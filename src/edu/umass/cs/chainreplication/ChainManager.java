@@ -436,7 +436,7 @@ public class ChainManager<NodeIDType> {
 
         ChainRequestPacket chainRequestPacket = this.getChainRequestPacket(request, false);
 
-        log.log(level, "ChainManager.propsoe request " +
+        log.log(level, "ChainManager.propose request " +
                 "{0} for service name {1}",
                 new Object[]{chainRequestPacket, chainID});
 
@@ -448,7 +448,7 @@ public class ChainManager<NodeIDType> {
 
         ReplicatedChainStateMachine rcsm = this.getInstance(chainID);
 
-        log.log(level, "ChainManager.propsoe retrieves ReplicatedChainStateMachine {0}",
+        log.log(level, "ChainManager.propose retrieves ReplicatedChainStateMachine {0}",
                 new Object[]{rcsm});
         if (rcsm != null) {
             matched = true;

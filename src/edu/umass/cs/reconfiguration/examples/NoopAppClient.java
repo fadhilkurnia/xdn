@@ -111,7 +111,7 @@ public class NoopAppClient extends ReconfigurableAppClientAsync<Request> impleme
 	 */
 	public static void main(String[] args) throws IOException {
 		final NoopAppClient client = new NoopAppClient();
-		final int numNames = 10;
+		final int numNames = 3;
 		final int numReqs = 20;
 		String namePrefix = "some_name";
 		String initialState = "some_default_initial_state";
@@ -128,10 +128,11 @@ public class NoopAppClient extends ReconfigurableAppClientAsync<Request> impleme
 							try {
 								if (response instanceof CreateServiceName
 										&& !((CreateServiceName) response)
-												.isFailed())
+												.isFailed()) {
 									client.testSendBunchOfRequests(name,
 											numReqs);
-								else
+									System.out.println(">>> create name success " + name);
+								} else
 									System.out.println(this
 											+ " failed to create name " + name);
 							} catch (IOException e) {

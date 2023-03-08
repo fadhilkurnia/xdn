@@ -634,7 +634,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 
 	@Override
 	public boolean handleMessage(Request incoming, NIOHeader header) {
-
+		System.out.println("handling message: " + incoming);
 		log.log(debug, "{0} handleMessage received {1}", new Object[] { this,
 				incoming.getSummary(log.isLoggable(debug)) });
 

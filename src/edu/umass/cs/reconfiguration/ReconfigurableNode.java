@@ -214,6 +214,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
 		else if (coordinatorClassName.equals("edu.umass.cs.reconfiguration.ChainReplicaCoordinator"))
 			return new ChainReplicaCoordinator<NodeIDType>(app, myID, nodeConfig,
 					messenger);
+		else if (coordinatorClassName.equals("edu.umass.cs.reconfiguration.DynamoReplicaCoordinator"))
+			return new DynamoReplicaCoordinator<NodeIDType>(app, myID, messenger);
 
 		return null;
 

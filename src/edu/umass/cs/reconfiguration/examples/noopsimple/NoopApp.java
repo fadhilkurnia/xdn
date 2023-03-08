@@ -83,6 +83,7 @@ public class NoopApp extends AbstractReconfigurablePaxosApp<String> implements
 	 * @param args
 	 */
 	public NoopApp(String[] args) {
+		System.out.println("noop created ...");
 	}
 
 	// Need a messenger mainly to send back responses to the client.
@@ -94,6 +95,7 @@ public class NoopApp extends AbstractReconfigurablePaxosApp<String> implements
 
 	@Override
 	public boolean execute(Request request, boolean doNotReplyToClient) {
+		System.out.println("noop execute ...");
 		if (request.toString().equals(Request.NO_OP))
 			return true;
 		switch ((AppRequest.PacketType) (request.getRequestType())) {
