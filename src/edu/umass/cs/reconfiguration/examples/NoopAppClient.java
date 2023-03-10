@@ -111,7 +111,7 @@ public class NoopAppClient extends ReconfigurableAppClientAsync<Request> impleme
 	 */
 	public static void main(String[] args) throws IOException {
 		final NoopAppClient client = new NoopAppClient();
-		final int numNames = 3;
+		final int numNames = 2;
 		final int numReqs = 20;
 		String namePrefix = "some_name";
 		String initialState = "some_default_initial_state";

@@ -95,7 +95,7 @@ public class NoopApp implements Replicable, Reconfigurable,
 	@Override
 	public boolean execute(Request request,
 			boolean doNotReplyToClient) {
-		System.out.println("executing ..." + request);
+		System.out.println(">>>>>>>>> executing ..." + request);
 		if (request.toString().equals(Request.NO_OP))
 			return true;
 			switch ((AppRequest.PacketType) (request.getRequestType())) {
@@ -125,7 +125,7 @@ public class NoopApp implements Replicable, Reconfigurable,
 		assert (data != null);
 		data.setState(request.getValue());
 		this.appData.put(request.getServiceName(), data);
-		System.out.println("App-" + myID + " wrote " + data.name
+		System.out.println(">>>>>>>>> App-" + myID + " wrote " + data.name
 				+ " with state " + data.getState());
 		if (DELEGATE_RESPONSE_MESSAGING)
 			this.sendResponse(request);
@@ -223,7 +223,7 @@ public class NoopApp implements Replicable, Reconfigurable,
 
 		if (data == null && state != null) {
 			data = new AppData(name, state);
-			 System.out.println(">>>App-" + myID + " creating " + name
+			 System.out.println(">>>>>>>>> App-" + myID + " creating " + name
 			 + " with state " + state);
 		} else if (state == null) {
 			if (data != null)
