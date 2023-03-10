@@ -95,6 +95,7 @@ public class NoopApp implements Replicable, Reconfigurable,
 	@Override
 	public boolean execute(Request request,
 			boolean doNotReplyToClient) {
+		System.out.println("executing ..." + request);
 		if (request.toString().equals(Request.NO_OP))
 			return true;
 			switch ((AppRequest.PacketType) (request.getRequestType())) {
@@ -213,6 +214,7 @@ public class NoopApp implements Replicable, Reconfigurable,
 
 	@Override
 	public boolean restore(String name, String state) {
+		System.out.println("restore ..." + name + " " + state);
 		AppData data = this.appData.get(name);
 		/*
 		 * If no previous state, set epoch to initial epoch, otherwise

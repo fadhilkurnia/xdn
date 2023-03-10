@@ -1,21 +1,31 @@
 package edu.umass.cs.reconfiguration;
 
+import edu.umass.cs.gigapaxos.PaxosConfig;
+import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.gigapaxos.paxosutil.IntegerMap;
+import edu.umass.cs.nio.GenericMessagingTask;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.reconfiguration.examples.AppRequest;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
+import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.CreateServiceName;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.StartEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * @param <NodeIDType>
@@ -30,6 +40,7 @@ public class DynamoReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     private int currentEpoch = 0;
     private String checkpointState = "";
 
+    protected static final Logger log = (ReconfigurationConfig.getLogger());
     // variables for messaging purposes
 
 
@@ -54,17 +65,29 @@ public class DynamoReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
      * true here */
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback) throws IOException, RequestParseException {
-        System.out.println("coordinate request ... " + request.toString());
+        System.out.println("[" + this.myID + "] coordinate request ... " + (request == null ? "null" : request));
 
         if (request instanceof ReplicableClientRequest rcr) {
             if (rcr.getRequest() instanceof AppRequest ar) {
-                execute(rcr.getRequest(), false);
+
+                // broadcast to other active replica
+                try {
+                    if (ar.needsCoordination()) {
+                        ar.setNeedsCoordination(false);
+                        this.messenger.send(new GenericMessagingTask<NodeIDType, AppRequest>(nodeReplicas.toArray(), ar));
+                    }
+                } catch (JSONException e) {
+                    throw new RuntimeException(e);
+                }
+
+                this.execute(ar, false);
+                callback.executed(ar, true);
                 System.out.println("response ... " + ar.getResponse());
             } else {
                 System.out.println("no execute since request's class is " + rcr.getRequest().getClass().getSimpleName());
             }
         } else {
-            System.out.println("no execute since class is " + request.getClass().getSimpleName());
+            System.out.println("no execute since request is " + request.getRequestType());
         }
         return true;
     }
@@ -73,6 +96,7 @@ public class DynamoReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     public boolean createReplicaGroup(String serviceName, int epoch, String state, Set<NodeIDType> nodes) {
         System.out.println("create replica group " + serviceName + nodes.toString());
         nodeReplicas = nodes;
+        this.restore(serviceName, state);
         return true;
     }
 
@@ -85,6 +109,9 @@ public class DynamoReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     @Override
     public Set<NodeIDType> getReplicaGroup(String serviceName) {
         System.out.println("get replica group " + serviceName);
+
+        // TODO: confirm this hacky approach
+        this.restore(serviceName, "");
         return nodeReplicas;
     }
 
