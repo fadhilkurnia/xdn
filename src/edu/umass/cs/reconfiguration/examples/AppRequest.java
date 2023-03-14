@@ -81,7 +81,11 @@ public class AppRequest extends JSONPacket implements ReconfigurableRequest,
 		/**
 		 * 
 		 */
-		META_REQUEST_PACKET (406);
+		META_REQUEST_PACKET (406),
+
+
+		DYNAMO_FORWARD_REQUEST(407),
+		DYNAMO_FORWARD_ACK(408);
 
 		/******************************** BEGIN static ******************************************/
 		private static HashMap<Integer, PacketType> numbers = new HashMap<Integer, PacketType>();
@@ -189,6 +193,8 @@ public class AppRequest extends JSONPacket implements ReconfigurableRequest,
 
 	private boolean coordType = true;
 
+	public int senderID;
+
 	/**
 	 * @param name
 	 * @param value
@@ -250,6 +256,7 @@ public class AppRequest extends JSONPacket implements ReconfigurableRequest,
 		this.name = json.getString(Keys.NAME.toString());
 		this.epoch = json.getInt(Keys.EPOCH.toString());
 		this.id = json.getLong(Keys.QID.toString());
+		this.senderID = json.getInt("SID");
 		
 		this.stop = json.getBoolean(Keys.STOP.toString());
 		this.value = json.getString(Keys.QVAL.toString());
@@ -302,6 +309,7 @@ public class AppRequest extends JSONPacket implements ReconfigurableRequest,
 		if (this.clientAddress != null)
 			json.put(Keys.CSA.toString(), this.clientAddress.toString());
 		json.putOpt(Keys.RVAL.toString(), this.response);
+		json.put("SID", this.senderID);
 		return json;
 	}
 
