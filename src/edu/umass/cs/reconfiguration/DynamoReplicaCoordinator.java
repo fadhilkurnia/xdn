@@ -194,63 +194,7 @@ public class DynamoReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
             return true;
         }
-
-        // handle coordination packet
-        if (request instanceof DynamoPacket dp) {
-
-            System.out.println(">>>>>> [" + this.myID + "] protocol-packet-type " + dp.getRequestType());
-
-            if (dp.getRequestType() == DynamoPacket.PacketType.FORWARD_WRITE_REQUEST) {
-                // execute the request locally
-                this.execute(dp.getAppRequest(), false);
-
-                // ack to the broadcaster
-                DynamoPacket broadcastAck = new DynamoPacket(
-                        this.myIntID,
-                        DynamoPacket.PacketType.FORWARD_WRITE_RESPONSE,
-                        dp.getAppRequest(),
-                        dp.getEpochNumber());
-                GenericMessagingTask<NodeIDType, Object> m = new GenericMessagingTask<NodeIDType, Object>(
-                        (NodeIDType) integerMap.get(dp.getSenderID()), broadcastAck);
-
-                System.out.printf(">>>>>> [" + this.myID + "] %s acks to %s: %s\n", this.myID, dp.getSenderID(), dp.getAppRequest());
-                try {
-                    this.messenger.send(m);
-                } catch (JSONException e) {
-                    throw new RuntimeException(e);
-                }
-
-                return true;
-            }
-
-            if (dp.getRequestType() == DynamoPacket.PacketType.FORWARD_WRITE_RESPONSE) {
-
-                if (!quorumCounter.containsKey(dp.getRequestID())) {
-                    quorumCounter.put(dp.getRequestID(), 0);
-                }
-
-                // increase the ack counter
-                quorumCounter.put(
-                        dp.getRequestID(),
-                        quorumCounter.get(dp.getRequestID()) + 1);
-
-                System.out.printf(">>>>>> [" + this.myID + "] %d acks: %d\n", this.myID, dp.getRequestID(), quorumCounter.get(dp.getRequestID()));
-
-                // send the response back to client if we have 2 acks already
-                if (quorumCounter.get(dp.getRequestID()) == 2) {
-                    AppRequest ar = appRequestByID.get(dp.getRequestID());
-                    ExecutedCallback c = callbackByRequestID.get(dp.getRequestID());
-                    c.executed(ar, true);
-                    // TODO: cleanup the counter after sending response
-                    // TODO: use node.counter as the requestID
-                }
-
-                return true;
-            }
-
-            System.out.println(">>>>>> [" + this.myID + "] no execute since request is " + dp.getRequestType());
-        }
-
+        
         // else, not a client request not a dynamo coordination packet
         // so ignore it.
         System.out.println(">>>>>> [" + this.myID + "] no execute since request is " + request.getRequestType());
