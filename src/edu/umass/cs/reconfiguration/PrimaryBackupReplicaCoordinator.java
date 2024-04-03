@@ -2,8 +2,12 @@ package edu.umass.cs.reconfiguration;
 
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.PaxosManager;
+import edu.umass.cs.gigapaxos.paxosutil.Ballot;
 import edu.umass.cs.nio.GenericMessagingTask;
+import edu.umass.cs.primarybackup.PBEpoch;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
+import edu.umass.cs.primarybackup.packets.PrimaryBackupPacketType;
+import edu.umass.cs.primarybackup.packets.StartEpochPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.xdn.request.*;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
@@ -24,6 +28,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -52,11 +57,14 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
 
     private final boolean ENABLE_INTERNAL_REDIRECT_PRIMARY = true;
     private final PaxosManager<NodeIDType> paxosManager;
-    private final Set<IntegerPacketType> requestTypes;
+    private final Set<IntegerPacketType> appRequestTypes;
+    private final Set<IntegerPacketType> coordinatorRequestTypes;
     private final NodeIDType myNodeID;
     private final BackupableApplication backupableApplication;
 
-    private Role currentRole = Role.BACKUP;
+    // per service metadata
+    private ConcurrentHashMap<String, Role> currentRole;
+    private ConcurrentHashMap<String, PBEpoch> currentEpoch;
 
     // outstanding request forwarded to primary
     ConcurrentHashMap<Long, XDNRequestAndCallback> outstanding = new ConcurrentHashMap<>();
@@ -87,17 +95,21 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
                                 messenger.getNodeConfig().getNodePort(myID)),
                         messenger);
 
-        // initialize all the request types handled
-        Set<IntegerPacketType> types = new HashSet<>(app.getRequestTypes());
-        types.add(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST);
-        this.requestTypes = types;
+        // initialize all the app packet/request types handled
+        Set<IntegerPacketType> appPackets = new HashSet<>(app.getRequestTypes());
+        appPackets.add(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST);
+        this.appRequestTypes = appPackets;
+
+        // initialize all the coordinator packet types handled
+        Set<IntegerPacketType> pbPackets = new HashSet<>();
+        pbPackets.add(PrimaryBackupPacketType.PB_START_EPOCH_PACKET);
+        this.coordinatorRequestTypes = pbPackets;
 
         // store my node id
         this.myNodeID = myID;
 
-
-        // TODO: infer role, propose primary-start message
-
+        this.currentRole = new ConcurrentHashMap<>();
+        this.currentEpoch = new ConcurrentHashMap<>();
     }
 
     private void inferCurrentRole() {
@@ -108,7 +120,10 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
     @Override
     public Set<IntegerPacketType> getRequestTypes() {
         System.out.println(">> PrimaryBackupReplicaCoordinator - getRequestTypes");
-        return requestTypes;
+        Set<IntegerPacketType> allTypes = new HashSet<>();
+        allTypes.addAll(this.appRequestTypes);
+        allTypes.addAll(this.coordinatorRequestTypes);
+        return allTypes;
     }
 
     @Override
@@ -144,15 +159,22 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
 
     private boolean handleServiceRequest(XDNRequest request, ExecutedCallback callback) {
         String serviceName = request.getServiceName();
-        boolean isCurrentPrimary = this.paxosManager.isPaxosCoordinator(serviceName);
         NodeIDType currPrimaryID = this.paxosManager.getPaxosCoordinator(serviceName);
+
+        // TODO: detect state changes
+//        if (!currPrimaryID.equals(myNodeID) && this.currentRole.get(serviceName) == Role.BACKUP) {
+////            this.paxosManager.propose(serviceName,
+////                    new StartEpochPacket())
+//        }
+
+        if (currPrimaryID == null) {
+            return sendErrorResponse(request, callback, "unknown coordinator");
+        }
+
         // if this node is not a primary, forward the request to the primary, either
         // (1) using internal redirection, or
         // (2) asking the client to contact the primary.
-        if (!isCurrentPrimary && currPrimaryID != myNodeID) {
-            if (currPrimaryID == null) {
-                return sendErrorResponse(request, callback, "unknown coordinator");
-            }
+        if (!currPrimaryID.equals(myNodeID)) {
 
             // case-1: use internal redirection
             if (ENABLE_INTERNAL_REDIRECT_PRIMARY) {
@@ -320,7 +342,7 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
                                             ExecutedCallback callback) {
 
         // validate that the request is http request
-        assert (request instanceof XDNHttpRequest);
+        assert (request instanceof XDNHttpRequest) : "requestType: " + request.getClass().getSimpleName();
         XDNHttpRequest httpRequest = (XDNHttpRequest) request;
 
         // put request and callback into outstanding map
@@ -363,6 +385,36 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
                     this.paxosManager.getVersion(serviceName));
         }
 
+        // TODO: confirming this:
+        //  by default Gigapaxos creates these 3 service replica groups, which we will
+        //  ignore in our primary-backup replica coordinator.
+        if (serviceName.equals(PaxosConfig.getDefaultServiceName()) ||
+                serviceName.equals(AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString()) ||
+                serviceName.equals(AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString())) {
+            return true;
+        }
+
+        this.currentRole.put(serviceName, Role.BACKUP);
+        NodeIDType paxosCoorNodeID = this.paxosManager.getPaxosCoordinator(serviceName);
+        System.out.println(">> " + myNodeID + " createReplicaGroup paxos-coordinator: " + paxosCoorNodeID);
+//        if (paxosCoorNodeID.equals(myNodeID)) {
+//            System.out.println(">> " + myNodeID + " I am a paxos coordinator of " + serviceName);
+//            this.currentRole.put(serviceName, Role.PRIMARY_CANDIDATE);
+//            PBEpoch initEpoch = new PBEpoch(myNodeID.toString(), 0);
+//            StartEpochPacket startEpochPacket = new StartEpochPacket(
+//                    serviceName,
+//                    initEpoch);
+//            currentEpoch.put(serviceName, initEpoch);
+//            this.paxosManager.propose(
+//                    serviceName,
+//                    startEpochPacket,
+//                    (proposedRequest, isHandled) -> {
+//                        System.out.println(">>>>>>>>> " + myNodeID + " IAM THE PRIMARY NOW!!!");
+//                        currentRole.put(serviceName, Role.PRIMARY);
+//                    }
+//            );
+//        }
+
         return true;
     }
 
@@ -377,4 +429,6 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
         System.out.println(">> getReplicaGroup - " + serviceName);
         return this.paxosManager.getReplicaGroup(serviceName);
     }
+
+
 }

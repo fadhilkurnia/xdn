@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn.request;
 
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.primarybackup.PBEpoch;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -15,6 +16,7 @@ public class XDNStatediffApplyRequest extends XDNRequest {
             XDNRequest.SERIALIZED_PREFIX, XDNRequestType.XDN_STATEDIFF_APPLY_REQUEST.getInt());
 
     private final String serviceName;
+    // TODO: add Epoch
     private final String statediff;
     private long requestID;
 

@@ -1136,10 +1136,10 @@ public class PaxosManager<NodeIDType> {
             PaxosConfig.log.log(Level.FINE, "{0} proposing to {1}: {2}",
                     new Object[]{this, pism.getPaxosIDVersion(),
                             requestPacket.getSummary()});
-            System.out.println(">> propose put in outstanding queue ...");
+            System.out.println(">> "+getNodeID()+" propose put in outstanding queue ...");
             this.outstanding.enqueue(new RequestAndCallback(requestPacket,
                     callback));
-            System.out.println(">> handling incoming packet ... " + requestPacket);
+            System.out.println(">> "+getNodeID()+" handling incoming packet ... " + requestPacket);
             this.handleIncomingPacket(requestPacket);
         } else
             PaxosConfig.log.log(Level.INFO,

@@ -539,6 +539,8 @@ public class HttpActiveReplica {
                         InetAddress.getByName(addrPort[0].substring(1)),
                         Integer.parseInt(addrPort[1])));
 
+                System.out.println(">>>> client address " + ctx.channel().remoteAddress());
+
                 // forward http request to XDN App, which eventually will forward it to the service.
                 // Note that response later will be written inside the callback, via ctx.
                 arFunctions.handRequestToAppForHttp(gpRequest, callback);
