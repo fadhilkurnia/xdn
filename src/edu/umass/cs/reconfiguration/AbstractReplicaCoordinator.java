@@ -290,10 +290,10 @@ public abstract class AbstractReplicaCoordinator<NodeIDType> implements
 	 */
 	public boolean execute(Request request, boolean noReplyToClient,
 			ExecutedCallback requestCallback) {
-
-		if (this.callback != null && this.callback.preExecuted(request))
+		if (this.callback != null && this.callback.preExecuted(request)) {
 			// no further execution
 			return true;
+		}
 		
 		boolean handled = request.getRequestType()==ReconfigurationPacket.PacketType.NO_TYPE ||
 				(((this.app instanceof Replicable) ? ((Replicable) (this.app))

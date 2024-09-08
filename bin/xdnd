@@ -241,7 +241,7 @@ function upload_binaries() {
   local git_url="https://github.com/fadhilkurnia/gigapaxos.git";
   local git_branch="fadhil-dist-deploy";
 
-  # TODO: implement me, copy from current source instead of pulling from github
+  # TODO: implement me, copy from current source instead of pulling from gÏithub
   echo "Getting the XDN binaries from Github ..."
   # bin/fuselog
   # bin/fuselog-apply

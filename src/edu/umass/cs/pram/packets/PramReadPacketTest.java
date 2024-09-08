@@ -23,7 +23,7 @@ import static org.junit.Assert.*;
 @RunWith(JUnit4.class)
 public class PramReadPacketTest {
 
-    private static class DummyAppRequest extends ReadOnlyRequest implements ClientRequest {
+    private static class DummyReadOnlyAppRequest extends ReadOnlyRequest implements ClientRequest {
 
         @Override
         public ClientRequest getResponse() {
@@ -47,16 +47,16 @@ public class PramReadPacketTest {
 
         @Override
         public String toString() {
-            return String.format("DummyAppRequest{id:%d,svc:%s}",
+            return String.format("DummyReadOnlyAppRequest{id:%d,svc:%s}",
                     this.getRequestID(), this.getServiceName());
         }
     }
 
-    private static class DummyRequestParser implements AppRequestParser {
+    private static class DummyReadOnlyAppRequestParser implements AppRequestParser {
 
         @Override
         public Request getRequest(String stringified) throws RequestParseException {
-            return new DummyAppRequest();
+            return new DummyReadOnlyAppRequest();
         }
 
         @Override
@@ -67,7 +67,7 @@ public class PramReadPacketTest {
 
     @Test
     public void testInitialization() {
-        ClientRequest dummyRequest = new DummyAppRequest();
+        ClientRequest dummyRequest = new DummyReadOnlyAppRequest();
         PramReadPacket packet = new PramReadPacket(dummyRequest);
         assertTrue(packet.getRequestID() > 0);
         assertTrue(packet.needsCoordination());
@@ -76,7 +76,7 @@ public class PramReadPacketTest {
 
     @Test
     public void testToString() {
-        ClientRequest dummyRequest = new DummyAppRequest();
+        ClientRequest dummyRequest = new DummyReadOnlyAppRequest();
         PramReadPacket packet = new PramReadPacket(dummyRequest);
         assertNotNull(packet.toString());
         assertThat(packet.toString(), containsString(dummyRequest.toString()));
@@ -90,18 +90,18 @@ public class PramReadPacketTest {
         JSONObject object = new JSONObject();
         object.put("id", 123);
         object.put("type", PramPacketType.PRAM_READ_PACKET.getInt());
-        object.put("req", (new DummyAppRequest()).toString());
-        PramReadPacket packet = PramReadPacket.fromJsonObject(object, new DummyRequestParser());
+        object.put("req", (new DummyReadOnlyAppRequest()).toString());
+        PramReadPacket packet = PramReadPacket.fromJsonObject(object, new DummyReadOnlyAppRequestParser());
         assertNotNull(packet);
         System.out.println(packet.toString());
     }
 
     @Test
     public void testSerializationDeserialization() {
-        ClientRequest dummyRequest = new DummyAppRequest();
+        ClientRequest dummyRequest = new DummyReadOnlyAppRequest();
         PramReadPacket sourcePacket = new PramReadPacket(dummyRequest);
         Request resultingPacket =
-                PramPacket.createFromString(sourcePacket.toString(), new DummyRequestParser());
+                PramPacket.createFromString(sourcePacket.toString(), new DummyReadOnlyAppRequestParser());
         assertTrue(resultingPacket instanceof PramReadPacket);
         assertEquals(sourcePacket.toString(), resultingPacket.toString());
     }

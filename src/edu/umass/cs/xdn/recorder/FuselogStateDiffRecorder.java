@@ -106,6 +106,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         // create target mnt dir, if not exist
         // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/
         try {
+            Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
             Shell.runCommand("rm -rf " + targetDir);
             Files.createDirectory(Paths.get(targetDir));
         } catch (IOException e) {
@@ -225,6 +226,14 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         int exitCode = Shell.runCommand(cmd, true);
         assert exitCode == 0 : "failed to apply stateDiff with exit code " + exitCode;
 
+        return true;
+    }
+
+    @Override
+    public boolean removeServiceRecorder(String serviceName) {
+        String targetDir = baseMountDirPath + serviceName;
+        Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1", false);
+        Shell.runCommand("rm -rf " + targetDir, false);
         return true;
     }
 }

@@ -9,10 +9,7 @@ import org.junit.runner.RunWith;
 
 import java.util.*;
 
-
 // TODO: handle stateless service
-
-@RunWith(Enclosed.class)
 public class ServiceProperty {
 
     public static String XDN_INITIAL_STATE_PREFIX = "xdn:init:";
@@ -385,83 +382,4 @@ public class ServiceProperty {
         return components;
     }
 
-    public static class ServicePropertiesTest {
-        @Test
-        public void TEST_parseSingleComponentServiceProperties() {
-            String serviceName = "alice-book-catalog";
-            String prop = String.format("""
-                    {
-                      "name": "%s",
-                      "image": "bookcatalog",
-                      "port": 8000,
-                      "state": "/data/",
-                      "consistency": "linearizability",
-                      "deterministic": true
-                    }
-                    """, serviceName);
-            try {
-                ServiceProperty sp = createFromJSONString(prop);
-                assert Objects.equals(sp.serviceName, serviceName);
-                assert Objects.equals(sp.components.size(), 1);
-                assert Objects.equals(sp.consistencyModel, ConsistencyModel.LINEARIZABILITY);
-                assert Objects.equals(sp.isDeterministic, true);
-
-                ServiceComponent c = sp.components.getFirst();
-                assert Objects.equals(c.getComponentName(), serviceName);
-                assert Objects.equals(c.getExposedPort(), 8000);
-                assert Objects.equals(c.getEntryPort(), 8000);
-                assert Objects.equals(c.isStateful(), true);
-            } catch (JSONException e) {
-                throw new RuntimeException(e);
-            }
-        }
-
-        @Test
-        public void TEST_parseTwoComponentsServiceProperties() {
-            String serviceName = "dave-note";
-            String prop = String.format("""
-                    {
-                      "name": "%s",
-                      "components": [
-                        {
-                          "backend": {
-                            "image": "note-backend",
-                            "expose": 8000,
-                            "stateful": true
-                          }
-                        },
-                        {
-                          "frontend": {
-                            "image": "note-frontend",
-                            "port": 8080,
-                            "entry": true,
-                            "environments": [
-                              {
-                                "BACKEND_HOST": "localhost:8000"
-                              }
-                            ]
-                          }
-                        }
-                      ],
-                      "deterministic": false,
-                      "state": "backend:/app/prisma/",
-                      "consistency": "causal"
-                    }
-                    """, serviceName);
-            try {
-                ServiceProperty sp = createFromJSONString(prop);
-                assert Objects.equals(sp.serviceName, serviceName);
-                assert Objects.equals(sp.components.size(), 2);
-                assert Objects.equals(sp.consistencyModel, ConsistencyModel.CAUSAL);
-                assert Objects.equals(sp.isDeterministic, false);
-
-                ServiceComponent c1 = sp.components.get(0);
-                ServiceComponent c2 = sp.components.get(1);
-                assert c1 != null;
-                assert c2 != null;
-            } catch (JSONException e) {
-                throw new RuntimeException(e);
-            }
-        }
-    }
 }

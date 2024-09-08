@@ -2,7 +2,7 @@ package edu.umass.cs.xdn.service;
 
 public enum ConsistencyModel {
     LINEARIZABILITY,
-    LINEATIZABLE,
+    LINEARIZABLE,
     SEQUENTIAL,
     CAUSAL,
     EVENTUAL,

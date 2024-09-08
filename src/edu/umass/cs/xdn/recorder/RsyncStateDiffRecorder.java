@@ -172,4 +172,11 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
         return true;
     }
+
+    @Override
+    public boolean removeServiceRecorder(String serviceName) {
+        String targetDir = baseMountDirPath + serviceName + "/";
+        Shell.runCommand("rm -rf " + targetDir, false);
+        return true;
+    }
 }

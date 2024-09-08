@@ -177,4 +177,11 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
 
         return true;
     }
+
+    @Override
+    public boolean removeServiceRecorder(String serviceName) {
+        String targetMountDir = baseMountDirPath + serviceName + "/";
+        Shell.runCommand("rm -rf " + targetMountDir, false);
+        return true;
+    }
 }

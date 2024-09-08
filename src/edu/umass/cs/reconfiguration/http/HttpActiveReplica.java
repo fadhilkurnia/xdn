@@ -158,13 +158,13 @@ public class HttpActiveReplica {
             }
 
             // Note that we always use the DEFAULT_HTTP_ADDR (0.0.0.0) if the loop-back address
-            // (e.g., 127.0.0.1 or localhost) is used so that we can listen incoming Http requests
-            // from all interfaces, including non-localhost ones.
+            // (e.g., 127.0.0.1 or localhost) is used so that we can listen to incoming HTTP
+            // requests from all interfaces, including non-localhost ones.
             if (sockAddr.getAddress().isLoopbackAddress())
                 sockAddr = new InetSocketAddress(DEFAULT_HTTP_ADDR, sockAddr.getPort());
 
             // FIXME: quick hack to make it listen to port 80
-            sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
+            // sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
             channel = b.bind(sockAddr).sync().channel();
 
             log.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});

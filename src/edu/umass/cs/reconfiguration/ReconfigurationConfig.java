@@ -434,6 +434,12 @@ public class ReconfigurationConfig {
          */
         REPLICA_COORDINATOR_CLASS("edu.umass.cs.reconfiguration.PaxosReplicaCoordinator"),
 
+        /**
+         * Used in the {@link Reconfigurator} to validate the initialState during service or
+         * replica group creation. The default empty string indicates no validation is needed.
+         */
+        INITIAL_STATE_VALIDATOR_CLASS(""),
+
         ;
 
         final Object defaultValue;

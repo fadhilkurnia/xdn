@@ -20,4 +20,6 @@ public abstract class AbstractStateDiffRecorder {
 
     abstract public boolean applyStateDiff(String serviceName, String encodedState);
 
+    abstract public boolean removeServiceRecorder(String serviceName);
+
 }

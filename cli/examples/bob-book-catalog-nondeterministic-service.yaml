@@ -1,0 +1,7 @@
+---
+name: "bob-book-catalog"
+image: "bookcatalog-nondeterministic"
+port: 8000
+state: /data/
+consistency: linearizability
+deterministic: false

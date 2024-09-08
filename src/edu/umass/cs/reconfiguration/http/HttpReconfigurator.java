@@ -75,6 +75,13 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.RequestActiveReplicas
  * 
  *         Loosely based on the HTTP Snoop server example from netty
  *         documentation pages.
+ *
+ *         TODO: implement better API with prefix of /api/v0/services
+ *          - GET 		/api/v0/services
+ *          - GET 		/api/v0/services/:serviceName
+ *          - POST 		/api/v0/services/:serviceName
+ *          - DELETE 	/api/v0/services/:serviceName
+ *          because currently everything is handled with GET request :(
  */
 public class HttpReconfigurator {
 
@@ -220,7 +227,7 @@ public class HttpReconfigurator {
 			channel = b.bind(sockAddr).sync().channel();
 			instances.add(this);
 			log.log(Level.INFO, "{0} ready", new Object[] { this });
-			System.out.println(this + " ready");
+			System.out.println("HttpReconfigurator ready on " + sockAddr);
 
 			channel.closeFuture().sync();
 		} finally {

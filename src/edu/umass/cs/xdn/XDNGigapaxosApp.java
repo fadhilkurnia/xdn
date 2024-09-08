@@ -44,6 +44,8 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableApplication,
         InitialStateValidator {
@@ -140,8 +142,8 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean execute(Request request) {
-        // System.out.printf(">> %s:XDNGigapaxosApp execution %s\n",
-        //        this.nodeID, request.getClass().getSimpleName());
+        System.out.printf(">> %s:XDNGigapaxosApp execution %s\n",
+                this.nodeID, request.getClass().getSimpleName());
         String serviceName = request.getServiceName();
 
         if (request instanceof HttpActiveReplicaRequest harRequest) {
@@ -172,6 +174,10 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
         if (request instanceof XDNHttpRequest xdnRequest) {
             return forwardHttpRequestToContainerizedService(xdnRequest);
+        }
+
+        if (request instanceof XDNStopRequest stopRequest) {
+            return deleteContainerizedService(stopRequest.getServiceName());
         }
 
         String exceptionMessage = String.format("%s:XDNGigapaxosApp executing unknown request %s",
@@ -290,8 +296,10 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public String checkpoint(String name) {
-        System.out.println("BookCatalogApp - checkpoint ... name=" + name);
-        return null;
+        // TODO: implement me
+        //
+        System.out.println(">> XDNGigapaxosApp:" + this.nodeID + " - checkpoint ... name=" + name);
+        return "dummyXDNServiceCheckpoint";
     }
 
     @Override
@@ -321,7 +329,13 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             return isServiceInitialized;
         }
 
-        // Case-3: the actual restore, i.e., initialize service in new epoch (>0) with state
+        // Case-3: restore with null state implies terminating the service. This is used by
+        // PaxosInstanceStateMachine.nullifyAppState(.).
+        if (state == null) {
+            return deleteContainerizedService(name);
+        }
+
+        // Case-4: the actual restore, i.e., initialize service in new epoch (>0) with state
         // obtained from the latest checkpoint (possibly from different active replica).
         if (state != null && state.startsWith(ServiceProperty.XDN_CHECKPOINT_PREFIX)) {
             // TODO: implement me
@@ -394,6 +408,17 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             if (r == null) {
                 Exception e = new RuntimeException(
                         "Invalid serialized format for xdn http forward response");
+                throw new RequestParseException(e);
+            }
+            return r;
+        }
+
+        // handle a stop request
+        if (stringified.startsWith(XDNStopRequest.SERIALIZED_PREFIX)) {
+            Request r = XDNStopRequest.createFromString(stringified);
+            if (r == null) {
+                Exception e = new RuntimeException(
+                        "Invalid serialized format for xdn stop request");
                 throw new RequestParseException(e);
             }
             return r;
@@ -638,6 +663,22 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return false;
     }
 
+    private boolean deleteContainerizedService(String serviceName) {
+        System.out.println(">>> Stopping a containerized service ...");
+        assert serviceName != null;
+        ServiceInstance instance = this.services.remove(serviceName);
+        if (instance == null) {
+            return true;
+        }
+
+        for (String containerName : instance.containerNames) {;
+            stopContainer(containerName);
+            removeContainer(containerName);
+        }
+
+        return true;
+    }
+
     /**
      * startContainer runs the bash command below to start running a docker container.
      */
@@ -743,26 +784,24 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return true;
     }
 
-    private boolean stopContainer(String serviceName) {
-        String containerName = String.format("%s.%s.xdn.io", serviceName, this.nodeID);
+    private boolean stopContainer(String containerName) {
         String stopCommand = String.format("docker container stop %s", containerName);
-
-        int exitCode = runShellCommand(stopCommand, false);
-        if (exitCode != 0) {
-            System.err.println("failed to stop container");
+        int exitCode = runShellCommand(stopCommand, true);
+        if (exitCode != 0 && exitCode != 1) {
+            // 1 is the exit code of stopping a non-existent container
+            System.err.println("Failed to stop container");
             return false;
         }
 
         return true;
     }
 
-    private boolean removeContainer(String serviceName) {
-        String containerName = String.format("%s.%s.xdn.io", serviceName, this.nodeID);
+    private boolean removeContainer(String containerName) {
         String removeCommand = String.format("docker container rm %s", containerName);
-
-        int exitCode = runShellCommand(removeCommand, false);
-        if (exitCode != 0) {
-            System.err.println("failed to remove container");
+        int exitCode = runShellCommand(removeCommand, true);
+        if (exitCode != 0 && exitCode != 1) {
+            // 1 is the exit code of removing a non-existent container
+            System.err.println("Failed to remove container");
             return false;
         }
 
@@ -1035,41 +1074,11 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
      *                  Begin implementation methods for Replicable interface                     *
      *********************************************************************************************/
 
-    private static class XDNStopRequest implements ReconfigurableRequest {
-
-        private final String serviceName;
-        private final int epochNumber;
-
-        public XDNStopRequest(String serviceName, int epochNumber) {
-            this.serviceName = serviceName;
-            this.epochNumber = epochNumber;
-        }
-
-        @Override
-        public IntegerPacketType getRequestType() {
-            return ReconfigurableRequest.STOP;
-        }
-
-        @Override
-        public String getServiceName() {
-            return serviceName;
-        }
-
-        @Override
-        public int getEpochNumber() {
-            return epochNumber;
-        }
-
-        @Override
-        public boolean isStop() {
-            return true;
-        }
-    }
-
     @Override
     public ReconfigurableRequest getStopRequest(String name, int epoch) {
         System.out.println(">> XDNGigapaxosApp - getStopRequest name:" + name + " epoch:" + epoch);
-        return new XDNStopRequest(name, epoch);
+        return null;
+        // return new XDNStopRequest(name, epoch);
     }
 
     @Override
@@ -1090,10 +1099,12 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean deleteFinalState(String name, int epoch) {
-        var exceptionMessage = String.format(
-                "XDNGigapaxosApp.deleteFinalState is unimplemented, serviceName=%s epoch=%d",
-                name, epoch);
-        throw new RuntimeException(exceptionMessage);
+        System.out.println(">> XDNGigapaxosApp:" + this.nodeID + " -- deleteFinalState(name=" + name + ",epoch=" + epoch + ")");
+        return true;
+//        var exceptionMessage = String.format(
+//                "XDNGigapaxosApp.deleteFinalState is unimplemented, serviceName=%s epoch=%d",
+//                name, epoch);
+//        throw new RuntimeException(exceptionMessage);
     }
 
     @Override

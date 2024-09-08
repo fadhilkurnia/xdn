@@ -9,7 +9,8 @@ public enum XDNRequestType implements IntegerPacketType {
     XDN_SERVICE_HTTP_REQUEST(31300),
     XDN_HTTP_FORWARD_REQUEST(31301),
     XDN_HTTP_FORWARD_RESPONSE(31302),
-    XDN_STATEDIFF_APPLY_REQUEST(31303);
+    XDN_STATEDIFF_APPLY_REQUEST(31303),
+    XDN_STOP_REQUEST(31304);
 
     private static final HashMap<Integer, XDNRequestType> numbers = new HashMap<>();
 

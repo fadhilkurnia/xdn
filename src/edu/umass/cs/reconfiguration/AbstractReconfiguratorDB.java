@@ -154,12 +154,14 @@ public abstract class AbstractReconfiguratorDB<NodeIDType> implements
 		boolean handled = false;
 		// cast checked by assert above
 		@SuppressWarnings("unchecked")
-		BasicReconfigurationPacket<NodeIDType> rcPacket = (BasicReconfigurationPacket<NodeIDType>) request;
-		if (this.uglyRecoveryHack(rcPacket, this.recovering))
+		BasicReconfigurationPacket<NodeIDType> rcPacket =
+				(BasicReconfigurationPacket<NodeIDType>) request;
+		if (this.uglyRecoveryHack(rcPacket, this.recovering)) {
 			handled = true;
-		else
+		} else {
 			handled = (Boolean) AbstractReconfiguratorDB.autoInvokeMethod(this,
 					rcPacket, doNotReplyToClient, this.consistentNodeConfig);
+		}
 		return handled;
 	}
 

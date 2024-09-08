@@ -23,7 +23,7 @@ import io.netty.handler.codec.http.HttpResponse;
  *                           ┌──────────────┴───────┐
  *                           │XDNHttpForwardResponse│
  *                           └──────────────────────┘
- *
+ * TODO: Add XDNStopRequest
  */
 public abstract class XDNRequest implements ReplicableRequest {
 
