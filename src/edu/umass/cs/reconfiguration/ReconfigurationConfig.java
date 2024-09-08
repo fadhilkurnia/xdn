@@ -403,6 +403,12 @@ public class ReconfigurationConfig {
         HTTP_ACTIVE_REPLICA_NAME("edu.umass.cs.reconfiguration.http.HttpActiveReplica"),
 
         /**
+         * Enable HttpActiveReplica to listen at port 80, ignoring the offset specified in
+         * {@link ReconfigurationConfig#HTTP_PORT_OFFSET}.
+         */
+        ENABLE_ACTIVE_REPLICA_HTTP_PORT_80(false),
+
+        /**
          * If true, transactions are enabled; else disabled.
          */
         ENABLE_TRANSACTIONS(false),

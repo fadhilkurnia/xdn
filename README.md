@@ -1,4 +1,4 @@
-# XDN - Replicating Blackbox Stateful Services to Live on the Edge
+# XDN - Replicating Blackbox Stateful Services
 
 ## Project structure
 ```
@@ -13,8 +13,8 @@ xdn/
 ├─ src/
 │  ├─ edu.umass.cs
 │  │  ├─ reconfigurator/
-│  │  │  ├─ reconfiguration/
-│  │  │  │  ├─ ReconfigurableNode.java     // the main() method for a Node
+│  │  │  ├─ ReconfigurableNode.java       // the main() method for a Node
+│  │  │  │  ...
 ├─ tests/
 ├─ build.xml
 ├─ LICENSE.txt
@@ -34,25 +34,30 @@ the following system requirements:
 
 1. Pull XDN source code:
     ```
-   git pull https://github.com/fadhilkurnia/gigapaxos.git
-   cd gigapaxos
-   git checkout fadhil-dist-deploy
+   git pull https://github.com/fadhilkurnia/xdn.git
+   cd xdn
     ```
 2. Compile XDN source code:
     ```
-   ant jar
+   ./bin/build_xdn_jar.sh
     ```
-3. Make symbolic link of XDN's binaries to `/usr/bin/`:
+3. Compile XDN cli tool `xdn` for app developer:
     ```
-   # xdn's filesystem and its statediff applicator:
-   sudo ln -s "$PWD"/bin/fuselog /usr/bin/fuselog
-   sudo ln -s "$PWD"/bin/fuselog-apply /usr/bin/fuselog-apply
-   
-   # xdn's cli:
-   sudo ln -s "$PWD"/bin/xdn /usr/bin/xdn
+   ./bin/build_xdn_cli.sh
     ``` 
 
-## Single machine deployment
+## Deployment with existing provider
+We have prepared an XDN deployment that you can easily use.
+Simply run the following command:
+```bash
+export XDN_CONTROL_PLANE=cp.xdnapp.com
+xdn launch bookcatalog
+     --image=fadhilkurnia/xdn-bookcatalog
+     --state=/app/data/ 
+     --deterministic=true
+```
+
+## Deployment in single machine
 
 1. Start the reconfigurator and active replicas, using the default configuration
    (`./conf/gigapaxos.properties`):
@@ -140,7 +145,7 @@ the following system requirements:
 > ```
 
 
-## Distributed deployment
+## Deployment as XDN provider
 
 Assuming we have 4 machines with the following IP address:
 - `10.10.1.1` for the first active replica.

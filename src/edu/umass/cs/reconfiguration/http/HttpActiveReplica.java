@@ -18,6 +18,7 @@ import java.util.logging.Logger;
 import javax.net.ssl.SSLException;
 
 import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.request.XDNHttpRequest;
 import edu.umass.cs.xdn.request.XDNRequest;
 import io.netty.channel.*;
@@ -163,8 +164,10 @@ public class HttpActiveReplica {
             if (sockAddr.getAddress().isLoopbackAddress())
                 sockAddr = new InetSocketAddress(DEFAULT_HTTP_ADDR, sockAddr.getPort());
 
-            // FIXME: quick hack to make it listen to port 80
-            // sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
+            // Listen at port 80 if ENABLE_ACTIVE_REPLICA_HTTP_PORT_80 is true.
+            if (Config.getGlobalBoolean(ReconfigurationConfig.RC.ENABLE_ACTIVE_REPLICA_HTTP_PORT_80)) {
+                sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
+            }
             channel = b.bind(sockAddr).sync().channel();
 
             log.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
