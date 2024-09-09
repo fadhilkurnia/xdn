@@ -294,7 +294,7 @@ func runLaunchCommand(prop CommonProperties) {
 		fmt.Printf(" ")
 		errColorPrint.Printf("ERROR")
 		fmt.Printf(" ")
-		fmt.Printf("Failed to remove the service: \n")
+		fmt.Printf("Failed to launch the service: \n")
 		var jsonMap map[string]interface{}
 		json.Unmarshal([]byte(bodyStr), &jsonMap)
 		errMsgIf := jsonMap["RESPONSE_MESSAGE"]
