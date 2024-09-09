@@ -306,8 +306,12 @@ func runLaunchCommand(prop CommonProperties) {
 	dummyServiceURL := colorPrint.Sprintf(
 		"http://%s.%s/", prop.serviceName, XDN_BASE_HOST)
 	fmt.Println("The service is successfully launched 🎉🚀 ")
-	fmt.Printf("Access your service at the following permanent URL:\n")
-	fmt.Printf("  > %s     \n\n\n", dummyServiceURL)
+	if controlPlane != DEFAULT_CONTROL_PLANE {
+		fmt.Printf("Access your service at the following permanent URL:\n")
+		fmt.Printf("  > %s     \n\n\n", dummyServiceURL)
+	} else {
+		fmt.Printf("\n")
+	}
 	fmt.Printf("Retrieve the service's replica locations with this command:\n")
 	fmt.Printf("  xdn service info %s\n", prop.serviceName)
 	fmt.Printf("Destroy the replicated service with this command:\n")
