@@ -44,7 +44,7 @@ public class XDNServiceInitialStateValidator implements InitialStateValidator {
             containerNames.add(c.getImageName());
         }
         for (String imageName : containerNames) {
-            String command = String.format("docker manifest inspect %s:latest", imageName);
+            String command = String.format("docker inspect --type=image %s:latest", imageName);
             int errCode = Shell.runCommand(command, true);
             if (errCode != 0) {
                 String exceptionMessage = String.format(

@@ -287,13 +287,18 @@ public class Util {
 
 	public static InetSocketAddress getInetSocketAddressFromString(String s) {
 		// remove anything upto and including the first slash
-		// handles this: "10.0.1.50/10.0.1.50:24404"
+		// handles these inputs:
+		//   "10.0.1.50/10.0.1.50:24404"
+		//   "localhost/[0:0:0:0:0:0:0:1]:24404"
 		s = s.replaceAll(".*/", "");
 		String[] tokens = s.split(":");
 		if (tokens.length < 2) {
 			return null;
 		}
-		return new InetSocketAddress(tokens[0], Integer.valueOf(tokens[1]));
+		String ipHostName = s.substring(0, s.lastIndexOf(":"));
+		String portStr = tokens[tokens.length-1];
+		int port = Integer.parseInt(portStr);
+		return new InetSocketAddress(ipHostName, port);
 	}
 
 	// assumes strict formatting and is more efficient

@@ -73,7 +73,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private PrimaryBackupManager<?> primaryBackupManagerPtr;
 
-    private static RecorderType recorderType = RecorderType.FUSELOG;
+    private RecorderType recorderType = RecorderType.FUSELOG;
     private AbstractStateDiffRecorder stateDiffRecorder;
 
     public XDNGigapaxosApp(String[] args) {
@@ -304,7 +304,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean restore(String name, String state) {
-        System.out.println("BookCatalogApp - restore name=" + name + " state=" + state);
+        System.out.println(">> XDNGigapaxosApp:" + this.nodeID + " - restore name=" + name + " state=" + state);
 
         // A corner case when name is empty, which fundamentally must not happen.
         if (name == null || name.isEmpty()) {
@@ -1194,11 +1194,12 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             envSubCmd = sb.toString();
         }
 
+        // TODO: investigate the use of this user id with fuselog
         String userSubCmd = "";
         int uid = Utils.getUid();
         int gid = Utils.getGid();
-        if (uid != 0) {
-            userSubCmd = String.format("--user=%d:%d", uid, gid);
+        if (uid != 0 && this.recorderType == RecorderType.FUSELOG) {
+             userSubCmd = String.format("--user=%d:%d", uid, gid);
         }
 
         String startCommand =
