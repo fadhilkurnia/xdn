@@ -6,4 +6,5 @@ public enum RequestBehaviorType {
     READ_MODIFY_WRITE,
     NIL_EXTERNAL,
     MONOTONIC,
+    COMMUTATIVE,
 }

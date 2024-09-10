@@ -30,7 +30,6 @@ var ServiceInfoCmd = &cobra.Command{
 
 		err := ValidateControlPlaneConn()
 		if err != nil {
-			errorColorPrint.Printf(" ERROR ")
 			fmt.Errorf("Failed to reach the control plane: %s.\n", err.Error())
 			return
 		}
@@ -181,8 +180,11 @@ var ServiceInfoCmd = &cobra.Command{
 
 		fmt.Printf("\n\n")
 		fmt.Printf(" Declared service's operation properties:\n")
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("GET /            read-only"))
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("GET /api/books   read-only"))
+		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("GET    /*          read-only"))
+		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("POST   /*          write-only, read-modify-write"))
+		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("PUT    /*          write-only, read-modify-write"))
+		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("PATCH  /*          write-only, read-modify-write"))
+		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("DELETE /*          write-only, read-modify-write"))
 		fmt.Printf("\n")
 
 		// | AR1        | 172.0.0.1  | primary | 2 minutes ago | Up 2 minutes |
