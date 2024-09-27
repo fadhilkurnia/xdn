@@ -7,13 +7,14 @@ import org.json.JSONObject;
 
 import java.util.Objects;
 
-public class XDNStatediffApplyRequest extends XDNRequest {
+@Deprecated
+public class XDNStatediffApplyRequest extends XdnRequest {
 
     /**
      * All the serialized XDNStatediffApplyRequest starts with "xdn:31303:"
      */
     public static final String SERIALIZED_PREFIX = String.format("%s%d:",
-            XDNRequest.SERIALIZED_PREFIX, XDNRequestType.XDN_STATEDIFF_APPLY_REQUEST.getInt());
+            XdnRequest.SERIALIZED_PREFIX, XdnRequestType.XDN_STATEDIFF_APPLY_REQUEST.getInt());
 
     private final String serviceName;
     private final String statediff;
@@ -33,7 +34,7 @@ public class XDNStatediffApplyRequest extends XDNRequest {
 
     @Override
     public IntegerPacketType getRequestType() {
-        return XDNRequestType.XDN_STATEDIFF_APPLY_REQUEST;
+        return XdnRequestType.XDN_STATEDIFF_APPLY_REQUEST;
     }
 
     @Override

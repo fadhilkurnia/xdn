@@ -14,7 +14,6 @@ import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.ZipFiles;
-import edu.umass.cs.xdn.experiment.GetOSUserGroupID;
 import edu.umass.cs.xdn.recorder.*;
 import edu.umass.cs.xdn.request.*;
 import edu.umass.cs.xdn.service.ServiceComponent;
@@ -44,8 +43,6 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableApplication,
         InitialStateValidator {
@@ -56,6 +53,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private final String FUSELOG_APPLY_BIN_PATH = "/users/fadhil/fuse/apply";
 
     private final String nodeID;
+    private final Set<IntegerPacketType> packetTypes;
 
     private HashMap<String, Integer> activeServicePorts;
 
@@ -112,6 +110,10 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                 throw new RuntimeException(errMessage);
         }
 
+        // Set app request type
+        // TODO: handle StopRequest
+        this.packetTypes = new HashSet<>();
+        this.packetTypes.add(XdnRequestType.XDN_SERVICE_HTTP_REQUEST);
     }
 
     // TODO: complete this implementation
@@ -142,8 +144,8 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean execute(Request request) {
-        System.out.printf(">> %s:XDNGigapaxosApp execution %s\n",
-                this.nodeID, request.getClass().getSimpleName());
+        // System.out.printf(">> %s:XDNGigapaxosApp execution %s\n",
+        //         this.nodeID, request.getClass().getSimpleName());
         String serviceName = request.getServiceName();
 
         if (request instanceof HttpActiveReplicaRequest harRequest) {
@@ -172,11 +174,15 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             return applyStatediff(serviceName, xdnRequest.getStatediff());
         }
 
-        if (request instanceof XDNHttpRequest xdnRequest) {
+        if (request instanceof XdnJsonHttpRequest xdnRequest) {
             return forwardHttpRequestToContainerizedService(xdnRequest);
         }
 
-        if (request instanceof XDNStopRequest stopRequest) {
+        if (request instanceof XdnHttpRequest xdnHttpRequest) {
+            return forwardHttpRequestToContainerizedService(xdnHttpRequest);
+        }
+
+        if (request instanceof XdnStopRequest stopRequest) {
             return deleteContainerizedService(stopRequest.getServiceName());
         }
 
@@ -350,123 +356,171 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public Request getRequest(String stringified) throws RequestParseException {
-        // System.out.printf(">>> %s:XDNGigapaxosApp-createFromString string=%s\n",
-        //        nodeID, stringified);
+        XdnRequestType packetType = XdnRequest.getQuickPacketTypeFromEncodedPacket(stringified);
+        assert packetType != null;
 
-        // case-1: handle all xdn requests with prefix "xdn:"
-        if (stringified.startsWith(XDNRequest.SERIALIZED_PREFIX)) {
-            return this.getXDNRequest(stringified);
+        if (packetType.equals(XdnRequestType.XDN_SERVICE_HTTP_REQUEST)) {
+            return XdnHttpRequest.createFromString(stringified);
         }
 
-        // case-2: handle primary-backup request, with prefix "pb:"
-        if (stringified.startsWith(PrimaryBackupPacket.SERIALIZED_PREFIX)) {
-            return this.getPrimaryBackupRequest(stringified);
+        if (packetType.equals(XdnRequestType.XDN_STOP_REQUEST)) {
+            throw new RuntimeException("unimplemented");
         }
 
-        Exception e = new RuntimeException("unknown request format");
-        throw new RequestParseException(e);
+        throw new RuntimeException("Unknown encoded request or packet format: "
+                + stringified);
     }
 
-    private Request getXDNRequest(String stringified) throws RequestParseException {
+//    private Request getXDNRequest(String stringified) throws RequestParseException {
+//
+//        // handle a statediff request
+//        if (stringified.startsWith(XDNStatediffApplyRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNStatediffApplyRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn statediff request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle an http request
+//        if (stringified.startsWith(XDNHttpRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNHttpRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn http request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle a forwarded request
+//        if (stringified.startsWith(XDNHttpForwardRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNHttpForwardRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn http forward request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle a forwarded response
+//        if (stringified.startsWith(XDNHttpForwardResponse.SERIALIZED_PREFIX)) {
+//            Request r = XDNHttpForwardResponse.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn http forward response");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle a stop request
+//        if (stringified.startsWith(XDNStopRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNStopRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn stop request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        Exception e = new RuntimeException("Invalid serialized format for xdn request");
+//        throw new RequestParseException(e);
+//    }    private Request getXDNRequest(String stringified) throws RequestParseException {
+//
+//        // handle a statediff request
+//        if (stringified.startsWith(XDNStatediffApplyRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNStatediffApplyRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn statediff request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle an http request
+//        if (stringified.startsWith(XDNHttpRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNHttpRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn http request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle a forwarded request
+//        if (stringified.startsWith(XDNHttpForwardRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNHttpForwardRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn http forward request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle a forwarded response
+//        if (stringified.startsWith(XDNHttpForwardResponse.SERIALIZED_PREFIX)) {
+//            Request r = XDNHttpForwardResponse.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn http forward response");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        // handle a stop request
+//        if (stringified.startsWith(XDNStopRequest.SERIALIZED_PREFIX)) {
+//            Request r = XDNStopRequest.createFromString(stringified);
+//            if (r == null) {
+//                Exception e = new RuntimeException(
+//                        "Invalid serialized format for xdn stop request");
+//                throw new RequestParseException(e);
+//            }
+//            return r;
+//        }
+//
+//        Exception e = new RuntimeException("Invalid serialized format for xdn request");
+//        throw new RequestParseException(e);
+//    }
 
-        // handle a statediff request
-        if (stringified.startsWith(XDNStatediffApplyRequest.SERIALIZED_PREFIX)) {
-            Request r = XDNStatediffApplyRequest.createFromString(stringified);
-            if (r == null) {
-                Exception e = new RuntimeException(
-                        "Invalid serialized format for xdn statediff request");
-                throw new RequestParseException(e);
-            }
-            return r;
-        }
-
-        // handle an http request
-        if (stringified.startsWith(XDNHttpRequest.SERIALIZED_PREFIX)) {
-            Request r = XDNHttpRequest.createFromString(stringified);
-            if (r == null) {
-                Exception e = new RuntimeException(
-                        "Invalid serialized format for xdn http request");
-                throw new RequestParseException(e);
-            }
-            return r;
-        }
-
-        // handle a forwarded request
-        if (stringified.startsWith(XDNHttpForwardRequest.SERIALIZED_PREFIX)) {
-            Request r = XDNHttpForwardRequest.createFromString(stringified);
-            if (r == null) {
-                Exception e = new RuntimeException(
-                        "Invalid serialized format for xdn http forward request");
-                throw new RequestParseException(e);
-            }
-            return r;
-        }
-
-        // handle a forwarded response
-        if (stringified.startsWith(XDNHttpForwardResponse.SERIALIZED_PREFIX)) {
-            Request r = XDNHttpForwardResponse.createFromString(stringified);
-            if (r == null) {
-                Exception e = new RuntimeException(
-                        "Invalid serialized format for xdn http forward response");
-                throw new RequestParseException(e);
-            }
-            return r;
-        }
-
-        // handle a stop request
-        if (stringified.startsWith(XDNStopRequest.SERIALIZED_PREFIX)) {
-            Request r = XDNStopRequest.createFromString(stringified);
-            if (r == null) {
-                Exception e = new RuntimeException(
-                        "Invalid serialized format for xdn stop request");
-                throw new RequestParseException(e);
-            }
-            return r;
-        }
-
-        Exception e = new RuntimeException("Invalid serialized format for xdn request");
-        throw new RequestParseException(e);
-    }
-
-    private Request getPrimaryBackupRequest(String stringified) throws RequestParseException {
-
-        if (stringified.startsWith(StartEpochPacket.SERIALIZED_PREFIX)) {
-            return StartEpochPacket.createFromString(stringified);
-        }
-
-        if (stringified.startsWith(ChangePrimaryPacket.SERIALIZED_PREFIX)) {
-            return ChangePrimaryPacket.createFromString(stringified);
-        }
-
-        if (stringified.startsWith(ForwardedRequestPacket.SERIALIZED_PREFIX)) {
-            return ForwardedRequestPacket.createFromString(stringified);
-        }
-
-        if (stringified.startsWith(ApplyStateDiffPacket.SERIALIZED_PREFIX)) {
-            return ApplyStateDiffPacket.createFromString(stringified);
-        }
-
-        if (stringified.startsWith(ResponsePacket.SERIALIZED_PREFIX)) {
-            return ResponsePacket.createFromString(stringified);
-        }
-
-        Exception e = new RuntimeException(
-                "Invalid serialized format for primary-backup request");
-        throw new RequestParseException(e);
-    }
+//    private Request getPrimaryBackupRequest(String stringified) throws RequestParseException {
+//
+//        if (stringified.startsWith(StartEpochPacket.SERIALIZED_PREFIX)) {
+//            return StartEpochPacket.createFromString(stringified);
+//        }
+//
+//        if (stringified.startsWith(ChangePrimaryPacket.SERIALIZED_PREFIX)) {
+//            return ChangePrimaryPacket.createFromString(stringified);
+//        }
+//
+//        if (stringified.startsWith(ForwardedRequestPacket.SERIALIZED_PREFIX)) {
+//            return ForwardedRequestPacket.createFromString(stringified);
+//        }
+//
+//        if (stringified.startsWith(ApplyStateDiffPacket.SERIALIZED_PREFIX)) {
+//            return ApplyStateDiffPacket.createFromString(stringified);
+//        }
+//
+//        if (stringified.startsWith(ResponsePacket.SERIALIZED_PREFIX)) {
+//            return ResponsePacket.createFromString(stringified);
+//        }
+//
+//        Exception e = new RuntimeException(
+//                "Invalid serialized format for primary-backup request");
+//        throw new RequestParseException(e);
+//    }
 
     @Override
     public Set<IntegerPacketType> getRequestTypes() {
-        HashSet<IntegerPacketType> packetTypes = new HashSet<>();
-        packetTypes.add(XDNRequestType.XDN_SERVICE_HTTP_REQUEST);
-        packetTypes.add(XDNRequestType.XDN_STATEDIFF_APPLY_REQUEST);
-        packetTypes.add(XDNRequestType.XDN_HTTP_FORWARD_REQUEST);
-        packetTypes.add(XDNRequestType.XDN_HTTP_FORWARD_RESPONSE);
-
-        // TODO: move this to coordinator level
-        packetTypes.addAll(List.of(PrimaryBackupPacketType.values()));
-
-        return packetTypes;
+        return this.packetTypes;
     }
 
     /**
@@ -671,7 +725,8 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             return true;
         }
 
-        for (String containerName : instance.containerNames) {;
+        for (String containerName : instance.containerNames) {
+            ;
             stopContainer(containerName);
             removeContainer(containerName);
         }
@@ -1076,9 +1131,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public ReconfigurableRequest getStopRequest(String name, int epoch) {
-        System.out.println(">> XDNGigapaxosApp - getStopRequest name:" + name + " epoch:" + epoch);
-        return null;
-        // return new XDNStopRequest(name, epoch);
+        return new XdnStopRequest(name, epoch);
     }
 
     @Override
@@ -1199,7 +1252,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         int uid = Utils.getUid();
         int gid = Utils.getGid();
         if (uid != 0 && this.recorderType == RecorderType.FUSELOG) {
-             userSubCmd = String.format("--user=%d:%d", uid, gid);
+            userSubCmd = String.format("--user=%d:%d", uid, gid);
         }
 
         String startCommand =
@@ -1216,7 +1269,37 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return true;
     }
 
-    private boolean forwardHttpRequestToContainerizedService(XDNHttpRequest xdnRequest) {
+    private boolean forwardHttpRequestToContainerizedService(XdnHttpRequest xdnRequest) {
+        String serviceName = xdnRequest.getServiceName();
+        assert serviceName != null;
+        Integer targetPort = this.activeServicePorts.get(serviceName);
+        assert targetPort != null;
+
+        // Create Http Request
+        HttpRequest javaNetHttpRequest = xdnRequest
+                .getJavaNetHttpRequest(true, targetPort);
+
+        // Forward request to the containerized service, get the http response.
+        HttpResponse<byte[]> response;
+        try {
+            response = this.serviceClient.send(
+                    javaNetHttpRequest, HttpResponse.BodyHandlers.ofByteArray());
+        } catch (IOException | InterruptedException e) {
+            xdnRequest.setHttpResponse(createNettyHttpErrorResponse(e));
+            return true;
+        }
+
+        // Convert the response into Netty Http Response
+        io.netty.handler.codec.http.HttpResponse nettyHttpResponse =
+                createNettyHttpResponse(response);
+
+        // Store the response in the xdn request, which will be returned to the end client.
+        xdnRequest.setHttpResponse(nettyHttpResponse);
+
+        return true;
+    }
+
+    private boolean forwardHttpRequestToContainerizedService(XdnJsonHttpRequest xdnRequest) {
         String serviceName = xdnRequest.getServiceName();
         if (isServiceActive.get(serviceName) != null && !isServiceActive.get(serviceName)) {
             activate(serviceName);
@@ -1245,12 +1328,12 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         } catch (Exception e) {
             xdnRequest.setHttpResponse(createNettyHttpErrorResponse(e));
             e.printStackTrace();
-            return false;
+            return true;
         }
     }
 
     // convertXDNRequestToHttpRequest converts Netty's HTTP request into Java's HTTP request
-    private HttpRequest convertXDNRequestToHttpRequest(XDNHttpRequest xdnRequest) {
+    private HttpRequest convertXDNRequestToHttpRequest(XdnJsonHttpRequest xdnRequest) {
         try {
             // preparing url to the containerized service
             String url = String.format("http://127.0.0.1:%d%s",
@@ -1321,13 +1404,16 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private io.netty.handler.codec.http.HttpResponse createNettyHttpErrorResponse(Exception e) {
         StringWriter sw = new StringWriter();
-        PrintWriter pw = new PrintWriter(sw);
-        sw.write("Failed to get response from the containerized service:\n");
-        e.printStackTrace(pw);
-        return new DefaultFullHttpResponse(
+        sw.write("{\"error\":\"Failed to get response from the containerized service.\",");
+        sw.write("\"message\":\"");
+        sw.write(e.getMessage());
+        sw.write("\"}");
+        DefaultFullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
                 HttpResponseStatus.INTERNAL_SERVER_ERROR,
                 Unpooled.copiedBuffer(sw.toString().getBytes()));
+        response.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+        return response;
     }
 
     private HttpVersion getNettyHttpVersion(HttpClient.Version httpClientVersion) {
