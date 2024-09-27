@@ -5,6 +5,7 @@ public enum ConsistencyModel {
     LINEARIZABLE,
     SEQUENTIAL,
     CAUSAL,
+    PRAM,
     EVENTUAL,
     READ_YOUR_WRITES,
     WRITES_FOLLOW_READS,

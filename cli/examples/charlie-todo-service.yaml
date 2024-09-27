@@ -1,7 +1,0 @@
----
-name: "charlie-todo"
-image: "todo"
-port: 8000
-state: /home/node/app/var/db/
-consistency: linearizability
-deterministic: true

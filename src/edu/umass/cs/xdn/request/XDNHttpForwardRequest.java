@@ -6,25 +6,26 @@ import org.json.JSONObject;
 
 import java.util.Objects;
 
-public class XDNHttpForwardRequest extends XDNRequest {
+@Deprecated
+public class XDNHttpForwardRequest extends XdnRequest {
 
     /**
      * All the serialized XDNHttpRequest starts with "xdn:31301:"
      */
     public static final String SERIALIZED_PREFIX = String.format("%s%d:",
-            XDNRequest.SERIALIZED_PREFIX, XDNRequestType.XDN_HTTP_FORWARD_REQUEST.getInt());
+            XdnRequest.SERIALIZED_PREFIX, XdnRequestType.XDN_HTTP_FORWARD_REQUEST.getInt());
 
-    private final XDNHttpRequest request;
+    private final XdnJsonHttpRequest request;
     private final String entryNodeID;
 
-    public XDNHttpForwardRequest(XDNHttpRequest request, String entryNodeID) {
+    public XDNHttpForwardRequest(XdnJsonHttpRequest request, String entryNodeID) {
         this.request = request;
         this.entryNodeID = entryNodeID;
     }
 
     @Override
     public IntegerPacketType getRequestType() {
-        return XDNRequestType.XDN_HTTP_FORWARD_REQUEST;
+        return XdnRequestType.XDN_HTTP_FORWARD_REQUEST;
     }
 
     @Override
@@ -42,7 +43,7 @@ public class XDNHttpForwardRequest extends XDNRequest {
         return true;
     }
 
-    public XDNHttpRequest getRequest() {
+    public XdnJsonHttpRequest getRequest() {
         return request;
     }
 
@@ -82,7 +83,7 @@ public class XDNHttpForwardRequest extends XDNRequest {
         stringified = stringified.substring(SERIALIZED_PREFIX.length());
         try {
             JSONObject json = new JSONObject(stringified);
-            XDNHttpRequest httpRequest = XDNHttpRequest.createFromString(json.getString("r"));
+            XdnJsonHttpRequest httpRequest = XdnJsonHttpRequest.createFromString(json.getString("r"));
             String entryNodeID = json.getString("e");
             return new XDNHttpForwardRequest(httpRequest, entryNodeID);
         } catch (JSONException e) {

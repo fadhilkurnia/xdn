@@ -11,13 +11,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 import java.util.Map;
 
-public class XDNHttpForwardResponse extends XDNRequest {
+@Deprecated
+public class XDNHttpForwardResponse extends XdnRequest {
 
     /**
      * All the serialized XDNHttpForwardResponse starts with "xdn:31302:"
      */
     public static final String SERIALIZED_PREFIX = String.format("%s%d:",
-            XDNRequest.SERIALIZED_PREFIX, XDNRequestType.XDN_HTTP_FORWARD_RESPONSE.getInt());
+            XdnRequest.SERIALIZED_PREFIX, XdnRequestType.XDN_HTTP_FORWARD_RESPONSE.getInt());
 
     private long requestID;
     private final String serviceName;
@@ -31,7 +32,7 @@ public class XDNHttpForwardResponse extends XDNRequest {
 
     @Override
     public IntegerPacketType getRequestType() {
-        return XDNRequestType.XDN_HTTP_FORWARD_RESPONSE;
+        return XdnRequestType.XDN_HTTP_FORWARD_RESPONSE;
     }
 
     @Override

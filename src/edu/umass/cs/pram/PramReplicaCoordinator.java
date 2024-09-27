@@ -6,6 +6,7 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.packets.*;
+import edu.umass.cs.primarybackup.packets.PrimaryBackupPacketType;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
@@ -56,24 +57,14 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         this.messenger = messenger;
         this.currentInstances = new ConcurrentHashMap<>();
 
-        // initialize all the supported request type
+        // initialize all the supported packet types
         Set<IntegerPacketType> types = new HashSet<>(app.getRequestTypes());
-        types.add(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST);
-        types.add(PramPacketType.PRAM_PACKET);
         types.addAll(List.of(PramPacketType.values()));
         this.requestTypes = types;
 
-        // prepare parser for PramPacket
-        this.setGetRequestImpl(new AppRequestParser() {
-            @Override
-            public Request getRequest(String stringified) throws RequestParseException {
-                return PramPacket.createFromString(stringified, (AppRequestParser) app);
-            }
-            @Override
-            public Set<IntegerPacketType> getRequestTypes() {
-                return types;
-            }
-        });
+        // prepare packet deserializer and handler for PramPacket
+        this.messenger.precedePacketDemultiplexer(
+                new PramPacketDemultiplexer(this, app));
 
         System.out.printf(">> PramReplicaCoordinator - initialization at node %s\n", this.myNodeID);
     }
@@ -81,6 +72,10 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     @Override
     public Set<IntegerPacketType> getRequestTypes() {
         return requestTypes;
+    }
+
+    public static Set<IntegerPacketType> getAllPramRequestTypes() {
+        return new HashSet<>(List.of(PramPacketType.values()));
     }
 
     @Override
@@ -96,8 +91,10 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         PramPacket packet;
         if (request instanceof ReplicableClientRequest rcr &&
                 rcr.getRequest() instanceof ClientRequest clientRequest) {
-            boolean isWriteOnly = (clientRequest instanceof BehavioralRequest br && br.isWriteOnlyRequest());
-            boolean isReadOnly = (clientRequest instanceof BehavioralRequest br && br.isReadOnlyRequest());
+            boolean isWriteOnly =
+                    (clientRequest instanceof BehavioralRequest br && br.isWriteOnlyRequest());
+            boolean isReadOnly =
+                    (clientRequest instanceof BehavioralRequest br && br.isReadOnlyRequest());
             if (isReadOnly) {
                 packet = new PramReadPacket(clientRequest);
             } else if (isWriteOnly) {
@@ -107,7 +104,7 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                         "WriteOnlyRequest or ReadOnlyRequest");
             }
         } else if (request instanceof ReplicableClientRequest rcr &&
-                rcr.getRequest() instanceof PramPacket pp){
+                rcr.getRequest() instanceof PramPacket pp) {
             packet = pp;
         } else {
             assert request instanceof PramPacket :
@@ -174,7 +171,7 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
             instance.replicaQueue.putIfAbsent(senderID, new ConcurrentLinkedQueue<>());
             Queue<PramWriteAfterPacket> replicaQueue = instance.replicaQueue.get(senderID);
             boolean isAdded = replicaQueue.add(p);
-            assert isAdded :  "Failed to enqueue the write request from " + senderIdString;
+            assert isAdded : "Failed to enqueue the write request from " + senderIdString;
 
             // spawn a thread to execute all the write requests in the FIFO queue
             Thread writeExecutor = new Thread(() -> {
@@ -201,11 +198,16 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                                       int epoch,
                                       String state,
                                       Set<NodeIDType> nodes) {
-        System.out.println(">> " + myNodeID + " createReplicaGroup " + serviceName + " " + nodes);
+        System.out.printf(">> %s:PramReplicaCoordinator -- " +
+                        "createReplicaGroup name=%s nodes=%s epoch=%d state=%s\n",
+                myNodeID, serviceName, nodes, epoch, state);
         PramInstance<NodeIDType> pramInstance =
                 new PramInstance<>(serviceName, epoch, state, nodes, new ConcurrentHashMap<>());
         this.currentInstances.put(serviceName, pramInstance);
-        return true;
+
+        // Creating a replica group is a special case for reconfiguration where we reconfigure
+        // from nothing to something. In that case, we call app.restore(.) with initialState.
+        return this.app.restore(serviceName, state);
     }
 
     @Override
@@ -214,7 +216,10 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         PramInstance<NodeIDType> pramInstance = this.currentInstances.get(serviceName);
         if (pramInstance.currentEpoch != epoch) return true;
         this.currentInstances.remove(serviceName);
-        return true;
+
+        // Deleting a replica group is a special case for reconfiguration where we reconfigure
+        // from something into nothing. In that case, we call app.restore(.) with null state.
+        return this.app.restore(serviceName, null);
     }
 
     @Override
