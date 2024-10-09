@@ -31,8 +31,9 @@ public class TestSendRequestWhilePrimaryChanges {
                   3. node2 is the primary, by default with deterministic startup.
                   4. Send client requests to node2.
                   5. Make node3 as the new primary.
-                  6. Assert that node3 indeed is the latest primary.
-                  7. Assert that all the replicas have the same state at the end.
+                  6. Continue send request to node2.
+                  7. Assert that node3 indeed is the latest primary.
+                  8. Assert that all the replicas have the same state at the end.
                   
                 """;
         System.out.println(scenario);
@@ -111,6 +112,25 @@ public class TestSendRequestWhilePrimaryChanges {
             assert managerAtNode3.isCurrentPrimary(serviceName) :
                     "After change primary, node3 must become the primary.";
         });
+
+        System.out.println("Continue sending requests");
+        for (int i = 0; i < 5; i++) {
+            MonotonicAppRequest appRequest = new MonotonicAppRequest(
+                    serviceName, MonotonicAppRequest.MONOTONIC_APP_GEN_NUMBER_COMMAND);
+            int finalI = i;
+            node2.coordinateRequest(
+                    ReplicableClientRequest.wrap(appRequest),
+                    (executedRequest, handled) -> {
+                        assert executedRequest instanceof MonotonicAppRequest;
+                        assert handled;
+
+                        MonotonicAppRequest response = (MonotonicAppRequest) executedRequest;
+                        System.out.printf("\n\nRequest-%d to %s is executed. response: %s \n\n",
+                                finalI, NODE_2_ID, response.getResponseValue());
+                    });
+
+            Thread.sleep(10);
+        }
 
         Thread.sleep(3000);
 

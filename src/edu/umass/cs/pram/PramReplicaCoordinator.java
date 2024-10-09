@@ -39,9 +39,14 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
 
     private final Messenger<NodeIDType, JSONObject> messenger;
 
-    private record PramInstance<NodeIDType>(String serviceName, int currentEpoch,
-                                            String initStateSnapshot, Set<NodeIDType> nodes,
-                                            ConcurrentMap<NodeIDType, ConcurrentLinkedQueue<PramWriteAfterPacket>> replicaQueue) {
+    private record PramInstance<NodeIDType>
+            (String serviceName,
+             int currentEpoch,
+             String initStateSnapshot,
+             Set<NodeIDType> nodes,
+
+             // incoming-queue for each node in the replica group
+             ConcurrentMap<NodeIDType, ConcurrentLinkedQueue<PramWriteAfterPacket>> replicaQueue) {
     }
 
     private final ConcurrentMap<String, PramInstance<NodeIDType>> currentInstances;

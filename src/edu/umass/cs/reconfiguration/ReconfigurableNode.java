@@ -23,11 +23,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 
-import edu.umass.cs.cops.CopsReplicaCoordinator;
+import edu.umass.cs.causal.CausalReplicaCoordinator;
+import edu.umass.cs.consistency.EventualConsistency.DynamoCoordinator;
 import edu.umass.cs.nio.NIOTransport;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.PramReplicaCoordinator;
-import edu.umass.cs.xdn.XDNReplicaCoordinator;
+import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
+import edu.umass.cs.xdn.XdnReplicaCoordinator;
 import org.json.JSONObject;
 
 import edu.umass.cs.gigapaxos.AbstractPaxosLogger;
@@ -122,8 +124,6 @@ public abstract class ReconfigurableNode<NodeIDType> {
         AbstractReplicaCoordinator<NodeIDType> appCoordinator = null;
         // ReplicaCoordinator<NodeIDType> appCoordinator = null;
 
-        System.out.println(">> createApp");
-
         if (ReconfigurationConfig.application == null)
             throw new RuntimeException("Application name can not be null");
         // else
@@ -212,6 +212,7 @@ public abstract class ReconfigurableNode<NodeIDType> {
             nodeIDStringifier = s;
         }
 
+        // TODO: handle this programmatically
         switch (coordinatorClassName) {
             case "edu.umass.cs.reconfiguration.PaxosReplicaCoordinator" -> {
                 return new PaxosReplicaCoordinator<NodeIDType>(app, myID, nodeIDStringifier,
@@ -226,20 +227,24 @@ public abstract class ReconfigurableNode<NodeIDType> {
                 return new ChainReplicaCoordinator<NodeIDType>(app, myID, nodeIDStringifier,
                         messenger);
             }
-            case "edu.umass.cs.reconfiguration.PrimaryBackupReplicaCoordinator" -> {
+            case "edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator" -> {
                 return new PrimaryBackupReplicaCoordinator<NodeIDType>(
                         app, myID, nodeIDStringifier, messenger);
             }
-            case "edu.umass.cs.xdn.XDNReplicaCoordinator" -> {
-                return new XDNReplicaCoordinator<NodeIDType>(
+            case "edu.umass.cs.xdn.XdnReplicaCoordinator" -> {
+                return new XdnReplicaCoordinator<NodeIDType>(
                         app, myID, nodeIDStringifier, messenger);
             }
             case "edu.umass.cs.cops.CopsReplicaCoordinator" -> {
-                return new CopsReplicaCoordinator<NodeIDType>(
+                return new CausalReplicaCoordinator<NodeIDType>(
                         app, myID, nodeIDStringifier, messenger);
             }
             case "edu.umass.cs.pram.PramReplicaCoordinator" -> {
-                return new PramReplicaCoordinator<NodeIDType>(app, myID, nodeIDStringifier, messenger);
+                return new PramReplicaCoordinator<NodeIDType>(
+                        app, myID, nodeIDStringifier, messenger);
+            }
+            case "edu.umass.cs.consistency.EventualConsistency.DynamoCoordinator" -> {
+                return new DynamoCoordinator<>(app, myID, nodeIDStringifier, messenger);
             }
         }
 

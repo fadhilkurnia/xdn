@@ -1,0 +1,64 @@
+// To generate the class, from the project root directory:
+// protoc --java_out=./src src/edu/umass/cs/primarybackup/proto/primary_backup_packet.proto
+
+syntax = "proto3";
+
+package primary_backup;
+
+option java_package = "edu.umass.cs.primarybackup.proto";
+option java_outer_classname = "PrimaryBackupPacketProto";
+
+message ForwardedRequestPacket {
+  // unique ID of this packet.
+  int64 packet_id = 1;
+
+  // The service name.
+  string service_name = 2;
+
+  // ID of the entry node that first receive the request.
+  string sender_node_id = 3;
+
+  // The encoded request from the entry node.
+  bytes encoded_request = 4;
+}
+
+message ApplyStateDiffPacket {
+  // Unique ID of this packet.
+  int64 packet_id = 1;
+
+  // The service name.
+  string service_name = 2;
+
+  // The primary epoch, consisting the primary node ID and its counter epoch.
+  string primary_node_id = 3;
+  uint32 primary_epoch = 4;
+
+  // State diff obtained by the Primary.
+  bytes encoded_state_diff = 5;
+}
+
+message ResponsePacket {
+  // ID of request whose response contained in this project.
+  int64 request_id = 1;
+
+  // The service name.
+  string service_name = 2;
+
+  // The encoded response from the Primary.
+  bytes encoded_response = 3;
+}
+
+// StartEpochPacket: Elected Primary => All Nodes.
+message StartEpochPacket {
+  // Unique ID of this packet.
+  int64 packet_id = 1;
+
+  // The service name.
+  string service_name = 2;
+
+  // The node ID of Primary that starts the epoch.
+  string primary_node_id = 3;
+
+  // The encoded response from the Primary.
+  uint32 primary_epoch = 4;
+}

@@ -1,6 +1,7 @@
 package edu.umass.cs.primarybackup.packets;
 
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.utils.IntegerPacketTypeMap;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -51,4 +52,8 @@ public enum PrimaryBackupPacketType implements IntegerPacketType {
     public int getInt() {
         return this.number;
     }
+
+    public static final IntegerPacketTypeMap<PrimaryBackupPacketType> intToType =
+            new IntegerPacketTypeMap<>(PrimaryBackupPacketType.values());
+
 }

@@ -285,7 +285,7 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
     }
 
     protected Replicable getApp() {
-        return this.paxosManager.getApp(this.getPaxosID()); // this.clientRequestHandler;
+        return this.paxosManager.getApp(); // this.clientRequestHandler;
     }
 
     protected PaxosManager<?> getPaxosManager() {
@@ -1783,8 +1783,7 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 					e.printStackTrace();
 				}
 				if (!executed) {
-					String error = paxosManager.getApp(requestPacket
-							.getPaxosID())
+					String error = paxosManager.getApp()
 							+ " failed to execute request, retrying: "
 							+ decision.requestValue;
 					log.severe(error);

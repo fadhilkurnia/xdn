@@ -1,12 +1,7 @@
 package edu.umass.cs.primarybackup;
 
-import org.junit.Test;
-import org.junit.experimental.runners.Enclosed;
-import org.junit.runner.RunWith;
-
 import java.util.Objects;
 
-@RunWith(Enclosed.class)
 public class PrimaryEpoch<NodeIDType> {
 
     public final String nodeID;
@@ -56,32 +51,6 @@ public class PrimaryEpoch<NodeIDType> {
     @Override
     public int hashCode() {
         return Objects.hash(nodeID, counter);
-    }
-
-    public static class TestPrimaryEpoch {
-
-        @Test
-        public void TestEquals() {
-            PrimaryEpoch<String> e1 = new PrimaryEpoch<>("node1:0");
-            PrimaryEpoch<String> e2 = new PrimaryEpoch<>("node1:0");
-            assert e1.equals(e2);
-            assert e1.compareTo(e2) == 0;
-        }
-
-        @Test
-        public void TestCompare() {
-            PrimaryEpoch<String> e1 = new PrimaryEpoch<>("node1:0");
-            PrimaryEpoch<String> e2 = new PrimaryEpoch<>("node1:1");
-            assert e1.compareTo(e2) < 0;
-        }
-
-        @Test
-        public void TestCompare2() {
-            PrimaryEpoch<String> e1 = new PrimaryEpoch<>("node2:0");
-            PrimaryEpoch<String> e2 = new PrimaryEpoch<>("node1:1");
-            assert e1.compareTo(e2) < 0;
-        }
-
     }
 
 }
