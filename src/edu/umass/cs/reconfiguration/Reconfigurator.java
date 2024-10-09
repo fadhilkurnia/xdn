@@ -713,9 +713,6 @@ public class Reconfigurator<NodeIDType> implements
                 this.callbacksCRP.put(getCRPKey(create), callback);
             }
 
-            System.out.println(">>> initiating reconfiguration ... " + create.getInitGroup());
-            System.out.println(">>> ===== " + this.consistentNodeConfig.getReplicatedActives(
-                    create.getServiceName()));
             this.initiateReconfiguration(
                     create.getServiceName(),
                     record,

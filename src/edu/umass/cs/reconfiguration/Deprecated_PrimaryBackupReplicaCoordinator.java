@@ -73,6 +73,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     // outstanding request forwarded to primary
     ConcurrentHashMap<Long, XDNRequestAndCallback> outstanding = new ConcurrentHashMap<>();
 
+    @Deprecated
     public Deprecated_PrimaryBackupReplicaCoordinator(
             Replicable app,
             NodeIDType myID,
@@ -87,13 +88,14 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
             throw new RuntimeException(exceptionMessage);
         }
 
-        this.pbManager = new PrimaryBackupManager<>(
-                myID,
-                app,
-                (BackupableApplication) app,
-                unstringer,
-                messenger
-        );
+//        this.pbManager = new PrimaryBackupManager<>(
+//                myID,
+//                app,
+//                (BackupableApplication) app,
+//                unstringer,
+//                messenger
+//        );
+        this.pbManager = null;
 
         // store the backupable application so this coordinator can
         // later capture the statediff after request execution.

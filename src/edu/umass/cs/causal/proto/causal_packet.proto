@@ -1,0 +1,33 @@
+// To generate the class, from the project root directory:
+// protoc --java_out=./src src/edu/umass/cs/causal/proto/causal_packet.proto
+
+syntax = "proto3";
+
+package causal;
+option java_package = "edu.umass.cs.causal.proto";
+option java_outer_classname = "CausalPacketProto";
+
+message VectorTimestamp {
+  message NodeCounterPair {
+    string node_id = 1;
+    uint64 counter = 2;
+  }
+  repeated NodeCounterPair components = 1;
+}
+
+message CausalWriteForwardPacket {
+  uint64 packet_id = 1;
+  string service_name = 2;
+  string sender_node_id = 3;
+  repeated VectorTimestamp dependencies = 4;
+  VectorTimestamp timestamp = 5;
+  bytes encoded_write_request = 6;
+}
+
+message CausalWriteAckPacket {
+  uint64 packet_id = 1;
+  string service_name = 2;
+  string sender_node_id = 3;
+  VectorTimestamp confirmed_graph_node_id = 4;
+  repeated VectorTimestamp graph_leaf_node_ids = 5;
+}

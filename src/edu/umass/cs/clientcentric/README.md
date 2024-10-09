@@ -7,6 +7,10 @@ Sources:
 - Session Guarantees for Weakly Consistent Replicated Data
 - Distributed Systems Textbook, Ch. 7 - Consistency and Replication.
 
+System model:
+- TODO
+
+
 ## Protocol for Monotonic Reads
 **Informal Definition**:
 Successive reads reflect a non-decreasing set of writes (i.e., reads cannot go backward).
@@ -18,19 +22,21 @@ will always return that same value or a more recent value.
 Event-action protocol:
 ```
 When receiving a WriteOnlyRequest W from client:
+   increase our component in the current timestamp
    directly execute W locally
    send WriteAfterPacket to all replicas
-   send the current timestamp
-   (optional) send the updated timestamp
+   send the current timestamp as write-timestamp
 
 When receiving a ReadOnlyRequest R from client:
     if R.timestamp <= myTimestamp:
         R.timestamp <- myTimestamp
         execute R
+        response.read-timestamp <- the current timestamp
         send response to client
     else
         sync with our peers
         execute R
+        response.read-timestamp <- the current timestamp
         send response to client
     
 When receiving a SyncRequestPacket X:
@@ -41,6 +47,7 @@ When receiving a SyncResponsePacket Y:
         if isAlreadyExecuted(R):
             no-op
         else:
+            increase our component in the current timestamp
             execute R
 
 When receiving a WriteAfterPacket Z from Server S:
@@ -69,7 +76,7 @@ Write return the latest timestamp
 
 ## Protocol for Read Your Writes
 **Informal Definition**:
-Read operation reflect previous writes.
+Read operations reflect previous writes.
 
 **Definition**:
 The effect of a write operation by a client on data item `x` will always be seen by a successive 

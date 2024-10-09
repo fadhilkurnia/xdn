@@ -59,20 +59,42 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 * @param enableNullCheckpoints
 	 */
 	@SuppressWarnings("unchecked")
-	private PaxosReplicaCoordinator(Replicable app, NodeIDType myID,
-			Stringifiable<NodeIDType> unstringer,
-			Messenger<NodeIDType, ?> niot, String paxosLogFolder,
-			boolean enableNullCheckpoints) {
+	private PaxosReplicaCoordinator(Replicable app,
+									NodeIDType myID,
+									Stringifiable<NodeIDType> unstringer,
+									Messenger<NodeIDType, ?> niot,
+									String paxosLogFolder,
+									boolean enableNullCheckpoints,
+									PaxosManager<NodeIDType> paxosManager) {
 		super(app, niot);
 		assert (niot instanceof JSONMessenger);
-		this.paxosManager = new PaxosManager<NodeIDType>(myID, unstringer,
-				(JSONMessenger<NodeIDType>) niot, this, paxosLogFolder,
-				enableNullCheckpoints)
-				.initClientMessenger(new InetSocketAddress(niot.getNodeConfig()
-						.getNodeAddress(myID), niot.getNodeConfig()
-						.getNodePort(myID)), niot);
+		if (paxosManager != null) {
+			this.paxosManager = paxosManager;
+		} else {
+			this.paxosManager = new PaxosManager<NodeIDType>(myID, unstringer,
+					(JSONMessenger<NodeIDType>) niot, this, paxosLogFolder,
+					enableNullCheckpoints)
+					.initClientMessenger(new InetSocketAddress(niot.getNodeConfig()
+							.getNodeAddress(myID), niot.getNodeConfig()
+							.getNodePort(myID)), niot);
+		}
 	}
 
+	public PaxosReplicaCoordinator(Replicable replicableApp,
+								   NodeIDType myID,
+								   Stringifiable<NodeIDType> nodeIdTypeDeserializer,
+								   Messenger<NodeIDType, ?> nioTransport,
+								   PaxosManager<NodeIDType> paxosManager) {
+		this(replicableApp,
+				myID,
+				nodeIdTypeDeserializer,
+				nioTransport,
+				null,
+				true,
+				paxosManager);
+		this.setOutOfOrderLimit(Config
+				.getGlobalInt(ReconfigurationConfig.RC.OUT_OF_ORDER_LIMIT));
+	}
 
 	/**
 	 * @param app
@@ -82,7 +104,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 */
 	public PaxosReplicaCoordinator(Replicable app, NodeIDType myID,
 			Stringifiable<NodeIDType> unstringer, Messenger<NodeIDType, ?> niot) {
-		this(app, myID, unstringer, niot, null, true);
+		this(app, myID, unstringer, niot, null, true, null);
 		this.setOutOfOrderLimit(Config
 				.getGlobalInt(ReconfigurationConfig.RC.OUT_OF_ORDER_LIMIT));
 	}

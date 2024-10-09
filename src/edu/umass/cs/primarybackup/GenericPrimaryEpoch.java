@@ -1,7 +1,6 @@
 package edu.umass.cs.primarybackup;
 
-import edu.umass.cs.nio.interfaces.Stringifiable;
-
+@Deprecated
 public class GenericPrimaryEpoch<NodeIDType> {
 
     public final String nodeID;

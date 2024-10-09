@@ -16,6 +16,8 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * AwReplicaCoordinator implements a protocol providing sequential consistency inspired
@@ -23,24 +25,31 @@ import java.util.Set;
  * Jennifer L Welch. AW is the initial of the authors' last name. Specifically, the protocol
  * refers to the read-write object that does local execution for read-only operations, and
  * uses MultiPaxos as the Atomic Broadcast (ABC) for write-only (and read-modify-write) operations.
- * <p>
- * TODO: Implement Me!
  */
 public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
     private final NodeIDType myNodeID;
+    private final Stringifiable<NodeIDType> nodeIdDeserializer;
     private final PaxosManager<NodeIDType> paxosManager;
     private final Replicable app;
 
+    private final Logger logger = Logger.getGlobal();
+
     public AwReplicaCoordinator(Replicable app,
                                 NodeIDType myID,
-                                Stringifiable<NodeIDType> unstringer,
+                                Stringifiable<NodeIDType> nodeIdDeserializer,
                                 Messenger<NodeIDType, JSONObject> messenger,
                                 PaxosManager<NodeIDType> paxosManager) {
         super(app, messenger);
         this.myNodeID = myID;
+        this.nodeIdDeserializer = nodeIdDeserializer;
         this.paxosManager = paxosManager;
         this.app = app;
+
+        assert messenger.getMyID().equals(myID) : "Invalid node id given in the messenger";
+        assert this.nodeIdDeserializer.valueOf(this.myNodeID.toString()).equals(this.myNodeID)
+                : "Invalid node ID deserializer given";
+
     }
 
     @Override
@@ -51,8 +60,8 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        System.out.printf(">> %s:AwReplicaCoordinator -- coordinateRequest %s\n",
-                this.myNodeID, request);
+        logger.log(Level.INFO, String.format(">> %s:AwReplicaCoordinator -- coordinateRequest %s\n",
+                this.myNodeID, request));
         if (!(request instanceof ReplicableClientRequest rcr)) {
             throw new RuntimeException("Unknown request/packet handled by AwReplicaCoordinator");
         }
@@ -72,18 +81,20 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         // confirmation. We directly acknowledge back to the client.
         // This implementation refers to the "Sequential Consistency versus Linearizability" paper,
         // specifically for Enqueue and Push operation in FIFO Queue and Stack, respectively.
-        if (clientRequest instanceof BehavioralRequest br && br.isNilExternal()) {
+        if (clientRequest instanceof BehavioralRequest br && br.isMonotonicRequest()) {
             this.paxosManager.propose(serviceName, clientRequest, null);
-            callback.executed(clientRequest, true);
-            return true;
+            boolean isExecSuccess = this.app.execute(clientRequest);
+            if (isExecSuccess) {
+                callback.executed(clientRequest, true);
+            }
+            return isExecSuccess;
         }
 
         // Most requests, especially write-only and read-modify-write requests need to
-        // be coordinated. We wait for the coordination confirmation before returning to client.
-        this.paxosManager.propose(serviceName, clientRequest, (executedRequest, isHandled) -> {
-            // System.out.println(">> execution result: " + executedRequest);
-            callback.executed(executedRequest, isHandled);
-        });
+        // be coordinated. Note that the code below is asynchronous, we wait for the
+        // coordination confirmation before returning to client.
+        this.paxosManager.propose(serviceName, clientRequest, callback);
+
         return true;
     }
 

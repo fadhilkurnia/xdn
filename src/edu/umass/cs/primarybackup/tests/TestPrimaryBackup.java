@@ -8,7 +8,7 @@ import edu.umass.cs.nio.SSLDataProcessingWorker;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.primarybackup.PrimaryBackupManager;
-import edu.umass.cs.reconfiguration.PrimaryBackupReplicaCoordinator;
+import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationPacketDemultiplexer;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;

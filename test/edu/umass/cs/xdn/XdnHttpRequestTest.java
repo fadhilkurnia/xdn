@@ -152,7 +152,7 @@ public class XdnHttpRequestTest {
 
         // prepare the app request parser
         String[] args = {"AR0"};
-        Replicable app = new XDNGigapaxosApp(args);
+        Replicable app = new XdnGigapaxosApp(args);
         assertFalse(app.getRequestTypes().isEmpty());
 
         // parse/deserialize the request
@@ -304,7 +304,7 @@ public class XdnHttpRequestTest {
         throw new RuntimeException("unimplemented");
     }
 
-    private HttpRequest helpCreateDummyHttpRequest() {
+    private static HttpRequest helpCreateDummyHttpRequest() {
         String serviceName = "dummyServiceName";
         return new DefaultHttpRequest(
                 HttpVersion.HTTP_1_1,
@@ -323,8 +323,8 @@ public class XdnHttpRequestTest {
                         .add("Content-Type", "multipart/mixed; boundary=gc0p4Jq0MYt08"));
     }
 
-    private HttpContent helpCreateDummyHttpContent(int contentLength) {
-        String randomHttpBody = this.helpCreateRandomString(contentLength);
+    private static HttpContent helpCreateDummyHttpContent(int contentLength) {
+        String randomHttpBody = helpCreateRandomString(contentLength);
         return new DefaultHttpContent(
                 Unpooled.copiedBuffer(randomHttpBody.getBytes(StandardCharsets.UTF_8)));
     }
@@ -337,7 +337,7 @@ public class XdnHttpRequestTest {
                 Unpooled.copiedBuffer(randomHttpBody.getBytes()));
     }
 
-    private String helpCreateRandomString(int length) {
+    private static String helpCreateRandomString(int length) {
         String AlphaNumericString = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvxyz0123456789";
         StringBuilder sb = new StringBuilder(length);
         for (int i = 0; i < length; ++i) {
@@ -345,6 +345,12 @@ public class XdnHttpRequestTest {
             sb.append(AlphaNumericString.charAt(ch));
         }
         return sb.toString();
+    }
+
+    public static XdnHttpRequest helpCreateDummyRequest() {
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(128);
+        return new XdnHttpRequest(request, content);
     }
 
 }

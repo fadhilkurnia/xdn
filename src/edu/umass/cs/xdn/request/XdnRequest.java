@@ -15,15 +15,14 @@ import java.nio.charset.StandardCharsets;
  * but the Response itself can still be Null.
  * <p>
  * Currently, there are three kind of Requests supported.
- *                            ┌────────────┐
- *         ┌─────────────────►│ XDNRequest │◄───────────────┐
- *         │                  └────────────┘                │
- *         │                                                │
- *         │                                                │
+ * ┌────────────┐
+ * ┌─────────────────►│ XDNRequest │◄───────────────┐
+ * │                  └────────────┘                │
+ * │                                                │
+ * │                                                │
  * ┌───────┴───────┐                         ┌──────────────┴─────────┐
  * │ XdnHttpRequest│                         │     XdnStopRequest     │
  * └───────────────┘                         └────────────────────────┘
-
  */
 public abstract class XdnRequest implements ReplicableRequest {
 

@@ -67,8 +67,6 @@ public class MessageExtractor implements InterfaceMessageExtractor {
 	protected MessageExtractor(AbstractPacketDemultiplexer<?> pd) {
 		packetDemuxes = new ArrayList<AbstractPacketDemultiplexer<?>>();
 		packetDemuxes.add(pd);
-
-		System.out.println(">>>>> MessageExtractor, adding " + pd.getClass().getSimpleName());
 	}
 
 	protected MessageExtractor() { // default packet demux returns false
@@ -87,8 +85,6 @@ public class MessageExtractor implements InterfaceMessageExtractor {
 				this.packetDemuxes);
 		tmp.add(pd);
 		this.packetDemuxes = tmp;
-
-		System.out.println(">>>>> MessageExtractor, adding " + pd.getClass().getSimpleName());
 	}
 
 	/**
@@ -103,8 +99,6 @@ public class MessageExtractor implements InterfaceMessageExtractor {
 		tmp.add(pd);
 		tmp.addAll(packetDemuxes);
 		this.packetDemuxes = tmp;
-
-		System.out.println(">>>>> MessageExtractor, front adding " + pd.getClass().getSimpleName());
 	}
 
 	/**

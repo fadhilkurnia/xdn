@@ -1,16 +1,8 @@
 package edu.umass.cs.clientcentric;
 
-import org.junit.Test;
-import org.junit.experimental.runners.Enclosed;
-import org.junit.runner.RunWith;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-@RunWith(Enclosed.class)
 public class VectorTimestamp {
 
     private final Map<String, Long> nodeTimestamp;
@@ -132,6 +124,19 @@ public class VectorTimestamp {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        VectorTimestamp timestamp = (VectorTimestamp) o;
+        return Objects.deepEquals(nodeTimestamp, timestamp.nodeTimestamp);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(nodeTimestamp);
+    }
+
+    @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append("VectorTimestamp/");
@@ -172,22 +177,4 @@ public class VectorTimestamp {
         }
         return timestamp;
     }
-
-    public static class VectorTimestampTest {
-        @Test
-        public void VectorTimestampTest_ToString() {
-            VectorTimestamp timestamp = new VectorTimestamp(List.of("AR0", "AR1", "AR2"));
-            assert timestamp.toString().equals("VectorTimestamp/AR1:0.AR2:0.AR0:0/") :
-                    "Incorrect timestamp format in String: " + timestamp;
-        }
-        @Test
-        public void VectorTimestampTest_FromString() {
-            String encoded = "VectorTimestamp/AR1:313.AR2:354.AR0:413/";
-            VectorTimestamp timestamp = VectorTimestamp.createFromString(encoded);
-            assert timestamp.getNodeTimestamp("AR1") == 313;
-            assert timestamp.getNodeTimestamp("AR2") == 354;
-            assert timestamp.getNodeTimestamp("AR0") == 413;
-        }
-    }
-
 }

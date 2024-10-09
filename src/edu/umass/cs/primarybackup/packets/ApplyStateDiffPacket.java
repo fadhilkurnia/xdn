@@ -1,48 +1,58 @@
 package edu.umass.cs.primarybackup.packets;
 
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
+import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.primarybackup.PrimaryEpoch;
+import edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.junit.Test;
-import org.junit.experimental.runners.Enclosed;
-import org.junit.runner.RunWith;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Objects;
-import java.util.Random;
+import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
-@RunWith(Enclosed.class)
-public class ApplyStateDiffPacket extends PrimaryBackupPacket {
+public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteable {
 
+    @Deprecated
     public static final String SERIALIZED_PREFIX = "pb:sd:";
 
+    private final long packetId;
     private final String serviceName;
     private final PrimaryEpoch<?> primaryEpoch;
     private final String stateDiff;
-    private final long requestID;
 
     public ApplyStateDiffPacket(String serviceName,
                                 PrimaryEpoch<?> primaryEpoch,
                                 String stateDiff) {
+        this(Math.abs(UUID.randomUUID().getLeastSignificantBits()),
+                serviceName,
+                primaryEpoch,
+                stateDiff);
+        assert serviceName != null;
+        assert primaryEpoch != null;
+        assert stateDiff != null;
+    }
+
+    private ApplyStateDiffPacket(long packetId,
+                                String serviceName,
+                                 PrimaryEpoch<?> primaryEpoch,
+                                 String stateDiff) {
+        assert packetId > 0;
         assert serviceName != null;
         assert primaryEpoch != null;
         assert stateDiff != null;
 
+        this.packetId = packetId;
         this.serviceName = serviceName;
         this.primaryEpoch = primaryEpoch;
         this.stateDiff = stateDiff;
-        this.requestID = System.currentTimeMillis();
-    }
-
-    private ApplyStateDiffPacket(String serviceName,
-                                 PrimaryEpoch<?> primaryEpoch,
-                                 String stateDiff,
-                                 long requestID) {
-        this.serviceName = serviceName;
-        this.primaryEpoch = primaryEpoch;
-        this.stateDiff = stateDiff;
-        this.requestID = requestID;
     }
 
     @Override
@@ -57,7 +67,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket {
 
     @Override
     public long getRequestID() {
-        return this.requestID;
+        return this.packetId;
     }
 
     @Override
@@ -78,7 +88,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ApplyStateDiffPacket that = (ApplyStateDiffPacket) o;
-        return requestID == that.requestID &&
+        return packetId == that.packetId &&
                 Objects.equals(serviceName, that.serviceName) &&
                 Objects.equals(primaryEpoch, that.primaryEpoch) &&
                 Objects.equals(stateDiff, that.stateDiff);
@@ -86,23 +96,70 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket {
 
     @Override
     public int hashCode() {
-        return Objects.hash(serviceName, primaryEpoch, stateDiff, requestID);
+        return Objects.hash(packetId, serviceName, primaryEpoch, stateDiff);
     }
 
     @Override
     public String toString() {
-        try {
-            JSONObject json = new JSONObject();
-            json.put("sn", this.serviceName);
-            json.put("ep", this.primaryEpoch.toString());
-            json.put("sd", this.stateDiff);
-            json.put("id", this.requestID);
-            return String.format("%s%s", SERIALIZED_PREFIX, json.toString());
-        } catch (JSONException e) {
-            throw new RuntimeException(e);
-        }
+        return new String(this.toBytes(), StandardCharsets.ISO_8859_1);
     }
 
+    @Override
+    public byte[] toBytes() {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        // Serialize the packet type
+        int packetType = this.getRequestType().getInt();
+        byte[] encodedHeader = ByteBuffer.allocate(4).putInt(packetType).array();
+
+        // Prepare the packet proto builder
+        PrimaryBackupPacketProto.ApplyStateDiffPacket.Builder protoBuilder =
+                PrimaryBackupPacketProto.ApplyStateDiffPacket.newBuilder()
+                        .setPacketId(this.packetId)
+                        .setServiceName(this.serviceName)
+                        .setPrimaryNodeId(this.primaryEpoch.nodeID)
+                        .setPrimaryEpoch(this.primaryEpoch.counter)
+                        .setEncodedStateDiff(
+                                ByteString.copyFrom(this.stateDiff, StandardCharsets.ISO_8859_1));
+
+        // Serialize the packetType in the header, followed by the protobuf
+        output.writeBytes(encodedHeader);
+        output.writeBytes(protoBuilder.build().toByteArray());
+        return output.toByteArray();
+    }
+
+    public static ApplyStateDiffPacket createFromBytes(byte[] encodedPacket) {
+        assert encodedPacket != null && encodedPacket.length > 0;
+
+        // Decode the packet type
+        assert encodedPacket.length >= 4;
+        ByteBuffer headerBuffer = ByteBuffer.wrap(encodedPacket);
+        int packetType = headerBuffer.getInt(0);
+        assert packetType == PrimaryBackupPacketType.PB_STATE_DIFF_PACKET.getInt()
+                : "invalid packet header: " + packetType;
+        byte[] encoded = encodedPacket;
+        encoded = Arrays.copyOfRange(encoded, 4, encoded.length);
+
+        // Decode the bytes into Proto
+        PrimaryBackupPacketProto.ApplyStateDiffPacket decodedProto = null;
+        try {
+            decodedProto = PrimaryBackupPacketProto.ApplyStateDiffPacket.parseFrom(encoded);
+        } catch (InvalidProtocolBufferException e) {
+            Logger.getGlobal().log(Level.WARNING,
+                    "Invalid protobuf bytes given: " + e.getMessage());
+            return null;
+        }
+
+        return new ApplyStateDiffPacket(
+                decodedProto.getPacketId(),
+                decodedProto.getServiceName(),
+                new PrimaryEpoch<>(
+                        decodedProto.getPrimaryNodeId(),
+                        decodedProto.getPrimaryEpoch()),
+                decodedProto.getEncodedStateDiff().toString(StandardCharsets.ISO_8859_1));
+    }
+
+    @Deprecated
     public static ApplyStateDiffPacket createFromString(String encodedPacket) {
         assert encodedPacket != null;
         assert !encodedPacket.isEmpty();
@@ -118,29 +175,12 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket {
             long requestID = json.getLong("id");
 
             return new ApplyStateDiffPacket(
+                    requestID,
                     serviceName,
-                    new PrimaryEpoch(primaryEpochStr),
-                    stateDiff,
-                    requestID);
+                    new PrimaryEpoch<String>(primaryEpochStr),
+                    stateDiff);
         } catch (JSONException e) {
             throw new RuntimeException(e);
-        }
-    }
-
-    public static class TestApplyStateDiffPacket {
-        @Test
-        public void TestApplyStateDiffPacketSerializationDeserialization() {
-            byte[] stateDiff = new byte[10240];
-            new Random().nextBytes(stateDiff);
-
-            String serviceName = "dummyServiceName";
-            PrimaryEpoch zero = new PrimaryEpoch("0:0");
-            String stateDiffString = new String(stateDiff, StandardCharsets.ISO_8859_1);
-
-            ApplyStateDiffPacket p1 = new ApplyStateDiffPacket(serviceName, zero, stateDiffString);
-            ApplyStateDiffPacket p2 = ApplyStateDiffPacket.createFromString(p1.toString());
-
-            assert p2.equals(p1);
         }
     }
 
