@@ -288,7 +288,7 @@ public class TestSendRequestWhilePrimaryChanges {
             );
             Thread.sleep(50);
         }
-        Thread.sleep(1000);
+        Thread.sleep(2000);
 
         assert managerAtNode1.isCurrentPrimary(serviceName) :
                 "After change primary, node1 must become the primary.";

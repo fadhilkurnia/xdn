@@ -46,7 +46,9 @@ public class ResponsePacket extends PrimaryBackupPacket implements Byteable {
         // Despite the name of getRequestID, this method intention is to get the packet ID.
         // We don't need to have packet ID for ResponsePacket because it is already
         // idempotent: it is safe for a replica to receive duplicate ResponsePacket.
-        return -1;
+        // Never mind, we need to return the request ID of the previously forwarded request.
+
+        return this.requestId;
     }
 
     @Override

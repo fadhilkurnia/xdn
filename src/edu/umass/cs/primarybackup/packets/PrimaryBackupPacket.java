@@ -18,6 +18,12 @@ public abstract class PrimaryBackupPacket implements ReplicableRequest {
         return PrimaryBackupPacketType.intToType.get(packetType);
     }
 
+    public static PrimaryBackupPacketType getQuickPacketTypeFromEncodedPacket(
+            String encodedPacket) {
+        return PrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(
+                encodedPacket.getBytes(StandardCharsets.ISO_8859_1));
+    }
+
     public static PrimaryBackupPacket createFromBytes(byte[] encodedPacket) {
         PrimaryBackupPacketType packetType =
                 PrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(encodedPacket);
