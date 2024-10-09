@@ -49,59 +49,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // requests forwarded to the PRIMARY
     private final Map<Long, RequestAndCallback> forwardedRequests;
 
-//    protected PrimaryBackupManager(NodeIDType nodeID,
-//                                   Replicable replicableApp,
-//                                   BackupableApplication backupableApp,
-//                                   Stringifiable<NodeIDType> unstringer,
-//                                   Messenger<NodeIDType, JSONObject> messenger,
-//                                   PaxosManager<NodeIDType> paxosManager,
-//                                   boolean omitClientMessengerInitialization) {
-//
-//        // Replicable and BackupableApplication interface must be implemented by the same
-//        // Application because captureStateDiff(.) in the BackupableApplication is invoked after
-//        // execute(.) in the Replicable.
-//        assert replicableApp.getClass().getSimpleName().
-//                equals(backupableApp.getClass().getSimpleName());
-//
-//        this.myNodeID = nodeID;
-//        this.nodeIDTypeStringifiable = unstringer;
-//        this.currentPrimaryEpoch = new ConcurrentHashMap<>();
-//        this.currentRole = new ConcurrentHashMap<>();
-//        this.currentPrimary = new ConcurrentHashMap<>();
-//
-//        this.replicableApp = replicableApp;
-//        this.backupableApp = backupableApp;
-//        this.paxosMiddlewareApp = new PaxosMiddlewareApp(
-//                nodeID.toString(),
-//                this
-//        );
-//
-//        if (paxosManager == null) {
-//            setupPaxosConfiguration();
-//            this.paxosManager = new PaxosManager<>(
-//                    this.myNodeID,
-//                    unstringer,
-//                    messenger,
-//                    this.paxosMiddlewareApp,
-//                    "/tmp/gigapaxos/pb_paxos_logs/",
-//                    true);
-//            if (!omitClientMessengerInitialization) {
-//                this.paxosManager.initClientMessenger(new InetSocketAddress(
-//                                messenger.getNodeConfig().getNodeAddress(this.myNodeID),
-//                                messenger.getNodeConfig().getNodePort(this.myNodeID)),
-//                        messenger);
-//            }
-//        } else {
-//            this.paxosManager = paxosManager;
-//        }
-//
-//        this.messenger = messenger;
-//        this.outstandingRequests = new ConcurrentLinkedQueue<>();
-//        this.forwardedRequests = new ConcurrentHashMap<>();
-//
-//        System.out.printf(">> %s PrimaryBackupManager is initialized.\n", myNodeID);
-//    }
-
     /**
      * The default constructor
      *
@@ -179,6 +126,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         assert paxosManager.isAppEquals(middlewareApp) :
                 "The Replicable application handled by Paxos Manager must be " +
                         "Primary Backup Middleware App";
+        this.validatePaxosConfiguration();
         this.paxosManager = paxosManager;
 
         this.myNodeID = nodeId;
@@ -205,8 +153,16 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 String.format("%s=%b", PaxosConfig.PC.BATCHING_ENABLED, false),
         };
         Config.register(args);
-
         // TODO: investigate how to enable batching without stateDiff reordering
+    }
+
+    private void validatePaxosConfiguration() {
+        assert Config.getGlobalBoolean(PaxosConfig.PC.ENABLE_EMBEDDED_STORE_SHUTDOWN);
+        assert !Config.getGlobalBoolean(PaxosConfig.PC.ENABLE_STARTUP_LEADER_ELECTION);
+        assert !Config.getGlobalBoolean(PaxosConfig.PC.FORWARD_PREEMPTED_REQUESTS);
+        assert Config.getGlobalInt(PaxosConfig.PC.PACKET_DEMULTIPLEXER_THREADS) == 0;
+        assert !Config.getGlobalBoolean(PaxosConfig.PC.HIBERNATE_OPTION);
+        assert !Config.getGlobalBoolean(PaxosConfig.PC.BATCHING_ENABLED);
     }
 
 
@@ -380,14 +336,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 serviceName,
                 myNodeID.toString(),
                 packet.toString().getBytes(StandardCharsets.ISO_8859_1));
-        NodeIDType currentPrimaryID = (NodeIDType) currentPrimaryIDStr;
-        GenericMessagingTask<NodeIDType, PrimaryBackupPacket> m = new GenericMessagingTask<>(
-                currentPrimaryID, forwardPacket);
+        GenericMessagingTask<NodeIDType, PrimaryBackupPacket> m =
+                new GenericMessagingTask<>(
+                        currentPrimaryIDStr, forwardPacket);
 
         // send the forwarded request to the primary
         try {
-            System.out.printf(">> PBManager-%s: is disconnected to %s? %b\n",
-                    myNodeID, currentPrimaryID, this.messenger.isDisconnected(currentPrimaryID));
             this.messenger.send(m);
         } catch (IOException | JSONException e) {
             throw new RuntimeException(e);
@@ -433,7 +387,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     ResponsePacket resp = new ResponsePacket(
                             executedRequest.getServiceName(),
                             rp.getRequestID(),
-                            requestWithResponse.getResponse().toString().
+                            requestWithResponse.getResponse(). toString().
                                     getBytes(StandardCharsets.ISO_8859_1));
                     String entryNodeIDStr = forwardedRequestPacket.getEntryNodeId();
                     NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
@@ -848,12 +802,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     //--------------------------------------------------------------------------------------------||
 
     //--------------------------------------------------------------------------------------------||
-    // Begin implementation for PaxosMiddlewareApp.                                               ||
+    // Begin implementation for PrimaryBackupMiddlewareApp.                                               ||
     // A middleware application that handle execute(.) before the PrimaryBackupManager can do     ||
     // execution in the BackupableApplication.                                                    ||
     //--------------------------------------------------------------------------------------------||
 
 
+    /**
+     * PrimaryBackupMiddlewareApp is the application of Paxos used in the PrimaryBackupManager.
+     * As an application of Paxos, generally PaxosMiddlewareApp apply the stateDiffs being
+     * agreed upon from Paxos. Thus, the execute() method simply apply the stateDiffs.
+     * Additionally, PaxosMiddlewareApp needs to ignore stateDiff from 'stale' primary
+     * to ensure primary integrity. i.e., making the execution as no-op.
+     */
     public static class PrimaryBackupMiddlewareApp implements Replicable {
 
         private final Replicable app;
@@ -891,7 +852,14 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         @Override
         public Request getRequest(String stringified) throws RequestParseException {
             if (stringified == null || stringified.isEmpty()) return null;
-            return PrimaryBackupPacket.createFromString(stringified);
+            PrimaryBackupPacketType packetType =
+                    PrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(stringified);
+
+            if (packetType != null) {
+                return PrimaryBackupPacket.createFromString(stringified);
+            }
+
+            return this.app.getRequest(stringified);
         }
 
         @Override
@@ -918,6 +886,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 return this.primaryBackupManager.executeApplyStateDiffPacket(stateDiffPacket);
             }
 
+            if (this.app.getRequestTypes().contains(request.getRequestType())) {
+                return this.app.execute(request);
+            }
+
             throw new RuntimeException(
                     String.format("PrimaryBackupMiddlewareApp: Unknown execute handler" +
                             " for request %s: %s", request.getClass().getSimpleName(), request));
@@ -936,172 +908,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     "Ensure to set the manager for this middleware app";
             return this.primaryBackupManager.executeRestore(name, state);
         }
-    }
-
-    /**
-     * PaxosMiddlewareApp is the application of Paxos used in the PrimaryBackupManager.
-     * As an application of Paxos, generally PaxosMiddlewareApp apply the stateDiffs being
-     * agreed upon from Paxos. Thus, the execute() method simply apply the stateDiffs.
-     * Additionally, PaxosMiddlewareApp needs to ignore stateDiff from 'stale' primary
-     * to ensure primary integrity. i.e., making the execution as no-op.
-     */
-    public class PaxosMiddlewareApp implements Replicable, Reconfigurable {
-
-        private final String myNodeID;
-        private final Set<IntegerPacketType> requestTypes;
-        private final PrimaryBackupManager<NodeIDType> managerPtr;
-
-        public PaxosMiddlewareApp(String myNodeID,
-                                  PrimaryBackupManager<NodeIDType> managerPtr) {
-            this.myNodeID = myNodeID;
-            this.managerPtr = managerPtr;
-
-            // only two packet/request type required by this PaxosMiddlewareApp
-            Set<IntegerPacketType> types = new HashSet<>();
-            types.add(PrimaryBackupPacketType.PB_START_EPOCH_PACKET);
-            types.add(PrimaryBackupPacketType.PB_STATE_DIFF_PACKET);
-            this.requestTypes = types;
-        }
-
-        @Override
-        public Request getRequest(String stringified) throws RequestParseException {
-            assert stringified != null;
-
-            if (stringified.startsWith(StartEpochPacket.SERIALIZED_PREFIX)) {
-                return StartEpochPacket.createFromString(stringified);
-            }
-
-            if (stringified.startsWith(ApplyStateDiffPacket.SERIALIZED_PREFIX)) {
-                return ApplyStateDiffPacket.createFromString(stringified);
-            }
-
-            throw new RequestParseException(
-                    new RuntimeException("unable to parse request " + stringified)
-            );
-        }
-
-        @Override
-        public Set<IntegerPacketType> getRequestTypes() {
-            return this.requestTypes;
-        }
-
-        @Override
-        public boolean execute(Request request) {
-            return execute(request, false);
-        }
-
-        @Override
-        public boolean execute(Request request, boolean doNotReplyToClient) {
-            if (request == null) {
-                return true;
-            }
-
-            System.out.printf(">> %s:PaxosMiddlewareApp execute %s\n",
-                    myNodeID, request.getRequestType());
-
-            if (request instanceof StartEpochPacket startEpochPacket) {
-                return executeStartEpochPacket(startEpochPacket);
-            }
-
-            if (request instanceof ApplyStateDiffPacket stateDiffPacket) {
-                return executeApplyStateDiffPacket(stateDiffPacket);
-            }
-
-            throw new RuntimeException(String.format("PaxosMiddlewareApp: Unknown execute handler" +
-                    " for request %s: %s", request.getClass().getSimpleName(), request));
-        }
-
-        private boolean executeStartEpochPacket(StartEpochPacket packet) {
-            return this.managerPtr.executeStartEpochPacket(packet);
-        }
-
-        private boolean executeApplyStateDiffPacket(ApplyStateDiffPacket packet) {
-            return this.managerPtr.executeApplyStateDiffPacket(packet);
-        }
-
-        @Override
-        public String checkpoint(String name) {
-            return this.managerPtr.executeGetCheckpoint(name);
-        }
-
-        @Override
-        public boolean restore(String name, String state) {
-            return this.managerPtr.executeRestore(name, state);
-        }
-
-        //----------------------------------------------------------------------------------------||
-        //                   Begin implementation methods for Replicable interface                ||
-        //----------------------------------------------------------------------------------------||
-
-        private record PaxosMiddlewareStopRequest(String serviceName, int placementEpoch)
-                implements ReconfigurableRequest {
-
-            @Override
-            public IntegerPacketType getRequestType() {
-                return ReconfigurableRequest.STOP;
-            }
-
-            @Override
-            public String getServiceName() {
-                return this.serviceName;
-            }
-
-            @Override
-            public int getEpochNumber() {
-                return this.placementEpoch;
-            }
-
-            @Override
-            public boolean isStop() {
-                return true;
-            }
-        }
-
-        @Override
-        public ReconfigurableRequest getStopRequest(String name, int epoch) {
-            return new PaxosMiddlewareStopRequest(name, epoch);
-        }
-
-        @Override
-        public String getFinalState(String name, int epoch) {
-            // TODO: implement me
-            String exceptionMessage = String.format(
-                    "PrimaryBackupManager.PaxosMiddlewareApp.getFinalState is unimplemented, " +
-                            "serviceName=%s epoch=%d",
-                    name, epoch);
-            throw new RuntimeException(exceptionMessage);
-        }
-
-        @Override
-        public void putInitialState(String name, int epoch, String state) {
-            // TODO: implement me
-            String exceptionMessage = String.format(
-                    "PrimaryBackupManager.PaxosMiddlewareApp.putInitialState is unimplemented, " +
-                            "serviceName=%s epoch=%d state=%s",
-                    name, epoch, state);
-            throw new RuntimeException(exceptionMessage);
-        }
-
-        @Override
-        public boolean deleteFinalState(String name, int epoch) {
-            // TODO: implement me
-            String exceptionMessage = String.format(
-                    "PrimaryBackupManager.PaxosMiddlewareApp.putInitialState is unimplemented, " +
-                            "serviceName=%s epoch=%d",
-                    name, epoch);
-            throw new RuntimeException(exceptionMessage);
-        }
-
-        @Override
-        public Integer getEpoch(String name) {
-            // TODO: store epoch for each service
-            return 0;
-        }
-
-        //----------------------------------------------------------------------------------------||
-        //                    End implementation methods for Replicable interface                 ||
-        //----------------------------------------------------------------------------------------||
-
     }
 
 }

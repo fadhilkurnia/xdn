@@ -178,9 +178,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         if (serviceName.equals(PaxosConfig.getDefaultServiceName()) ||
                 serviceName.equals(AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString()) ||
                 serviceName.equals(AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString())) {
-            boolean isSuccess = this.paxosCoordinator.createReplicaGroup(serviceName, epoch, state, nodes);
-            assert isSuccess : "failed to create default services";
-            this.serviceCoordinator.put(serviceName, this.paxosCoordinator);
+            // FIXME: we need to consider how to handle these default service and meta-name.
+            // boolean isSuccess = this.paxosCoordinator.createReplicaGroup(serviceName, epoch, state, nodes);
+            // assert isSuccess : "failed to create default services";
+            // this.serviceCoordinator.put(serviceName, this.paxosCoordinator);
             return true;
         }
 

@@ -1733,7 +1733,6 @@ public class PaxosManager<NodeIDType> {
             if ((pism = pinstances.get(paxosID)) != null)
                 pism.markActive();
         }
-        System.out.println(">>>> PISM - before unpause and restore for " + paxosID);
         if (pism == null
                 && ((tryHotRestore && (pism = this.unpause(paxosID)) != null) || (tryRestore && (pism = this
                 .restore(paxosID)) != null)))
@@ -2165,24 +2164,20 @@ public class PaxosManager<NodeIDType> {
             return null;
         PaxosInstanceStateMachine pism = null;
         if ((pism = this.pinstances.get(paxosID)) != null) {
-            System.out.println(">> PISM - try to restore but not null? " + pism);
             return pism;
         }
         PaxosConfig.log.log(Level.INFO, "{0} trying to restore instance {1}", new Object[]{
                 this, paxosID});
         RecoveryInfo pri = this.paxosLogger.getRecoveryInfo(paxosID);
-        System.out.println("PISM - recover info " + pri);
         if (pri != null)
             pism = this.recover(paxosID, pri.getVersion(), this.myID,
                     this.getNodesFromStringSet(pri.getMembers()), this.myApp,
                     pri.getState());
         if (pism != null) {
-            System.out.println("PISM - recovery is success");
             PaxosConfig.log.log(Level.INFO,
                     "{0} successfully restored hibernated instance {1}",
                     new Object[]{this, pism});
         } else {
-            System.out.println("PISM - recovery is unsuccessfull");
             PaxosConfig.log.log(Level.WARNING, "{0} unable to restore paxos instance {1}",
                     new Object[]{this, paxosID});
         }
@@ -2308,10 +2303,7 @@ public class PaxosManager<NodeIDType> {
 
             HotRestoreInfo hri = this.paxosLogger.unpause(paxosID);
 
-            System.out.println("PISM - unpause restore info " + hri);
-
             if (hri != null) {
-                System.out.println("PISM - unpause is successfully: " + hri);
                 PaxosConfig.log.log(Level.FINE,
                         "{0} successfully unpaused paused instance {1}",
                         new Object[]{this, paxosID});

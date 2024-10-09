@@ -320,7 +320,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             throw new RuntimeException(exceptionMessage);
         }
 
-        // Case-1: gigapaxos started meta service with name == XDNGigaPaxosApp0 and state == {}
+        // Case-1: Gigapaxos started meta service with name == XDNGigaPaxosApp0 and state == {}
         if (name.equals(PaxosConfig.getDefaultServiceName()) &&
                 state != null && state.equals("{}")) {
             return true;
