@@ -368,7 +368,12 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     @Override
     public boolean deleteReplicaGroup(String serviceName, int epoch) {
-        throw new RuntimeException("unimplemented");
+        AbstractReplicaCoordinator<NodeIDType> coordinator =
+                this.serviceCoordinator.get(serviceName);
+        if (coordinator == null) {
+            return true;
+        }
+        return coordinator.deleteReplicaGroup(serviceName, epoch);
     }
 
     @Override

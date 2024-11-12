@@ -1542,12 +1542,21 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 									.setName(this.appCoordinator.app.toString()
 											+ ":" + (ssl ? "SSL" : "")
 											+ "ClientMessenger"));
-					if (!niot.getListeningSocketAddress().equals(isa))
-						throw new IOException(
-								"Unable to listen on specified client facing socket address "
-										+ isa
-										+ "; created messenger listening instead on "
-										+ niot.getListeningSocketAddress());
+					if (!niot.getListeningSocketAddress().equals(isa)) {
+						if (niot.getListeningSocketAddress().getPort() == isa.getPort() &&
+								niot.getListeningSocketAddress().getAddress().isAnyLocalAddress()) {
+							log.log(Level.WARNING,
+									"{0} Unable to listen on specified client facing socket "
+									+ "address {1}, but listen to any local address of {2}",
+									new Object[] { this, niot.getListeningSocketAddress(), isa });
+						} else {
+							throw new IOException(
+									"Unable to listen on specified client facing socket address "
+											+ isa
+											+ "; created messenger listening instead on "
+											+ niot.getListeningSocketAddress());
+						}
+					}
 				} else if (!ssl) {
 					log.log(Level.INFO,
 							"{0} adding self as demultiplexer to existing {1} client messenger",

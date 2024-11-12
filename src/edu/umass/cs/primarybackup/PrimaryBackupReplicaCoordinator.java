@@ -143,13 +143,8 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
         }
 
         // handle application stop request
-        if (request instanceof ReconfigurableRequest reconfigurableRequest &&
-                reconfigurableRequest.isStop()) {
-            boolean isSuccess = this.pbManager.handleStopRequest(reconfigurableRequest);
-            assert isSuccess;
-            callback.executed(reconfigurableRequest, true);
-            return isSuccess;
-
+        if (request instanceof ReconfigurableRequest reconfigurableRequest) {
+            return this.pbManager.handleReconfigurationPacket(reconfigurableRequest, callback);
         }
 
         // printout a helpful exception message by showing the possible acceptable packets
