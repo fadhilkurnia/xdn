@@ -5,8 +5,6 @@ import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.xdn.proto.XdnStopRequestProto;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -21,18 +19,18 @@ public class XdnStopRequest extends XdnRequest implements ReconfigurableRequest,
 
     private final long requestID;
     private final String serviceName;
-    private final int reconfigurationEpochNumber;
+    private final int placementEpochNumber;
 
-    public XdnStopRequest(String serviceName, int reconfigurationEpochNumber) {
+    public XdnStopRequest(String serviceName, int placementEpochNumber) {
         this(Math.abs(UUID.randomUUID().getLeastSignificantBits()),
                 serviceName,
-                reconfigurationEpochNumber);
+                placementEpochNumber);
     }
 
-    private XdnStopRequest(long requestID, String serviceName, int reconfigurationEpochNumber) {
+    private XdnStopRequest(long requestID, String serviceName, int placementEpochNumber) {
         this.requestID = requestID;
         this.serviceName = serviceName;
-        this.reconfigurationEpochNumber = reconfigurationEpochNumber;
+        this.placementEpochNumber = placementEpochNumber;
     }
 
     @Override
@@ -47,7 +45,7 @@ public class XdnStopRequest extends XdnRequest implements ReconfigurableRequest,
 
     @Override
     public int getEpochNumber() {
-        return this.reconfigurationEpochNumber;
+        return this.placementEpochNumber;
     }
 
     @Override
@@ -83,7 +81,7 @@ public class XdnStopRequest extends XdnRequest implements ReconfigurableRequest,
                 XdnStopRequestProto.XdnStopRequest.newBuilder()
                         .setRequestId(this.requestID)
                         .setServiceName(this.serviceName)
-                        .setReconfigurationEpoch(this.reconfigurationEpochNumber);
+                        .setReconfigurationEpoch(this.placementEpochNumber);
 
         // Serialize the packetType in the header, followed by the protobuf
         output.writeBytes(encodedHeader);
@@ -96,14 +94,14 @@ public class XdnStopRequest extends XdnRequest implements ReconfigurableRequest,
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         XdnStopRequest that = (XdnStopRequest) o;
-        return reconfigurationEpochNumber == that.reconfigurationEpochNumber &&
+        return placementEpochNumber == that.placementEpochNumber &&
                 requestID == that.requestID &&
                 Objects.equals(serviceName, that.serviceName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(serviceName, reconfigurationEpochNumber, requestID);
+        return Objects.hash(serviceName, placementEpochNumber, requestID);
     }
 
     public static XdnStopRequest createFromString(String encodedRequest) {

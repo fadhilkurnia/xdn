@@ -1,11 +1,10 @@
 package edu.umass.cs.xdn.service;
 
+import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
+import io.netty.handler.codec.http.HttpMethod;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.junit.Test;
-import org.junit.experimental.runners.Enclosed;
-import org.junit.runner.RunWith;
 
 import java.util.*;
 
@@ -14,6 +13,7 @@ public class ServiceProperty {
 
     public static String XDN_INITIAL_STATE_PREFIX = "xdn:init:";
     public static String XDN_CHECKPOINT_PREFIX = "xdn:checkpoint:";
+    public static String XDN_EPOCH_FINAL_STATE_PREFIX = "xdn:final:";
 
     private final String serviceName;
     private final boolean isDeterministic;
@@ -28,9 +28,10 @@ public class ServiceProperty {
     private ServiceComponent entryComponent;
     private ServiceComponent statefulComponent;
 
+    private List<RequestMatcher> requestMatchers;
+
     private ServiceProperty(String serviceName, boolean isDeterministic, String stateDirectory,
-                            ConsistencyModel consistencyModel,
-                            List<ServiceComponent> components) {
+                            ConsistencyModel consistencyModel, List<ServiceComponent> components) {
         this.serviceName = serviceName;
         this.isDeterministic = isDeterministic;
         this.stateDirectory = stateDirectory;
@@ -62,16 +63,16 @@ public class ServiceProperty {
         return statefulComponent;
     }
 
-    public static ServiceProperty createFromJSONString(String jsonString) throws JSONException {
+    public static ServiceProperty createFromJsonString(String jsonString) throws JSONException {
         JSONObject json = new JSONObject(jsonString);
 
         // parsing and validating service name
         String serviceName = json.getString("name");
         if (serviceName == null || serviceName.isEmpty()) {
-            throw new RuntimeException("service name is required");
+            throw new IllegalStateException("service name is required");
         }
         if (serviceName.length() > 256) {
-            throw new RuntimeException("service name must be <= 256 characters");
+            throw new IllegalStateException("service name must be <= 256 characters");
         }
 
         // parsing is-deterministic
@@ -102,14 +103,14 @@ public class ServiceProperty {
         // parsing and validating service component(s)
         List<ServiceComponent> components = new ArrayList<>();
         if (json.has("image") && json.has("components")) {
-            throw new RuntimeException("a service must either have a single component, " +
+            throw new IllegalStateException("a service must either have a single component, " +
                     "declared with 'image', or have multiple components declared with 'components'");
         }
         // case-1: handle service with a single component
         if (json.has("image")) {
             String imageName = json.getString("image");
             if (imageName == null || imageName.isEmpty()) {
-                throw new RuntimeException("docker image name is required");
+                throw new IllegalStateException("docker image name is required");
             }
 
             // parse entry port with port 80 as the default
@@ -146,6 +147,23 @@ public class ServiceProperty {
             components.addAll(parseServiceComponents(componentsJSON));
         }
 
+        // parsing and validating request matchers
+        List<RequestMatcher> parsedRequestMatchers = null;
+        if (json.has("requests")) {
+            JSONArray requestMatcherArr = json.getJSONArray("requests");
+            if (requestMatcherArr != null && requestMatcherArr.length() > 0) {
+                parsedRequestMatchers = ServiceProperty.parseRequestMatchers(requestMatcherArr);
+            }
+        }
+        // provide the default request matcher:
+        //  - all GET,HEAD,OPTIONS, and TRACE requests are read_only,
+        //  - all PUT and DELETE requests are write_only,
+        //  - all POST and PATCH requests are read_modify_write.
+        // read_modify_write.
+        if (parsedRequestMatchers == null) {
+            parsedRequestMatchers = createDefaultMatchers();
+        }
+
         ServiceProperty prop = new ServiceProperty(
                 serviceName,
                 isDeterministic,
@@ -163,7 +181,8 @@ public class ServiceProperty {
                 if (sc.getComponentName().equals(statefulComponent))
                     c = sc;
             if (c == null) {
-                throw new RuntimeException("unknown service's component specified in the state dir");
+                throw new IllegalStateException(
+                        "unknown service's component specified in the state dir");
             }
             c.setIsStateful(true);
         }
@@ -176,13 +195,89 @@ public class ServiceProperty {
             if (c.isEntryComponent()) numEntryComponent++;
         }
         if (numStatefulComponent > 1) {
-            throw new RuntimeException("there is at most one stateful service's component");
+            throw new IllegalStateException("only one stateful service's component is allowed");
         }
         if (numEntryComponent != 1) {
-            throw new RuntimeException("there must be one entry component");
+            throw new IllegalStateException("there must be one entry component");
         }
 
         return prop;
+    }
+
+    private static List<RequestMatcher> parseRequestMatchers(JSONArray matcherJsonArray)
+            throws JSONException {
+        List<RequestMatcher> parsedMatchers = new ArrayList<>();
+        for (int i = 0; i < matcherJsonArray.length(); i++) {
+            JSONObject matcherItem = matcherJsonArray.getJSONObject(i);
+
+            // get the optional name
+            String matcherName = matcherItem.has("name")
+                    ? matcherItem.getString("name") : null;
+
+            // get the path prefix
+            String pathPrefix = null;
+            pathPrefix = matcherItem.has("prefix")
+                    ? matcherItem.getString("prefix") : null;
+            pathPrefix = matcherItem.has("path_prefix")
+                    ? matcherItem.getString("path_prefix") : null;
+            if (pathPrefix == null) {
+                throw new IllegalStateException("prefix is required for request matcher");
+            }
+
+            // get the comma-separated methods
+            String[] methods = null;
+            String methodsRaw = matcherItem.has("methods")
+                    ? matcherItem.getString("methods") : null;
+            if (methodsRaw == null) {
+                throw new IllegalStateException("methods is required for request matcher");
+            }
+            methods = methodsRaw.split(",");
+
+            // get the behavior
+            String behaviorRaw = null;
+            behaviorRaw = matcherItem.has("behavior")
+                    ? matcherItem.getString("behavior") : null;
+            if (behaviorRaw == null) {
+                throw new IllegalStateException("behavior is required for request matcher");
+            }
+            RequestBehaviorType behaviorType = RequestBehaviorType.fromString(behaviorRaw);
+
+            RequestMatcher matcher =
+                    new RequestMatcher(matcherName,
+                            pathPrefix,
+                            List.of(methods),
+                            behaviorType);
+            parsedMatchers.add(matcher);
+        }
+        return parsedMatchers;
+    }
+
+    private static List<RequestMatcher> createDefaultMatchers() {
+        List<RequestMatcher> defaultMatchers = new ArrayList<>();
+        defaultMatchers.add(
+                new RequestMatcher(
+                        null,
+                        "/",
+                        List.of(HttpMethod.GET.name(),
+                                HttpMethod.HEAD.name(),
+                                HttpMethod.OPTIONS.name(),
+                                HttpMethod.TRACE.name()),
+                        RequestBehaviorType.READ_ONLY));
+        defaultMatchers.add(
+                new RequestMatcher(
+                        null,
+                        "/",
+                        List.of(HttpMethod.PUT.name(),
+                                HttpMethod.DELETE.name()),
+                        RequestBehaviorType.WRITE_ONLY));
+        defaultMatchers.add(
+                new RequestMatcher(
+                        null,
+                        "/",
+                        List.of(HttpMethod.POST.name(),
+                                HttpMethod.PATCH.name()),
+                        RequestBehaviorType.READ_MODIFY_WRITE));
+        return defaultMatchers;
     }
 
     private static void validateStateDirectory(String stateDirectory) {
@@ -380,6 +475,46 @@ public class ServiceProperty {
 
     public List<ServiceComponent> getComponents() {
         return components;
+    }
+
+    public String toJsonString() {
+        assert !this.components.isEmpty() : "unexpected empty component";
+
+        // handle service with a single component
+        if (this.components.size() == 1) {
+            JSONObject jsonObject = new JSONObject();
+            try {
+                jsonObject.put("name", this.serviceName);
+                jsonObject.put("image", this.getEntryComponent().getImageName());
+                jsonObject.put("port", this.getEntryComponent().getEntryPort());
+                jsonObject.put("state", this.stateDirectory);
+                jsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
+                jsonObject.put("deterministic", this.isDeterministic);
+            } catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
+            return jsonObject.toString();
+        }
+
+        // handle service with multiple components
+        JSONObject servicePropertyJsonObject = new JSONObject();
+        try {
+            servicePropertyJsonObject.put("name", this.serviceName);
+            servicePropertyJsonObject.put("state", this.stateDirectory);
+            servicePropertyJsonObject.put("deterministic", this.isDeterministic);
+            servicePropertyJsonObject.put("consistency",
+                    this.consistencyModel.toString().toLowerCase());
+            JSONArray componentArray = new JSONArray();
+            for (ServiceComponent component : this.components) {
+                JSONObject componentJsonObject = component.toJsonObject();
+                componentArray.put(componentJsonObject);
+            }
+            servicePropertyJsonObject.put("components", componentArray);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+
+        return servicePropertyJsonObject.toString();
     }
 
 }

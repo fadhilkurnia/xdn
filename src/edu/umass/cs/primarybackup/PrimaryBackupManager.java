@@ -25,6 +25,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
@@ -765,6 +767,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         this.paxosManager.restartFromLastCheckpoint(groupName);
     }
 
+    protected boolean handleStopRequest(ReconfigurableRequest stopRequest) {
+        assert stopRequest.isStop() : "incorrect request type";
+        return this.replicableApp.execute(stopRequest, true);
+    }
+
 
     //--------------------------------------------------------------------------------------------||
     //                  Begin implementation for AppRequestParser interface                       ||
@@ -890,6 +897,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 return this.app.execute(request);
             }
 
+            if (request instanceof ReconfigurableRequest rcRequest && rcRequest.isStop()) {
+                return this.app.restore(request.getServiceName(), null);
+            }
+
             throw new RuntimeException(
                     String.format("PrimaryBackupMiddlewareApp: Unknown execute handler" +
                             " for request %s: %s", request.getClass().getSimpleName(), request));
@@ -904,10 +915,17 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         @Override
         public boolean restore(String name, String state) {
-            assert this.primaryBackupManager != null :
-                    "Ensure to set the manager for this middleware app";
-            return this.primaryBackupManager.executeRestore(name, state);
+            // FIXME: all names will go through primary backup, we need a mapper
+            //  that somehow bypass primary backup for names that use other coordinator.
+            //  For now, it is fine as executeRestore is only storing data in a map.
+            if (this.primaryBackupManager != null) {
+                return this.primaryBackupManager.executeRestore(name, state);
+            }
+            Logger.getGlobal().log(Level.WARNING,
+                    "PrimaryBackupManager was not set before restore");
+            return this.app.restore(name, state);
         }
+
     }
 
 }

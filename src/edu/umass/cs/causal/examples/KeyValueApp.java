@@ -29,8 +29,6 @@ public class KeyValueApp implements Replicable, Reconfigurable {
         // FIXME: quick hack because we dont differentiate coordination packet and
         //  app request packet
 
-        System.out.println(">>> getRequest() " + stringified);
-
         if (stringified != null && stringified.startsWith(edu.umass.cs.causal.examples.KeyValueAppRequest.SERIALIZED_PREFIX)) {
             return edu.umass.cs.causal.examples.KeyValueAppRequest.createFromString(stringified);
         }

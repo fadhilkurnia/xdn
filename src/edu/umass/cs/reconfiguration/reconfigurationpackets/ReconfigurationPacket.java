@@ -1,17 +1,17 @@
 /* Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- * 
+ *
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration.reconfigurationpackets;
 
@@ -62,44 +62,44 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 		 * send DEMAND_REPORTs to reconfigurators. Upon the receipt of some (but
 		 * far from all) demand report, a reconfigurator might decide to
 		 * initiate a reconfiguration that proceeds as follows:
-		 * 
+		 *
 		 * DEMAND_REPORT: coordinate "reconfiguration intent" RC_RECORD_REQUEST
 		 * with other reconfigurators.
-		 * 
+		 *
 		 * RC_RECORD_REQUEST (RECONFIGURATION_INTENT) : send STOP_EPOCH to all
 		 * active replicas.
-		 * 
+		 *
 		 * STOP_EPOCH: coordinate STOP_EPOCH with other active replicas.
-		 * 
+		 *
 		 * PaxosPacket.DECISION(STOP_EPOCH) : send ACK_STOP_EPOCH to
 		 * reconfigurators.
-		 * 
+		 *
 		 * ACK_STOP_EPOCH : send START_EPOCH to next epoch active replicas.
-		 * 
+		 *
 		 * START_EPOCH : send REQUEST_EPOCH_FINAL_STATE to previous epoch active
 		 * replicas.
-		 * 
+		 *
 		 * REQUEST_EPOCH_FINAL_STATE : send EPOCH_FINAL_STATE
-		 * 
+		 *
 		 * EPOCH_FINAL_STATE : create new epoch group locally and send
 		 * ACK_START_EPOCH to initiating reconfigurator.
-		 * 
+		 *
 		 * ACK_START_EPOCH : upon receiving a majority of these from the new
 		 * epoch, send DROP_EPOCH_FINAL_STATE to old epoch active replicas, and
 		 * and coordinate RC_RECORD_REQUEST marking "reconfiguration complete"
 		 * with other reconfigurators (although the reconfiguration is not
 		 * completely complete yet).
-		 * 
+		 *
 		 * RC_RECORD_REQUEST (RECONFIGURATION_COMPLETE) : mark the reconfigured
 		 * name as READY to receive client requests.
-		 * 
+		 *
 		 * DROP_EPOCH_FINAL_STATE : drop old, stopped epoch's final state and
 		 * send ACK_DROP_EPOCH_FINAL_STATE to reconfigurator.
-		 * 
+		 *
 		 * ACK_DROP_EPOCH_FINAL_STATE : wait until all old epoch active replicas
 		 * have dropped their state, marking the final completion of the
 		 * reconfiguration.
-		 * 
+		 *
 		 */
 
 		// reconfigurator -> active_replica
@@ -132,16 +132,19 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 		RECONFIGURE_RC_NODE_CONFIG(239), RECONFIGURE_ACTIVE_NODE_CONFIG(240),
 
 		// client <-> active
-		ECHO_REQUEST(241), 
-		
+		ECHO_REQUEST(241),
+
 		// client <-> active
 		REPLICABLE_CLIENT_REQUEST (242),
-		
+
 		// active -> active, or active -> reconfigurator: initialize a connection behind NAT
 		HELLO_REQUEST(243),
-		
+
+		// change the replica placement
+        SET_REPLICA_PLACEMENT_REQUEST(244),
+
 		NO_TYPE (999),
-		
+
 		;
 
 		private final int number;
@@ -221,8 +224,10 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 				EchoRequest.class);
 		typeMap.put(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST,
 				ReplicableClientRequest.class);
-		typeMap.put(ReconfigurationPacket.PacketType.HELLO_REQUEST, 
+		typeMap.put(ReconfigurationPacket.PacketType.HELLO_REQUEST,
 				HelloRequest.class);
+
+		typeMap.put(PacketType.SET_REPLICA_PLACEMENT_REQUEST, SetReplicaPlacementRequest.class);
 
 		for (ReconfigurationPacket.PacketType type : ReconfigurationPacket.PacketType.intToType
 				.values()) {
@@ -466,7 +471,7 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 	private static final String CHARSET = "ISO-8859-1";
 
 	private static final boolean BYTEIFICATION = Config.getGlobalBoolean(PC.BYTEIFICATION);
-	
+
 	@Override
 	public byte[] toBytes() {
 		byte[] body=null;

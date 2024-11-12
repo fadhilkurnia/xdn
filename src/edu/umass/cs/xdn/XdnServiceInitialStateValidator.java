@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class XdnServiceInitialStateValidator implements InitialStateValidator {
+
     @Override
     public void validateInitialState(String initialState) throws InvalidInitialStateException {
         if (initialState == null || initialState.isEmpty()) {
@@ -30,7 +31,7 @@ public class XdnServiceInitialStateValidator implements InitialStateValidator {
         initialState = initialState.substring(validInitialStatePrefix.length());
         ServiceProperty property = null;
         try {
-            property = ServiceProperty.createFromJSONString(initialState);
+            property = ServiceProperty.createFromJsonString(initialState);
         } catch (JSONException e) {
             throw new InvalidInitialStateException(
                     "Invalid initial state, expecting valid JSON data. Error: " + e.getMessage());
@@ -44,8 +45,16 @@ public class XdnServiceInitialStateValidator implements InitialStateValidator {
             containerNames.add(c.getImageName());
         }
         for (String imageName : containerNames) {
-            String command = String.format("docker inspect --type=image %s:latest", imageName);
+            // First, try to inspect local image, if any.
+            String command = String.format("docker image inspect %s", imageName);
             int errCode = Shell.runCommand(command, true);
+            if (errCode == 0) {
+                continue;
+            }
+
+            // Fallback by checking remote image.
+            command = String.format("docker manifest inspect --insecure %s", imageName);
+            errCode = Shell.runCommand(command, true);
             if (errCode != 0) {
                 String exceptionMessage = String.format(
                         "Unknown container image with name '%s'. Ensure the image is accessible " +

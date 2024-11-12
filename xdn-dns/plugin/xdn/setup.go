@@ -39,8 +39,8 @@ func setupXDNPlugin(c *caddy.Controller) error {
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		return XDN{
-			myControlPlane: myControlPlane,
-			myIPAddress:    myIPAddress,
+			xdnControlPlaneHost:      myControlPlane,
+			xdnControlPlaneIPAddress: myIPAddress,
 		}
 	})
 

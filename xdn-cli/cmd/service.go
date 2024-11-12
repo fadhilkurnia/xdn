@@ -126,12 +126,22 @@ var ServiceInfoCmd = &cobra.Command{
 					} else {
 						continue
 					}
+					// example format: c240g5-110201.wisc.cloudlab.us/128.105.144.59:2000
 					rawAddressComponents := strings.Split(rawAddressStr, ":")
 					if len(rawAddressComponents) != 2 {
 						panic("unexpected address format")
 					}
-					ipAddress := rawAddressComponents[0][1:]
-					replicaAddressList = append(replicaAddressList, ipAddress)
+					rawHostComponents := strings.Split(rawAddressComponents[0], "/")
+					if len(rawHostComponents) != 2 {
+                        panic("unexpected address host format")
+                    }
+                    host := rawHostComponents[0]
+					ipAddress := rawHostComponents[1]
+					printedFormat := ipAddress
+					if host != "" {
+					    printedFormat += " (" + host + ")"
+					}
+					replicaAddressList = append(replicaAddressList, printedFormat)
 				}
 			}
 		}
@@ -157,7 +167,7 @@ var ServiceInfoCmd = &cobra.Command{
 		fmt.Printf("\n")
 		fmt.Printf(" Current replicas placement, with epoch=%s:\n",
 			epochNumberStr)
-		fmt.Printf("  | %-10s | %-24s | %-16s | %-16s | %-16s |\n",
+		fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
 			fmt.Sprint("MACHINE ID"),
 			fmt.Sprint("PUBLIC IP"),
 			fmt.Sprint("ROLE"),
@@ -170,10 +180,10 @@ var ServiceInfoCmd = &cobra.Command{
 			if idx != 0 {
 				roleStr = dummyColorPrint.Sprint("backup ")
 			}
-			fmt.Printf("  | %-10s | %-24s | %-16s | %-16s | %-16s |\n",
+			fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
 				fmt.Sprintf("AR%d", idx),
 				fmt.Sprintf("%s", address),
-				fmt.Sprintf("%s         ", roleStr),
+				fmt.Sprintf("%s   ", roleStr),
 				fmt.Sprintf("%s   ", createdStr),
 				fmt.Sprintf("%s    ", statusStr))
 		}

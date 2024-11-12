@@ -636,6 +636,9 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 		log.log(debug, "{0} handleMessage received {1}", new Object[] { this,
 				incoming.getSummary(log.isLoggable(debug)) });
 
+		System.out.println(">>> ActiveReplica --- handling incoming message " +
+				incoming.getClass().getSimpleName() + ": " + incoming + " at " + this.getMyID());
+
 		long entryTime = System.nanoTime();
 		@SuppressWarnings("unchecked")
 		BasicReconfigurationPacket<NodeIDType> rcPacket =
@@ -1414,6 +1417,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	/* Report demand stats to reconfigurators. This method will necessarily
 	 * result in a stats message being sent out to reconfigurators. */
 	private void report(AbstractDemandProfile demand) {
+		System.out.println(">> ActiveReplica --- sending demand report " + demand.getDemandStats());
 		try {
 			NodeIDType reportee = selectReconfigurator(demand.getName());
 			assert (reportee != null);
@@ -1643,6 +1647,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	@Override
 	public boolean handRequestToAppForHttp(Request request, ExecutedCallback callback) {
 		return handRequestToApp(request, callback);
+		// TODO: consider to send demand profile to RC.
 	}
 
 	/**

@@ -36,6 +36,7 @@ the following system requirements:
     ```
    git pull https://github.com/fadhilkurnia/xdn.git
    cd xdn
+   git checkout consistency-dev
     ```
 2. Compile XDN source code:
     ```
@@ -108,7 +109,7 @@ To deploy a stateful service with this existing provider, simply follow the step
    export XDN_CONTROL_PLANE=localhost
    ```
 
-3. With `xdn` command line, launch a containerized stateful service:
+3. With `xdn` command line, launch a containerized stateful service with `bookcatalog` as the name:
    ```bash
    xdn launch bookcatalog --image=fadhilkurnia/xdn-bookcatalog --state=/app/data/ --deterministic=true
    ```
@@ -131,7 +132,8 @@ To deploy a stateful service with this existing provider, simply follow the step
 
    We can also verify that the replicated services run in the background using `docker ps`.
 
-4. Access the replicated services in the active replicas:
+4. Access the replicated services in the active replicas with curl. Note that we need to specify
+   the service name (`bookcatalog`) in the header with `XDN` as the key.
    ```
    # access from the first replica:
    curl -v http://localhost:2300/ -H "XDN: bookcatalog"
@@ -153,9 +155,9 @@ To deploy a stateful service with this existing provider, simply follow the step
    ```
    Then you can access the replicated web service with those host, without XDN custom header:
    ```
-   curl -v http://tpcc-web.ar0.xdn.io:2300/
-   curl -v http://tpcc-web.ar1.xdn.io:2301/
-   curl -v http://tpcc-web.ar2.xdn.io:2301/
+   curl -v http://bookcatalog.xdn.io:2300/
+   curl -v http://bookcatalog.xdn.io:2301/
+   curl -v http://bookcatalog.xdn.io:2301/
    ```
 
 > To stop xdn, we need to stop the Reconfigurator and ActiveReplicas and clean all the state:
