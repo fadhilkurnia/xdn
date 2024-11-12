@@ -926,7 +926,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private boolean deleteContainerizedServiceInstance(String serviceName, int placementEpoch) {
         assert serviceName != null && !serviceName.isEmpty();
         assert placementEpoch >= 0;
-        System.out.println(">>> Stopping a containerized service name=" + serviceName +
+        System.out.println(">>> Deleting a containerized service name=" + serviceName +
                 " epoch=" + placementEpoch);
 
         // validate and get the service metadata for the provided serviceName and placementEpoch
@@ -1115,7 +1115,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     }
 
     private boolean removeContainer(String containerName) {
-        String removeCommand = String.format("docker container rm %s", containerName);
+        String removeCommand = String.format("docker container rm --force %s", containerName);
         int exitCode = runShellCommand(removeCommand, true);
         if (exitCode != 0 && exitCode != 1) {
             // 1 is the exit code of removing a non-existent container
@@ -1454,6 +1454,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public String getFinalState(String name, int epoch) {
+        // TODO: validate whether this works with PrimaryBackup or not
         System.out.println(">>> " + this.myNodeId + ":XdnGigapaxosApp - getFinalState name=" +
                 name + " epoch=" + epoch);
 
@@ -1519,9 +1520,8 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     @Override
     public Integer getEpoch(String name) {
         assert name != null && !name.isEmpty();
-        System.out.println(">> XdnGigapaxosApp:" + this.myNodeId +
-                " -- getEpoch(name=" + name + ")");
-        return this.servicePlacementEpoch.get(name);
+        Integer currentPlacementEpoch = this.servicePlacementEpoch.get(name);
+        return currentPlacementEpoch;
     }
 
     /**********************************************************************************************

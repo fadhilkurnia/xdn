@@ -11,7 +11,6 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.primarybackup.packets.*;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
-import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
@@ -741,8 +740,17 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     // TODO: also handle deletion of PBInstance with placement epoch
     public boolean deletePrimaryBackupInstance(String groupName, int placementEpoch) {
-        System.out.println(">> deletePrimaryBackupInstance - " + groupName);
-        return this.paxosManager.deleteStoppedPaxosInstance(groupName, placementEpoch);
+        System.out.printf(">> %s:PbManager deletePrimaryBackupInstance name=%s epoch=%d\n",
+                this.myNodeID, groupName, placementEpoch);
+        boolean isPaxosStopped = this.paxosManager.
+                deleteStoppedPaxosInstance(groupName, placementEpoch);
+        if (!isPaxosStopped) {
+            return false;
+        }
+
+        // TODO: handle placement epoch
+
+        return true;
     }
 
     public Set<NodeIDType> getReplicaGroup(String groupName) {
@@ -767,9 +775,34 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         this.paxosManager.restartFromLastCheckpoint(groupName);
     }
 
-    protected boolean handleStopRequest(ReconfigurableRequest stopRequest) {
+    private boolean handleStopRequest(ReconfigurableRequest stopRequest) {
         assert stopRequest.isStop() : "incorrect request type";
         return this.replicableApp.execute(stopRequest, true);
+    }
+
+    protected boolean handleReconfigurationPacket(ReconfigurableRequest reconfigurationPacket,
+                                                  ExecutedCallback callback) {
+        System.out.printf("%s:PbManager handling reconfiguration packet of %s with callback=%s\n",
+                this.myNodeID, reconfigurationPacket.getClass().getSimpleName(),
+                callback.getClass().getSimpleName());
+
+        if (reconfigurationPacket.isStop()) {
+            String serviceName = reconfigurationPacket.getServiceName();
+            int reconfigurationEpoch = reconfigurationPacket.getEpochNumber();
+
+            System.out.printf("%s:PbManager stopping service name=%s epoch=%d\n",
+                    this.myNodeID, serviceName, reconfigurationEpoch);
+
+            boolean isExecStopSuccess = this.handleStopRequest(reconfigurationPacket);
+            assert isExecStopSuccess : "must be successful on executing stop request";
+            callback.executed(reconfigurationPacket, true);
+
+            return true;
+        }
+
+        System.out.println("WARNING: Unhandled reconfigurationPacket of " +
+                reconfigurationPacket.getClass().getSimpleName() + ": " + reconfigurationPacket);
+        return false;
     }
 
 

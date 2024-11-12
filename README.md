@@ -4,9 +4,7 @@
 ```
 xdn/
 ├─ bin/                                   // binaries
-├─ cli/                                   // xdn cli for developers
 ├─ conf/                                  // configuration
-├─ dns/                                   // nameserver for xdn
 ├─ docs/
 ├─ lib/
 ├─ services/
@@ -15,6 +13,8 @@ xdn/
 │  │  ├─ reconfigurator/
 │  │  │  ├─ ReconfigurableNode.java       // the main() method for a Node
 │  │  │  │  ...
+├─ xdn-cli/                               // xdn cli for developers / service owner
+├─ xdn-dns/                               // nameserver for xdn
 ├─ tests/
 ├─ build.xml
 ├─ LICENSE.txt
