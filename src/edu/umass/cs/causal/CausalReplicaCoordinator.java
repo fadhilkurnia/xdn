@@ -16,6 +16,7 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
+import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
@@ -206,10 +207,20 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                                         ExecutedCallback callback) {
         assert clientReplicableRequest != null : "client request cannot be null";
 
+        // FIXME: stop packet should not be wrapped as client request
+        if (clientReplicableRequest.getRequest() instanceof ReconfigurableRequest rcRequest &&
+                rcRequest.isStop()) {
+            System.out.println(">> CausalReplicaCoordinator -- stopping a service in epoch=" +
+                    rcRequest.getEpochNumber());
+            return this.app.restore(clientReplicableRequest.getServiceName(), null);
+        }
+
         // Validates the client request
         Request clientRequest = clientReplicableRequest.getRequest();
         if (!(clientRequest instanceof ClientRequest)) {
-            throw new RuntimeException("CausalReplicaCoordinator can only handle ClientRequest");
+            throw new RuntimeException("CausalReplicaCoordinator can only handle ClientRequest, " +
+                    "but " + clientRequest.getClass().getSimpleName() + " is received at " +
+                    this.myNodeID);
         }
         if (!(clientRequest instanceof BehavioralRequest behavioralRequest)) {
             throw new RuntimeException("CausalReplicaCoordinator can only handle " +

@@ -2,19 +2,15 @@ package edu.umass.cs.xdn.recorder;
 
 import edu.umass.cs.utils.ZipFiles;
 import edu.umass.cs.xdn.utils.Shell;
+import edu.umass.cs.xdn.utils.Utils;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
-import java.util.zip.DeflaterOutputStream;
-import java.util.zip.InflaterOutputStream;
 
 public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
 
@@ -60,19 +56,44 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public String getTargetDirectory(String serviceName) {
-        return baseMountDirPath + serviceName + "/";
+    public String getTargetDirectory(String serviceName, int placementEpoch) {
+        // location: /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
+        return String.format("%s%s/e%d/",
+                baseMountDirPath, serviceName, placementEpoch);
     }
 
     @Override
-    public boolean preInitialization(String serviceName) {
-        String targetDir = this.getTargetDirectory(serviceName);
-
-        // create target mnt dir, if not exist
-        // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/
+    public boolean preInitialization(String serviceName, int placementEpoch) {
+        // remove and re-create target mnt dir
+        // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
+        String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
         try {
-            Shell.runCommand("rm -rf " + targetDir);
+            int code = Shell.runCommand("rm -rf " + targetDir);
+            assert code == 0;
             Files.createDirectory(Paths.get(targetDir));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        // remove and re-create snapshot dir
+        // e.g., /tmp/xdn/state/rsync/node1/snp/service1/e0/
+        String snapshotDirPath = String.format("%s%s/e%d/",
+                this.baseSnapshotDirPath, serviceName, placementEpoch);
+        try {
+            int code = Shell.runCommand("rm -rf " + snapshotDirPath);
+            assert code == 0;
+            Files.createDirectory(Paths.get(snapshotDirPath));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        // remove and re-create state diff dir
+        // e.g., /tmp/xdn/state/rsync/node1/diff/service1/
+        String stateDiffDirPath = String.format("%s%s/", this.baseZipDirPath, serviceName);
+        try {
+            int code = Shell.runCommand("rm -rf " + stateDiffDirPath);
+            assert code == 0;
+            Files.createDirectory(Paths.get(stateDiffDirPath));
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -81,16 +102,24 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public boolean postInitialization(String serviceName) {
+    public boolean postInitialization(String serviceName, int placementEpoch) {
         // do nothing
         return true;
     }
 
     @Override
-    public String captureStateDiff(String serviceName) {
-        String targetMountDir = baseMountDirPath + serviceName + "/";
-        String targetSnpDir = baseSnapshotDirPath + serviceName + "/";
-        String targetZipFile = baseZipDirPath + serviceName + ".zip";
+    public String captureStateDiff(String serviceName, int placementEpoch) {
+        // for rsync, assuming the initialization is deterministic, we update the state in
+        // the snapshot dir.
+        // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
+        // snapshot dir : /tmp/xdn/state/zip/<nodeId>/snp/<serviceName>/e<epoch>/
+        // diff file    : /tmp/xdn/state/zip/<nodeId>/diff/<serviceName>/e<epoch>.zip
+        String targetMountDir = String.format("%s%s/e%d/",
+                this.baseMountDirPath, serviceName, placementEpoch);
+        String targetSnpDir = String.format("%s%s/e%d/",
+                this.baseSnapshotDirPath, serviceName, placementEpoch);
+        String targetZipFile = String.format("%s%s/e%d.zip",
+                this.baseZipDirPath, serviceName, placementEpoch);
 
         // remove previous snapshot, if any
         Shell.runCommand("rm -rf " + targetSnpDir);
@@ -108,7 +137,7 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
         ZipFiles.zipDirectory(new File(targetSnpDir), targetZipFile);
 
         // read the archive into byte[]
-        byte[] stateDiff = null;
+        byte[] stateDiff;
         try {
             stateDiff = Files.readAllBytes(Path.of(targetZipFile));
         } catch (IOException e) {
@@ -116,14 +145,9 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
         }
 
         // compress stateDiff
-        byte[] compressedStateDiff = null;
+        byte[] compressedStateDiff;
         try {
-            ByteArrayOutputStream os = new ByteArrayOutputStream();
-            DeflaterOutputStream dos = new DeflaterOutputStream(os);
-            dos.write(stateDiff);
-            dos.flush();
-            dos.close();
-            compressedStateDiff = os.toByteArray();
+            compressedStateDiff = Utils.compressBytes(stateDiff);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -132,23 +156,25 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public boolean applyStateDiff(String serviceName, String encodedState) {
-        String targetMountDir = baseMountDirPath + serviceName + "/";
-        String targetSnpDir = baseSnapshotDirPath + serviceName + "/";
-        String targetZipFile = baseZipDirPath + serviceName + ".zip";
+    public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
+        // important location
+        // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
+        // snapshot dir : /tmp/xdn/state/zip/<nodeId>/snp/<serviceName>/e<epoch>/
+        // diff file    : /tmp/xdn/state/zip/<nodeId>/diff/<serviceName>/e<epoch>.zip
+        String targetMountDir = String.format("%s%s/e%d/",
+                this.baseMountDirPath, serviceName, placementEpoch);
+        String targetSnpDir = String.format("%s%s/e%d/",
+                this.baseSnapshotDirPath, serviceName, placementEpoch);
+        String targetZipFile = String.format("%s%s/e%d.zip",
+                this.baseZipDirPath, serviceName, placementEpoch);
 
         // convert the compressed stateDiff back to byte[]
         byte[] compressedStateDiff = Base64.getDecoder().decode(encodedState);
 
         // decompress the stateDiff
-        byte[] stateDiff = null;
+        byte[] stateDiff;
         try {
-            ByteArrayOutputStream os = new ByteArrayOutputStream();
-            OutputStream ios = new InflaterOutputStream(os);
-            ios.write(compressedStateDiff);
-            ios.flush();
-            ios.close();
-            stateDiff = os.toByteArray();
+            stateDiff = Utils.decompressBytes(compressedStateDiff);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -179,9 +205,10 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public boolean removeServiceRecorder(String serviceName) {
-        String targetMountDir = baseMountDirPath + serviceName + "/";
-        Shell.runCommand("rm -rf " + targetMountDir, false);
+    public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+        String targetMountDir = this.getTargetDirectory(serviceName, placementEpoch);
+        int code = Shell.runCommand("rm -rf " + targetMountDir);
+        assert code == 0;
         return true;
     }
 }

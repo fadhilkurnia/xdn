@@ -362,7 +362,7 @@ public class HttpActiveReplica {
                 }
 
                 if (isXdnRequest) {
-                    handleReceivedXDNRequest(ctx, msg);
+                    handleReceivedXdnRequest(ctx, msg);
                     return;
                 }
             }
@@ -495,7 +495,7 @@ public class HttpActiveReplica {
 
         }
 
-        private void handleReceivedXDNRequest(ChannelHandlerContext ctx, Object msg) throws Exception {
+        private void handleReceivedXdnRequest(ChannelHandlerContext ctx, Object msg) throws Exception {
             if (msg instanceof HttpRequest) {
                 this.request = (HttpRequest) msg;
                 if (HttpUtil.is100ContinueExpected((HttpRequest) msg)) {

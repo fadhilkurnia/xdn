@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project
-        name="Build file for gigapaxos"
+        name="Build file for Gigapaxos and XDN"
         basedir="."
         default="jar">
 
@@ -20,6 +20,7 @@
               value="gigapaxos-${build.major.number}.${build.minor.number}.${build.revision.number}"/>
     <property name="bin.dir" value="bin"/>
     <property name="conf.dir" value="conf"/>
+    <property name="built.by" value="V. Arun"/>
 
 
     <path id="classpath.base">
@@ -51,11 +52,10 @@
 
     <target name="gigapaxos_jarbuild" depends="compile" description="generate jar files for gigpaxos">
         <mkdir dir="${build.jar.dir}"/>
-        <jar
-                destfile="${build.jar.dir}/gigapaxos-${build.major.number}.${build.minor.number}.${build.revision.number}.jar"
-                filesetmanifest="mergewithoutmain">
+        <jar destfile="${build.jar.dir}/gigapaxos-${build.major.number}.${build.minor.number}.${build.revision.number}.jar"
+             filesetmanifest="mergewithoutmain">
             <manifest>
-                <attribute name="Built-By" value="${V. Arun}"/>
+                <attribute name="Built-By" value="${built.by}"/>
                 <attribute name="Implementation-Vendor"
                            value="University of Massachusetts"/>
                 <attribute name="Implementation-Title" value="GigaPaxos"/>
@@ -74,7 +74,7 @@
         <jar destfile="${build.jar.dir}/nio-${nio.build.major.number}.${nio.build.minor.number}.${nio.build.revision.number}.jar"
              filesetmanifest="mergewithoutmain">
             <manifest>
-                <attribute name="Built-By" value="${V. Arun}"/>
+                <attribute name="Built-By" value="${built.by}"/>
                 <attribute name="Implementation-Vendor"
                            value="University of Massachusetts"/>
                 <attribute name="Implementation-Title" value="nio"/>
@@ -155,6 +155,7 @@
         <pathelement location="${lib.dir}/msgpack-core-0.8.8.jar"/>
         <pathelement location="${lib.dir}/jedis-2.8.1.jar"/>
         <pathelement location="${lib.dir}/netty-all-4.1.50.Final.jar"/>
+        <pathelement location="${lib.dir}/protobuf-java-4.28.2.jar"/>
     </path>
 
     <target name="ensure-test-name" unless="test">
@@ -180,7 +181,8 @@
         </javac>
     </target>
 
-    <target name="runtest" description="Runs the test you specify on the command line with -Dtest="
+    <target name="runtest"
+            description="Runs the test you specify on the command line with -Dtest="
             depends="compiletest, ensure-test-name">
         <junit printsummary="withOutAndErr" fork="true" forkmode="once" showoutput="true" haltonfailure="on">
             <jvmarg value="-ea"/>
@@ -209,8 +211,8 @@
         </junit>
     </target>
 
-    <target name="run" description="Runs the test you specify on the
-command line with -Dclass="
+    <target name="run"
+            description="Runs the test you specify on the command line with -Dclass="
             depends="jar, compiletest, ensure-class-name">
         <java classname="${class}">
             <jvmarg value="-ea"/>
@@ -247,7 +249,8 @@ command line with -Dclass="
         </junit>
     </target>
 
-    <target name="test1" description="Runs the default integration test"
+    <target name="test1"
+            description="Runs the default integration test"
             depends="compiletest">
         <junit printsummary="yes" fork="yes" haltonfailure="on"
                showoutput="yes">
@@ -352,6 +355,51 @@ command line with -Dclass="
             <entry key="build.minor.number" type="int" value="0" pattern="00"/>
             <entry key="build.revision.number" type="int" value="0" pattern="00"/>
         </propertyfile>
+    </target>
+
+    <!-- begin build configuration for junit5 tests -->
+    <path id="junit5.lib.jars">
+        <pathelement location="${lib.dir}/junit-jupiter-api-5.11.1.jar"/>
+        <pathelement location="${lib.dir}/junit-jupiter-engine-5.11.1.jar"/>
+        <pathelement location="${lib.dir}/junit-platform-engine-1.11.1.jar"/>
+        <pathelement location="${lib.dir}/junit-platform-launcher-1.11.1.jar"/>
+        <pathelement location="${lib.dir}/junit-platform-commons-1.11.1.jar"/>
+    </path>
+    <target name="xdn-compile-tests">
+        <mkdir dir="build/test-classes"/>
+        <javac srcdir="test"
+               destdir="build/test-classes"
+               includeantruntime="false">
+            <classpath>
+                <pathelement path="build/classes"/>
+                <path refid="classpath.test"/>
+                <path refid="junit5.lib.jars"/>
+            </classpath>
+        </javac>
+    </target>
+
+    <!-- FIXME: this build target for our unit test still doesnt work,
+           we need to run the tests via IDE instead -->
+    <target name="xdn-unit-tests"
+            description="Run all unit tests inside the test/ directory"
+            depends="xdn-compile-tests">
+        <!-- prepare the tests output directory -->
+        <mkdir dir="out/test-output"/>
+        <junitlauncher printsummary="true"
+                       haltonfailure="true">
+            <!-- include the JUnit platform related libraries required to run the tests -->
+            <classpath refid="junit5.lib.jars"/>
+
+            <!-- the test classes themselves -->
+            <classpath location="build/classes"/>
+            <classpath location="build/test-classes"/>
+
+            <testclasses outputdir="out/test-output">
+                <fileset dir="build/test-classes">
+                    <include name="**/*Test*.class"/>
+                </fileset>
+            </testclasses>
+        </junitlauncher>
     </target>
 
 </project>

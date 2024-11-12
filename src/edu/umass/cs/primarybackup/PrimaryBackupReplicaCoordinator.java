@@ -9,6 +9,7 @@ import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.primarybackup.packets.PrimaryBackupPacket;
 import edu.umass.cs.primarybackup.packets.RequestPacket;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
+import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
@@ -141,6 +142,16 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
             return this.pbManager.handlePrimaryBackupPacket(packet, chainedCallback);
         }
 
+        // handle application stop request
+        if (request instanceof ReconfigurableRequest reconfigurableRequest &&
+                reconfigurableRequest.isStop()) {
+            boolean isSuccess = this.pbManager.handleStopRequest(reconfigurableRequest);
+            assert isSuccess;
+            callback.executed(reconfigurableRequest, true);
+            return isSuccess;
+
+        }
+
         // printout a helpful exception message by showing the possible acceptable packets
         StringBuilder requestTypeString = new StringBuilder();
         for (IntegerPacketType p : this.app.getRequestTypes()) {
@@ -152,7 +163,7 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
                 request.getClass().getSimpleName(),
                 ReplicableClientRequest.class.getSimpleName(),
                 PrimaryBackupPacket.class.getSimpleName(),
-                requestTypeString.toString()));
+                requestTypeString));
     }
 
     @Override

@@ -1,8 +1,8 @@
 # nameserver for xdnapp.com
 xdnapp.com {
-    xdn cp.xdnapp.com 3.80.41.179      # query name from xdn's control plane
-    errors                             # show errors
-    log                                # enable query logs
+    xdn cp.xdnapp.com 3.80.41.179  # query service name from xdn's control plane
+    errors                         # show errors
+    log                            # enable query logs
 }
 
 # root server

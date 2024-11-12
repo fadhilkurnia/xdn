@@ -31,14 +31,16 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     private final String baseDiffDirPath;
 
     // important locations:
-    // - /tmp/xdn/state/fuselog/<node-id>/                          the base directory
-    // - /tmp/xdn/state/fuselog/<node-id>/mnt/                      the mount directory
-    // - /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/       mount dir of specific service
-    // - /tmp/xdn/state/fuselog/<node-id>/sock/                     the socket directory
-    // - /tmp/xdn/state/fuselog/<node-id>/sock/<service-name>.sock  socket to fs of specific service
-    // - /tmp/xdn/state/fuselog/<node-id>/diff/                     the stateDiff directory
+    // /tmp/xdn/state/fuselog/<node-id>/                                    the base directory
+    // /tmp/xdn/state/fuselog/<node-id>/mnt/                                the mount directory
+    // /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/        mount dir of specific service
+    // /tmp/xdn/state/fuselog/<node-id>/sock/                               the socket directory
+    // /tmp/xdn/state/fuselog/<node-id>/sock/<service-name>::e<epoch>.sock  socket to fs of specific service
+    // /tmp/xdn/state/fuselog/<node-id>/diff/                               the stateDiff directory
+    // /tmp/xdn/state/fuselog/<node-id>/diff/<service-name>::e<epoch>.diff  the stateDiff file
 
-    private Map<String, SocketChannel> serviceFSSocket;
+    // mapping service name and epoch into its fuselog filesystem socket
+    private final Map<String, Map<Integer, SocketChannel>> serviceFsSocket;
 
     public FuselogStateDiffRecorder(String nodeID) {
         super(nodeID, defaultWorkingBasePath + nodeID + "/");
@@ -89,29 +91,28 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         }
 
         // initialize mapping between serviceName to the FS socket
-        this.serviceFSSocket = new ConcurrentHashMap<>();
+        this.serviceFsSocket = new ConcurrentHashMap<>();
 
     }
 
     @Override
-    public String getTargetDirectory(String serviceName) {
-        return baseMountDirPath + serviceName + "/";
+    public String getTargetDirectory(String serviceName, int placementEpoch) {
+        // location: /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/
+        return String.format("%s%s/e%d/",
+                baseMountDirPath, serviceName, placementEpoch);
     }
 
     @Override
-    public boolean preInitialization(String serviceName) {
-        String targetDir = this.getTargetDirectory(serviceName);
-        String socketFile = baseSocketDirPath + serviceName + ".sock";
+    public boolean preInitialization(String serviceName, int placementEpoch) {
+        String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+        String socketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
         // create target mnt dir, if not exist
-        // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/
-        try {
-            Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
-            Shell.runCommand("rm -rf " + targetDir);
-            Files.createDirectory(Paths.get(targetDir));
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        // e.g., /tmp/xdn/state/fuselog/node1/mnt/service1/
+        Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
+        Shell.runCommand("rm -rf " + targetDir);
+        int code = Shell.runCommand("mkdir -p " + targetDir);
+        assert code == 0 : "statediff dir creation must success";
 
         // initialize file system in the mnt dir, with socket
         assert targetDir.length() > 1 : "invalid target mount directory";
@@ -137,20 +138,27 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        serviceFSSocket.put(serviceName, socketChannel);
+
+        // update the socket metadata
+        if (!serviceFsSocket.containsKey(serviceName)) {
+            serviceFsSocket.put(serviceName, new ConcurrentHashMap<>());
+        }
+        serviceFsSocket.get(serviceName).put(placementEpoch, socketChannel);
 
         return true;
     }
 
     @Override
-    public boolean postInitialization(String serviceName) {
+    public boolean postInitialization(String serviceName, int placementEpoch) {
         // TODO: read initialization stateDiff and discard it
         return false;
     }
 
     @Override
-    public String captureStateDiff(String serviceName) {
-        SocketChannel socketChannel = serviceFSSocket.get(serviceName);
+    public String captureStateDiff(String serviceName, int placementEpoch) {
+        Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
+        assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
+        SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
         assert socketChannel != null : "unknown fs socket client for " + serviceName;
 
         // send get command (g) to the filesystem
@@ -166,7 +174,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
         sizeBuffer.clear();
         System.out.println(">> reading fuselog response ...");
-        int numRead = 0;
+        int numRead;
         try {
             numRead = socketChannel.read(sizeBuffer);
         } catch (IOException e) {
@@ -200,17 +208,17 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public boolean applyStateDiff(String serviceName, String encodedState) {
+    public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
         // TODO: directly apply stateDiff from the obtained byte[], not via
         //  the fuselog-apply program, which we currently use.
 
-        String diffFile = this.baseDiffDirPath + serviceName + ".diff";
-        String targetDir = baseMountDirPath + serviceName + "/";
+        String diffFile = this.baseDiffDirPath + serviceName + "::" + placementEpoch + ".diff";
+        String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
 
         // store stateDiff into an external file
         byte[] stateDiff;
         try {
-            FileOutputStream outputStream = null;
+            FileOutputStream outputStream;
             outputStream = new FileOutputStream(diffFile);
             stateDiff = Base64.getDecoder().decode(encodedState);
             outputStream.write(stateDiff);
@@ -230,10 +238,11 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public boolean removeServiceRecorder(String serviceName) {
-        String targetDir = baseMountDirPath + serviceName;
-        Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1", false);
-        Shell.runCommand("rm -rf " + targetDir, false);
+    public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+        String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+        int umountRetCode = Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
+        int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
+        assert umountRetCode == 0 && rmRetCode == 0;
         return true;
     }
 }

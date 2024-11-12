@@ -1,19 +1,15 @@
 package edu.umass.cs.xdn.recorder;
 
 import edu.umass.cs.xdn.utils.Shell;
+import edu.umass.cs.xdn.utils.Utils;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
-import java.util.zip.DeflaterOutputStream;
-import java.util.zip.InflaterOutputStream;
 
 public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
@@ -35,7 +31,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         try {
             Files.createDirectories(Paths.get(this.baseMountDirPath));
         } catch (IOException e) {
-            System.err.println("err: " + e.toString());
+            System.err.println("err: " + e);
             throw new RuntimeException(e);
         }
 
@@ -45,7 +41,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         try {
             Files.createDirectories(Paths.get(this.baseSnapshotDirPath));
         } catch (IOException e) {
-            System.err.println("err: " + e.toString());
+            System.err.println("err: " + e);
             throw new RuntimeException(e);
         }
 
@@ -55,50 +51,91 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         try {
             Files.createDirectories(Paths.get(this.baseDiffDirPath));
         } catch (IOException e) {
-            System.err.println("err: " + e.toString());
+            System.err.println("err: " + e);
             throw new RuntimeException(e);
         }
     }
 
     @Override
-    public String getTargetDirectory(String serviceName) {
-        return baseMountDirPath + serviceName + "/";
+    public String getTargetDirectory(String serviceName, int placementEpoch) {
+        // location: /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
+        return String.format("%s%s/e%d/",
+                baseMountDirPath, serviceName, placementEpoch);
     }
 
     @Override
-    public boolean preInitialization(String serviceName) {
-        String targetDir = this.getTargetDirectory(serviceName);
+    public boolean preInitialization(String serviceName, int placementEpoch) {
+        // remove and then re-create target mnt dir
+        // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
+        String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+        String removeDirCommand = String.format("rm -rf %s", targetDirPath);
+        int code = Shell.runCommand(removeDirCommand);
+        assert code == 0;
+        String createDirCommand = String.format("mkdir -p %s", targetDirPath);
+        code = Shell.runCommand(createDirCommand);
+        assert code == 0;
 
-        // create target mnt dir, if not exist
-        // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/
-        try {
-            Shell.runCommand("rm -rf " + targetDir);
-            Files.createDirectory(Paths.get(targetDir));
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        // remove and then re-create snapshot dir
+        // e.g., /tmp/xdn/state/rsync/node1/snp/service1/e0/
+        String snapshotDirPath = String.format("%s%s/e%d/",
+                this.baseSnapshotDirPath, serviceName, placementEpoch);
+        removeDirCommand = String.format("rm -rf %s", snapshotDirPath);
+        code = Shell.runCommand(removeDirCommand);
+        assert code == 0;
+        createDirCommand = String.format("mkdir -p %s", snapshotDirPath);
+        code = Shell.runCommand(createDirCommand);
+        assert code == 0;
+
+        // remove and then re-create stateDiff dir
+        // e.g., /tmp/xdn/state/rsync/node1/diff/service1/
+        String stateDiffDirPath = String.format("%s%s/", this.baseDiffDirPath, serviceName);
+        removeDirCommand = String.format("rm -rf %s", stateDiffDirPath);
+        code = Shell.runCommand(removeDirCommand);
+        assert code == 0;
+        createDirCommand = String.format("mkdir -p %s", stateDiffDirPath);
+        code = Shell.runCommand(createDirCommand);
+        assert code == 0;
 
         return true;
     }
 
     @Override
-    public boolean postInitialization(String serviceName) {
-        String targetSourceDir = baseMountDirPath + serviceName + "/";
-        String targetDestDir = baseSnapshotDirPath + serviceName + "/";
-        String targetDiffFile = baseDiffDirPath + serviceName + ".diff";
+    public boolean postInitialization(String serviceName, int placementEpoch) {
+        // for rsync, assuming the initialization is deterministic, we update the state in
+        // the snapshot dir.
+        // mount dir    : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
+        // snapshot dir : /tmp/xdn/state/rsync/<nodeId>/snp/<serviceName>/e<epoch>/
+        // diff file    : /tmp/xdn/state/rsync/<nodeId>/diff/<serviceName>/e<epoch>.diff
+        String targetSourceDir = String.format("%s%s/e%d/",
+                this.baseMountDirPath, serviceName, placementEpoch);
+        String targetDestDir = String.format("%s%s/e%d/",
+                this.baseSnapshotDirPath, serviceName, placementEpoch);
+        String targetDiffFile = String.format("%s%s/e%d.diff",
+                this.baseDiffDirPath, serviceName, placementEpoch);
 
-        Shell.runCommand("rm -rf " + targetDestDir);
-        Shell.runCommand("rm -rf " + targetDiffFile);
-        Shell.runCommand(String.format("cp -ar %s %s", targetSourceDir, targetDestDir));
+        int removeTargetDirRetCode = Shell.runCommand("rm -rf " + targetDestDir, false);
+        int removeDiffDirRetCode = Shell.runCommand("rm -rf " + targetDiffFile, false);
+        int copySnapshotRetCode = Shell.runCommand(String.format("cp -a %s %s",
+                targetSourceDir, targetDestDir), false);
+        assert removeTargetDirRetCode == 0 &&
+                removeDiffDirRetCode == 0 &&
+                copySnapshotRetCode == 0;
 
         return true;
     }
 
     @Override
-    public String captureStateDiff(String serviceName) {
-        String targetSourceDir = baseMountDirPath + serviceName + "/";
-        String targetDestDir = baseSnapshotDirPath + serviceName + "/";
-        String targetDiffFile = baseDiffDirPath + serviceName + ".diff";
+    public String captureStateDiff(String serviceName, int placementEpoch) {
+        // important location:
+        // mount dir    : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
+        // snapshot dir : /tmp/xdn/state/rsync/<nodeId>/snp/<serviceName>/e<epoch>/
+        // diff file    : /tmp/xdn/state/rsync/<nodeId>/diff/<serviceName>/e<epoch>.diff
+        String targetSourceDir = String.format("%s%s/e%d/",
+                this.baseMountDirPath, serviceName, placementEpoch);
+        String targetDestDir = String.format("%s%s/e%d/",
+                this.baseSnapshotDirPath, serviceName, placementEpoch);
+        String targetDiffFile = String.format("%s%s/e%d.diff",
+                this.baseDiffDirPath, serviceName, placementEpoch);
 
         String command = String.format("%s -ar --write-batch=%s %s %s",
                 RSYNC_BIN_PATH, targetDiffFile, targetSourceDir, targetDestDir);
@@ -108,7 +145,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         }
 
         // read diff into byte[]
-        byte[] stateDiff = null;
+        byte[] stateDiff;
         try {
             stateDiff = Files.readAllBytes(Path.of(targetDiffFile));
         } catch (IOException e) {
@@ -116,14 +153,9 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         }
 
         // compress stateDiff
-        byte[] compressedStateDiff = null;
+        byte[] compressedStateDiff;
         try {
-            ByteArrayOutputStream os = new ByteArrayOutputStream();
-            DeflaterOutputStream dos = new DeflaterOutputStream(os);
-            dos.write(stateDiff);
-            dos.flush();
-            dos.close();
-            compressedStateDiff = os.toByteArray();
+            compressedStateDiff = Utils.compressBytes(stateDiff);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -133,22 +165,23 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public boolean applyStateDiff(String serviceName, String encodedState) {
-        String targetDir = baseMountDirPath + serviceName + "/";
-        String targetDiffFile = baseDiffDirPath + serviceName + ".diff";
+    public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
+        // important location:
+        // target dir   : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
+        // diff file    : /tmp/xdn/state/rsync/<nodeId>/diff/<serviceName>/e<epoch>.diff
+        String targetDir = String.format("%s%s/e%d/",
+                this.baseMountDirPath, serviceName, placementEpoch);
+        String targetDiffFile = String.format("%s%s/e%d.diff",
+                this.baseDiffDirPath, serviceName, placementEpoch);
 
-        Shell.runCommand("rm -rf " + targetDiffFile);
+        int retCode = Shell.runCommand("rm -rf " + targetDiffFile);
+        assert retCode == 0;
 
         // convert stateDiff from String back to byte[], then decompress
         byte[] compressedStateDiff = Base64.getDecoder().decode(encodedState);
-        byte[] stateDiff = null;
+        byte[] stateDiff;
         try {
-            ByteArrayOutputStream os = new ByteArrayOutputStream();
-            OutputStream ios = new InflaterOutputStream(os);
-            ios.write(compressedStateDiff);
-            ios.flush();
-            ios.close();
-            stateDiff = os.toByteArray();
+            stateDiff = Utils.decompressBytes(compressedStateDiff);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -168,15 +201,17 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         // apply the stateDiff inside the .diff file using rsync
         String command = String.format("%s -ar --read-batch=%s %s",
                 RSYNC_BIN_PATH, targetDiffFile, targetDir);
-        Shell.runCommand(command);
+        retCode = Shell.runCommand(command);
+        assert retCode == 0;
 
         return true;
     }
 
     @Override
-    public boolean removeServiceRecorder(String serviceName) {
-        String targetDir = baseMountDirPath + serviceName + "/";
-        Shell.runCommand("rm -rf " + targetDir, false);
+    public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+        String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+        int retCode = Shell.runCommand("rm -rf " + targetDir, false);
+        assert retCode == 0;
         return true;
     }
 }

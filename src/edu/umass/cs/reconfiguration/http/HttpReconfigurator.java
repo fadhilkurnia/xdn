@@ -4,7 +4,10 @@ import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
+import edu.umass.cs.gigapaxos.interfaces.Callback;
+import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -19,19 +22,7 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.DecoderResult;
-import io.netty.handler.codec.http.DefaultFullHttpResponse;
-import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.HttpContent;
-import io.netty.handler.codec.http.HttpHeaderNames;
-import io.netty.handler.codec.http.HttpHeaderValues;
-import io.netty.handler.codec.http.HttpObject;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpRequestDecoder;
-import io.netty.handler.codec.http.HttpResponseEncoder;
-import io.netty.handler.codec.http.HttpUtil;
-import io.netty.handler.codec.http.LastHttpContent;
-import io.netty.handler.codec.http.QueryStringDecoder;
+import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
@@ -44,27 +35,24 @@ import io.netty.util.CharsetUtil;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.net.ssl.SSLException;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorFunctions;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.BasicReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket.PacketType;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.RequestActiveReplicas;
 
 /**
  * @author arun
@@ -77,11 +65,12 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.RequestActiveReplicas
  * Loosely based on the HTTP Snoop server example from netty
  * documentation pages.
  * <p>
- *         TODO: implement better API with prefix of /api/v0/services
- *          - GET 		/api/v0/services
- *          - GET 		/api/v0/services/:serviceName
- *          - POST 		/api/v0/services/:serviceName
- *          - DELETE 	/api/v0/services/:serviceName
+ *         TODO: implement better API with prefix of /api/services
+ *          - GET 		/api/v2/services
+ *          - GET 		/api/v2/services/{name}
+ *          - POST 		/api/v2/services/{name}
+ *          - POST 		/api/v2/services/{name}/placement
+ *          - DELETE 	/api/v2/services/{name}
  *          because currently everything is handled with GET request :(
  */
 public class HttpReconfigurator {
@@ -458,6 +447,14 @@ public class HttpReconfigurator {
                 HttpRequest request = this.request = (HttpRequest) msg;
                 buf.setLength(0);
 
+                // All HTTP requests for Reconfiguration with '/api/v2/services' prefix
+                // are being handled separately. We keep other requests (e.g. /?type=CREATE&name=..)
+                // processed by the original handler for backward compatability (that is v1).
+                if (this.isV2ApiRequest(request)) {
+                    this.handleReconfigurationV2Request(ctx, msg);
+                    return;
+                }
+
                 ReconfiguratorRequest crp = null;
                 try {
                     JSONObject json = toJSONObject(new QueryStringDecoder(
@@ -479,7 +476,6 @@ public class HttpReconfigurator {
                             .setResponseMessage(e.getMessage()) : "");
                 }
                 buf.append("\r\n");
-                // appendDecoderResult(buf, request);
             }
 
             if (msg instanceof HttpContent) {
@@ -527,6 +523,109 @@ public class HttpReconfigurator {
             buf.append(".. WITH DECODER FAILURE: ");
             buf.append(result.cause());
             buf.append("\r\n");
+        }
+
+        private boolean isV2ApiRequest(HttpRequest request) {
+            return request.uri().startsWith("/api/v2/services");
+        }
+
+        private void handleReconfigurationV2Request(ChannelHandlerContext ctx, Object msg) {
+            // Ignores non HTTP requests that is not self-contained.
+            if (!(msg instanceof HttpRequest httpRequest && msg instanceof LastHttpContent)) {
+                return;
+            }
+
+            HttpContent httpContent = (HttpContent) msg;
+            assert this.rcFunctions != null : "Reconfigurator packets handler must be initialized";
+
+            // parse the sender
+            assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
+                    "Invalid request sender";
+            InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+
+            // Parses and handles SetReplicaPlacementRequest
+            Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9]+/placement$");
+            Matcher matcher = pattern.matcher(httpRequest.uri());
+            if (httpRequest.method().equals(HttpMethod.POST) && matcher.matches()) {
+                SetReplicaPlacementRequest setReplicaPlacementReq =
+                        this.parseSetReplicaPlacementRequest(
+                                senderAddress, httpRequest, httpContent);
+                if (setReplicaPlacementReq == null) {
+                    this.writeBadRequestResponse(
+                            ctx, "Invalid format for set replica placement request.");
+                    return;
+                }
+                this.rcFunctions.sendRequest(setReplicaPlacementReq, response -> {
+                    assert response instanceof ClientReconfigurationPacket :
+                            "Unexpected response type from Reconfigurator: " +
+                                    response.getClass().getSimpleName();
+                    ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+                    this.writeResponse(crp, ctx);
+                    return null;
+                });
+                return;
+            }
+
+            // TODO: handle other kind of reconfigurator requests
+
+            // Handles unknown v2 requests with BadRequestResponse (400).
+            this.writeBadRequestResponse(ctx, "Unknown reconfiguration request.");
+        }
+
+        // returns null if the content is invalid
+        private SetReplicaPlacementRequest parseSetReplicaPlacementRequest(InetSocketAddress sender,
+                                                                           HttpRequest request,
+                                                                           HttpContent content) {
+            assert sender != null;
+            assert request != null;
+            assert content != null;
+
+            // Parse service name in the URI
+            // example: /api/v2/services/{name}/placement
+            String[] uriComponents = request.uri().split("/");
+            assert uriComponents.length == 6 : "Invalid uri for set replica placement request";
+            String serviceName = uriComponents[4];
+
+            // Parse active names from the body
+            // example: '["AR0", "AR2", "AR3"]'
+            String contentBody = content.content().toString(StandardCharsets.ISO_8859_1);
+            List<String> nodeIds = new ArrayList<>();
+            try {
+                JSONArray nodeIdArray = new JSONArray(contentBody);
+                for (int i = 0; i < nodeIdArray.length(); i++) {
+                    String nodeId = nodeIdArray.getString(i);
+                    nodeIds.add(nodeId);
+                }
+            } catch (JSONException e) {
+                return null;
+            }
+
+            return new SetReplicaPlacementRequest(sender, serviceName, Set.copyOf(nodeIds));
+        }
+
+        private void writeBadRequestResponse(ChannelHandlerContext ctx, String errMessage) {
+            HttpResponse httpResponse = new DefaultFullHttpResponse(
+                    HTTP_1_1,
+                    BAD_REQUEST,
+                    Unpooled.copiedBuffer(errMessage.getBytes(StandardCharsets.UTF_8)));
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
+            ctx.write(httpResponse);
+        }
+
+        private void writeResponse(ClientReconfigurationPacket response,
+                                   ChannelHandlerContext ctx) {
+            // TODO: convert ClientReconfigurationPacket into HttpResponse
+            FullHttpResponse httpResponse = new DefaultFullHttpResponse(
+                    HTTP_1_1,
+                    response.isFailed()
+                            ? HttpResponseStatus.INTERNAL_SERVER_ERROR
+                            : HttpResponseStatus.OK,
+                    Unpooled.copiedBuffer(response.toString().getBytes(StandardCharsets.UTF_8)));
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH,
+                    httpResponse.content().readableBytes());
+            ctx.write(httpResponse);
+            ctx.flush();
         }
 
         private boolean writeResponse(HttpObject currentObj,

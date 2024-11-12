@@ -1,6 +1,8 @@
 module github.com/coredns/coredns
 
-go 1.21
+go 1.23
+
+toolchain go1.23.2
 
 require (
 	github.com/Azure/azure-sdk-for-go v68.0.0+incompatible
@@ -21,6 +23,7 @@ require (
 	github.com/openzipkin-contrib/zipkin-go-opentracing v0.5.0
 	github.com/openzipkin/zipkin-go v0.4.3
 	github.com/oschwald/geoip2-golang v1.9.0
+	github.com/oschwald/maxminddb-golang/v2 v2.0.0-beta.1
 	github.com/prometheus/client_golang v1.19.1
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.53.0
@@ -28,7 +31,7 @@ require (
 	go.etcd.io/etcd/api/v3 v3.5.13
 	go.etcd.io/etcd/client/v3 v3.5.13
 	golang.org/x/crypto v0.23.0
-	golang.org/x/sys v0.20.0
+	golang.org/x/sys v0.21.0
 	google.golang.org/api v0.172.0
 	google.golang.org/grpc v1.63.2
 	google.golang.org/protobuf v1.33.0

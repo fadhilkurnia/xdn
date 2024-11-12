@@ -20,10 +20,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.security.cert.CertificateException;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +29,7 @@ import java.util.logging.Level;
 import javax.net.ssl.SSLException;
 
 import edu.umass.cs.reconfiguration.interfaces.*;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -58,21 +56,7 @@ import edu.umass.cs.protocoltask.ProtocolTask;
 import edu.umass.cs.protocoltask.ProtocolTaskCreationException;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.RC;
 import edu.umass.cs.reconfiguration.http.HttpReconfigurator;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.BasicReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.CreateServiceName;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DeleteServiceName;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DemandReport;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.EchoRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.HelloRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.RCRecordRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.RCRecordRequest.RequestTypes;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigureActiveNodeConfig;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigureRCNodeConfig;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.RequestActiveReplicas;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ServerReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.StartEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.CommitWorker;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.ReconfiguratorProtocolTask;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckDropEpoch;
@@ -395,6 +379,7 @@ public class Reconfigurator<NodeIDType> implements
             ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
         ReconfigurationConfig.log.log(Level.FINEST, "{0} received {1} {2}", new Object[]{this,
                 report.getType(), report});
+        System.out.println(">>> Reconfigurator: handling demand report " + report);
         /* Forward if I am not responsible and return. Demand reports can be
          * misdirected if actives have an inconsistent view of the current set
          * of reconfigurators. */
@@ -411,11 +396,13 @@ public class Reconfigurator<NodeIDType> implements
             this.updateDemandProfile(report); // no coordination
         ReconfigurationRecord<NodeIDType> record = this.DB
                 .getReconfigurationRecord(report.getServiceName());
+        System.out.println(">>> Reconfigurator: reconfiguration report " + report);
         if (record != null)
             // coordinate and commit reconfiguration intent
             this.initiateReconfiguration(report.getServiceName(), record,
                     shouldReconfigure(report.getServiceName()), null, null,
-                    null, null, null, null, ReconfigurationConfig.ReconfigureUponActivesChange.DEFAULT); // coordinated
+                    null, null, null, null,
+                    ReconfigurationConfig.ReconfigureUponActivesChange.DEFAULT); // coordinated
         trimAggregateDemandProfile();
         return null; // never any messaging or ptasks
     }
@@ -1110,6 +1097,68 @@ public class Reconfigurator<NodeIDType> implements
                 me.getAddress().equals(incoming.getAddress()) &&
                         ReconfigurationConfig.getClientFacingSSLPort(me.getPort()) == incoming.getPort();
 
+    }
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleSetReplicaPlacementRequest(
+            SetReplicaPlacementRequest request,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
+            Callback<Request, ReconfiguratorRequest> callback) {
+        // get service metadata based on the provided name
+        String serviceName = request.getServiceName();
+        ReconfigurationRecord<NodeIDType> record = this.DB.getReconfigurationRecord(serviceName);
+        if (record == null) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);
+            request.setResponseMessage("Failed to get record for " + serviceName);
+            callback.processResponse(request.makeResponse());
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // Validate that the provided node ids do exist
+        Map<String, InetSocketAddress> allActives =
+                this.consistentNodeConfig.getAllActiveReplicas();
+        Set<String> allValidNodeIds = allActives.keySet();
+        Set<String> newActivesStringSet = request.getNewReplicaPlacement();
+        for (String nodeId : newActivesStringSet) {
+            if (!allValidNodeIds.contains(nodeId)) {
+                request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+                request.setResponseMessage("Invalid node id of " + nodeId);
+                callback.processResponse(request.makeResponse());
+                return null;
+            }
+        }
+
+        // parse the new placement location
+        Stringifiable<NodeIDType> nodeIdDeserialized = this.getUnstringer();
+        Set<NodeIDType> newActives = new HashSet<>();
+        for (String nodeId : newActivesStringSet) {
+            newActives.add(nodeIdDeserialized.valueOf(nodeId));
+        }
+
+        // coordinate and commit reconfiguration (i.e., replacement) intent
+        boolean isHandled = this.initiateReconfiguration(
+                /*name=*/serviceName,
+                /*reconfigurationRecord=*/record,
+                /*newActives=*/newActives,
+                /*sender=*/null,
+                /*receiver=*/null,
+                /*forwarder=*/null,
+                /*initialState=*/null,
+                /*nameStates=*/null,
+                /*newlyAddedNodes=*/null,
+                ReconfigureUponActivesChange.DEFAULT);
+        if (!isHandled) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+            request.setResponseMessage("Failed to coordinate replica placement for " + serviceName);
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // Reconfiguration is handled, and will eventually be executed.
+        // Sends success response back to client.
+        request.setResponseMessage("Replica placement request is processed");
+        callback.processResponse(request.makeResponse());
+        return null;
     }
 
     /**
@@ -1833,17 +1882,20 @@ public class Reconfigurator<NodeIDType> implements
     private Set<NodeIDType> shouldReconfigure(String name) {
         // return null if no current actives
         Set<NodeIDType> oldActives = this.DB.getActiveReplicas(name);
+        System.out.println(">>> Reconfigurator: shouldReconfigure? oldActives=" + oldActives);
         if (oldActives == null || oldActives.isEmpty())
             return null;
         // get new IP addresses (via consistent hashing if no oldActives
         Set<String> newActiveIPs = this.demandProfiler
                 .testAndSetReconfigured(name,
                         getStringSet(oldActives), this.getReconfigurableAppInfo());
+        System.out.println(">>> Reconfigurator: shouldReconfigure? newActiveIPs=" + newActiveIPs);
         if (newActiveIPs == null)
             return null;
         // get new actives based on new IP addresses
         Set<NodeIDType> newActives = this.consistentNodeConfig
                 .getNodeIDs(newActiveIPs);
+        System.out.println(">>> Reconfigurator: shouldReconfigure? newActives=" + newActives);
         return (!newActives.equals(oldActives) || ReconfigurationConfig
                 .shouldReconfigureInPlace()) ? newActives : null;
     }

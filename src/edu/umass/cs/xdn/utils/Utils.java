@@ -1,8 +1,13 @@
 package edu.umass.cs.xdn.utils;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.InflaterOutputStream;
 
 public class Utils {
+
     public static int getUid() {
         int uid = 0;
 
@@ -44,4 +49,29 @@ public class Utils {
 
         return gid;
     }
+
+    public static byte[] compressBytes(byte[] input) throws IOException {
+        byte[] compressedResult;
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        DeflaterOutputStream dos = new DeflaterOutputStream(os);
+        dos.write(input);
+        dos.flush();
+        dos.close();
+        compressedResult = os.toByteArray();
+
+        return compressedResult;
+    }
+
+    public static byte[] decompressBytes(byte[] input) throws IOException {
+        byte[] decompressed;
+        ByteArrayOutputStream os = new ByteArrayOutputStream();
+        OutputStream ios = new InflaterOutputStream(os);
+        ios.write(input);
+        ios.flush();
+        ios.close();
+        decompressed = os.toByteArray();
+
+        return decompressed;
+    }
+
 }

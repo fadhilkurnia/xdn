@@ -81,6 +81,7 @@ func init() {
 	LaunchCmd.PersistentFlags().StringP("consistency", "c", "linearizability", "consistency model for the replicated service")
 	LaunchCmd.PersistentFlags().StringP("state", "s", "/", "absolute path of directory in which the service store the state durably")
 	LaunchCmd.PersistentFlags().BoolP("deterministic", "d", false, "indicate whether the service is deterministic (default: false)")
+	LaunchCmd.PersistentFlags().StringP("methods", "m", "", "HTTP methods allowed by the replicated service")
 
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")

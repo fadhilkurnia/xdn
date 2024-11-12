@@ -21,9 +21,12 @@ import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.ServiceProperty;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.*;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -36,7 +39,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * XDNReplicaCoordinator is a wrapper of multiple replica coordinators supported by XDN.
+ * XdnReplicaCoordinator is a wrapper of multiple replica coordinators supported by XDN.
  *
  * @param <NodeIDType>
  */
@@ -151,14 +154,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        // System.out.printf(">> %s:XDNReplicaCoordinator - coordinateRequest request=%s payload=%s\n",
-        //        myNodeID, request.getClass().getSimpleName(), request.toString());
-
         var serviceName = request.getServiceName();
         var coordinator = this.serviceCoordinator.get(serviceName);
         if (coordinator == null) {
-            // TODO: return 404
-            throw new RuntimeException("unknown coordinator for " + serviceName);
+            // returns 404 not found back to client
+            return createNotFoundResponse(request, callback);
         }
 
         ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(request);
@@ -166,12 +166,44 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         return coordinator.coordinateRequest(gpRequest, callback);
     }
 
+    private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {
+        // handle only if the request is a Http request coming from client.
+        String serviceName = request.getServiceName();
+        XdnHttpRequest httpRequest = null;
+        if (request instanceof ReplicableClientRequest rcr &&
+                rcr.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
+            httpRequest = xdnHttpRequest;
+        }
+        if (request instanceof XdnHttpRequest xdnHttpRequest) {
+            httpRequest = xdnHttpRequest;
+        }
+        if (httpRequest == null) {
+            throw new RuntimeException("Unknown coordinator for name=" + serviceName +
+                    " with request type of " + request.getClass().getSimpleName());
+        }
+
+        // generate 404 response
+        String errorMessage =
+                String.format("Service '%s' does not exist in this XDN deployment", serviceName);
+        HttpHeaders headers = new DefaultHttpHeaders();
+        headers.add(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+        HttpResponse notFoundResponse = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1,
+                HttpResponseStatus.NOT_FOUND,
+                Unpooled.copiedBuffer(errorMessage.getBytes()),
+                headers,
+                new DefaultHttpHeaders());
+        httpRequest.setHttpResponse(notFoundResponse);
+        callback.executed(httpRequest, true);
+        return true;
+    }
+
     @Override
     public boolean createReplicaGroup(String serviceName,
                                       int epoch,
                                       String state,
                                       Set<NodeIDType> nodes) {
-        System.out.printf(">> %s:XDNReplicaCoordinator - createReplicaGroup name=%s, epoch=%d, state=%s, nodes=%s\n",
+        System.out.printf(">> %s:XdnReplicaCoordinator - createReplicaGroup name=%s, epoch=%d, state=%s, nodes=%s\n",
                 myNodeID, serviceName, epoch, state, nodes);
 
         // These are the default replica groups from Gigapaxos
@@ -185,17 +217,15 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             return true;
         }
 
-        if (epoch == 0) {
-            return this.initializeReplicaGroup(serviceName, state, nodes);
-        }
-
-        throw new RuntimeException("reconfiguration with epoch > 0 is unimplemented");
+        return this.initializeReplicaGroup(serviceName, state, nodes, epoch);
     }
 
     private boolean initializeReplicaGroup(String serviceName,
                                            String initialState,
-                                           Set<NodeIDType> nodes) {
-        System.out.printf(">> %s:XDNReplicaCoordinator - initializeReplicaGroup name=%s, state=%s, nodes=%s\n",
+                                           Set<NodeIDType> nodes,
+                                           int placementEpoch) {
+        System.out.printf(">> %s:XdnReplicaCoordinator - initializeReplicaGroup " +
+                        "name=%s, state=%s, nodes=%s\n",
                 myNodeID, serviceName, initialState, nodes);
 
         // Validate the serviceName, initialState, and nodes
@@ -206,13 +236,26 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         assert initialState != null && !initialState.isEmpty()
                 : "Cannot initialize an XDN service with null or empty initial state";
         final String validInitialStatePrefix = "xdn:init:";
-        assert initialState.startsWith(validInitialStatePrefix) : "incorrect initial state prefix";
+        final String validEpochFinalStatePrefix = "xdn:final:";
+        assert initialState.startsWith(validInitialStatePrefix) ||
+                initialState.startsWith(validEpochFinalStatePrefix)
+                : "Incorrect initial state prefix: " + initialState;
 
         // Parse and validate the service's properties
-        String encodedProperties = initialState.substring(validInitialStatePrefix.length());
+        String encodedProperties = null;
+        if (initialState.startsWith(validInitialStatePrefix)) {
+            encodedProperties = initialState.substring(validInitialStatePrefix.length());
+        }
+        if (initialState.startsWith(validEpochFinalStatePrefix)) {
+            // format: xdn:final:<epoch>::<serviceProperty>::<finalState>
+            String[] raw = initialState.split("::");
+            assert raw.length >= 2;
+            encodedProperties = raw[1];
+        }
+        assert encodedProperties != null;
         ServiceProperty serviceProperties = null;
         try {
-            serviceProperties = ServiceProperty.createFromJSONString(encodedProperties);
+            serviceProperties = ServiceProperty.createFromJsonString(encodedProperties);
         } catch (JSONException e) {
             logger.log(Level.SEVERE, "Invalid service properties given: " + encodedProperties);
             throw new RuntimeException(e);
@@ -225,7 +268,6 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                 "XDN does not know what coordinator to be used for the specified service";
 
         // Create the replica group using the coordinator
-        final int startingEpoch = 0;
         boolean isSuccess;
         if (isClientCentricConsistency(serviceProperties.getConsistencyModel())) {
             // A special case for client-centric replica coordinator, Bayou, that require
@@ -237,14 +279,14 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                             getBayouConsistencyModel(
                                     serviceProperties.getConsistencyModel()),
                             serviceName,
-                            startingEpoch,
+                            placementEpoch,
                             initialState,
                             nodes);
         } else {
             // for all other coordinators, we use the generic createReplicaGroup method.
             isSuccess = coordinator.createReplicaGroup(
                     serviceName,
-                    startingEpoch,
+                    placementEpoch,
                     initialState,
                     nodes);
         }

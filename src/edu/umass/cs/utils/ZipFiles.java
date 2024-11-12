@@ -21,8 +21,8 @@ public class ZipFiles {
     /**
      * This method zips the directory
      *
-     * @param dir
-     * @param zipDirName
+     * @param dir        the directory to be archived.
+     * @param zipDirName the target archived file location.
      */
     public static void zipDirectory(File dir, String zipDirName) {
         try {
@@ -78,7 +78,7 @@ public class ZipFiles {
     public static void unzip(String zipFilePath, String destDir) {
         File dir = new File(destDir);
         // create output directory if it doesn't exist
-        if(!dir.exists()) dir.mkdirs();
+        if (!dir.exists()) dir.mkdirs();
         FileInputStream fis;
         //buffer for read and write data to file
         byte[] buffer = new byte[1024];
@@ -86,7 +86,7 @@ public class ZipFiles {
             fis = new FileInputStream(zipFilePath);
             ZipInputStream zis = new ZipInputStream(fis);
             ZipEntry ze = zis.getNextEntry();
-            while(ze != null){
+            while (ze != null) {
                 String fileName = ze.getName();
                 File newFile = new File(destDir + File.separator + fileName);
                 //create directories for sub directories in zip
