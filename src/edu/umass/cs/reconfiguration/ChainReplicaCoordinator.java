@@ -79,7 +79,8 @@ public class ChainReplicaCoordinator<NodeIDType>
     }
 
     @Override
-    public boolean createReplicaGroup(String serviceName, int epoch, String state, Set<NodeIDType> nodes) {
+    public boolean createReplicaGroup(String serviceName, int epoch, String state,
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         // System.out.println(">>>>> Create: "+serviceName+", on "+this.getMyID());
 
         return this.chainManager.createReplicatedChainForcibly(

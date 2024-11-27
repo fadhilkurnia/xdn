@@ -657,7 +657,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     public boolean createPrimaryBackupInstance(String groupName,
                                                int placementEpoch,
                                                String initialState,
-                                               Set<NodeIDType> nodes) {
+                                               Set<NodeIDType> nodes,
+                                               String placementMetadata) {
         System.out.printf(">> %s PrimaryBackupManager - createPrimaryBackupInstance | " +
                         "groupName: %s, placementEpoch: %d, initialState: %s, nodes: %s\n",
                 myNodeID, groupName, placementEpoch, initialState, nodes.toString());
@@ -681,6 +682,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 groupName.equals(AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString())) {
             return true;
         }
+
+        // TODO: handle placement metadata
+        //   - if preferred coordinator is specified: set primary, set paxos leader
+        //   - if preferred coordinator is not specified: detect paxos leader -> set primary
 
         boolean isInitializationSuccess = initializePrimaryEpoch(groupName);
         if (!isInitializationSuccess) {

@@ -1,17 +1,17 @@
 /* Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- * 
+ *
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration.reconfigurationutils;
 
@@ -29,33 +29,33 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableAppInfo;
 
 /**
  * @author V. Arun
- * 
+ *
  *         An implementation, X, of this abstract class must satisfy the
  *         following requirements in addition to those enforced by the abstract
  *         methods explicitly listed herein:
- * 
+ *
  *         (1) X must have a constructor that takes a single JSONObject as an
  *         argument. Otherwise, the static method
  *         {@link #createDemandProfile(JSONObject)} that reflectively creates an
  *         instance of this class from a JSONObject will fail.
- * 
+ *
  *         (2) X must have a constructor that takes a single String as an
  *         argument. Otherwise, the static method
  *         {@link #createDemandProfile(String)} that reflectively creates an
  *         instance of this class from a JSONObject will fail.
- * 
+ *
  *         (3) For any instance x of X, x.equals(new X(x.getStats()) must return
  *         true.
- * 
+ *
  *         (4) It is slightly more efficient (but not necessary) for X to
  *         override the methods {@link #createDemandProfile(String)} and
  *         {@link #createDemandProfile(JSONObject)} method to create an instance
  *         of X rather than having the default implementation do so via
  *         reflection.
- * 
+ *
  *         Refer to reconfiguration.reconfigurationutils.DemandProfile for an
  *         example implementation.
- * 
+ *
  *         Use {@link ReconfigurationPolicyTest#testPolicyImplementation(Class)}
  *         to test an implementation of this class.
  */
@@ -64,8 +64,9 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableAppInfo;
 public abstract class AbstractDemandProfile {
 	static final Class<?> C = ReconfigurationConfig.getDemandProfile();
 
-	protected static enum Keys {
-		SERVICE_NAME
+	public static enum Keys {
+		SERVICE_NAME,
+		PREFERRED_COORDINATOR
 	};
 
 	protected final String name;
@@ -87,15 +88,15 @@ public abstract class AbstractDemandProfile {
 	 * {@link ReconfigurableAppInfo#getAllActiveReplicas()} ; this may be useful
 	 * to determine whether other active replicas might be better suited to
 	 * service requests from this sender.
-	 * 
+	 *
 	 * This method must implement a policy that tells whether it is time to
 	 * report from an active replica to a reconfigurator. Active replicas in
 	 * general should not report upon every request, but at some coarser
 	 * frequency to limit overhead.
-	 * 
+	 *
 	 * @return Whether the active replica should send a demand report to the
 	 *         reconfigurator.
-	 * 
+	 *
 	 * @param request
 	 * @param sender
 	 * @param nodeConfig
@@ -109,7 +110,7 @@ public abstract class AbstractDemandProfile {
 	 * the reconfiguration policy in
 	 * {@link AbstractDemandProfile#reconfigure(Set, ReconfigurableAppInfo)}
 	 * that is invoked at reconfigurators (not active replicas).
-	 * 
+	 *
 	 * @return Demand statistics as JSON.
 	 */
 	public abstract JSONObject getDemandStats();
@@ -118,7 +119,7 @@ public abstract class AbstractDemandProfile {
 	 * Combine the new information in {@code update} into {@code this}. This
 	 * method is used at reconfigurators to combine a newly received demand
 	 * report with an existing demand report.
-	 * 
+	 *
 	 * @param update
 	 */
 	public abstract void combine(AbstractDemandProfile update);
@@ -126,10 +127,10 @@ public abstract class AbstractDemandProfile {
 	/**
 	 * The main reconfiguration policy invoked at reconfigurators (not active
 	 * replicas).
-	 * 
+	 *
 	 * @param curActives
-	 * @param nodeConfig
-	 * 
+	 * @param appInfo
+	 *
 	 * @return The list of reconfigured actives for the new placement. Simply
 	 *         returning null means no reconfiguration will happen. Returning a
 	 *         list that is the same as curActives means that a trivial
@@ -138,6 +139,20 @@ public abstract class AbstractDemandProfile {
 	 */
 	public abstract Set<String> reconfigure(Set<String> curActives,
 			ReconfigurableAppInfo appInfo);
+
+	/**
+	 * Similar to the {@link #reconfigure(Set, ReconfigurableAppInfo)} method, but this method
+	 * also returns metadata along the set of actives.
+	 *
+	 * @param curActives The current Node IDs hosting the replicas.
+	 * @param appInfo    Interface to access the application information,
+	 *                   including possible Node IDs for next replica placement.
+	 * @return Set of Node IDs with optional metadata.
+	 */
+	public NodeIdsMetadataPair<String> getNewActivesPlacement(Set<String> curActives,
+													  ReconfigurableAppInfo appInfo) {
+		return new NodeIdsMetadataPair<>(this.reconfigure(curActives, appInfo), null);
+	}
 
 	/**
 	 * Tells {@code this} that the current demand profile was just used to
@@ -163,7 +178,7 @@ public abstract class AbstractDemandProfile {
 	 * need to override equals(.) and hashCode() methods accordingly. If an
 	 * implementation of this class consists of non-primitive types, e.g., a
 	 * {@link Map}, then a new Map has to be created inside the clone() method.
-	 * 
+	 *
 	 */
 	@Deprecated
 	public AbstractDemandProfile clone() {

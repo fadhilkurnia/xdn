@@ -129,7 +129,7 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes) {
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         return this.createReplicaGroup(
                 /*consistencyModel=*/DEFAULT_CLIENT_CENTRIC_CONSISTENCY_MODEL,
                 /*serviceName=*/serviceName,

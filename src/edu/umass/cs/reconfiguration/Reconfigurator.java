@@ -30,6 +30,7 @@ import javax.net.ssl.SSLException;
 
 import edu.umass.cs.reconfiguration.interfaces.*;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
+import edu.umass.cs.reconfiguration.reconfigurationutils.*;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -63,11 +64,6 @@ import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckDropEpoc
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckStartEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckStopEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitPrimaryExecution;
-import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
-import edu.umass.cs.reconfiguration.reconfigurationutils.AggregateDemandProfiler;
-import edu.umass.cs.reconfiguration.reconfigurationutils.ConsistentReconfigurableNodeConfig;
-import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationPacketDemultiplexer;
-import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationRecord;
 import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationRecord.RCStates;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.ReconfigureUponActivesChange;
 import edu.umass.cs.reconfiguration.dns.DnsReconfigurator;
@@ -397,12 +393,17 @@ public class Reconfigurator<NodeIDType> implements
         ReconfigurationRecord<NodeIDType> record = this.DB
                 .getReconfigurationRecord(report.getServiceName());
         System.out.println(">>> Reconfigurator: reconfiguration report " + report);
-        if (record != null)
+        if (record != null) {
+            NodeIdsMetadataPair<NodeIDType> newActives =
+                    this.shouldReconfigure2(report.getServiceName());
+            String placementMetadata = newActives != null ? newActives.placementMetadata() : null;
+
             // coordinate and commit reconfiguration intent
             this.initiateReconfiguration(report.getServiceName(), record,
                     shouldReconfigure(report.getServiceName()), null, null,
-                    null, null, null, null,
+                    null, placementMetadata, null, null,
                     ReconfigurationConfig.ReconfigureUponActivesChange.DEFAULT); // coordinated
+        }
         trimAggregateDemandProfile();
         return null; // never any messaging or ptasks
     }
@@ -1882,22 +1883,64 @@ public class Reconfigurator<NodeIDType> implements
     private Set<NodeIDType> shouldReconfigure(String name) {
         // return null if no current actives
         Set<NodeIDType> oldActives = this.DB.getActiveReplicas(name);
-        System.out.println(">>> Reconfigurator: shouldReconfigure? oldActives=" + oldActives);
         if (oldActives == null || oldActives.isEmpty())
             return null;
-        // get new IP addresses (via consistent hashing if no oldActives
+        // get new IP addresses (via consistent hashing if no oldActives)
         Set<String> newActiveIPs = this.demandProfiler
                 .testAndSetReconfigured(name,
                         getStringSet(oldActives), this.getReconfigurableAppInfo());
-        System.out.println(">>> Reconfigurator: shouldReconfigure? newActiveIPs=" + newActiveIPs);
         if (newActiveIPs == null)
             return null;
         // get new actives based on new IP addresses
         Set<NodeIDType> newActives = this.consistentNodeConfig
                 .getNodeIDs(newActiveIPs);
-        System.out.println(">>> Reconfigurator: shouldReconfigure? newActives=" + newActives);
         return (!newActives.equals(oldActives) || ReconfigurationConfig
                 .shouldReconfigureInPlace()) ? newActives : null;
+    }
+
+    /**
+     * Indicates whether reconfiguration is needed. Exactly the same as
+     * {@link #shouldReconfigure(String)} with additional metadata in the return value, which is
+     * useful for conveying reconfiguration/placement metadata (e.g., which node is preferable as
+     * the coordinator).
+     * <p>
+     * TODO: handle configuration if the replica group does not change, but the preferred node for
+     *    coordinator does change.
+     *
+     * @param name The service name
+     * @return pair of Node ID set and optional metadata if reconfiguration is needed,
+     *          otherwise null is returned.
+     */
+    private NodeIdsMetadataPair<NodeIDType> shouldReconfigure2(String name) {
+        // returns null if no current actives
+        Set<NodeIDType> oldActives = this.DB.getActiveReplicas(name);
+        System.out.println(">>> Reconfigurator: shouldReconfigure? oldActives=" + oldActives);
+        if (oldActives == null || oldActives.isEmpty())
+            return null;
+
+        // get new Node IDs (via consistent hashing if no oldActives)
+        NodeIdsMetadataPair<String> newActiveNodeIdsAndMetadata =
+                this.demandProfiler.testAndSetReconfigured2(
+                        name, getStringSet(oldActives), this.getReconfigurableAppInfo());
+        if (newActiveNodeIdsAndMetadata == null || newActiveNodeIdsAndMetadata.nodeIds() == null)
+            return null;
+
+        System.out.println(">>> Reconfigurator: shouldReconfigure? newActiveIPs=" +
+                newActiveNodeIdsAndMetadata.nodeIds() + " metadata:" +
+                newActiveNodeIdsAndMetadata.placementMetadata());
+
+        // get new actives based on the new Node IDs
+        Set<String> newActiveStringNodeIds = newActiveNodeIdsAndMetadata.nodeIds();
+        Set<NodeIDType> newActiveNodeIds = this.consistentNodeConfig.getNodeIDs(newActiveStringNodeIds);
+
+        // when RECONFIGURE_IN_PLACE flag is disabled, returns null if no changes
+        boolean isSameActives = oldActives.equals(newActiveNodeIds);
+        if (isSameActives && !ReconfigurationConfig.shouldReconfigureInPlace())
+            return null;
+
+        return new NodeIdsMetadataPair<>(
+                newActiveNodeIds,
+                newActiveNodeIdsAndMetadata.placementMetadata());
     }
 
     private ReconfigurableAppInfo getReconfigurableAppInfo() {

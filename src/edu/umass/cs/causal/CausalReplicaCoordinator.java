@@ -140,7 +140,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes) {
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         assert serviceName != null : "service name cannot be null";
         assert nodes != null && !nodes.isEmpty() : "nodes cannot be empty";
         assert epoch >= 0 : "epoch must not be a negative number";

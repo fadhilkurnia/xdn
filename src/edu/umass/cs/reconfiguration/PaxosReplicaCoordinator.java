@@ -15,19 +15,11 @@
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
 import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
+import edu.umass.cs.gigapaxos.interfaces.GigapaxosShutdownable;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
-import edu.umass.cs.gigapaxos.interfaces.GigapaxosShutdownable;
 import edu.umass.cs.gigapaxos.paxosutil.PaxosInstanceCreationException;
 import edu.umass.cs.gigapaxos.paxosutil.StringContainer;
 import edu.umass.cs.nio.JSONMessenger;
@@ -37,8 +29,19 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
+import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * @author arun
@@ -200,7 +203,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 * case, the caller should consider the operation a success. */
 	@Override
 	public boolean createReplicaGroup(String groupName, int epoch,
-			String state, Set<NodeIDType> nodes) {
+			String state, Set<NodeIDType> nodes, String placementMetadata) {
 		// will block for a default timeout if a lower unstopped epoch exits
 		boolean created = this.paxosManager.createPaxosInstanceForcibly(
 				groupName, epoch, nodes, this, state, 0);
@@ -212,6 +215,11 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 					+ " failed to create " + groupName + ":" + epoch
 					+ " with state [" + state + "]") + "; existing_version=" + 
 					this.paxosManager.getVersion(groupName));
+
+		// set the coordinator if it is set in the metadata
+		if (placementMetadata != null && !placementMetadata.isEmpty())
+			handlePlacementMetadata(groupName, placementMetadata);
+
 		return createdOrExistsOrHigher;
 	}
 
@@ -220,6 +228,43 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 			Set<NodeIDType> nodes) {
 		return this.paxosManager.createPaxosInstance(nameStates, nodes);
 	}
+
+	/**
+	 * Parse and handle the provided placement metadata. For now, this method checks
+	 * whether this node is the preferred paxos coordinator as specified in the metadata,
+	 * if so, then this node try to be the coordinator for that paxos group (in the best effort).
+	 * <p>
+	 * TODO: Ideally, the coordinator should be set during replica group creation via
+	 *    PaxosManager.createPaxosInstanceForcibly() method, which for now doesnt support that.
+	 *
+	 * @param groupName the paxos replica group name
+	 * @param placementMetadata json-encoded data of placement metadata
+	 *                             (e.g., preferred coordinator)
+	 */
+	private void handlePlacementMetadata(String groupName, String placementMetadata) {
+		assert groupName != null && !groupName.isEmpty();
+		assert placementMetadata != null && !placementMetadata.isEmpty();
+
+		// attempts to parse the metadata
+		String preferredCoordinatorNodeId = null;
+        try {
+            JSONObject json = new JSONObject(placementMetadata);
+			preferredCoordinatorNodeId = json.getString(
+					AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
+        } catch (JSONException e) {
+			log.log(Level.WARNING,
+					"{0} failed to parse preferred coordinator in the placement metadata: {1}",
+					new Object[] { this, e });
+			return;
+        }
+
+		// attempts to be the coordinator, if this node is the preferred coordinator
+		// specified in the placement metadata.
+		if (this.getMyID().toString().equals(preferredCoordinatorNodeId)) {
+			this.paxosManager.tryToBePaxosCoordinator(groupName);
+			System.out.println(">>>>>>>>>> Making " + this.getMyID() + " as coordinator for " + groupName);
+		}
+    }
 
 	public String toString() {
 		return this.getClass().getSimpleName() + ":" + getMyID();
