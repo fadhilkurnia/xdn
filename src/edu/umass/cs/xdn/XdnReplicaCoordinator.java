@@ -202,9 +202,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     public boolean createReplicaGroup(String serviceName,
                                       int epoch,
                                       String state,
-                                      Set<NodeIDType> nodes) {
-        System.out.printf(">> %s:XdnReplicaCoordinator - createReplicaGroup name=%s, epoch=%d, state=%s, nodes=%s\n",
-                myNodeID, serviceName, epoch, state, nodes);
+                                      Set<NodeIDType> nodes,
+                                      String placementMetadata) {
+        System.out.printf(">> %s:XdnReplicaCoordinator - createReplicaGroup name=%s, epoch=%d, state=%s, nodes=%s, metadata=%s\n",
+                myNodeID, serviceName, epoch, state, nodes, placementMetadata);
 
         // These are the default replica groups from Gigapaxos
         if (serviceName.equals(PaxosConfig.getDefaultServiceName()) ||
@@ -217,18 +218,19 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             return true;
         }
 
-        return this.initializeReplicaGroup(serviceName, state, nodes, epoch);
+        return this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
     }
 
     private boolean initializeReplicaGroup(String serviceName,
                                            String initialState,
                                            Set<NodeIDType> nodes,
-                                           int placementEpoch) {
+                                           int placementEpoch,
+                                           String placementMetadata) {
         System.out.printf(">> %s:XdnReplicaCoordinator - initializeReplicaGroup " +
-                        "name=%s, state=%s, nodes=%s\n",
-                myNodeID, serviceName, initialState, nodes);
+                        "name=%s, state=%s, nodes=%s metadata=%s\n",
+                myNodeID, serviceName, initialState, nodes, placementMetadata);
 
-        // Validate the serviceName, initialState, and nodes
+        // Validates the serviceName, initialState, and nodes
         assert serviceName != null && !serviceName.isEmpty()
                 : "Cannot initialize an XDN service with null or empty service name";
         assert nodes != null && !nodes.isEmpty()
@@ -282,13 +284,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                             placementEpoch,
                             initialState,
                             nodes);
+            // TODO: handle placement metadata for Bayou, if there is any. For now it is not
+            //   needed because there is no "preferred" coordinator for Client Centric Consistency.
         } else {
             // for all other coordinators, we use the generic createReplicaGroup method.
             isSuccess = coordinator.createReplicaGroup(
                     serviceName,
                     placementEpoch,
                     initialState,
-                    nodes);
+                    nodes,
+                    placementMetadata);
         }
         assert isSuccess : "failed to initialize service";
 

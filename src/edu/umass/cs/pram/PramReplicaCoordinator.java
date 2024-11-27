@@ -199,10 +199,8 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     }
 
     @Override
-    public boolean createReplicaGroup(String serviceName,
-                                      int epoch,
-                                      String state,
-                                      Set<NodeIDType> nodes) {
+    public boolean createReplicaGroup(String serviceName, int epoch, String state,
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         System.out.printf(">> %s:PramReplicaCoordinator -- " +
                         "createReplicaGroup name=%s nodes=%s epoch=%d state=%s\n",
                 myNodeID, serviceName, nodes, epoch, state);

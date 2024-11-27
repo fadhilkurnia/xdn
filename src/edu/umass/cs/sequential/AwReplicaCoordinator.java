@@ -100,7 +100,7 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes) {
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         boolean isCreated = this.paxosManager.createPaxosInstanceForcibly(
                 serviceName, epoch, nodes, this.app, state, 5000);
         boolean isAlreadyExist = this.paxosManager.equalOrHigherVersionExists(serviceName, epoch);

@@ -163,11 +163,12 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes) {
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         assert serviceName != null && !serviceName.isEmpty();
         assert epoch >= 0;
         assert !nodes.isEmpty();
-        return this.pbManager.createPrimaryBackupInstance(serviceName, epoch, state, nodes);
+        return this.pbManager.createPrimaryBackupInstance(
+                serviceName, epoch, state, nodes, placementMetadata);
     }
 
     @Override

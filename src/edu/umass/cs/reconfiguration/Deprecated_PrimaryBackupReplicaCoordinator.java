@@ -384,7 +384,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes) {
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         System.out.println(">> PrimaryBackupCoor - createReplicaGroup | serviceName:" + serviceName
                 + " epoch:" + epoch
                 + " state:" + state

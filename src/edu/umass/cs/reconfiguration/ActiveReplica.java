@@ -939,8 +939,8 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 				e.printStackTrace();
 			}
 			/* FIXME: This assertion can fail if there is a reconfiguration
-			 * immmediately after creation. the creation above will throw an
-			 * exception if it fails */
+			 *   immediately after creation. the creation above will throw an
+			 *   exception if it fails */
 			assert (!created || startEpoch.getCurEpochGroup().equals(
 					this.appCoordinator.getReplicaGroup(startEpoch
 							.getServiceName()))) : this

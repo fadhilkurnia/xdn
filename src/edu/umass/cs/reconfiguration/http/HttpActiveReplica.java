@@ -341,13 +341,12 @@ public class HttpActiveReplica {
             // (1) the HttpRequest contains non-empty XDN header, or
             // (2) the HttpRequest contains Host header ending in "xdnapp.com".
             // Note that "Host" header is required since HTTP 1.1
-            if (msg instanceof HttpRequest) {
+            if (msg instanceof HttpRequest httpRequest) {
                 boolean isXdnRequest = false;
 
                 // Handle the first condition: contains XDN header
-                HttpRequest httpRequest = (HttpRequest) msg;
                 String xdnHeader = httpRequest.headers().get("XDN");
-                if (xdnHeader != null && xdnHeader.length() > 0) {
+                if (xdnHeader != null && !xdnHeader.isEmpty()) {
                     isXdnRequest = true;
                 }
 
@@ -535,17 +534,19 @@ public class HttpActiveReplica {
                         new XdnHttpRequest(this.request, this.requestContent);
 
                 // prepare the callback for this http request
-                XdnHttpExecutedCallback callback = new XdnHttpExecutedCallback(httpRequest, ctx);
+                XdnHttpExecutedCallback callback =
+                        new XdnHttpExecutedCallback(httpRequest, ctx, arFunctions);
 
                 // create Gigapaxos' request, it is important to explicitly set the clientAddress,
                 // otherwise, down the pipeline, the RequestPacket's equals method will return false
                 // and our callback will not be called, leaving the client hanging
                 // waiting for response.
                 ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(httpRequest);
-                String[] addrPort = ctx.channel().remoteAddress().toString().split(":");
-                gpRequest.setClientAddress(new InetSocketAddress(
-                        InetAddress.getByName(addrPort[0].substring(1)),
-                        Integer.parseInt(addrPort[1])));
+                InetSocketAddress clientInetSocketAddress = null;
+                assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
+                        "Expecting Internet socket address from client";
+                clientInetSocketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+                gpRequest.setClientAddress(clientInetSocketAddress);
 
                 // forward http request to XDN App, which eventually will forward it to the service.
                 // Note that response later will be written inside the callback, via ctx.
@@ -685,10 +686,12 @@ public class HttpActiveReplica {
         }
 
         private record XdnHttpExecutedCallback(XdnHttpRequest request,
-                                               ChannelHandlerContext ctx)
+                                               ChannelHandlerContext ctx,
+                                               ActiveReplicaFunctions arFunctions)
                 implements ExecutedCallback {
             @Override
             public void executed(Request executedRequest, boolean handled) {
+                // Validates the executed Http request
                 if (!(executedRequest instanceof XdnHttpRequest xdnRequest)) {
                     String exceptionMessage = "Unexpected executed request (" +
                             executedRequest.getClass().getSimpleName() +
@@ -696,12 +699,20 @@ public class HttpActiveReplica {
                     throw new RuntimeException(exceptionMessage);
                 }
 
+                // Prepares the Http response, then send it back to client.
                 HttpResponse httpResponse = xdnRequest.getHttpResponse();
                 boolean isKeepAlive = HttpUtil.isKeepAlive(request.getHttpRequest());
                 if (httpResponse != null) {
                     isKeepAlive = isKeepAlive && HttpUtil.isKeepAlive(httpResponse);
                 }
                 writeHttpResponse(httpResponse, ctx, isKeepAlive);
+
+                // Asynchronously sends statistics to the control plane (i.e., RC).
+                InetAddress clientInetAddress = null;
+                if (ctx.channel().remoteAddress() instanceof InetSocketAddress isa) {
+                    clientInetAddress = isa.getAddress();
+                }
+                arFunctions.updateDemandStatsFromHttp(executedRequest, clientInetAddress);
             }
         }
     }
