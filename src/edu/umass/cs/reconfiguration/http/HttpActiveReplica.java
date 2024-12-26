@@ -204,7 +204,7 @@ public class HttpActiveReplica {
 
         @Override
         protected void initChannel(SocketChannel channel) throws Exception {
-            CorsConfig corsConfig = CorsConfig.withAnyOrigin().build();
+            CorsConfig corsConfig = CorsConfig.withAnyOrigin().allowedRequestHeaders("xdn", "XDN", "Xdn", "content-type", "Content-Type", "CONTENT-TYPE", "Authorization").build();
 
             ChannelPipeline p = channel.pipeline();
 
@@ -634,6 +634,9 @@ public class HttpActiveReplica {
                         HttpHeaderNames.CONNECTION,
                         HttpHeaderValues.KEEP_ALIVE);
             }
+            httpResponse.headers().set("Access-Control-Allow-Origin", "*");
+            httpResponse.headers().set("Access-Control-Allow-Headers", "*");
+            httpResponse.headers().set("Access-Control-Allow-Methods", "*");
 
             ChannelFuture cf = ctx.writeAndFlush(httpResponse);
             cf.addListener((ChannelFutureListener) channelFuture -> {

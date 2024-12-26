@@ -118,6 +118,9 @@ public class ServiceProperty {
                 entryPort = 80;
             }
 
+            String entrypoint = json.has("entrypoint") ? json.getString("entrypoint") : "";
+            String addMountSrc = json.has("addMountSrc") ? json.getString("addMountSrc") : "";
+            String addMountTgt = json.has("addMountTgt") ? json.getString("addMountTgt") : "";
             // parse environment variables, if any
             Map<String, String> env = null;
             if (json.has("environments")) {
@@ -136,7 +139,8 @@ public class ServiceProperty {
                     (stateDirectory != null),
                     true,
                     entryPort,
-                    env
+                    env,
+                    entrypoint, addMountSrc, addMountTgt
             );
             components.add(c);
         }
@@ -319,6 +323,18 @@ public class ServiceProperty {
                 entryPort = componentDetailJSON.getInt("port");
                 isEntry = true;
             }
+            String entrypoint = "";
+            if(componentDetailJSON.has("entrypoint")) {
+                entrypoint = componentDetailJSON.getString("entrypoint");
+            }
+            String addMountSrc = "";
+            if(componentDetailJSON.has("addMountSrc")) {
+                addMountSrc = componentDetailJSON.getString("addMountSrc");
+            }
+            String addMountTgt = "";
+            if(componentDetailJSON.has("addMountTgt")) {
+                addMountTgt = componentDetailJSON.getString("addMountTgt");
+            }
 
             // parse environments
             Map<String, String> env = null;
@@ -338,7 +354,8 @@ public class ServiceProperty {
                     isStateful,
                     isEntry,
                     entryPort == 0 ? null : entryPort,
-                    env
+                    env,
+                    entrypoint, addMountSrc, addMountTgt
             ));
         }
 

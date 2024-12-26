@@ -29,6 +29,9 @@ type CommonProperties struct {
 	consistencyModel  string
 	isDeterministic   bool
 	stateDir          string
+	entrypoint        string
+	addMountSrc       string
+	addMountTgt       string
 	rawJsonProperties string
 }
 
@@ -81,7 +84,9 @@ func init() {
 	LaunchCmd.PersistentFlags().StringP("consistency", "c", "linearizability", "consistency model for the replicated service")
 	LaunchCmd.PersistentFlags().StringP("state", "s", "/", "absolute path of directory in which the service store the state durably")
 	LaunchCmd.PersistentFlags().BoolP("deterministic", "d", false, "indicate whether the service is deterministic (default: false)")
-
+    LaunchCmd.PersistentFlags().StringP("entrypoint", "e", "", "custom command to be run during docker run")
+    LaunchCmd.PersistentFlags().StringP("addMountSrc", "m", "", "host source to mount any additional data")
+    LaunchCmd.PersistentFlags().StringP("addMountTgt", "t", "", "docker target to mount any additional data")
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")
 }
@@ -134,6 +139,15 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		return prop, err
 	}
 
+    e, err := flags.GetString("entrypoint")
+    prop.entrypoint = e
+
+    addMountSrc, err := flags.GetString("addMountSrc")
+    prop.addMountSrc = addMountSrc
+
+    addMountTgt, err := flags.GetString("addMountTgt")
+    prop.addMountTgt = addMountTgt
+
 	prop.rawJsonProperties = fmt.Sprintf(`
 	{
 		"name":"%s",
@@ -141,18 +155,23 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		"port":%d,
 		"state":"%s",
 		"consistency":"%s",
-		"deterministic":%t
+		"deterministic":%t,
+		"addMountSrc":"%s",
+		"addMountTgt":"%s"
 	}`, prop.serviceName,
 		prop.imageName,
 		prop.httpPort,
 		prop.stateDir,
 		prop.consistencyModel,
-		prop.isDeterministic)
+		prop.isDeterministic,
+		prop.addMountSrc,
+		prop.addMountTgt)
 	trimmedJson := strings.ReplaceAll(prop.rawJsonProperties, " ", "")
 	trimmedJson = strings.ReplaceAll(trimmedJson, "\t", "")
 	trimmedJson = strings.ReplaceAll(trimmedJson, "\n", "")
-	prop.rawJsonProperties = trimmedJson
+    entrypointJson := fmt.Sprintf(`, "entrypoint":"%s"`, prop.entrypoint)
 
+    prop.rawJsonProperties = trimmedJson[:len(trimmedJson)-1] + entrypointJson + "}"
 	return prop, nil
 }
 

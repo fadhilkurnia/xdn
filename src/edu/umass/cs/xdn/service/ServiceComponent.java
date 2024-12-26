@@ -20,10 +20,13 @@ public class ServiceComponent {
      */
     private final Integer entryPort;
     private final Map<String, String> environmentVariables;
+    private final String entrypoint;
+    private final String addMountSrc;
+    private final String addMountTgt;
 
     protected ServiceComponent(String componentName, String imageName, Integer exposedPort,
                                boolean isStateful, boolean isEntryComponent, Integer entryPort,
-                               Map<String, String> environmentVariables) {
+                               Map<String, String> environmentVariables, String entrypoint, String addMountSrc, String addMountTgt) {
         this.componentName = componentName;
         this.imageName = imageName;
         this.exposedPort = exposedPort;
@@ -31,7 +34,9 @@ public class ServiceComponent {
         this.isEntryComponent = isEntryComponent;
         this.entryPort = entryPort;
         this.environmentVariables = environmentVariables;
-
+        this.entrypoint = entrypoint;
+        this.addMountSrc = addMountSrc;
+        this.addMountTgt = addMountTgt;
         if (this.isEntryComponent && entryPort == null) {
             throw new RuntimeException("port is required for service's entry component");
         }
@@ -63,6 +68,17 @@ public class ServiceComponent {
 
     public Integer getEntryPort() {
         return entryPort;
+    }
+
+    public String getEntrypoint() {
+        return entrypoint;
+    }
+
+    public String getAddMountSrc() {
+        return addMountSrc;
+    }
+    public String getAddMountTgt() {
+        return addMountTgt;
     }
 
     public Map<String, String> getEnvironmentVariables() {
