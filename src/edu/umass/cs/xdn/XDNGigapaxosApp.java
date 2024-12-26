@@ -634,7 +634,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                     c.isEntryComponent() ? allocatedPort : null,
                     c.isStateful() ? stateDirMountSource : null,
                     c.isStateful() ? stateDirMountTarget : null,
-                    c.getEnvironmentVariables());
+                    c.getEnvironmentVariables(), c.getEntrypoint(), c.getAddMountSrc(), c.getAddMountTgt());
             if (!isSuccess) {
                 throw new RuntimeException("failed to start container for component " +
                         c.getComponentName());
@@ -1162,7 +1162,7 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private boolean startContainer(String imageName, String containerName, String networkName,
                                    String hostName, Integer exposedPort, Integer publishedPort,
                                    Integer allocatedHttpPort, String mountDirSource,
-                                   String mountDirTarget, Map<String, String> env) {
+                                   String mountDirTarget, Map<String, String> env, String entrypoint, String addMountSrc, String addMountTgt) {
 
         String publishPortSubCmd = "";
         if (publishedPort != null && allocatedHttpPort != null) {
@@ -1184,6 +1184,12 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             mountSubCmd = String.format("--mount type=bind,source=%s,target=%s",
                     mountDirSource, mountDirTarget);
         }
+        String addMountSubCmd = "";
+        if (addMountSrc != null && !addMountSrc.isEmpty() &&
+                addMountTgt != null && !addMountTgt.isEmpty()) {
+            addMountSubCmd = String.format("--mount type=bind,source=%s,target=%s",
+                    addMountSrc, addMountTgt);
+        }
 
         String envSubCmd = "";
         if (env != null) {
@@ -1204,9 +1210,9 @@ public class XDNGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
         String startCommand =
                 String.format("docker run --rm -d --name=%s --hostname=%s --network=%s " +
-                                "%s %s %s %s %s %s",
+                                "%s %s %s %s %s %s %s %s",
                         containerName, hostName, networkName, publishPortSubCmd, exposePortSubCmd,
-                        mountSubCmd, envSubCmd, userSubCmd, imageName);
+                        mountSubCmd, envSubCmd, userSubCmd, addMountSubCmd, imageName, entrypoint);
         int exitCode = Shell.runCommand(startCommand, false);
         if (exitCode != 0) {
             System.err.println("failed to start container");
