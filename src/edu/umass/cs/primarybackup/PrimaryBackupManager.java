@@ -13,6 +13,7 @@ import edu.umass.cs.primarybackup.packets.*;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
+import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import org.json.JSONException;
@@ -388,7 +389,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     ResponsePacket resp = new ResponsePacket(
                             executedRequest.getServiceName(),
                             rp.getRequestID(),
-                            requestWithResponse.getResponse(). toString().
+                            requestWithResponse.getResponse().toString().
                                     getBytes(StandardCharsets.ISO_8859_1));
                     String entryNodeIDStr = forwardedRequestPacket.getEntryNodeId();
                     NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
@@ -687,10 +688,73 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         //   - if preferred coordinator is specified: set primary, set paxos leader
         //   - if preferred coordinator is not specified: detect paxos leader -> set primary
 
+        if (placementMetadata != null) {
+            boolean isInitSuccess = this.initializePrimaryEpoch(groupName, placementMetadata);
+            assert isInitSuccess;
+            return true;
+        }
+
         boolean isInitializationSuccess = initializePrimaryEpoch(groupName);
         if (!isInitializationSuccess) {
             System.out.printf("Failed to initialize replica group for %s\n", groupName);
             return false;
+        }
+
+        return true;
+    }
+
+    private boolean initializePrimaryEpoch(String groupName, String placementMetadata) {
+        assert groupName != null && !groupName.isEmpty();
+        assert placementMetadata != null && !placementMetadata.isEmpty();
+
+        // System.out.println(">>> initialize with placement metadata " + placementMetadata);
+        this.currentRole.put(groupName, Role.BACKUP);
+
+        // attempts to parse the metadata
+        String preferredCoordinatorNodeId = null;
+        try {
+            JSONObject json = new JSONObject(placementMetadata);
+            preferredCoordinatorNodeId = json.getString(
+                    AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
+        } catch (JSONException e) {
+            Logger.getGlobal().log(Level.WARNING,
+                    "{0} failed to parse preferred coordinator in the placement metadata: {1}",
+                    new Object[]{this, e});
+            return false;
+        }
+
+        // attempts to be the coordinator, if this node is the preferred coordinator
+        // specified in the placement metadata.
+        if (this.myNodeID.toString().equals(preferredCoordinatorNodeId)) {
+
+            // FIXME: we need to wait for other replicas (majority) to active first,
+            //  before we can propose something.
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+
+            // System.out.printf(">> %s Initializing primary epoch for %s\n", myNodeID, groupName);
+            PrimaryEpoch<NodeIDType> zero = new PrimaryEpoch<>(myNodeID, 0);
+            this.currentRole.put(groupName, Role.PRIMARY_CANDIDATE);
+            this.currentPrimaryEpoch.put(groupName, zero);
+            StartEpochPacket startPacket = new StartEpochPacket(groupName, zero);
+            this.paxosManager.propose(
+                    groupName,
+                    startPacket,
+                    (proposedPacket, isHandled) -> {
+                        System.out.printf("\n\n>> %s I'M THE PRIMARY NOW FOR %s!!\n\n",
+                                myNodeID, groupName);
+                        currentRole.put(groupName, Role.PRIMARY);
+                        currentPrimary.put(groupName, this.myNodeID);
+                        currentPrimaryEpoch.put(groupName, zero);
+                        processOutstandingRequests();
+                    }
+            );
+
+            this.paxosManager.tryToBePaxosCoordinator(groupName);
+
         }
 
         return true;
@@ -727,7 +791,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         //  This is needed for now as the current implementation has not handle the case when
         //  a node does not know the current Primary.
         try {
-            Thread.sleep(1000);
+            Thread.sleep(100);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
