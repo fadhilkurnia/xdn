@@ -43,7 +43,7 @@ function do_distributed_initialization() {
   # extract unique IPs from the config file
   local unique_ips=()
   while IFS= read -r line; do
-    if [[ $line =~ ^(active|reconfigurator)\. ]]; then
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
       ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
       if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
         unique_ips+=("$ip")
@@ -281,8 +281,8 @@ function upload_binaries() {
   local node=$1
   local ssh_key=$2;
   local username=$3;
-  local git_url="https://github.com/fadhilkurnia/gigapaxos.git";
-  local git_branch="fadhil-dist-deploy";
+  local git_url="https://github.com/fadhilkurnia/xdn.git";
+  local git_branch="reconfiguration-dev";
 
   # TODO: implement me, copy from current source instead of pulling from Github
   echo "Getting the XDN binaries from Github ..."
