@@ -9,6 +9,10 @@ set -u
 LC_CTYPE=en_US.UTF-8
 LC_ALL=en_US.UTF-8
 
+# Contains the absolute path of XDN source code (e.g., /users/fadhil/xdn).
+# The variable is populated in main() function.
+XDN_SRC_PATH="";
+
 function do_system_check() {
   echo "The following systems/dependencies are required to run XDN."
   echo " - Linux 5.15 or newer with x86-64 architecture"
@@ -34,7 +38,7 @@ function do_distributed_initialization() {
     esac
   done
 
-  # check if the file exist
+  # check if the specified/default config file exist
   if [ ! -f "$CONFIG" ]; then
     echo "Config file '$CONFIG' can not be found!"
     exit 1
@@ -281,18 +285,16 @@ function upload_binaries() {
   local node=$1
   local ssh_key=$2;
   local username=$3;
-  local git_url="https://github.com/fadhilkurnia/xdn.git";
-  local git_branch="reconfiguration-dev";
+  local xdn_src_dir=$XDN_SRC_PATH;
 
-  # TODO: implement me, copy from current source instead of pulling from Github
-  echo "Getting the XDN binaries from Github ..."
-  # bin/fuselog
-  # bin/fuselog-apply
+  # copy from current source into the target machine
+  echo "Uploading XDN binaries from $xdn_src_dir/ ..."
+  ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "rm -rf xdn"
+  rsync -Pav -e "ssh -i $ssh_key -q" --exclude=".*/" -q -a $xdn_src_dir/ $username@$node:~/xdn
+
+  # TODO: check that fuselog and fuselog-apply are working
 
   CMD=()
-  CMD+=("rm -rf xdn")
-  CMD+=("git clone $git_url xdn > /dev/null")
-  CMD+=("cd xdn && git checkout $git_branch > /dev/null && ant jar")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuselog')
@@ -360,6 +362,11 @@ function main() {
     echo "Invalid program name. Must be 'xdnd'."
     exit 1
   fi
+
+  # Find out the absolute path of XDN source code, assuming
+  # this bash program is./bin/xdnd inside the XDN source code.
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  XDN_SRC_PATH="$(cd $SCRIPT_DIR && cd ../ && pwd)"
 
   # check the number of parameter.
   if [ "$#" -eq 0 ]; then
