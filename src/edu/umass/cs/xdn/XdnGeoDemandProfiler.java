@@ -51,6 +51,7 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     private static final Logger LOGGER = Logger.getLogger(XdnGeoDemandProfiler.class.getName());
 
     // Dummy const data for server locations.
+    // TODO: load from config
     private final Map<String, int[]> serverLocations = Map.ofEntries(
             Map.entry("AR0", new int[]{0, 0}),
             Map.entry("AR1", new int[]{1, 1}),
