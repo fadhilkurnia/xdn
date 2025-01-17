@@ -262,6 +262,13 @@ function install_dependencies() {
   CMD_DESC+=("install java21")
   CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk ant")
 
+  # install python3-pip and tcconfig for WAN latency emulation
+  CMD_DESC+=("install pip")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip")
+  CMD_DESC+=("install tcconfig for WAN latency emulation")
+  CMD+=("sudo pip install -q tcconfig")
+
+
   for i in "${!CMD_DESC[@]}"; do
     desc=${CMD_DESC[$i]}
     cmd=${CMD[$i]}
