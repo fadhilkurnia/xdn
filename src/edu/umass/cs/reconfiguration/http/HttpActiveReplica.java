@@ -166,7 +166,6 @@ public class HttpActiveReplica {
             channel = b.bind(sockAddr).sync().channel();
 
             log.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
-            System.out.println("HttpActiveReplica ready on " + sockAddr);
 
             channel.closeFuture().sync();
         } finally {

@@ -61,7 +61,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     private final Set<IntegerPacketType> requestTypes;
 
-    private final Logger logger = Logger.getGlobal();
+    private final Logger logger = Logger.getLogger(XdnReplicaCoordinator.class.getName());
 
     public XdnReplicaCoordinator(Replicable app,
                                  NodeIDType myID,
@@ -204,8 +204,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                                       String state,
                                       Set<NodeIDType> nodes,
                                       String placementMetadata) {
-        System.out.printf(">> %s:XdnReplicaCoordinator - createReplicaGroup name=%s, epoch=%d, state=%s, nodes=%s, metadata=%s\n",
-                myNodeID, serviceName, epoch, state, nodes, placementMetadata);
+        logger.log(Level.FINEST,
+                "{0}:XdnReplicaCoordinator - createReplicaGroup " +
+                        "name={1}, epoch={1}, state={2}, nodes={3}, metadata={4}",
+                new Object[]{myNodeID, serviceName, epoch, state, nodes, placementMetadata});
 
         // These are the default replica groups from Gigapaxos
         if (serviceName.equals(PaxosConfig.getDefaultServiceName()) ||

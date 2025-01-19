@@ -125,7 +125,7 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     public boolean shouldReportDemandStats(Request request, InetAddress sender,
                                            ReconfigurableAppInfo nodeConfig) {
         // TODO: client-ip to fake geolocation mapping.
-        System.out.println(">>> XdnGeoDemandProfiler - name=" + this.name +
+        LOGGER.log(Level.FINEST, ">>> XdnGeoDemandProfiler - name=" + this.name +
                 " request=" + (request != null ? request.getClass().getSimpleName() : null) +
                 " sender=" + sender);
 
