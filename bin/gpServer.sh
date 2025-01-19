@@ -206,12 +206,13 @@ if [[ ${args[1]} == "all" ]]; then
 
   # get reconfigurators
   reconfigurators=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
-    grep "^[ \t]*$RECONFIGURATOR"|\
+    grep "^[ \t]*$RECONFIGURATOR.[a-zA-Z0-9\-_]*="|\
     sed s/"^.*$RECONFIGURATOR\."//g|sed s/"=.*$"//g`
   
   # get actives
 	actives=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
-    grep "^[ \t]*$ACTIVE"| sed \ s/"^.*$ACTIVE\."//g|\
+    grep "^[ \t]*$ACTIVE.[a-zA-Z0-9\-_]*="| \
+    sed s/"^.*$ACTIVE\."//g|\
     sed s/"=.*$"//g`
   
   servers="$actives $reconfigurators"
@@ -525,7 +526,6 @@ function clear_all {
       esac
     fi
     # else go ahead and force clear
-    docker ps -aq | xargs -r docker stop | xargs -r docker rm
     stop_servers
     for server in $servers; do
       get_address_port $server
@@ -537,6 +537,8 @@ function clear_all {
         $JAVA $JVMARGS \
           edu.umass.cs.reconfiguration.ReconfigurableNode \
           clear $server
+
+        docker ps -aq | xargs -r docker stop | xargs -r docker rm
 
       else
         # remote clear

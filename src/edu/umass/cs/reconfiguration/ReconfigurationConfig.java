@@ -726,8 +726,11 @@ public class ReconfigurationConfig {
         Properties config = PaxosConfig.getAsProperties();
 
         Set<String> keys = config.stringPropertyNames();
+        String reconfiguratorServerKeyRegexPattern =
+                String.format("^%s[a-zA-Z0-9\\-_]*$", DEFAULT_RECONFIGURATOR_PREFIX);
         for (String key : keys) {
-            if (key.trim().startsWith(DEFAULT_RECONFIGURATOR_PREFIX)) {
+            if (key.trim().startsWith(DEFAULT_RECONFIGURATOR_PREFIX) &&
+                    key.matches(reconfiguratorServerKeyRegexPattern)) {
                 map.put(key.replaceFirst(DEFAULT_RECONFIGURATOR_PREFIX, ""),
                         Util.getInetSocketAddressFromString(config
                                 .getProperty(key)));

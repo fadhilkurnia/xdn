@@ -158,8 +158,11 @@ public class PaxosConfig {
 		Properties config = getAsProperties();
 
 		Set<String> keys = config.stringPropertyNames();
+		String serverKeyRegexPattern =
+				String.format("^[ \t]*%s[a-zA-Z0-9\\-_]*$", DEFAULT_SERVER_PREFIX);
 		for (String key : keys) {
-			if (key.trim().startsWith(DEFAULT_SERVER_PREFIX)) {
+			if (key.trim().startsWith(DEFAULT_SERVER_PREFIX) &&
+					key.matches(serverKeyRegexPattern)) {
 				map.put(key.replaceFirst(DEFAULT_SERVER_PREFIX, ""),
 						Util.getInetSocketAddressFromString(config
 								.getProperty(key)));
