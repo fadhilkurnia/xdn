@@ -205,18 +205,18 @@ function get_simple_name {
 if [[ ${args[1]} == "all" ]]; then
 
   # get reconfigurators
-    reconfigurators=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
-      grep "^[ \t]*$RECONFIGURATOR"|\
-      sed s/"^.*$RECONFIGURATOR\."//g|sed s/"=.*$"//g`
+  reconfigurators=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
+    grep "^[ \t]*$RECONFIGURATOR"|\
+    sed s/"^.*$RECONFIGURATOR\."//g|sed s/"=.*$"//g`
   
   # get actives
 	actives=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
-      grep "^[ \t]*$ACTIVE"| sed \ s/"^.*$ACTIVE\."//g|\
-      sed s/"=.*$"//g`
+    grep "^[ \t]*$ACTIVE"| sed \ s/"^.*$ACTIVE\."//g|\
+    sed s/"=.*$"//g`
   
   servers="$actives $reconfigurators"
 
-echo servers=[$servers]
+  echo servers=[$servers]
   
 else 
   servers="${args[@]:1}"
@@ -468,45 +468,45 @@ function start_server {
 }
 
 function start_servers {
-if [[ $servers != "" ]]; then
-  # print app and app args
-  if [[ $APP_ARGS != "" ]]; then
-    echo "[$APP $APP_ARGS]"
-  else
-    echo "[$APP]"
+  if [[ $servers != "" ]]; then
+    # print app and app args
+    if [[ $APP_ARGS != "" ]]; then
+      echo "[$APP $APP_ARGS]"
+    else
+      echo "[$APP]"
+    fi
+    # start servers
+    for server in $servers; do
+      start_server $server
+    done
+    if [[ $non_local != "" && $VERBOSE != 0 ]]; then
+      echo "Ignoring non-local server(s) \" $non_local\""
+    fi
   fi
-  # start servers
-  for server in $servers; do
-    start_server $server
-  done
-  if [[ $non_local != "" && $VERBOSE != 0 ]]; then
-    echo "Ignoring non-local server(s) \" $non_local\""
-  fi
-fi
 }
 
 function stop_servers {
   for i in $servers; do
-      get_address_port $i
-      KILL_TARGET="ReconfigurableNode .*$i"
-      if [[ ! -z $ifconfig_found && `$ifconfig_cmd|grep $address` != "" ]]; 
-      then
-        pid=`ps -ef|grep "$KILL_TARGET"|grep -v grep|\
-          awk '{print $2}' 2>/dev/null`
-        if [[ $pid != "" ]]; then
-          foundservers="$i($pid) $foundservers"
-          pids="$pids $pid"
-        fi
-      else 
-        # remote kill
-        echo "Stopping remote server $server"
-        echo $SSH $username@$address "\"kill -9 \`ps -ef|\
-          grep \"$KILL_TARGET\"|grep -v grep|awk \
-          '{print \$2}'\` 2>/dev/null\""
-        $SSH $username@$address "sudo kill -9 \`sudo ps -ef|\
-          grep \"$KILL_TARGET\"|grep -v grep|awk \
-          '{print \$2}'\` 2>/dev/null"
+    get_address_port $i
+    KILL_TARGET="ReconfigurableNode .*$i"
+    if [[ ! -z $ifconfig_found && `$ifconfig_cmd|grep "[^0-9]$address[^0-9]"` != "" ]]; 
+    then
+      pid=`ps -ef|grep "$KILL_TARGET"|grep -v grep|\
+        awk '{print $2}' 2>/dev/null`
+      if [[ $pid != "" ]]; then
+        foundservers="$i($pid) $foundservers"
+        pids="$pids $pid"
       fi
+    else 
+      # remote kill
+      echo "Stopping remote server $server"
+      echo $SSH $username@$address "\"kill -9 \`ps -ef|\
+        grep \"$KILL_TARGET\"|grep -v grep|awk \
+        '{print \$2}'\` 2>/dev/null\""
+      $SSH $username@$address "sudo kill -9 \`sudo ps -ef|\
+        grep \"$KILL_TARGET\"|grep -v grep|awk \
+        '{print \$2}'\` 2>/dev/null"
+    fi
   done
   if [[ `echo $pids|sed s/" *"//g` != "" ]]; then
     echo killing $foundservers
@@ -515,80 +515,80 @@ function stop_servers {
 }
 
 function clear_all {
-if [[ ! -z `echo "$@"|grep "clear[ ]*all"` ]]; then
-  if [[ -z `echo "$@"|grep "forceclear[ ]*all"` ]]; then
-    read -p "Are you sure you want to wipe out all paxos state? " yn
-    case $yn in
-        [Yy]* );; 
-        [Nn]* ) exit;;
-        * ) echo "Please answer yes or no.";exit;;
-    esac
+  if [[ ! -z `echo "$@"|grep "clear[ ]*all"` ]]; then
+    if [[ -z `echo "$@"|grep "forceclear[ ]*all"` ]]; then
+      read -p "Are you sure you want to wipe out all paxos state? " yn
+      case $yn in
+          [Yy]* );; 
+          [Nn]* ) exit;;
+          * ) echo "Please answer yes or no.";exit;;
+      esac
+    fi
+    # else go ahead and force clear
+    docker ps -aq | xargs -r docker stop | xargs -r docker rm
+    stop_servers
+    for server in $servers; do
+      get_address_port $server
+      if [[ ! -z $ifconfig_found && `$ifconfig_cmd|grep "[^0-9]$address[^0-9]"` != "" ]];
+      then
+        print 3 "$JAVA $JVMARGS  \
+          edu.umass.cs.reconfiguration.ReconfigurableNode \
+          clear $server"
+        $JAVA $JVMARGS \
+          edu.umass.cs.reconfiguration.ReconfigurableNode \
+          clear $server
+
+      else
+        # remote clear
+        echo "Clearing state on remote server $server"
+        print 2 "$SSH $username@$address \"cd $INSTALL_PATH; nohup \
+          $JAVA $REMOTE_JVMARGS \
+          -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
+          edu.umass.cs.reconfiguration.ReconfigurableNode \
+          clear $server \""
+        $SSH $username@$address "cd $INSTALL_PATH; sudo \
+          $JAVA $REMOTE_JVMARGS \
+          -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
+          edu.umass.cs.reconfiguration.ReconfigurableNode \
+          clear $server "&
+
+        # remove all docker container instances
+        $SSH $username@$address "docker ps -aq | xargs -r docker stop | xargs -r docker rm";
+
+        # unmount all filesystem
+        local cmd='sudo df | grep xdn/state/fuselog | awk '\''{print $6}'\'' | xargs -r sudo umount';
+        $SSH $username@$address "$cmd";
+
+        $SSH $username@$address "sudo rm -rf /tmp/xdn";
+
+      fi
+    done;
+  elif [[ ! -z `echo "$@"|grep "clear|forceclear"` ]]; then
+    echo; echo "The 'clear' and 'forceclear' options can be \
+      used only as 'clear all' or 'forceclear all'"
   fi
-  # else go ahead and force clear
-  docker ps -aq | xargs -r docker stop | xargs -r docker rm
-          stop_servers
-          for server in $servers; do
-            get_address_port $server
-            if [[ ! -z $ifconfig_found && `$ifconfig_cmd|grep $address` != "" ]];
-            then
-              print 3 "$JAVA $JVMARGS  \
-                edu.umass.cs.reconfiguration.ReconfigurableNode \
-                clear $server"
-              $JAVA $JVMARGS \
-                edu.umass.cs.reconfiguration.ReconfigurableNode \
-                clear $server
-
-            else
-              # remote clear
-              echo "Clearing state on remote server $server"
-              print 2 "$SSH $username@$address \"cd $INSTALL_PATH; nohup \
-                $JAVA $REMOTE_JVMARGS \
-                -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
-                edu.umass.cs.reconfiguration.ReconfigurableNode \
-                clear $server \""
-              $SSH $username@$address "cd $INSTALL_PATH; sudo \
-                $JAVA $REMOTE_JVMARGS \
-                -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
-                edu.umass.cs.reconfiguration.ReconfigurableNode \
-                clear $server "&
-
-              # remove all docker container instances
-              $SSH $username@$address "docker ps -aq | xargs -r docker stop | xargs -r docker rm";
-
-              # unmount all filesystem
-              local cmd='sudo df | grep xdn/state/fuselog | awk '\''{print $6}'\'' | xargs -r sudo umount';
-              $SSH $username@$address "$cmd";
-
-              $SSH $username@$address "sudo rm -rf /tmp/xdn";
-    
-              fi
-            done;
-elif [[ ! -z `echo "$@"|grep "clear|forceclear"` ]]; then
-  echo; echo "The 'clear' and 'forceclear' options can be \
-    used only as 'clear all' or 'forceclear all'"
-fi
 }
 
 case ${args[0]} in
 
-start)
-  start_servers
-;;
-
-restart)
-    stop_servers
+  start)
     start_servers
-;;
+  ;;
 
-stop)
-  stop_servers
-;;
+  restart)
+      stop_servers
+      start_servers
+  ;;
 
-clear)
-  clear_all "$@"
-;;
+  stop)
+    stop_servers
+  ;;
 
-forceclear)
-  clear_all "$@"
+  clear)
+    clear_all "$@"
+  ;;
+
+  forceclear)
+    clear_all "$@"
 
 esac
