@@ -434,7 +434,7 @@ function start_server {
     DEBUG_PORT=$((DEBUG_PORT+1))
   fi
 
-  if [[ $ifconfig_found != "" && `$ifconfig_cmd|grep $address` != "" ]]; then
+  if [[ $ifconfig_found != "" && `$ifconfig_cmd | grep "[^0-9]$address[^0-9]"` != "" ]]; then
     if [[ $VERBOSE == 2 ]]; then
       echo "$JAVA $DEBUG_ARGS $JVMARGS \
         edu.umass.cs.reconfiguration.ReconfigurableNode $server&"
