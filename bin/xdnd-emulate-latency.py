@@ -6,7 +6,7 @@
 import math
 import subprocess
 
-def haversine_distance(lat1, lon1, lat2, lon2):
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
     Calculate the great-circle distance between two points on the Earth 
     using the haversine formula. Returns distance in kilometers.
@@ -29,7 +29,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     distance = R * c
     return distance
 
-def read_servers_from_property_file(filename):
+def read_servers_from_property_file(filename: str) -> dict:
     """
     Reads a property file with lines like:
       active.aa="192.168.1.10"
@@ -42,8 +42,6 @@ def read_servers_from_property_file(filename):
          },
          ...
       }
-
-      TODO: Consider the location of the control plane as well.
     """
     servers = {}
     with open(filename, 'r') as f:
@@ -112,6 +110,26 @@ def read_servers_from_property_file(filename):
                 servers[server_name]["host"] = host
     
     return servers
+
+def get_latency_slowdown_from_property_file(filename: str) -> float:
+    with open(filename, 'r') as f:
+        for line in f:
+            line = line.strip()
+            line = line.partition('#')[0]
+
+            # Skip empty lines or commented lines if any
+            if not line or line.startswith("#"):
+                continue
+            
+            if line.startswith("XDN_EVAL_LATENCY_SLOWDOWN_FACTOR"):
+                parts = line.split('=')
+                if len(parts) < 2:
+                    continue
+                parts = parts[1].strip().split()
+                slowdown_str = parts[0]
+                slowdown = float(slowdown_str)
+                return slowdown
+    return 1.0
 
 def get_estimated_latency(distance_km, slowdown_factor):
     """
@@ -184,6 +202,9 @@ def main():
     
     # Read all servers' geolocations and IP
     servers = read_servers_from_property_file(property_file)
+
+    # Read slowdown factor from the config file
+    slowdown = get_latency_slowdown_from_property_file(property_file)
     
     # Get a list of server names so we can pair them
     server_names = list(servers.keys())
@@ -192,9 +213,9 @@ def main():
     print("All the registered servers:")
     for name in server_names:
         print(" >> " + name + " " + servers[name]["host"])
+    print("Slowdown factor: " + str(slowdown))
     
     # Calculate distances and latency between all unique pairs
-    slowdown = 0.15
     print("\nDistance and latency between server pairs:")
     for i in range(len(server_names)):
         for j in range(i + 1, len(server_names)):
