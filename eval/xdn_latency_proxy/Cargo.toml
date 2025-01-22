@@ -1,0 +1,9 @@
+[package]
+name = "xdn_latency_proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hyper = { version = "0.14", features = ["full"] }
+java-properties = "2.0.0"
+tokio = { version = "1.43", features = ["macros", "rt", "rt-multi-thread"] }
