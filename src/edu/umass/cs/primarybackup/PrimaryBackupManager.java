@@ -558,8 +558,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     // executeStartEpochPacket is being called by execute() in the PaxosMiddlewareApp
     private boolean executeStartEpochPacket(StartEpochPacket packet) {
-        System.out.printf(">>> %s:PrimaryBackupManager:executeStartEpoch epoch=%s\n",
-                myNodeID, packet.getStartingEpochString());
         String groupName = packet.getServiceName();
         String newPrimaryEpochStr = packet.getStartingEpochString();
         PrimaryEpoch<NodeIDType> newPrimaryEpoch = new PrimaryEpoch<>(newPrimaryEpochStr);
@@ -625,15 +623,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     // executeGetCheckpoint is being called by checkpoint() in the PaxosMiddlewareApp
     private String executeGetCheckpoint(String groupName) {
-        System.out.printf(">>> %s PrimaryBackupManager checkpoint name=%s\n",
-                myNodeID, groupName);
         return this.replicableApp.checkpoint(groupName);
     }
 
     // executeRestore is being called by restore() in the PaxosMiddlewareApp
     private boolean executeRestore(String groupName, String state) {
-        System.out.printf(">>> %s PrimaryBackupManager restore name=%s state=%s\n",
-                myNodeID, groupName, state);
         if (state == null || state.isEmpty()) {
             this.currentPrimaryEpoch.remove(groupName);
             this.currentRole.put(groupName, Role.BACKUP);

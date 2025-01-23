@@ -636,9 +636,6 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 		log.log(debug, "{0} handleMessage received {1}", new Object[] { this,
 				incoming.getSummary(log.isLoggable(debug)) });
 
-		System.out.println(">>> ActiveReplica --- handling incoming message " +
-				incoming.getClass().getSimpleName() + ": " + incoming + " at " + this.getMyID());
-
 		long entryTime = System.nanoTime();
 		@SuppressWarnings("unchecked")
 		BasicReconfigurationPacket<NodeIDType> rcPacket =

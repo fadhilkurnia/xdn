@@ -228,10 +228,6 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                                            Set<NodeIDType> nodes,
                                            int placementEpoch,
                                            String placementMetadata) {
-        System.out.printf(">> %s:XdnReplicaCoordinator - initializeReplicaGroup " +
-                        "name=%s, state=%s, nodes=%s metadata=%s\n",
-                myNodeID, serviceName, initialState, nodes, placementMetadata);
-
         // Validates the serviceName, initialState, and nodes
         assert serviceName != null && !serviceName.isEmpty()
                 : "Cannot initialize an XDN service with null or empty service name";
