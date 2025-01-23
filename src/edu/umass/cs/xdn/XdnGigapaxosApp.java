@@ -50,7 +50,7 @@ import java.util.logging.Logger;
 public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableApplication,
         InitialStateValidator {
 
-    private boolean IS_USE_FUSE = true;
+    private boolean IS_USE_FUSE = false;
     private final boolean IS_RESTART_UPON_STATE_DIFF_APPLY = false;
     private final String FUSELOG_BIN_PATH = "/users/fadhil/fuse/fuselog";
     private final String FUSELOG_APPLY_BIN_PATH = "/users/fadhil/fuse/apply";
@@ -85,7 +85,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private PrimaryBackupManager<?> primaryBackupManagerPtr;
 
-    private RecorderType recorderType = RecorderType.FUSELOG;
+    private RecorderType recorderType = RecorderType.RSYNC;
     private AbstractStateDiffRecorder stateDiffRecorder;
 
     public XdnGigapaxosApp(String[] args) {
