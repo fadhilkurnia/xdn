@@ -129,10 +129,6 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        System.out.println(">> coordinateRequest " + request.getClass().getName() + " " + request.getServiceName());
-        System.out.println(">> myID:" + getMyID() + " isCoordinator? " +
-                this.paxosManager.isPaxosCoordinator(request.getServiceName()) +
-                " callback: " + callback);
 
         if (request instanceof ReplicableClientRequest rcr) {
             request = rcr.getRequest();
@@ -272,8 +268,6 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     // (2) XDNHttpForwardRequest, which also contains XDNHttpRequest, being forwarded
     //     by entry replica to this coordinator node.
     private boolean executeRequestCoordinateStatediff(Request request, ExecutedCallback callback) {
-        System.out.println(">> " + this.myNodeID + " primaryBackup execution:   " + request.getClass().getSimpleName());
-
         // TODO: possibly change Epoch
         String serviceName = request.getServiceName();
         if (this.currentRole.get(serviceName) == Role.BACKUP) {
@@ -307,9 +301,6 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
                         epoch,
                         statediff);
 
-        System.out.println(">> " + this.myNodeID + " propose ...");
-        System.out.println(" request type " + primaryRequest.getClass().getSimpleName());
-
         Request finalPrimaryRequest = primaryRequest;
         if (isEntryNode) {
             this.paxosManager.propose(
@@ -327,7 +318,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
                     statediffApplyRequest,
                     (statediffRequest, handled) -> {
                         try {
-                            System.out.println(">> " + myNodeID + " sending response back to entry node ...");
+                            // sending request back to entry node
                             myMessenger.send(responseMessagingTask);
                         } catch (IOException | JSONException e) {
                             throw new RuntimeException(e);
@@ -348,7 +339,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
         );
         String entryNodeIDStr = forwardRequest.getEntryNodeID();
         NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
-        System.out.println(">> " + myNodeID + " sending response back to " + entryNodeID);
+        // sending response back to entry node
         GenericMessagingTask<NodeIDType, ?> responseMessage = new GenericMessagingTask<>(
                 entryNodeID, response);
         return responseMessage;

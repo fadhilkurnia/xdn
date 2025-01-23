@@ -1421,28 +1421,28 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
         // Remove the previously captured final state, if any.
         String removeCommand = String.format("rm -rf %s", finalStateDirPath);
-        int code = Shell.runCommand(removeCommand, false);
+        int code = Shell.runCommand(removeCommand, true);
         assert code == 0;
 
         // Create the directory to store the final state
         String createDirCommand = String.format("mkdir -p %s", finalStateDirPath);
-        code = Shell.runCommand(createDirCommand, false);
+        code = Shell.runCommand(createDirCommand, true);
         assert code == 0;
 
         // Copy the service state into the prepared directory.
         String hostMountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
         String stateCopyCommand = String.format("cp -a %s %s", hostMountDir, finalStateDirPath);
-        code = Shell.runCommand(stateCopyCommand, false);
+        code = Shell.runCommand(stateCopyCommand, true);
         assert code == 0;
 
         // Archive the final state into a tar file
         String finalStateTarDirPath = String.format("/tmp/xdn/final/%s/%s/%d/",
                 this.myNodeId, serviceName, epoch);
         String removeTarDirCommand = String.format("rm -rf %s", finalStateTarDirPath);
-        code = Shell.runCommand(removeTarDirCommand, false);
+        code = Shell.runCommand(removeTarDirCommand, true);
         assert code == 0;
         String createTarDirCommand = String.format("mkdir -p %s", finalStateTarDirPath);
-        code = Shell.runCommand(createTarDirCommand, false);
+        code = Shell.runCommand(createTarDirCommand, true);
         assert code == 0;
         String finalStateTarFilePath = finalStateTarDirPath + "final_state.tar";
         ZipFiles.zipDirectory(new File(finalStateDirPath), finalStateTarFilePath);
