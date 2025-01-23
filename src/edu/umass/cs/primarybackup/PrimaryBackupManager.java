@@ -311,9 +311,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     }
 
     private boolean handRequestToPrimary(RequestPacket packet, ExecutedCallback callback) {
-        System.out.printf(">> PBManager-%s: handing request to primary %s\n",
-                myNodeID, packet.toString());
-
         if (!ENABLE_INTERNAL_REDIRECT_PRIMARY) {
             askClientToContactPrimary(packet, callback);
         }
@@ -358,8 +355,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     private boolean handleForwardedRequestPacket(
             ForwardedRequestPacket forwardedRequestPacket, ExecutedCallback callback) {
-        System.out.printf(">> PBManager-%s: handling forwarded request %s\n",
-                myNodeID, forwardedRequestPacket.toString());
 
         String groupName = forwardedRequestPacket.getServiceName();
         Role curentRole = null;
@@ -380,10 +375,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             String encodedRequestString = new String(encodedRequest, StandardCharsets.ISO_8859_1);
             RequestPacket rp = RequestPacket.createFromString(encodedRequestString);
             this.executeRequestCoordinateStateDiff(rp, (executedRequest, handled) -> {
-                System.out.printf(">> PBManager-%s: forwarded request is executed, forwarding " +
-                                "response back to the entry replica in %s\n",
-                        myNodeID, forwardedRequestPacket.getEntryNodeId());
-                System.out.printf(">> PBManager-%s: response %s\n", myNodeID, executedRequest.toString());
+                // Forwarded request is executed, forwarding response back to the entry replica
 
                 if (executedRequest instanceof ClientRequest requestWithResponse) {
                     ResponsePacket resp = new ResponsePacket(
