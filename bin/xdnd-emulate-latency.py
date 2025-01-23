@@ -4,6 +4,7 @@
 # gigapaxos properties file. We emulate latency by injecting it using tcconfig.
 
 import math
+import sys
 import subprocess
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -169,13 +170,7 @@ def inject_server_latency(servers, slowdown):
     server_names = list(servers.keys())
 
     # reseting the injected latency
-    for i in range(len(server_names)):
-        s1 = server_names[i]
-        host = servers[s1]["host"]
-        cmd = f"ssh fadhil@{host} sudo tcdel eth1 --all"
-        print(">> " + cmd)
-        rcode = subprocess.call(cmd, shell=True)
-        print("   " + str(rcode))
+    reset_latency_injection(servers)
     
     # injecting the latency
     for i in range(len(server_names)):
@@ -197,11 +192,30 @@ def inject_server_latency(servers, slowdown):
 
     return
 
-def main():
+def reset_latency_injection(servers):
+    server_names = list(servers.keys())
+    
+    # reseting the injected latency
+    for i in range(len(server_names)):
+        s1 = server_names[i]
+        host = servers[s1]["host"]
+        cmd = f"ssh fadhil@{host} sudo tcdel eth1 --all"
+        print(">> " + cmd)
+        rcode = subprocess.call(cmd, shell=True)
+        print("   " + str(rcode))
+    return
+
+def main(args: list[str]):
     property_file = 'conf/gigapaxos.cloudlab-virtual.properties'
     
     # Read all servers' geolocations and IP
     servers = read_servers_from_property_file(property_file)
+
+    # handle case to reset latency injection
+    if len(args) >= 2 and args[1] == "reset":
+        print("resetting the injected latency")
+        reset_latency_injection(servers)
+        return
 
     # Read slowdown factor from the config file
     slowdown = get_latency_slowdown_from_property_file(property_file)
@@ -231,4 +245,4 @@ def main():
     inject_server_latency(servers, slowdown)
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)
