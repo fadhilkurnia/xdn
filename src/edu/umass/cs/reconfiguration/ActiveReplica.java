@@ -1417,7 +1417,6 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	/* Report demand stats to reconfigurators. This method will necessarily
 	 * result in a stats message being sent out to reconfigurators. */
 	private void report(AbstractDemandProfile demand) {
-		System.out.println(">> ActiveReplica --- sending demand report " + demand.getDemandStats());
 		try {
 			NodeIDType reportee = selectReconfigurator(demand.getName());
 			assert (reportee != null);

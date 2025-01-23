@@ -160,8 +160,6 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean execute(Request request) {
-        System.out.printf(">> %s:XdnGigapaxosApp execution %s: %s\n",
-                this.myNodeId, request.getClass().getSimpleName(), request);
         String serviceName = request.getServiceName();
 
         if (request instanceof HttpActiveReplicaRequest) {
