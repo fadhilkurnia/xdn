@@ -6,7 +6,6 @@ use hyper::{
 use std::{
     collections::HashMap,
     convert::Infallible,
-    env,
     net::SocketAddr,
     sync::Arc,
 };
@@ -15,15 +14,21 @@ use tokio::time::{sleep, Duration};
 mod utils;
 use utils::ServerLocation;
 
-// TODO: Use logging library
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         println!("Usage: xdn_latency_proxy <config_file>");
-        return Ok(());
+        return Err("Expecting a valid config file.".into());
     }
+
+    // Initialize logger and its level, defaulting to INFO.
+    use std::env;
+    let log_level = env::var("RUST_LOG");
+    if log_level.is_err() || log_level.unwrap() == "" {
+        env::set_var("RUST_LOG", "info");
+    }
+    env_logger::init();
 
     // Our proxy will bind to 0.0.0.0:8080
     let address = SocketAddr::from(([0, 0, 0, 0], 8080));
@@ -56,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let server = Server::bind(&address).serve(make_svc);
-    println!("Latency proxy is listening on http://{}", address);
+    log::info!("Latency proxy is listening on http://{}", address);
 
     // Run until server is stopped (e.g., ctrl-c)
     server.await?;
@@ -121,25 +126,34 @@ async fn proxy_handler(
                     .unwrap_or(0.0);
             request_delay_ns = (emulated_latency_ms * 1_000_000.0) as u64;
 
-            println!("Emulated request path:");
-            println!("  - Client\t({}, {})",
-                     client_latitude.unwrap(),
-                     client_longitude.unwrap());
-            println!("  - Replica:{}\t({}, {})",
-                     server_location.unwrap().name,
-                     server_latitude.unwrap(),
-                     server_longitude.unwrap());
-            println!("  distance: {:.2} m", client_server_distance);
-            println!("  slowdown: {:.2} x", slowdown_factor);
+            log::debug!("\n\
+            Emulated request path:\n\
+              - Client\t\t({}, {})\n\
+              - Replica:{}\t({}, {})\n\
+              distance: {:.2}m\n\
+              slowdown: {:.2}x",
+                client_latitude.unwrap(),
+                client_longitude.unwrap(),
+                server_location.unwrap().name,
+                server_latitude.unwrap(),
+                server_longitude.unwrap(),
+                client_server_distance,
+                slowdown_factor
+            );
         }
     }
 
     // If we have a valid delay, sleeps for that duration.
     let one_way_request_delay_ns = request_delay_ns / 2;
     if request_delay_ns > 0 {
-        println!("Delaying request by {} ms", (request_delay_ns as f64) / 1_000_000.0);
-        println!(" - Client => Replica: {} ms", (one_way_request_delay_ns as f64) / 1_000_000.0);
-        println!(" - Client <= Replica: {} ms", (one_way_request_delay_ns as f64) / 1_000_000.0);
+        log::debug!("\n\
+        Delaying request by {}ms\n\
+           - Client => Replica: {}ms\n\
+           - Client <= Replica: {}ms\n",
+            (request_delay_ns as f64) / 1_000_000.0,
+            (one_way_request_delay_ns as f64) / 1_000_000.0,
+            (one_way_request_delay_ns as f64) / 1_000_000.0
+        );
         sleep(Duration::from_nanos(one_way_request_delay_ns)).await;
     }
 
