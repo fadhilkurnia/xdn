@@ -113,10 +113,10 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         String targetDiffFile = String.format("%s%s/e%d.diff",
                 this.baseDiffDirPath, serviceName, placementEpoch);
 
-        int removeTargetDirRetCode = Shell.runCommand("rm -rf " + targetDestDir, false);
-        int removeDiffDirRetCode = Shell.runCommand("rm -rf " + targetDiffFile, false);
-        int copySnapshotRetCode = Shell.runCommand(String.format("cp -a %s %s",
-                targetSourceDir, targetDestDir), false);
+        int removeTargetDirRetCode = Shell.runCommand("rm -rf " + targetDestDir);
+        int removeDiffDirRetCode = Shell.runCommand("rm -rf " + targetDiffFile);
+        int copySnapshotRetCode = Shell.runCommand(
+                String.format("cp -a %s %s", targetSourceDir, targetDestDir));
         assert removeTargetDirRetCode == 0 &&
                 removeDiffDirRetCode == 0 &&
                 copySnapshotRetCode == 0;
@@ -210,7 +210,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     @Override
     public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
         String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
-        int retCode = Shell.runCommand("rm -rf " + targetDir, false);
+        int retCode = Shell.runCommand("rm -rf " + targetDir);
         assert retCode == 0;
         return true;
     }
