@@ -56,8 +56,6 @@ def get_replicas_address(service_name, control_plane):
     return replicas
 
 def measure_latency_geo(service_name, replica_addresses, config_file, location_file, num_clients, repetition, timeout, proxy):
-    # TODO: measure latency by considering the client location distribution
-
     # validates address and config file
     if len(replica_addresses) == 0:
         return
