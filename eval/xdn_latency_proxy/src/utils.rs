@@ -20,7 +20,7 @@ pub fn get_server_locations(config_file: &str) -> Result<HashMap<String, ServerL
     if config_file.is_empty() {
         return Ok(HashMap::new());
     }
-    println!("Loading server locations from '{}'", config_file);
+    log::info!("Loading server locations from '{}'", config_file);
 
     let file = std::fs::File::open(config_file).expect("Could not open the config file");
     let config_map = read(BufReader::new(file)).expect("Could not read the config file");
@@ -34,7 +34,7 @@ pub fn get_server_locations(config_file: &str) -> Result<HashMap<String, ServerL
             let server_name = key.split('.').collect::<Vec<&str>>()[1];
             let address = value.parse::<SocketAddr>();
             if address.is_err() {
-                eprintln!("Could not parse server address {}", server_name);
+                log::warn!("Could not parse server address {}", server_name);
                 continue;
             }
             let address = address.unwrap();
@@ -64,7 +64,7 @@ pub fn get_server_locations(config_file: &str) -> Result<HashMap<String, ServerL
                 .map(|s| s.parse::<f64>().unwrap())
                 .collect::<Vec<f64>>();
             if locations.len() != 2 {
-                eprintln!("Invalid geolocation data for {}", server_name);
+                log::warn!("Invalid geolocation data for {}", server_name);
                 continue;
             }
 
@@ -93,7 +93,8 @@ pub fn get_server_locations(config_file: &str) -> Result<HashMap<String, ServerL
         if loc.address.is_none() {
             continue;
         }
-        println!("- {}\t{}\t{}\t{}", loc.name, loc.address.unwrap(), loc.latitude, loc.longitude);
+        log::info!("- parsed location: {}\t{}\t{}\t{}",
+            loc.name, loc.address.unwrap(), loc.latitude, loc.longitude);
         server_location_by_hostname.insert(loc.address.unwrap().ip().to_string(), loc);
     }
 
@@ -111,12 +112,14 @@ pub fn get_server_locations(config_file: &str) -> Result<HashMap<String, ServerL
 /// The slowdown factor as `f64`.
 pub fn get_slowdown_factor(config_file: &str) -> f64 {
     if config_file.is_empty() {
+        log::info!("Unspecified config file, using default latency slowdown factor: 1.0x");
         return 1.0;
     }
 
     // Open the .properties config file
     let file = std::fs::File::open(config_file);
     if file.is_err() {
+        log::warn!("Failed to open config file, using default latency slowdown factor: 1.0x");
         return 1.0;
     }
     let file = file.unwrap();
@@ -124,6 +127,7 @@ pub fn get_slowdown_factor(config_file: &str) -> f64 {
     // Read and parse the config file
     let config_map = read(BufReader::new(file));
     if config_map.is_err() {
+        log::warn!("Failed to read config file, using default latency slowdown factor: 1.0x");
         return 1.0;
     }
     let config_map = config_map.unwrap();
@@ -131,10 +135,12 @@ pub fn get_slowdown_factor(config_file: &str) -> f64 {
     for (key, value) in config_map.into_iter() {
         if key.eq("XDN_EVAL_LATENCY_SLOWDOWN_FACTOR") {
             let slowdown = value.parse::<f64>().unwrap_or(1.0);
+            log::info!("Parsed slowdown factor: {}x", slowdown);
             return slowdown;
         }
     }
 
+    log::warn!("Unknown value of `XDN_EVAL_LATENCY_SLOWDOWN_FACTOR`, using the default: 1.0x");
     1.0
 }
 
