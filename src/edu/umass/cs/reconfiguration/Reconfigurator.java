@@ -375,7 +375,6 @@ public class Reconfigurator<NodeIDType> implements
             ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
         ReconfigurationConfig.log.log(Level.FINEST, "{0} received {1} {2}", new Object[]{this,
                 report.getType(), report});
-        System.out.println(">>> Reconfigurator: handling demand report " + report);
         /* Forward if I am not responsible and return. Demand reports can be
          * misdirected if actives have an inconsistent view of the current set
          * of reconfigurators. */
@@ -392,7 +391,6 @@ public class Reconfigurator<NodeIDType> implements
             this.updateDemandProfile(report); // no coordination
         ReconfigurationRecord<NodeIDType> record = this.DB
                 .getReconfigurationRecord(report.getServiceName());
-        System.out.println(">>> Reconfigurator: reconfiguration report " + report);
         if (record != null) {
             NodeIdsMetadataPair<NodeIDType> newActives =
                     this.shouldReconfigure2(report.getServiceName());
@@ -1914,7 +1912,6 @@ public class Reconfigurator<NodeIDType> implements
     private NodeIdsMetadataPair<NodeIDType> shouldReconfigure2(String name) {
         // returns null if no current actives
         Set<NodeIDType> oldActives = this.DB.getActiveReplicas(name);
-        System.out.println(">>> Reconfigurator: shouldReconfigure? oldActives=" + oldActives);
         if (oldActives == null || oldActives.isEmpty())
             return null;
 
@@ -1924,10 +1921,6 @@ public class Reconfigurator<NodeIDType> implements
                         name, getStringSet(oldActives), this.getReconfigurableAppInfo());
         if (newActiveNodeIdsAndMetadata == null || newActiveNodeIdsAndMetadata.nodeIds() == null)
             return null;
-
-        System.out.println(">>> Reconfigurator: shouldReconfigure? newActiveIPs=" +
-                newActiveNodeIdsAndMetadata.nodeIds() + " metadata:" +
-                newActiveNodeIdsAndMetadata.placementMetadata());
 
         // get new actives based on the new Node IDs
         Set<String> newActiveStringNodeIds = newActiveNodeIdsAndMetadata.nodeIds();
