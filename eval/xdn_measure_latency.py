@@ -74,6 +74,9 @@ def measure_latency_geo(service_name, replica_addresses, config_file, location_f
     # prepare clients and assign to the closes replica
     city_clients = create_geo_clients(location_file, num_clients)
     prepared_clients = assign_client_replica(city_clients, servers)
+    proxy_address = None
+    if proxy is not None and proxy != "":
+        proxy_address = { "http": f"http://{proxy}" }
 
     # do the actual measurements
     latencies = []
@@ -90,7 +93,7 @@ def measure_latency_geo(service_name, replica_addresses, config_file, location_f
                     # Send a POST request
                     response = requests.post(f"http://{target_server}:2300{REQUEST_PATH}", 
                                             timeout=timeout,
-                                            proxies={"http": f"http://{proxy}"},
+                                            proxies=proxy_address,
                                             headers={
                                                 "XDN": service_name, 
                                                 "X-Client-Location": client_location},
