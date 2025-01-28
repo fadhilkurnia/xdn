@@ -10,8 +10,7 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use std::thread::sleep_until;
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 
 mod utils;
 use utils::ServerLocation;
@@ -129,12 +128,7 @@ async fn proxy_handler(
                     .unwrap_or(0.0);
             request_delay_ns = (emulated_latency_ms * 1_000_000.0) as u64;
 
-            log::debug!("\n\
-            Emulated request path:\n\
-              - Client\t\t({}, {})\n\
-              - Replica:{}\t({}, {})\n\
-              distance: {:.2}m\n\
-              slowdown: {:.2}x",
+            log::debug!("Path: Client({};{}) <=> Replica:{}({};{}) | dist={:.2}m slw={:.2}x",
                 client_latitude.unwrap(),
                 client_longitude.unwrap(),
                 server_location.unwrap().name,
@@ -157,8 +151,9 @@ async fn proxy_handler(
 
     // If we have a valid delay, sleeps for that duration.
     if request_delay_ns > 0 {
-        log::debug!("Delaying request by {}ms",(request_delay_ns as f64) / 1_000_000.0);
-        let start = Instant::now();
+        log::debug!("Delaying request by {}ms | ",
+            (request_delay_ns as f64) / 1_000_000.0);
+        let start = processing_time_start;
         let delay_duration = Duration::from_nanos(request_delay_ns);
         while Instant::now() - start < delay_duration {
             // delay with busy loop
