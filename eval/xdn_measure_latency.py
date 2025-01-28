@@ -115,11 +115,13 @@ def measure_latency_geo(service_name, replica_addresses, config_file, location_f
 
     # Calculate statistics
     avg_latency = statistics.mean(latencies)
+    med_latency = statistics.median(latencies)
     min_latency = min(latencies)
     max_latency = max(latencies)
 
     print(f"Number of successful requests: {len(latencies)}")
     print(f"Average latency: {avg_latency*1_000:.4f} ms")
+    print(f"Median latency: {med_latency*1_000:.4f} ms")
     print(f"Minimum latency: {min_latency*1_000:.4f} ms")
     print(f"Maximum latency: {max_latency*1_000:.4f} ms")
 
