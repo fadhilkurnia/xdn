@@ -7,6 +7,7 @@ import statistics
 import sys
 import time
 import math
+from datetime import datetime
 from typing import List
 
 SERVICE_NAME="bookcatalog"
@@ -56,6 +57,9 @@ def get_replicas_address(service_name, control_plane):
     return replicas
 
 def measure_latency_geo(service_name, replica_addresses, config_file, location_file, num_clients, repetition, timeout, proxy):
+    current_time = datetime.now()
+    measurement_id = current_time.strftime("%Y%m%d%H%M%S")
+
     # validates address and config file
     if len(replica_addresses) == 0:
         return
@@ -125,7 +129,13 @@ def measure_latency_geo(service_name, replica_addresses, config_file, location_f
     print(f"Minimum latency: {min_latency*1_000:.4f} ms")
     print(f"Maximum latency: {max_latency*1_000:.4f} ms")
 
-    # TODO: Store the result in a csv file: latencies.csv
+    # Store the result in a csv file: latencies.csv
+    result_filename = f"latencies_{measurement_id}.csv"
+    result_file = open(result_filename, 'w')
+    result_file.write("latency_ms")
+    for lat in latencies:
+        result_file.write(f"{lat*1_000}\n")
+    result_file.close()
 
     return
 
