@@ -178,9 +178,13 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             long startTime = System.nanoTime();
             forwardHttpRequestToContainerizedService(xdnHttpRequest);
             long elapsedTime = System.nanoTime() - startTime;
-            logger.log(Level.FINE, "{0}:{1} - request execution time is {2} ms",
+            logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} (id: {6})",
                     new Object[]{this.getClass().getSimpleName(), this.myNodeId,
-                            (elapsedTime / 1_000_000.0)});
+                            (elapsedTime / 1_000_000.0),
+                            xdnHttpRequest.getHttpRequest().method(),
+                            serviceName,
+                            xdnHttpRequest.getHttpRequest().uri(),
+                            xdnHttpRequest.getRequestID()});
             return true;
         }
 
