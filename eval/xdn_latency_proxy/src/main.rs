@@ -145,6 +145,15 @@ async fn proxy_handler(
         }
     }
 
+    let delay_calculation_end_time = Instant::now();
+
+    // Builds a new request to forward (reusing headers, method, and URI).
+    let (mut parts, body) = req.into_parts();
+    parts.headers.remove("X-Request-Delay");
+    parts.headers.remove("X-Client-Location");
+    let forward_req = Request::from_parts(parts, body);
+    let request_creation_end_time = Instant::now();
+
     // If we have a valid delay, sleeps for that duration.
     let one_way_request_delay_ns = request_delay_ns / 2;
     if request_delay_ns > 0 {
@@ -158,22 +167,27 @@ async fn proxy_handler(
         );
         sleep(Duration::from_nanos(one_way_request_delay_ns)).await;
     }
-
-    // Builds a new request to forward (reusing headers, method, and URI).
-    let (mut parts, body) = req.into_parts();
-    parts.headers.remove("X-Request-Delay");
-    parts.headers.remove("X-Client-Location");
-    let forward_req = Request::from_parts(parts, body);
+    let sending_delay_emulation_end_time = Instant::now();
 
     // Forwards the request to the upstream server using Hyper's client.
     let response = client.request(forward_req).await?;
+    let request_response_end_time = Instant::now();
 
     // If we have valid delay, sleeps for that duration for the response.
     if request_delay_ns > 0 {
         sleep(Duration::from_nanos(one_way_request_delay_ns)).await;
     }
 
-    let duration = processing_time_start.elapsed();
-    log::debug!("Time spent in proxy is: {:?}", duration);
+    let receiving_delay_emulation_end_time = Instant::now();
+
+    let total_duration = processing_time_start.elapsed();
+    log::debug!("Spent {:?} in proxy, pre={:?} req={:?} snd={:?} proc={:?} rcv={:?}",
+        total_duration,
+        delay_calculation_end_time - processing_time_start,
+        request_creation_end_time - delay_calculation_end_time,
+        sending_delay_emulation_end_time - request_creation_end_time,
+        request_response_end_time - sending_delay_emulation_end_time,
+        receiving_delay_emulation_end_time - request_response_end_time,
+    );
     Ok(response)
 }
