@@ -8,6 +8,7 @@ use std::{
     convert::Infallible,
     net::SocketAddr,
     sync::Arc,
+    time::Instant,
 };
 use tokio::time::{sleep, Duration};
 
@@ -75,6 +76,7 @@ async fn proxy_handler(
     server_locations: Arc<HashMap<String, ServerLocation>>,
     slowdown_factor: f64,
 ) -> Result<Response<Body>, hyper::Error> {
+    let processing_time_start = Instant::now();
 
     // Look for the "X-Request-Delay" header in the incoming request (in ms).
     let request_delay_ms = req
@@ -169,5 +171,7 @@ async fn proxy_handler(
         sleep(Duration::from_nanos(one_way_request_delay_ns)).await;
     }
 
+    let duration = processing_time_start.elapsed();
+    log::debug!("Time spent in proxy is: {:?}", duration);
     Ok(response)
 }
