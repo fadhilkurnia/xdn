@@ -160,7 +160,9 @@ async fn proxy_handler(
     }
 
     // Builds a new request to forward (reusing headers, method, and URI).
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
+    parts.headers.remove("X-Request-Delay");
+    parts.headers.remove("X-Client-Location");
     let forward_req = Request::from_parts(parts, body);
 
     // Forwards the request to the upstream server using Hyper's client.
