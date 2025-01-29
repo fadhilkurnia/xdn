@@ -179,7 +179,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             forwardHttpRequestToContainerizedService(xdnHttpRequest);
             long elapsedTime = System.nanoTime() - startTime;
             logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} (id: {6})",
-                    new Object[]{ this.myNodeId, this.getClass().getSimpleName(),
+                    new Object[]{this.myNodeId, this.getClass().getSimpleName(),
                             (elapsedTime / 1_000_000.0),
                             xdnHttpRequest.getHttpRequest().method(),
                             serviceName,
@@ -1454,49 +1454,47 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     }
 
     private void forwardHttpRequestToContainerizedService(XdnHttpRequest xdnRequest) {
+        long startTime = System.nanoTime();
         String serviceName = xdnRequest.getServiceName();
         assert serviceName != null;
         Integer targetPort = this.activeServicePorts.get(serviceName);
         assert targetPort != null;
+        long endValidationTime = System.nanoTime();
 
         // Create Http Request
-        long startTime = System.nanoTime();
         HttpRequest javaNetHttpRequest = xdnRequest
                 .getJavaNetHttpRequest(true, targetPort);
-        long elapsedTime = System.nanoTime() - startTime;
-        logger.log(Level.FINE, "{0}:{1} - request creation within {2}ms",
-                new Object[]{ this.myNodeId,
-                        this.getClass().getSimpleName(),
-                        (elapsedTime / 1_000_000.0)});
+        long endRequestCreationTime = System.nanoTime();
 
         // Forward request to the containerized service, get the http response.
         HttpResponse<byte[]> response;
         try {
-            startTime = System.nanoTime();
             response = this.serviceClient.send(
                     javaNetHttpRequest, HttpResponse.BodyHandlers.ofByteArray());
-            elapsedTime = System.nanoTime() - startTime;
-            logger.log(Level.FINE, "{0}:{1} - forward and wait to/from docker within {2}ms",
-                    new Object[]{ this.myNodeId,
-                            this.getClass().getSimpleName(),
-                            (elapsedTime / 1_000_000.0)});
         } catch (IOException | InterruptedException e) {
             xdnRequest.setHttpResponse(createNettyHttpErrorResponse(e));
             return;
         }
+        long endRequestResponseTime = System.nanoTime();
 
         // Convert the response into Netty Http Response
-        startTime = System.nanoTime();
         io.netty.handler.codec.http.HttpResponse nettyHttpResponse =
                 createNettyHttpResponse(response);
-        elapsedTime = System.nanoTime() - startTime;
-        logger.log(Level.FINE, "{0}:{1} - response conversion within {2}ms",
-                new Object[]{ this.myNodeId,
-                        this.getClass().getSimpleName(),
-                        (elapsedTime / 1_000_000.0)});
+        long endConversionTime = System.nanoTime();
 
         // Store the response in the xdn request, which will be returned to the end client.
         xdnRequest.setHttpResponse(nettyHttpResponse);
+        long endResponseStoreTime = System.nanoTime();
+
+        logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms, val={3}ms crt={4}ms " +
+                        "exc={5}ms conv={6}ms sto={7}ms)",
+                new Object[]{this.myNodeId, this.getClass().getSimpleName(),
+                        (endResponseStoreTime - startTime) / 1_000_000.0,
+                        (endValidationTime - startTime) / 1_000_000.0,
+                        (endRequestCreationTime - endValidationTime) / 1_000_000.0,
+                        (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0,
+                        (endConversionTime - endRequestResponseTime) / 1_000_000.0,
+                        (endResponseStoreTime - endConversionTime) / 1_000_000.0});
     }
 
     private boolean forwardHttpRequestToContainerizedService(XdnJsonHttpRequest xdnRequest) {
