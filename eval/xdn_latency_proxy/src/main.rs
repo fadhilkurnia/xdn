@@ -128,7 +128,8 @@ async fn proxy_handler(
                     .unwrap_or(0.0);
             request_delay_ns = (emulated_latency_ms * 1_000_000.0) as u64;
 
-            log::debug!("Path: Client({};{}) <=> Replica:{}({};{}) | dist={:.2}m slw={:.2}x",
+            log::debug!("Path: Client({:.2};{:.2}) <=> Replica:{}({:.2};{:.2}) \
+            dist={:.2}m slw={:.2}x",
                 client_latitude.unwrap(),
                 client_longitude.unwrap(),
                 server_location.unwrap().name,
@@ -151,7 +152,7 @@ async fn proxy_handler(
 
     // If we have a valid delay, sleeps for that duration.
     if request_delay_ns > 0 {
-        log::debug!("Delaying request by {}ms | ",
+        log::debug!("Delaying request by {}ms",
             (request_delay_ns as f64) / 1_000_000.0);
         let start = processing_time_start;
         let delay_duration = Duration::from_nanos(request_delay_ns);
