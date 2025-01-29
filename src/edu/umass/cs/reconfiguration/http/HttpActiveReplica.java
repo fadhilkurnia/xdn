@@ -94,6 +94,8 @@ public class HttpActiveReplica {
 
     private final Channel channel;
 
+    private static final Logger logger = Logger.getLogger(HttpActiveReplica.class.getName());
+
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
 
@@ -493,7 +495,9 @@ public class HttpActiveReplica {
 
         }
 
-        private void handleReceivedXdnRequest(ChannelHandlerContext ctx, Object msg) throws Exception {
+        private void handleReceivedXdnRequest(ChannelHandlerContext ctx, Object msg) {
+            long startXdnRequestProcTime = System.nanoTime();
+
             if (msg instanceof HttpRequest) {
                 this.request = (HttpRequest) msg;
                 if (HttpUtil.is100ContinueExpected((HttpRequest) msg)) {
@@ -534,7 +538,8 @@ public class HttpActiveReplica {
 
                 // prepare the callback for this http request
                 XdnHttpExecutedCallback callback =
-                        new XdnHttpExecutedCallback(httpRequest, ctx, arFunctions);
+                        new XdnHttpExecutedCallback(
+                                httpRequest, ctx, arFunctions, startXdnRequestProcTime);
 
                 // create Gigapaxos' request, it is important to explicitly set the clientAddress,
                 // otherwise, down the pipeline, the RequestPacket's equals method will return false
@@ -617,8 +622,7 @@ public class HttpActiveReplica {
         }
 
         private static void writeHttpResponse(HttpResponse httpResponse, ChannelHandlerContext ctx,
-                                              boolean isKeepAlive) {
-
+                                              boolean isKeepAlive, long startProcessingTime) {
             if (isKeepAlive) {
                 httpResponse.headers().set(
                         HttpHeaderNames.CONNECTION,
@@ -628,7 +632,8 @@ public class HttpActiveReplica {
             ChannelFuture cf = ctx.writeAndFlush(httpResponse);
             cf.addListener((ChannelFutureListener) channelFuture -> {
                 if (!channelFuture.isSuccess()) {
-                    System.out.println("writing response failed: " + channelFuture.cause());
+                    logger.log(Level.WARNING,
+                            "Writing response failed: " + channelFuture.cause());
                 }
 
                 // If keep-alive is off, close the connection once the content is fully written.
@@ -637,6 +642,11 @@ public class HttpActiveReplica {
                             .addListener(ChannelFutureListener.CLOSE);
                 }
             });
+
+            long elapsedTime = System.nanoTime() - startProcessingTime;
+            logger.log(Level.FINE, "{1} - HTTP execution within {2}ms",
+                    new Object[]{HttpActiveReplica.class.getSimpleName(),
+                            (elapsedTime / 1_000_000.0)});
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {
@@ -686,7 +696,8 @@ public class HttpActiveReplica {
 
         private record XdnHttpExecutedCallback(XdnHttpRequest request,
                                                ChannelHandlerContext ctx,
-                                               ActiveReplicaFunctions arFunctions)
+                                               ActiveReplicaFunctions arFunctions,
+                                               long startProcessingTime)
                 implements ExecutedCallback {
             @Override
             public void executed(Request executedRequest, boolean handled) {
@@ -704,7 +715,7 @@ public class HttpActiveReplica {
                 if (httpResponse != null) {
                     isKeepAlive = isKeepAlive && HttpUtil.isKeepAlive(httpResponse);
                 }
-                writeHttpResponse(httpResponse, ctx, isKeepAlive);
+                writeHttpResponse(httpResponse, ctx, isKeepAlive, startProcessingTime);
 
                 // Asynchronously sends statistics to the control plane (i.e., RC).
                 InetAddress clientInetAddress = null;
