@@ -644,7 +644,7 @@ public class HttpActiveReplica {
             });
 
             long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{1} - HTTP execution within {2}ms",
+            logger.log(Level.FINE, "{0} - HTTP execution within {1}ms",
                     new Object[]{HttpActiveReplica.class.getSimpleName(),
                             (elapsedTime / 1_000_000.0)});
         }

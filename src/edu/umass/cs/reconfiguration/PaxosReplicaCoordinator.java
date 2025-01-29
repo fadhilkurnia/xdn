@@ -1,17 +1,17 @@
 /* Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- * 
+ *
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration;
 
@@ -136,7 +136,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		this.paxosManager.setOutOfOrderLimit(limit);
 		return this;
 	}
-	
+
 	private static Set<IntegerPacketType> requestTypes = null;
 
 	@Override
@@ -183,18 +183,32 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 */
 	public boolean coordinateRequest(String paxosGroupID, Request request,
 			ExecutedCallback callback) throws RequestParseException {
-		String proposee = this.propose(paxosGroupID, request, callback);
+		// prepare the updated callback that log the coordination duration
+		long startProcessingTime = System.nanoTime();
+		ExecutedCallback loggedCallback = (response, handled) -> {
+            callback.executed(response, handled);
+			long elapsedTime = System.nanoTime() - startProcessingTime;
+			log.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
+					new Object[]{this.paxosManager.getNodeID(),
+							this.getClass().getSimpleName(),
+							elapsedTime / 1_000_000.0});
+        };
+
+		// propose the request with Paxos
+		String proposee = this.propose(paxosGroupID, request, loggedCallback);
+
 		Level level = Level.FINE;
-		log.log(level, "{0} {1} request {2} to {3}:{4}", new Object[] {
+		log.log(level, "{0} {1} request {2} to {3}:{4}", new Object[]{
 				this,
-				(proposee != null ? "paxos-coordinated"
+				(proposee != null
+						? "paxos-coordinated"
 						: "failed to paxos-coordinate"),
 				log.isLoggable(level) ? request.getSummary() : null,
 				proposee,
-				log.isLoggable(level) ? this.getReplicaGroup(paxosGroupID)
-						: null });
-		// System.out.printf(">>> %s:PaxosReplicaCoordinator - coordinate request %s proposee=%s app=%s\n\n",
-		//		messenger.getMyID(), request.getRequestType().toString(), proposee, app.getClass().getSimpleName());
+				log.isLoggable(level)
+						? this.getReplicaGroup(paxosGroupID)
+						: null});
+
 		return proposee != null;
 	}
 
@@ -213,7 +227,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		if (!createdOrExistsOrHigher)
 			throw new PaxosInstanceCreationException((this
 					+ " failed to create " + groupName + ":" + epoch
-					+ " with state [" + state + "]") + "; existing_version=" + 
+					+ " with state [" + state + "]") + "; existing_version=" +
 					this.paxosManager.getVersion(groupName));
 
 		// set the coordinator if it is set in the metadata
@@ -305,7 +319,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 * place. An alternative is to disallow null as a legitimate app state, but
 	 * that means forcing apps to specify a non-null initial state (currently
 	 * not enforced) as initial state needs to be checkpointed for safety.
-	 * 
+	 *
 	 * @param name
 	 * @param epoch
 	 * @return The final state wrapped in StringContainer.
@@ -340,7 +354,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		 * epoch that just got dropped by using the previous epoch final state
 		 * if it is available locally. So it is best to delete that final state
 		 * as well so that the late, zombie epoch creation eventually fails.
-		 * 
+		 *
 		 * Note: Usually deleting lower epochs in addition to the specified
 		 * epoch is harmless. There is at most one lower epoch final state at a
 		 * node anyway. */
