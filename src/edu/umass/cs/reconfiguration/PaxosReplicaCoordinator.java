@@ -53,6 +53,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 
 	private final PaxosManager<NodeIDType> paxosManager;
 	protected static final Logger log = (ReconfigurationConfig.getLogger());
+	private final Logger logger = Logger.getLogger(PaxosReplicaCoordinator.class.getName());
 
 	/**
 	 * @param app
@@ -185,14 +186,17 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 			ExecutedCallback callback) throws RequestParseException {
 		// prepare the updated callback that log the coordination duration
 		long startProcessingTime = System.nanoTime();
-		ExecutedCallback loggedCallback = (response, handled) -> {
-            callback.executed(response, handled);
-			long elapsedTime = System.nanoTime() - startProcessingTime;
-			log.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
-					new Object[]{this.paxosManager.getNodeID(),
-							this.getClass().getSimpleName(),
-							elapsedTime / 1_000_000.0});
-        };
+		ExecutedCallback loggedCallback = callback;
+        if (callback != null) {
+            loggedCallback = (response, handled) -> {
+                callback.executed(response, handled);
+                long elapsedTime = System.nanoTime() - startProcessingTime;
+                logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
+                        new Object[]{this.paxosManager.getNodeID(),
+                                this.getClass().getSimpleName(),
+                                elapsedTime / 1_000_000.0});
+            };
+        }
 
 		// propose the request with Paxos
 		String proposee = this.propose(paxosGroupID, request, loggedCallback);
