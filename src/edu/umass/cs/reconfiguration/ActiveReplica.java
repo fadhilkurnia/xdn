@@ -204,21 +204,22 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 			InetSocketAddress me = this.messenger.getListeningSocketAddress();
 			final InetSocketAddress addr = new InetSocketAddress(me.getAddress(),
 					ReconfigurationConfig.getHTTPPort( me.getPort()) );
+			String nodeId = this.getMyID().toString();
 
 			this.protocolExecutor.submit(new Runnable() {
 				@Override
 				public void run() {
-					initHTTPServer(false, addr);
+					initHTTPServer(nodeId, false, addr);
 				}
 			});
 		}
 	}
 
-	private void initHTTPServer(boolean ssl, InetSocketAddress addr){
+	private void initHTTPServer(String nodeId, boolean ssl, InetSocketAddress addr){
 
 		try {
 			// initialize HTTP server
-			new HttpActiveReplica(this, addr, ssl);
+			new HttpActiveReplica(nodeId, this, addr, ssl);
 
 		} catch (Exception e) {
 			if (!(e instanceof InterruptedException)) // close

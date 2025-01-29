@@ -93,23 +93,11 @@ public class HttpActiveReplica {
     private final EventLoopGroup workerGroup;
 
     private final Channel channel;
-
+    private final String nodeId;
     private static final Logger logger = Logger.getLogger(HttpActiveReplica.class.getName());
 
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
-
-    /**
-     * @param arf
-     * @param ssl
-     * @throws CertificateException
-     * @throws SSLException
-     * @throws InterruptedException
-     */
-    public HttpActiveReplica(ActiveReplicaFunctions arf,
-                             boolean ssl) throws CertificateException, SSLException, InterruptedException {
-        this(arf, null, ssl);
-    }
 
     /**
      * @param arf
@@ -119,9 +107,14 @@ public class HttpActiveReplica {
      * @throws SSLException
      * @throws InterruptedException
      */
-    public HttpActiveReplica(ActiveReplicaFunctions arf,
-                             InetSocketAddress sockAddr, boolean ssl)
+    public HttpActiveReplica(String nodeId,
+                             ActiveReplicaFunctions arf,
+                             InetSocketAddress sockAddr,
+                             boolean ssl)
             throws CertificateException, SSLException, InterruptedException {
+
+        this.nodeId = nodeId;
+        assert this.nodeId != null : "Node ID cannot be null";
 
         // Configure SSL.
         final SslContext sslCtx;
@@ -144,7 +137,7 @@ public class HttpActiveReplica {
                     .channel(NioServerSocketChannel.class)
                     .handler(new LoggingHandler(LogLevel.INFO))
                     .childHandler(
-                            new HttpActiveReplicaInitializer(arf, sslCtx)
+                            new HttpActiveReplicaInitializer(nodeId, arf, sslCtx)
                     );
 
             if (sockAddr == null) {
@@ -189,11 +182,14 @@ public class HttpActiveReplica {
     private static class HttpActiveReplicaInitializer extends
             ChannelInitializer<SocketChannel> {
 
+        private final String nodeId;
         private final SslContext sslCtx;
         final ActiveReplicaFunctions arFunctions;
 
-        HttpActiveReplicaInitializer(final ActiveReplicaFunctions arf,
+        HttpActiveReplicaInitializer(String nodeId,
+                                     final ActiveReplicaFunctions arf,
                                      SslContext sslCtx) {
+            this.nodeId = nodeId;
             this.arFunctions = arf;
             this.sslCtx = sslCtx;
         }
@@ -216,7 +212,7 @@ public class HttpActiveReplica {
 
             p.addLast(new CorsHandler(corsConfig));
 
-            p.addLast(new HttpActiveReplicaHandler(arFunctions, channel.remoteAddress()));
+            p.addLast(new HttpActiveReplicaHandler(nodeId, arFunctions, channel.remoteAddress()));
 
         }
 
@@ -311,10 +307,10 @@ public class HttpActiveReplica {
 
     }
 
-
     private static class HttpActiveReplicaHandler extends
             SimpleChannelInboundHandler<Object> {
 
+        private static String nodeId = null;
         ActiveReplicaFunctions arFunctions;
         final InetSocketAddress senderAddr;
 
@@ -325,7 +321,8 @@ public class HttpActiveReplica {
          */
         private final StringBuilder buf = new StringBuilder();
 
-        HttpActiveReplicaHandler(ActiveReplicaFunctions arFunctions, InetSocketAddress addr) {
+        HttpActiveReplicaHandler(String nodeId, ActiveReplicaFunctions arFunctions, InetSocketAddress addr) {
+            HttpActiveReplicaHandler.nodeId = nodeId;
             this.arFunctions = arFunctions;
             this.senderAddr = addr;
         }
@@ -644,8 +641,10 @@ public class HttpActiveReplica {
             });
 
             long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0} - HTTP execution within {1}ms",
-                    new Object[]{HttpActiveReplica.class.getSimpleName(),
+            logger.log(Level.FINE, "{0}:{1} - HTTP execution within {2}ms",
+                    new Object[]{
+                            nodeId,
+                            HttpActiveReplica.class.getSimpleName(),
                             (elapsedTime / 1_000_000.0)});
         }
 
@@ -734,7 +733,7 @@ public class HttpActiveReplica {
      * @throws InterruptedException
      */
     public static void main(String[] args) throws CertificateException, SSLException, InterruptedException {
-        new HttpActiveReplica(null, new InetSocketAddress(8080), false);
+        new HttpActiveReplica("node1", null, new InetSocketAddress(8080), false);
     }
 
 }
