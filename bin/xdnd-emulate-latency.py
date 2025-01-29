@@ -4,8 +4,13 @@
 # gigapaxos properties file. We emulate latency by injecting it using tcconfig.
 
 import math
+import os
 import sys
 import subprocess
+
+NET_DEV_INTERFACE_NAME = "eth1"
+if os.environ.get('NET_DEV_INTERFACE_NAME') != None:
+    NET_DEV_INTERFACE_NAME = os.environ.get('NET_DEV_INTERFACE_NAME')
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -185,7 +190,7 @@ def inject_server_latency(servers, slowdown):
             src_network = servers[s1]["host"]
             dst_network = servers[s2]["host"]
             
-            cmd = f"ssh fadhil@{src_network} sudo tcset eth1 --delay {latency_ms}ms --network {dst_network} --add"
+            cmd = f"ssh fadhil@{src_network} sudo tcset {NET_DEV_INTERFACE_NAME} --delay {latency_ms}ms --network {dst_network} --add"
             print(">> " + cmd)
             rcode = subprocess.call(cmd, shell=True)
             print("   " + str(rcode))
@@ -199,7 +204,7 @@ def reset_latency_injection(servers):
     for i in range(len(server_names)):
         s1 = server_names[i]
         host = servers[s1]["host"]
-        cmd = f"ssh fadhil@{host} sudo tcdel eth1 --all"
+        cmd = f"ssh fadhil@{host} sudo tcdel {NET_DEV_INTERFACE_NAME} --all"
         print(">> " + cmd)
         rcode = subprocess.call(cmd, shell=True)
         print("   " + str(rcode))
