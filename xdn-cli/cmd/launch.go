@@ -134,6 +134,14 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		fmt.Printf("the service's state directory is required, set with --state flag.\n")
 		return prop, err
 	}
+	if prop.stateDir[0] != '/' {
+	    fmt.Printf("the service's state directory must be in absolute form, starting with `/`.\n")
+        return prop, err
+	}
+	if prop.stateDir == "/" {
+    	    fmt.Printf("state directory `/` is not yet supported.\n")
+            return prop, err
+    	}
 
 	prop.rawJsonProperties = fmt.Sprintf(`
 	{
