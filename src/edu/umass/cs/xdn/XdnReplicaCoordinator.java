@@ -154,6 +154,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
+        long startProcessingTime = System.nanoTime();
+
+        // gets service name and its coordinator
         var serviceName = request.getServiceName();
         var coordinator = this.serviceCoordinator.get(serviceName);
         if (coordinator == null) {
@@ -161,9 +164,21 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             return createNotFoundResponse(request, callback);
         }
 
+        // prepare gigapaxos' request
         ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(request);
         gpRequest.setClientAddress(messenger.getListeningSocketAddress());
-        return coordinator.coordinateRequest(gpRequest, callback);
+
+        // prepare updated callback that logs the elapsed time
+        ExecutedCallback loggedCallback = (response, handled) -> {
+            callback.executed(response, handled);
+            long elapsedTime = System.nanoTime() - startProcessingTime;
+            logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
+                    new Object[] {this.myNodeID, this.getClass().getSimpleName(),
+                            elapsedTime / 1_000_000.0});
+        };
+
+        // asynchronously coordinate the request
+        return coordinator.coordinateRequest(gpRequest, loggedCallback);
     }
 
     private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {
