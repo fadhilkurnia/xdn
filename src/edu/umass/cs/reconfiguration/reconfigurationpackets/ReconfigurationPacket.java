@@ -143,6 +143,10 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 		// change the replica placement
         SET_REPLICA_PLACEMENT_REQUEST(244),
 
+		// get the latest replica placement, similar to REQUEST_ACTIVE_REPLICAS
+		// but with more metadata returned.
+		GET_REPLICA_PLACEMENT_REQUEST(245),
+
 		NO_TYPE (999),
 
 		;
@@ -228,6 +232,7 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 				HelloRequest.class);
 
 		typeMap.put(PacketType.SET_REPLICA_PLACEMENT_REQUEST, SetReplicaPlacementRequest.class);
+		typeMap.put(PacketType.GET_REPLICA_PLACEMENT_REQUEST, GetReplicaPlacementRequest.class);
 
 		for (ReconfigurationPacket.PacketType type : ReconfigurationPacket.PacketType.intToType
 				.values()) {
