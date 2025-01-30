@@ -58,6 +58,7 @@ import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
  *          - GET 		/api/v2/services
  *          - GET 		/api/v2/services/{name}
  *          - POST 		/api/v2/services/{name}
+ *          - GET 		/api/v2/services/{name}/placement
  *          - POST 		/api/v2/services/{name}/placement
  *          - DELETE 	/api/v2/services/{name}
  *          because currently everything is handled with GET request :(
@@ -608,20 +609,26 @@ public class HttpReconfigurator {
             String serviceName = uriComponents[4];
 
             // Parse active names from the body
-            // example: '["AR0", "AR2", "AR3"]'
+            // example: `{"NODES" : ["AR0", "AR2", "AR3"]}`
+            // example: `{"NODES" : ["AR0", "AR2", "AR3"], "COORDINATOR": "AR0"}`
             String contentBody = content.content().toString(StandardCharsets.ISO_8859_1);
-            List<String> nodeIds = new ArrayList<>();
+            Set<String> nodeIds = new HashSet<>();
+            String coordinatorId = null;
             try {
-                JSONArray nodeIdArray = new JSONArray(contentBody);
+                JSONObject contentJson = new JSONObject(contentBody);
+                JSONArray nodeIdArray = contentJson.getJSONArray("NODES");
                 for (int i = 0; i < nodeIdArray.length(); i++) {
                     String nodeId = nodeIdArray.getString(i);
                     nodeIds.add(nodeId);
                 }
+                coordinatorId = contentJson.has("COORDINATOR") ?
+                        contentJson.getString("COORDINATOR") : null;
             } catch (JSONException e) {
                 return null;
             }
 
-            return new SetReplicaPlacementRequest(sender, serviceName, Set.copyOf(nodeIds));
+            return new SetReplicaPlacementRequest(
+                    sender, serviceName, nodeIds, coordinatorId);
         }
 
         private GetReplicaPlacementRequest parseGetReplicaPlacementRequest(InetSocketAddress sender,

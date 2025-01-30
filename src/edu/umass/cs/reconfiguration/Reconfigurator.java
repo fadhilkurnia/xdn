@@ -397,10 +397,18 @@ public class Reconfigurator<NodeIDType> implements
             String placementMetadata = newActives != null ? newActives.placementMetadata() : null;
 
             // coordinate and commit reconfiguration intent
-            this.initiateReconfiguration(report.getServiceName(), record,
-                    shouldReconfigure(report.getServiceName()), null, null,
-                    null, placementMetadata, null, null,
-                    ReconfigurationConfig.ReconfigureUponActivesChange.DEFAULT); // coordinated
+            this.initiateReconfiguration(
+                    /*name=*/report.getServiceName(),
+                    /*reconfigurationRecord=*/record,
+                    /*newActives=*/shouldReconfigure(report.getServiceName()),
+                    /*sender=*/null,
+                    /*receiver=*/null,
+                    /*forwarder*/null,
+                    /*initialState=*/placementMetadata,
+                    /*nameState=*/null,
+                    /*newlyAddedNodes=*/null,
+                    /*policy=*/ReconfigurationConfig.
+                            ReconfigureUponActivesChange.DEFAULT); // coordinated
         }
         trimAggregateDemandProfile();
         return null; // never any messaging or ptasks
@@ -1127,11 +1135,37 @@ public class Reconfigurator<NodeIDType> implements
             }
         }
 
+        // If preferred coordinator id is given, validate that it is valid
+        String preferredCoordinatorId = request.getCoordinatorNodeId();
+        if (preferredCoordinatorId != null) {
+            if (!newActivesStringSet.contains(preferredCoordinatorId)) {
+                request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+                request.setResponseMessage("Invalid coordinator node id of " +
+                        preferredCoordinatorId);
+                callback.processResponse(request.makeResponse());
+                return null;
+            }
+        }
+
         // parse the new placement location
         Stringifiable<NodeIDType> nodeIdDeserialized = this.getUnstringer();
         Set<NodeIDType> newActives = new HashSet<>();
         for (String nodeId : newActivesStringSet) {
             newActives.add(nodeIdDeserialized.valueOf(nodeId));
+        }
+
+        // parse the preferred coordinator as metadata within initial state
+        // checkout XdnGeoDemandProfiler for the similar placement metadata
+        String placementMetadata = null;
+        if (preferredCoordinatorId != null) {
+            JSONObject metadataJson = new JSONObject();
+            try {
+                metadataJson.put(AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString(),
+                        preferredCoordinatorId);
+            } catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
+            placementMetadata = metadataJson.toString();
         }
 
         // coordinate and commit reconfiguration (i.e., replacement) intent
@@ -1142,7 +1176,7 @@ public class Reconfigurator<NodeIDType> implements
                 /*sender=*/null,
                 /*receiver=*/null,
                 /*forwarder=*/null,
-                /*initialState=*/null,
+                /*initialState=*/placementMetadata,
                 /*nameStates=*/null,
                 /*newlyAddedNodes=*/null,
                 ReconfigureUponActivesChange.DEFAULT);
