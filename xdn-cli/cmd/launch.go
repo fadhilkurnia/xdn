@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -91,10 +92,21 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 	var err error
 	prop := CommonProperties{}
 
-	// TODO: limit serviceName length, check valid chars
+	// limit serviceName length, check valid chars
 	prop.serviceName = serviceName
 	if serviceName == "" {
 		errMsg := "service name is required"
+		fmt.Print(errMsg + ".\n")
+		return prop, errors.New(errMsg)
+	}
+	if len(serviceName) > 64 {
+		errMsg := "service name cannot exceed 64 characters"
+		fmt.Print(errMsg + ".\n")
+		return prop, errors.New(errMsg)
+	}
+	alphanumericRegex := regexp.MustCompile(`^[a-zA-Z0-9\-_]+$`)
+	if !alphanumericRegex.MatchString(serviceName) {
+		errMsg := "service name can only be alphanumeric, optionally with '-' or '_'"
 		fmt.Print(errMsg + ".\n")
 		return prop, errors.New(errMsg)
 	}
@@ -128,20 +140,20 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 	}
 	prop.isDeterministic = d
 
-	// TODO: validate state directory, should not have any whitespace
+	// validate state directory
 	prop.stateDir, err = flags.GetString("state")
 	if err != nil || prop.stateDir == "" {
 		fmt.Printf("the service's state directory is required, set with --state flag.\n")
 		return prop, err
 	}
 	if prop.stateDir[0] != '/' {
-	    fmt.Printf("the service's state directory must be in absolute form, starting with `/`.\n")
-        return prop, err
+		fmt.Printf("the service's state directory must be in absolute form, starting with `/`.\n")
+		return prop, err
 	}
 	if prop.stateDir == "/" {
-    	    fmt.Printf("state directory `/` is not yet supported.\n")
-            return prop, err
-    	}
+		fmt.Printf("state directory `/` is not yet supported.\n")
+		return prop, err
+	}
 
 	prop.rawJsonProperties = fmt.Sprintf(`
 	{
@@ -225,6 +237,26 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 			prop.isDeterministic = propMap["deterministic"].(bool)
 		}
 	}
+
+	// validate service name
+	if prop.serviceName == "" {
+		errMsg := "service name is required"
+		fmt.Print(errMsg + ".\n")
+		return prop, errors.New(errMsg)
+	}
+	if len(prop.serviceName) > 64 {
+		errMsg := "service name cannot exceed 64 characters"
+		fmt.Print(errMsg + ".\n")
+		return prop, errors.New(errMsg)
+	}
+	alphanumericRegex := regexp.MustCompile(`^[a-zA-Z0-9\-_]+$`)
+	if !alphanumericRegex.MatchString(prop.serviceName) {
+		errMsg := "service name can only be alphanumeric, optionally with '-' or '_'"
+		fmt.Print(errMsg + ".\n")
+		return prop, errors.New(errMsg)
+	}
+
+	// TODO: validate state directory
 
 	return prop, nil
 }
