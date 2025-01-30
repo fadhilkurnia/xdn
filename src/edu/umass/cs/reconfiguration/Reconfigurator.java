@@ -1160,6 +1160,49 @@ public class Reconfigurator<NodeIDType> implements
         return null;
     }
 
+    public GenericMessagingTask<NodeIDType, ?>[] handleGetReplicaPlacementRequest(
+            GetReplicaPlacementRequest request,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
+            Callback<Request, ReconfiguratorRequest> callback) {
+        // TODO: handle redirection to appropriate RC, now we assume a single RC only.
+
+        // Query the data from reconfiguration DB
+        String serviceName = request.getServiceName();
+        ReconfigurationRecord<NodeIDType> record =
+                this.DB.getReconfigurationRecord(serviceName);
+
+        // Handle non-existent service name
+        if (record == null || record.getActiveReplicas() == null || record.isDeletePending()) {
+            String responseMessage = "No state found for name=" + serviceName;
+            request.setResponseMessage(responseMessage);
+            callback.processResponse(request);
+            return null;
+        }
+
+        // get the server ids where the replicas reside
+        List<String> stringNodeIds = new ArrayList<>();
+        List<NodeIDType> nodeIds = new ArrayList<>();
+        for (NodeIDType node : record.getActiveReplicas()) {
+            nodeIds.add(node);
+            stringNodeIds.add(node.toString());
+        }
+        request.setReplicaNodeIds(stringNodeIds);
+
+        // get the server addresses where the replicas are hosted
+        List<String> addresses = new ArrayList<>();
+        for (NodeIDType node : nodeIds) {
+            InetSocketAddress address = this.consistentNodeConfig.getNodeSocketAddress(node);
+            addresses.add(address.toString());
+        }
+        request.setReplicaAddresses(addresses);
+
+        // TODO: query the replica roles and metadata by contacting them
+        // TODO: add service/name metadata in the reconfiguration record.
+
+        callback.processResponse(request.makeResponse());
+        return null;
+    }
+
     /**
      * Handles a request to add or delete a reconfigurator from the set of all
      * reconfigurators in NodeConfig. The reconfiguration record corresponding

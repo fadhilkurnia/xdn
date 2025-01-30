@@ -140,8 +140,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         this.messenger = messenger;
         this.outstandingRequests = new ConcurrentLinkedQueue<>();
         this.forwardedRequests = new ConcurrentHashMap<>();
-
-        System.out.printf(">> %s PrimaryBackupManager is initialized.\n", myNodeID);
     }
 
     // setupPaxosConfiguration sets Paxos configuration required for PrimaryBackup use case

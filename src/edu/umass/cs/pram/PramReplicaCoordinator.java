@@ -70,8 +70,6 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         // prepare packet deserializer and handler for PramPacket
         this.messenger.precedePacketDemultiplexer(
                 new PramPacketDemultiplexer(this, app));
-
-        System.out.printf(">> PramReplicaCoordinator - initialization at node %s\n", this.myNodeID);
     }
 
     @Override

@@ -536,22 +536,15 @@ public class HttpReconfigurator {
             Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9]+/placement$");
             Matcher matcher = pattern.matcher(httpRequest.uri());
             if (httpRequest.method().equals(HttpMethod.POST) && matcher.matches()) {
-                SetReplicaPlacementRequest setReplicaPlacementReq =
-                        this.parseSetReplicaPlacementRequest(
-                                senderAddress, httpRequest, httpContent);
-                if (setReplicaPlacementReq == null) {
-                    this.writeBadRequestResponse(
-                            ctx, "Invalid format for set replica placement request.");
-                    return;
-                }
-                this.rcFunctions.sendRequest(setReplicaPlacementReq, response -> {
-                    assert response instanceof ClientReconfigurationPacket :
-                            "Unexpected response type from Reconfigurator: " +
-                                    response.getClass().getSimpleName();
-                    ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
-                    this.writeResponse(crp, ctx);
-                    return null;
-                });
+                parseAndHandleHttpSetReplicaPlacementRequest(
+                        ctx, senderAddress, httpRequest, httpContent);
+                return;
+            }
+
+            // Parses and handles GetReplicaPlacementRequest
+            if (httpRequest.method().equals(HttpMethod.GET) && matcher.matches()) {
+                parseAndHandleHttpGetReplicaPlacementRequest(
+                        ctx, senderAddress, httpRequest, httpContent);
                 return;
             }
 
@@ -559,6 +552,45 @@ public class HttpReconfigurator {
 
             // Handles unknown v2 requests with BadRequestResponse (400).
             this.writeBadRequestResponse(ctx, "Unknown reconfiguration request.");
+        }
+
+        private void parseAndHandleHttpSetReplicaPlacementRequest(ChannelHandlerContext ctx,
+                                                                  InetSocketAddress senderAddress,
+                                                                  HttpRequest httpRequest,
+                                                                  HttpContent httpContent) {
+            SetReplicaPlacementRequest setReplicaPlacementReq =
+                    this.parseSetReplicaPlacementRequest(
+                            senderAddress, httpRequest, httpContent);
+            if (setReplicaPlacementReq == null) {
+                this.writeBadRequestResponse(
+                        ctx, "Invalid format for set replica placement request.");
+                return;
+            }
+            this.rcFunctions.sendRequest(setReplicaPlacementReq, response -> {
+                assert response instanceof ClientReconfigurationPacket :
+                        "Unexpected response type from Reconfigurator: " +
+                                response.getClass().getSimpleName();
+                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+                this.writeResponse(crp, ctx);
+                return null;
+            });
+        }
+
+        private void parseAndHandleHttpGetReplicaPlacementRequest(ChannelHandlerContext ctx,
+                                                                  InetSocketAddress senderAddress,
+                                                                  HttpRequest httpRequest,
+                                                                  HttpContent httpContent) {
+            GetReplicaPlacementRequest getReplicaPlacementReq =
+                    this.parseGetReplicaPlacementRequest(
+                            senderAddress, httpRequest, httpContent);
+            this.rcFunctions.sendRequest(getReplicaPlacementReq, response -> {
+                assert response instanceof ClientReconfigurationPacket :
+                        "Unexpected response type from Reconfigurator: " +
+                                response.getClass().getSimpleName();
+                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+                this.writeResponse(crp, ctx);
+                return null;
+            });
         }
 
         // returns null if the content is invalid
@@ -590,6 +622,22 @@ public class HttpReconfigurator {
             }
 
             return new SetReplicaPlacementRequest(sender, serviceName, Set.copyOf(nodeIds));
+        }
+
+        private GetReplicaPlacementRequest parseGetReplicaPlacementRequest(InetSocketAddress sender,
+                                                                           HttpRequest request,
+                                                                           HttpContent content) {
+            assert sender != null;
+            assert request != null;
+            assert content != null;
+
+            // Parse service name in the URI
+            // example: /api/v2/services/{name}/placement
+            String[] uriComponents = request.uri().split("/");
+            assert uriComponents.length == 6 : "Invalid uri for get replica placement request";
+            String serviceName = uriComponents[4];
+
+            return new GetReplicaPlacementRequest(sender, serviceName);
         }
 
         private void writeBadRequestResponse(ChannelHandlerContext ctx, String errMessage) {

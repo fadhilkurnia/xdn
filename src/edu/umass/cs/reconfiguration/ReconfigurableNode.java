@@ -47,6 +47,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * @param <NodeIDType> A generic type for representing node identifiers. It must support
@@ -68,6 +69,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
 
     private final Set<ActiveReplica<NodeIDType>> activeReplicas = new HashSet<ActiveReplica<NodeIDType>>();
     private final Set<Reconfigurator<NodeIDType>> reconfigurators = new HashSet<Reconfigurator<NodeIDType>>();
+
+    private static final Logger logger = Logger.getLogger(ReconfigurableNode.class.getName());
 
     /**
      * @param id
@@ -560,6 +563,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
                         ReconfigurationConfig.getReconfigurators().size()});
 
         System.out.println(">> " + logServerStr + " " + servers + " ready");
+        logger.log(Level.INFO, "{0} - Servers {1} ready",
+                new Object[] {ReconfigurableNode.class.getSimpleName(), servers});
 
         return rcNodes;
     }
