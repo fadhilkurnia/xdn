@@ -213,6 +213,14 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 						? this.getReplicaGroup(paxosGroupID)
 						: null});
 
+		logger.log(Level.FINER, "{0}:{1} - proposing as {2} for svc={3}",
+				new Object[]{this.paxosManager.getNodeID(),
+						this.getClass().getSimpleName(),
+						this.paxosManager.isPaxosCoordinator(paxosGroupID)
+								? "coordinator"
+								: "non-coordinator",
+						paxosGroupID
+				});
 		return proposee != null;
 	}
 
