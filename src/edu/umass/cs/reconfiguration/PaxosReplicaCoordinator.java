@@ -284,11 +284,35 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 			return;
         }
 
-		// attempts to be the coordinator, if this node is the preferred coordinator
-		// specified in the placement metadata.
+		// Attempts to be the coordinator, if this node is the preferred coordinator
+		// specified in the placement metadata. Here, we need to wait for 30 second,
+		// ensuring other replicas are alive and can respond the PREPARE message.
+		// We also try to send the prepare message twice, increasing our chance to
+		// be the coordinator.
+        // Added by Fadhil on January 31, 2025
 		if (this.getMyID().toString().equals(preferredCoordinatorNodeId)) {
-			this.paxosManager.tryToBePaxosCoordinator(groupName);
-			System.out.println(">>>>>>>>>> Making " + this.getMyID() + " as coordinator for " + groupName);
+			Thread electionThread = new Thread(() -> {
+				System.out.println(">>>>>>>>>> [1] Waiting 30s for " + this.getMyID() + " to be coordinator of " + groupName);
+                try {
+                    Thread.sleep(30_000);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+				System.out.println(">>>>>>>>>> [1] Making " + this.getMyID() + " as coordinator for " + groupName);
+                this.paxosManager.tryToBePaxosCoordinator(groupName);
+				System.out.println(">>>>>>>>>> [1] Done making " + this.getMyID() + " as coordinator for " + groupName);
+
+				System.out.println(">>>>>>>>>> [2] Waiting 30s for " + this.getMyID() + " to be coordinator of " + groupName);
+				try {
+					Thread.sleep(30_000);
+				} catch (InterruptedException e) {
+					throw new RuntimeException(e);
+				}
+				System.out.println(">>>>>>>>>> [2] Making " + this.getMyID() + " as coordinator for " + groupName);
+				this.paxosManager.tryToBePaxosCoordinator(groupName);
+				System.out.println(">>>>>>>>>> [2] Done making " + this.getMyID() + " as coordinator for " + groupName);
+			});
+			electionThread.start();
 		}
     }
 

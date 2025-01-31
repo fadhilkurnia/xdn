@@ -2028,7 +2028,7 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 	 * received a prepare majority nor a preemption) for the ballot to complete. */
 
 	/* Checks whether current ballot coordinator is alive. If not, it checks if
-	 * it should try to be the nest coordinator and if so, it becomes the next
+	 * it should try to be the next coordinator and if so, it becomes the next
 	 * coordinator. This method can be called any time safely by any thread. */
 	private MessagingTask checkRunForCoordinator() {
 		return this.checkRunForCoordinator(false);
