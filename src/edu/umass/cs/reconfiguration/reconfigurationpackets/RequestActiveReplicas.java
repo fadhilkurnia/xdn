@@ -145,6 +145,10 @@ public class RequestActiveReplicas extends ClientReconfigurationPacket implement
 		return this.actives;
 	}
 
+	public void setPlacementEpochNumber(int epochNumber) {
+		this.epochNumber = epochNumber;
+	}
+
 	public static void main(String[] args) {
 		Util.assertAssertionsEnabled();
 		String[] addrs = { "128.119.240.21" };

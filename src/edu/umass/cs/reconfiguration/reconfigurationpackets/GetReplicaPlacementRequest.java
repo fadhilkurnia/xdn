@@ -35,6 +35,10 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
         this.replicaAddresses = replicaAddresses;
     }
 
+    public void setPlacementEpochNumber(int epochNumber) {
+        this.epochNumber = epochNumber;
+    }
+
     public void setReplicaRoles(List<String> replicaRoles) {
         this.replicaRoles = replicaRoles;
     }

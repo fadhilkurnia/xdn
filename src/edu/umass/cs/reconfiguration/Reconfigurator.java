@@ -1083,7 +1083,7 @@ public class Reconfigurator<NodeIDType> implements
         // to support different client facing ports
         request.setActives(modifyPortsForSSL(activeIPs,
                 receivedOnSSLPort(request)));
-        // this.sendClientReconfigurationPacket
+        request.setPlacementEpochNumber(record.getEpoch());
         callback.processResponse(request.makeResponse());
         /* We message using sendActiveReplicasToClient above as opposed to
          * returning a messaging task below because protocolExecutor's messenger
@@ -1229,6 +1229,7 @@ public class Reconfigurator<NodeIDType> implements
             addresses.add(address.toString());
         }
         request.setReplicaAddresses(addresses);
+        request.setPlacementEpochNumber(record.getEpoch());
 
         // TODO: query the replica roles and metadata by contacting them
         // TODO: add service/name metadata in the reconfiguration record.
