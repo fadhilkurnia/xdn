@@ -48,7 +48,7 @@ public abstract class BasicReconfigurationPacket<NodeIDType> extends
 	};
 
 	protected final String serviceName;
-	protected final int epochNumber;
+	protected int epochNumber;
 
 	/**
 	 * @param initiator
