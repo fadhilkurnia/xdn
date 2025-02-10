@@ -1,0 +1,35 @@
+Name,City,Country,Latitude,Longitude
+us-east-1,Washington,US,38.9072,-77.0369
+us-east-2,Columbus,US,39.9612,-82.9988
+us-west-1,San Francisco,US,37.7749,-122.4194
+us-west-2,Hermiston,US,45.8405,-119.2895
+af-south-1,Cape Town,South Africa,-33.9249,18.4241
+ap-east-1,Hong Kong,China,22.3193,114.1694
+ap-south-2,Hyderabad,India,17.3850,78.4867
+ap-southeast-3,Jakarta,Indonesia,-6.2088,106.8456
+ap-southeast-5,Kuala Lumpur,Malaysia,3.1390,101.6869
+ap-southeast-4,Melbourne,Australia,-37.8136,144.9631
+ap-south-1,Mumbai,India,19.0760,72.8777
+ap-northeast-3,Osaka,Japan,34.6937,135.5023
+ap-northeast-2,Seoul,South Korea,37.5665,126.9780
+ap-southeast-1,Singapore,Singapore,1.3521,103.8198
+ap-southeast-2,Sydney,Australia,-33.8688,151.2093
+ap-southeast-7,Bangkok,Thailand,13.7563,100.5018
+ap-northeast-1,Tokyo,Japan,35.6895,139.6917
+ca-central-1,Montreal,Canada,45.5017,-73.5673
+ca-west-1,Calgary,Canada,51.0447,-114.0719
+cn-north-1,Beijing,China,39.9042,116.4074
+cn-northwest-1,Ningxia,China,38.4872,106.2309
+eu-central-1,Frankfurt,Germany,50.1109,8.6821
+eu-west-1,Dublin,Ireland,53.3498,-6.2603
+eu-west-2,London,UK,51.5072,-0.1276
+eu-south-1,Milan,Italy,45.4642,9.19
+eu-west-3,Paris,France,48.8566,2.3522
+eu-south-2,Zaragoza,Spain,41.6488,-0.8891
+eu-north-1,Stockholm,Sweden,59.3293,18.0686
+eu-central-2,Zurich,Switzerland,47.3769,8.5417
+il-central-1,Tel Aviv,Israel,32.0853,34.7818
+mx-central-1,Queretaro,Mexico,20.5888,-100.3899
+me-south-1,Manama,Bahrain,26.2235,50.5876
+me-central-1,Dubai,UAE,25.2048,55.2708
+sa-east-1,São Paulo,Brazil,-23.5505,-46.6333

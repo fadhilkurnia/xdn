@@ -1,0 +1,289 @@
+Name,City,Country,Latitude,Longitude
+iad,Ashburn,United States,39.03,-77.469
+atl,Atlanta,United States,33.746,-84.386
+bos,Boston,United States,42.354,-71.061
+buf,Buffalo,United States,42.885,-78.876
+yyc,Calgary,Canada,51.044,-114.054
+clt,Charlotte,United States,35.228,-80.846
+ord,Chicago,United States,41.878,-87.623
+cmh,Columbus,United States,39.962,-83.002
+dal,Dallas,United States,32.779,-96.793
+den,Denver,United States,39.736,-104.984
+dtw,Detroit,United States,42.329,-83.05
+hnl,Honolulu,United States,21.302,-157.859
+iah,Houston,United States,29.76,-95.368
+ind,Indianapolis,United States,39.764,-86.155
+jax,Jacksonville,United States,30.334,-81.66
+mci,Kansas City,United States,39.097,-94.58
+las,Las Vegas,United States,36.164,-115.146
+lax,Los Angeles,United States,34.055,-118.241
+mfe,Mcallen,United States,26.201,-98.233
+mem,Memphis,United States,35.144,-90.048
+mia,Miami,United States,25.777,-80.198
+msp,Minneapolis,United States,44.977,-93.269
+mxf,Montgomery,United States,32.364,-86.297
+yul,Montréal,Canada,45.501,-73.566
+bna,Nashville,United States,36.165,-86.777
+ewr,Newark,United States,40.738,-74.168
+orf,Norfolk,United States,36.844,-76.285
+oma,Omaha,United States,41.257,-95.934
+yow,Ottawa,Canada,45.418,-75.692
+phl,Philadelphia,United States,39.948,-75.16
+phx,Phoenix,United States,33.447,-112.077
+pit,Pittsburgh,United States,40.442,-79.99
+pdx,Portland,United States,45.516,-122.678
+ric,Richmond,United States,37.535,-77.439
+smf,Sacramento,United States,38.579,-121.496
+slc,Salt Lake City,United States,40.763,-111.884
+san,San Diego,United States,32.721,-117.16
+sjc,San Jose,United States,37.334,-121.888
+yxe,Saskatoon,Canada,52.133,-106.657
+sea,Seattle,United States,47.608,-122.327
+stl,St. Louis,United States,38.628,-90.195
+tlh,Tallahassee,United States,30.434,-84.281
+tpa,Tampa,United States,27.947,-82.46
+yyz,Toronto,Canada,43.653,-79.382
+yvr,Vancouver,Canada,49.263,-123.11
+ywg,Winnipeg,Canada,49.895,-97.141
+qwj,Americana,Brazil,-22.737,-47.334
+ari,Arica,Chile,-18.475,-70.32
+asu,Asuncion,Paraguay,-25.276,-57.636
+plu,Belo Horizonte,Brazil,-19.924,-43.941
+bel,Belém,Brazil,-1.453,-48.466
+bnu,Blumenau,Brazil,-26.922,-49.064
+bog,Bogota,Colombia,4.651,-74.08
+bsb,Brasília,Brazil,-10.332,-53.202
+aep,Buenos Aires,Argentina,-34.608,-58.436
+vcp,Campinas,Brazil,-22.903,-47.062
+cfc,Caçador,Brazil,-26.774,-51.014
+cor,Cordoba,Argentina,-31.421,-64.183
+cgb,Cuiabá,Brazil,-15.595,-56.1
+bfh,Curitiba,Brazil,-25.43,-49.267
+fln,Florianópolis,Brazil,-27.602,-48.55
+for,Fortaleza,Brazil,-3.73,-38.52
+geo,Georgetown,Guyana,6.813,-58.164
+gyn,Goiânia,Brazil,-16.68,-49.25
+gua,Guatemala City,Guatemala,14.626,-90.516
+gye,Guayaquil,Ecuador,-2.287,-80.096
+nvt,Itajaí,Brazil,-26.907,-48.651
+joi,Joinville,Brazil,-26.3,-48.849
+jdo,Juazeiro do Norte,Brazil,-7.215,-39.314
+lim,Lima,Peru,-12.066,-77.039
+pll,Manaus,Brazil,-3.131,-59.98
+mde,Medellín,Colombia,6.244,-75.574
+mex,Mexico City,Mexico,19.435,-99.136
+nqn,Neuquen,Argentina,-38.373,-69.828
+pfn,Panama City,Panama,8.975,-79.534
+pbm,Paramaribo,Suriname,5.826,-55.17
+pap,Port-Au-Prince,Haiti,18.55,-72.339
+poa,Porto Alegre,Brazil,-30.03,-51.23
+qro,Queretaro,Mexico,20.596,-100.391
+uio,Quito,Ecuador,-0.217,-78.508
+rao,Ribeirão Preto,Brazil,-21.176,-47.806
+gig,Rio de Janeiro,Brazil,-22.912,-43.21
+ssa,Salvador,Brazil,-12.983,-38.484
+sjo,San José,Costa Rica,9.935,-84.08
+sdq,Santo Domingo,Dominican Republic,18.477,-69.946
+sod,Sorocaba,Brazil,-23.503,-47.461
+gnd,St. George's,Grenada,12.053,-61.754
+sjp,São José do Rio Preto,Brazil,-20.811,-49.383
+gru,São Paulo,Brazil,-23.551,-46.636
+tgu,Tegucigalpa,Honduras,14.102,-87.204
+udi,Uberlândia,Brazil,-18.916,-48.274
+vpz,Valparaíso,Chile,-33.049,-71.623
+cur,Willemstad,Curaçao,12.114,-68.938
+acc,Accra,Ghana,5.557,-0.197
+alg,Algiers,Algeria,36.778,3.062
+tnr,Antananarivo,Madagascar,-18.78,46.715
+cpt,Cape Town,South Africa,-33.925,18.421
+cmn,Casablanca,Morocco,33.591,-7.623
+dkr,Dakar,Senegal,14.696,-17.452
+dar,Dar Es Salaam,Tanzania,-6.815,39.28
+jib,Djibouti,Djibouti,11.816,42.844
+dur,Durban,South Africa,-29.859,31.011
+gbe,Gaborone,Botswana,-24.659,25.909
+hre,Harare,Zimbabwe,-17.828,31.043
+jnb,Johannesburg,South Africa,-26.203,28.053
+kgl,Kigali,Rwanda,-1.947,30.059
+los,Lagos,Nigeria,6.456,3.399
+lad,Luanda,Angola,-8.824,13.241
+mpm,Maputo,Mozambique,-25.964,32.571
+mba,Mombasa,Kenya,-4.046,39.67
+rob,Monrovia,Liberia,6.331,-10.795
+wil,Nairobi,Kenya,-1.284,36.821
+mru,Port Louis,Mauritius,-20.162,57.502
+run,Reunion,France,-21.131,55.541
+tun,Tunis,Tunisia,33.84,9.402
+ams,Amsterdam,Netherlands,52.377,4.894
+ath,Athens,Greece,37.972,23.739
+bcn,Barcelona,Spain,41.382,2.177
+beg,Belgrade,Serbia,44.816,20.459
+ber,Berlin,Germany,52.517,13.386
+bru,Brussels,Belgium,50.847,4.356
+bbu,Bucharest,Romania,44.44,26.099
+bud,Budapest,Hungary,47.498,19.044
+rmo,Chișinău,Moldova,47.025,47.025
+cph,Copenhagen,Denmark,55.69,12.574
+ork,Cork,Ireland,51.899,-8.469
+dub,Dublin,Ireland,53.347,-6.262
+dus,Düsseldorf,Germany,51.221,6.778
+edi,Edinburgh,United Kingdom,55.949,-3.184
+svx,Ekaterinburg,Russian Federation,56.838,60.605
+fra,Frankfurt,Germany,50.113,8.684
+gva,Geneva,Switzerland,46.204,6.145
+gse,Gothenburg,Sweden,57.703,11.965
+ham,Hamburg,Germany,53.547,10.0
+hel,Helsinki,Finland,60.168,24.939
+saw,Istanbul,Turkey,41.005,28.97
+khv,Khabarovsk,Russian Federation,51.627,136.124
+kja,Krasnoyarsk,Russian Federation,56.005,92.875
+iev,Kyiv,Ukraine,50.452,30.527
+lis,Lisbon,Portugal,38.712,-9.135
+lhr,London,United Kingdom,51.506,-0.126
+lux,Luxembourg City,Luxembourg,49.615,6.126
+mad,Madrid,Spain,40.413,-3.703
+man,Manchester,United Kingdom,53.479,-2.244
+mrs,Marseille,France,43.297,5.367
+lin,Milan,Italy,45.465,9.191
+msq,Minsk,Belarus,53.901,27.56
+bka,Moscow,Russian Federation,55.755,37.616
+muc,Munich,Germany,48.137,11.578
+ecn,Nicosia,Cyprus,35.178,33.362
+osl,Oslo,Norway,59.914,10.742
+pmo,Palermo,Italy,38.11,13.355
+cdg,Paris,France,48.854,2.345
+prg,Prague,Czechia,50.086,14.419
+rkv,Reykjavík,Iceland,64.145,-21.94
+rix,Riga,Latvia,56.945,24.107
+fco,Rome,Italy,41.893,12.482
+sof,Sofia,Bulgaria,42.693,23.32
+led,St. Petersburg,Russian Federation,59.939,30.319
+arn,Stockholm,Sweden,59.329,18.072
+tll,Tallinn,Estonia,59.436,24.745
+skg,Thessaloniki,Greece,40.644,22.933
+vie,Vienna,Austria,48.206,16.371
+vno,Vilnius,Lithuania,54.685,25.284
+waw,Warsaw,Poland,52.232,21.008
+zag,Zagreb,Croatia,45.838,15.962
+zrh,Zürich,Switzerland,47.373,8.537
+adj,Amman,Jordan,31.953,35.924
+bgw,Baghdad,Iraq,33.302,44.39
+bsr,Basra,Iraq,30.494,47.809
+bey,Beirut,Lebanon,33.892,35.5
+dmm,Dammam,Saudi Arabia,26.433,50.101
+doh,Doha,Qatar,25.282,51.524
+dxb,Dubai,United Arab Emirates,25.078,55.187
+ebl,Erbil,Iraq,36.193,44.014
+hfa,Haifa,Israel,32.823,34.997
+jed,Jeddah,Saudi Arabia,21.578,39.166
+kwi,Kuwait City,Kuwait,29.382,47.973
+bah,Manama,Bahrain,26.226,50.581
+mct,Muscat,Oman,23.59,58.382
+njf,Najaf,Iraq,31.997,44.33
+rlh,Ramallah,Palestine,31.903,35.198
+xxn,Riyadh,Saudi Arabia,24.636,46.714
+sdv,Tel Aviv,Israel,32.081,34.781
+amd,Ahmedabad,India,23.025,72.581
+ala,Almaty,Kazakhstan,43.238,76.942
+llk,Astara,Azerbaijan,38.512,48.828
+gyd,Baku,Azerbaijan,40.378,49.833
+bwn,Bandar Seri Begawan,Brunei Darussalam,4.889,114.938
+bkk,Bangkok,Thailand,13.752,100.491
+blr,Bengaluru,India,12.979,77.589
+bbi,Bhubaneshwar,India,20.257,85.84
+tug,Cagayan,Philippines,17.996,121.835
+ceb,Cebu,Philippines,10.293,123.906
+ixc,Chandigarh,India,30.727,76.783
+maa,Chennai,India,13.08,80.27
+cnx,Chiang Mai,Thailand,18.793,98.983
+cgp,Chittagong,Bangladesh,22.687,91.788
+rml,Colombo,Sri Lanka,6.936,79.855
+dac,Dhaka,Bangladesh,23.762,90.388
+fuk,Fukuoka,Japan,33.625,130.621
+han,Hanoi,Viet Nam,21.027,105.853
+sgn,Ho Chi Minh City,Viet Nam,10.775,106.701
+hkg,Hong Kong,,22.276,114.163
+bpm,Hyderabad,India,17.364,78.476
+isb,Islamabad,Pakistan,33.691,73.068
+hlp,Jakarta,Indonesia,-6.176,106.825
+jsr,Jashore,Bangladesh,23.167,89.212
+jhb,Johor Bahru,Malaysia,1.5,103.748
+knu,Kanpur,India,26.461,80.32
+khi,Karachi,Pakistan,24.858,67.016
+ktm,Kathmandu,Nepal,27.706,85.325
+ccu,Kolkata,India,22.576,88.364
+kul,Kuala Lumpur,Malaysia,3.154,101.698
+lhe,Lahore,Pakistan,31.566,74.312
+mfm,Macau,,22.193,113.536
+mle,Male,Maldives,4.177,73.509
+mdl,Mandalay,Myanmar,21.977,96.082
+mnl,Manila,Philippines,14.579,120.972
+bom,Mumbai,India,19.081,72.887
+nag,Nagpur,India,21.154,79.081
+oka,Naha,Japan,26.216,127.676
+xnh,Nasiriyah,Iraq,31.044,46.259
+del,New Delhi,India,28.613,77.213
+itm,Osaka,Japan,34.665,135.499
+pat,Patna,India,25.607,85.122
+pnh,Phnom Penh,Cambodia,11.564,104.925
+gmp,Seoul,South Korea,37.532600,127.024612
+sin,Singapore,Singapore,1.353,103.819
+urt,Surat Thani,Thailand,9.466,98.827
+tpe,Taipei,,25.035,121.567
+tas,Tashkent,Uzbekistan,41.31,69.281
+tbs,Tbilisi,Georgia,41.695,44.798
+pbh,Thimphu,Bhutan,27.472,89.634
+hnd,Tokyo,Japan,35.68,139.774
+uln,Ulaanbaatar,Mongolia,47.915,106.922
+vte,Vientiane,Lao People's Democratic Republic,17.963,102.615
+rgn,Yangon,Myanmar,16.792,96.158
+evn,Yerevan,Armenia,40.18,44.51
+jog,Yogyakarta,Indonesia,-7.978,110.369
+aqg,Anqing,China,30.663,116.63
+bqc,Baoji,China,34.361,107.231
+pek,Beijing,China,39.902,116.391
+cgd,Changde,China,29.037,111.691
+czx,Changzhou,China,31.809,119.968
+ctu,Chengdu,China,30.662,104.062
+che,Chengmai,China,19.74,110.0
+dlc,Dalian,China,38.915,121.628
+fuo,Foshan,China,23.023,113.116
+foc,Fuzhou,China,27.953,116.35
+can,Guangzhou,China,23.132,113.257
+kwe,Guiyang,China,26.652,106.627
+hak,Haikou,China,20.046,110.194
+het,Hohhot,China,40.836,111.673
+hfe,Huainan,China,32.587,117.01
+tna,Jinan,China,36.652,117.118
+yiw,Jinhua,China,29.108,119.649
+pkx,Langfang,China,39.533,116.682
+lhw,Lanzhou,China,36.066,103.836
+zha,Maoming,China,21.662,110.919
+khn,Nanchang,China,28.687,115.852
+tao,Qingdao,China,36.063,120.382
+bpe,Qinhuangdao,China,39.939,119.594
+jjn,Quanzhou,China,24.876,118.676
+hdg,Quzhou,China,36.769,114.955
+sha,Shanghai,China,31.236,121.465
+she,Shenyang,China,41.802,123.427
+wds,Shiyan,China,32.632,110.79
+hia,Suqian,China,33.969,118.268
+hyn,Taizhou,China,28.661,121.416
+wux,Wuxi,China,31.578,120.299
+xiy,Xianyang,China,34.329,108.7
+xnn,Xining,China,36.616,101.778
+yic,Xinyu,China,27.857,114.889
+yih,Yichang,China,30.692,111.285
+csx,Yiyang,China,28.555,112.346
+cgo,Zhengzhou,China,34.752,113.622
+adl,Adelaide,Australia,-34.93,138.597
+akl,Auckland,New Zealand,-36.851,174.762
+bne,Brisbane,Australia,-27.469,153.021
+cbr,Canberra,Australia,-35.299,149.098
+chc,Christchurch,New Zealand,-43.533,172.64
+gum,Guam,Guam,13.45,144.755
+hba,Hobart,Australia,-42.886,147.329
+mel,Melbourne,Australia,-37.815,144.964
+gea,Noumea,New Caledonia,-22.274,166.445
+per,Perth,Australia,-31.953,115.862
+syd,Sydney,Australia,-33.869,151.206

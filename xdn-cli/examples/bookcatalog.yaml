@@ -1,0 +1,32 @@
+---
+name: bookcatalog
+state: database:/var/lib/postgresql/data/
+consistency: linearizability
+deterministic: true
+
+components:
+   - database:
+      image: postgres
+      expose: 5432
+      stateful: true
+      environments:
+        - POSTGRES_PASSWORD: root
+        - POSTGRES_DB: books
+   - frontend:
+      image: fadhilkurnia/xdn-bookcatalog
+      port: 80
+      entry: true
+      environments:
+        - DB_TYPE: postgres
+        - DB_HOST: database
+
+requests:
+  - path_prefix: "/"
+    methods: "GET"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,DELETE"
+    behavior: write_only
+  - path_prefix: "/"
+    methods: "DELETE"
+    behavior: nil_external

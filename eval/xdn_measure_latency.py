@@ -279,5 +279,3 @@ if __name__ == "__main__":
          args.repetition, 
          args.timeout, 
          args.location)
-
-    # measure_latency(args.service_name, args.num_requests, args.timeout)
