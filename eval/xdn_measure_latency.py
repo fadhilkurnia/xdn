@@ -187,6 +187,8 @@ def create_geo_clients(location_file, total_client_count):
     with open(location_file, 'r') as file:
         csv_reader = csv.DictReader(file)
         for row in csv_reader:
+            if row["location"] == "NA;NA":
+                continue
             parts = row["location"].split(";")
             population = int(row["population"])
             latitude = float(parts[0].strip())
