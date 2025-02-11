@@ -4,13 +4,10 @@
 # gigapaxos properties file. We emulate latency by injecting it using tcconfig.
 
 import math
-import os
-import sys
 import subprocess
 
-NET_DEV_INTERFACE_NAME = "eth1"
-if os.environ.get('NET_DEV_INTERFACE_NAME') != None:
-    NET_DEV_INTERFACE_NAME = os.environ.get('NET_DEV_INTERFACE_NAME')
+DEFAULT_NET_DEV_INTERFACE_NAME = 'eth1'
+DEFAULT_CONFIG_FILE = 'conf/gigapaxos.cloudlab-virtual.properties'
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -171,60 +168,63 @@ def get_estimated_latency(distance_km, slowdown_factor):
 
     return time_milliseconds
 
-def inject_server_latency(servers, slowdown):
+def inject_server_latency(servers, net_device, slowdown):
     server_names = list(servers.keys())
 
     # reseting the injected latency
-    reset_latency_injection(servers)
+    print("\nResetting the emulated latency:")
+    reset_latency_injection(servers, net_device)
     
     # injecting the latency
+    print("\nInjecting emulated latency:")
     for i in range(len(server_names)):
         for j in range(i + 1, len(server_names)):
+            # calculate the expected latency between server pair
             s1 = server_names[i]
             s2 = server_names[j]
             lat1, lon1 = servers[s1]["geolocation"]
             lat2, lon2 = servers[s2]["geolocation"]
             distance_km = haversine_distance(lat1, lon1, lat2, lon2)
-            latency_ms = get_estimated_latency(distance_km, slowdown)
+            expected_latency_ms = get_estimated_latency(distance_km, slowdown)
 
             src_network = servers[s1]["host"]
             dst_network = servers[s2]["host"]
+
+            # observe the current ping latency to get the offset
+            command = f"ssh {src_network} ping -c 3 {dst_network} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
+            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            offset_latency_ms = float(proc_result.stdout.strip())
+
+            # calculate the injected latency
+            injected_latency_ms = expected_latency_ms - offset_latency_ms
+            injected_latency_ms = max(injected_latency_ms, 0.0)
+            print(f">>> {src_network} <-> {dst_network}: exp={expected_latency_ms:.3f}ms off={offset_latency_ms:.3f}ms dly={injected_latency_ms:.3f}ms")
             
-            cmd = f"ssh fadhil@{src_network} sudo tcset {NET_DEV_INTERFACE_NAME} --delay {latency_ms}ms --network {dst_network} --add"
-            print(">> " + cmd)
-            rcode = subprocess.call(cmd, shell=True)
-            print("   " + str(rcode))
+            command = f"ssh {src_network} sudo tcset {net_device} --delay {injected_latency_ms}ms --network {dst_network} --add"
+            print(">> " + command)
+            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            if proc_result.returncode != 0:
+                print("ERROR :(")
 
     return
 
-def reset_latency_injection(servers):
+
+def reset_latency_injection(servers, net_device):
     server_names = list(servers.keys())
     
     # reseting the injected latency
     for i in range(len(server_names)):
         s1 = server_names[i]
         host = servers[s1]["host"]
-        cmd = f"ssh fadhil@{host} sudo tcdel {NET_DEV_INTERFACE_NAME} --all"
+        cmd = f"ssh {host} sudo tcdel {net_device} --all"
         print(">> " + cmd)
-        rcode = subprocess.call(cmd, shell=True)
-        print("   " + str(rcode))
+        proc_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if proc_result.returncode != 0:
+            print(f"ERROR, retcode={proc_result.returncode}")
     return
 
-def main(args: list[str]):
-    property_file = 'conf/gigapaxos.cloudlab-virtual.properties'
-    
-    # Read all servers' geolocations and IP
-    servers = read_servers_from_property_file(property_file)
 
-    # handle case to reset latency injection
-    if len(args) >= 2 and args[1] == "reset":
-        print("resetting the injected latency")
-        reset_latency_injection(servers)
-        return
-
-    # Read slowdown factor from the config file
-    slowdown = get_latency_slowdown_from_property_file(property_file)
-    
+def printout_injected_latency(servers, slowdown):
     # Get a list of server names so we can pair them
     server_names = list(servers.keys())
 
@@ -233,21 +233,85 @@ def main(args: list[str]):
     for name in server_names:
         print(" >> " + name + " " + servers[name]["host"])
     print("Slowdown factor: " + str(slowdown))
-    
+
     # Calculate distances and latency between all unique pairs
     print("\nDistance and latency between server pairs:")
     for i in range(len(server_names)):
         for j in range(i + 1, len(server_names)):
             s1 = server_names[i]
             s2 = server_names[j]
+            h1 = servers[s1]["host"]
+            h2 = servers[s2]["host"]
             lat1, lon1 = servers[s1]["geolocation"]
             lat2, lon2 = servers[s2]["geolocation"]
             distance_km = haversine_distance(lat1, lon1, lat2, lon2)
             latency_ms = get_estimated_latency(distance_km, slowdown)
-            print(f" >> {s1} <-> {s2}: {distance_km:.2f} km \t ({latency_ms} ms)")
+            print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t{distance_km:8.2f} km \t ({latency_ms} ms)")
 
-    print("\nInjecting emulated latency:")
-    inject_server_latency(servers, slowdown)
+
+def verify_injected_latency(servers, slowdown):
+    printout_injected_latency(servers, slowdown)
+    server_names = list(servers.keys())
+    
+    print("\nObserved latency between server pairs:")
+    for i in range(len(server_names)):
+        for j in range(i + 1, len(server_names)):
+            s1 = server_names[i]
+            s2 = server_names[j]
+            h1 = servers[s1]["host"]
+            h2 = servers[s2]["host"]
+            lat1, lon1 = servers[s1]["geolocation"]
+            lat2, lon2 = servers[s2]["geolocation"]
+            distance_km = haversine_distance(lat1, lon1, lat2, lon2)
+            latency_ms = get_estimated_latency(distance_km, slowdown)
+
+            # from h1
+            command = f"ssh {h1} ping -c 3 {h2} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
+            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            latency_h1_ms = float(proc_result.stdout.strip())
+
+            # from h2
+            command = f"ssh {h2} ping -c 3 {h1} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
+            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            latency_h2_ms = float(proc_result.stdout.strip())
+
+            avg_lat_ms = (float(latency_h1_ms) + float(latency_h2_ms)) / 2
+            diff_lat_ms = avg_lat_ms - latency_ms
+            
+            print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t({latency_h1_ms:6.3f} ms) & ({latency_h2_ms:6.3f} ms)\t vs. ({latency_ms:6.3f} ms)\t diff={diff_lat_ms:.2f}ms")
+
 
 if __name__ == "__main__":
-    main(sys.argv)
+    import argparse
+
+    valid_modes = {"execute", "dry", "reset", "verify"}
+
+    parser = argparse.ArgumentParser(description="Injecting inter-server latency with tc")
+    parser.add_argument("-m", "--mode", type=str, default="execute", help=f"Supported mode: {valid_modes}")
+    parser.add_argument("-d", "--device", type=str, default=DEFAULT_NET_DEV_INTERFACE_NAME, help="Network device interface name (e.g: eno1)")
+    parser.add_argument("-c", "--config", type=str, default=DEFAULT_CONFIG_FILE, help="Gigapaxos config file, containing servers data")
+
+    args = parser.parse_args()
+
+    # Validate mode
+    if args.mode not in valid_modes:
+        print(f"Invalid mode of '{args.mode}', valid options are {valid_modes}.")
+        exit(-1)
+
+    # Validate device
+    if args.device == "":
+        print("Invalid network device interface name.")
+        exit(-1)
+
+    # Read all servers' geolocations and IP
+    servers = read_servers_from_property_file(args.config)
+    slowdown = get_latency_slowdown_from_property_file(args.config)
+
+    if args.mode == "execute":
+        inject_server_latency(servers, args.device, slowdown)
+    elif args.mode == "reset":
+        reset_latency_injection(servers, args.device)
+    elif args.mode == "dry":
+        printout_injected_latency(servers, slowdown)
+    elif args.mode == "verify":
+        verify_injected_latency(servers, slowdown)
