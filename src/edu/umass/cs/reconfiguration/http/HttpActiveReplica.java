@@ -530,6 +530,9 @@ public class HttpActiveReplica {
                     return;
                 }
 
+                // instrumenting the request for latency measurement
+                this.request.headers().set("X-S-EXC-TS-" + nodeId, System.nanoTime());
+
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
 
@@ -646,6 +649,17 @@ public class HttpActiveReplica {
                             nodeId,
                             HttpActiveReplica.class.getSimpleName(),
                             (elapsedTime / 1_000_000.0)});
+
+            String postExecTimestampStr = httpResponse.headers().get("X-E-EXC-TS-" + nodeId);
+            if (postExecTimestampStr != null) {
+                long postExecTimestamp = Long.parseLong(postExecTimestampStr);
+                long postExecElapsedTime = System.nanoTime() - postExecTimestamp;
+                logger.log(Level.FINE, "{0}:{1} - spent {2}ms after HTTP execution",
+                        new Object[]{
+                                nodeId,
+                                HttpActiveReplica.class.getSimpleName(),
+                                (postExecElapsedTime / 1_000_000.0)});
+            }
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {

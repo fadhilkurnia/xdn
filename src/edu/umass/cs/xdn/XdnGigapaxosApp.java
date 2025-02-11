@@ -1461,6 +1461,17 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         assert targetPort != null;
         long endValidationTime = System.nanoTime();
 
+        String requestRcvTimestampStr =
+                xdnRequest.getHttpRequest().headers().get("X-S-EXC-TS-" + myNodeId);
+        if (requestRcvTimestampStr != null) {
+            long requestRcvTimestamp = Long.parseLong(requestRcvTimestampStr);
+            long preExecutionElapsedTime = System.nanoTime() - requestRcvTimestamp;
+            logger.log(Level.FINE, "{0}:{1} - spent {2}ms before execution " +
+                            "and after request is received",
+                    new Object[]{this.myNodeId, this.getClass().getSimpleName(),
+                            (preExecutionElapsedTime / 1_000_000.0)});
+        }
+
         // Create Http Request
         HttpRequest javaNetHttpRequest = xdnRequest
                 .getJavaNetHttpRequest(true, targetPort);
@@ -1483,6 +1494,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         long endConversionTime = System.nanoTime();
 
         // Store the response in the xdn request, which will be returned to the end client.
+        nettyHttpResponse.headers().set("X-E-EXC-TS-" + myNodeId, System.nanoTime());
         xdnRequest.setHttpResponse(nettyHttpResponse);
         long endResponseStoreTime = System.nanoTime();
 
