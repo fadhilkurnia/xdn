@@ -654,7 +654,7 @@ public class HttpActiveReplica {
             if (postExecTimestampStr != null) {
                 long postExecTimestamp = Long.parseLong(postExecTimestampStr);
                 long postExecElapsedTime = System.nanoTime() - postExecTimestamp;
-                logger.log(Level.FINE, "{0}:{1} - spent {2}ms after HTTP execution",
+                logger.log(Level.FINE, "{0}:{1} - HTTP post-execution over {2}ms",
                         new Object[]{
                                 nodeId,
                                 HttpActiveReplica.class.getSimpleName(),
