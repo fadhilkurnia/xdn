@@ -1466,8 +1466,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         if (requestRcvTimestampStr != null) {
             long requestRcvTimestamp = Long.parseLong(requestRcvTimestampStr);
             long preExecutionElapsedTime = System.nanoTime() - requestRcvTimestamp;
-            logger.log(Level.FINE, "{0}:{1} - spent {2}ms before execution " +
-                            "and after request is received",
+            logger.log(Level.FINE, "{0}:{1} - HTTP pre-execution over {2}ms",
                     new Object[]{this.myNodeId, this.getClass().getSimpleName(),
                             (preExecutionElapsedTime / 1_000_000.0)});
         }
