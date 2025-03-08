@@ -13,4 +13,4 @@ ant jar
 ./bin/build_xdn_cli.sh
 cd eval/xdn_latency_proxy && cargo build --release
 
-echo "Dont forget to initialize machines for xdn cluster using `xdnd dist-init`"
+echo "Dont forget to initialize machines for xdn cluster using 'xdnd dist-init'"
