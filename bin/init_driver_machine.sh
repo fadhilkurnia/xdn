@@ -2,7 +2,7 @@
 
 sudo apt update
 sudo apt install -y golang-go openjdk-21-jdk apache2-utils python3-pip ant screen
-curl https://sh.rustup.rs -sSf | sh
+curl https://sh.rustup.rs -sSf | sh -s -- -y
 source $HOME/.cargo/env
 python -m pip install -U pip
 python -m pip install -U matplotlib

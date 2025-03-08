@@ -268,6 +268,16 @@ function install_dependencies() {
   CMD_DESC+=("install tcconfig for WAN latency emulation")
   CMD+=("sudo pip install -q tcconfig")
 
+  # install rqlite for the geodistributed baseline
+  local rqlite_folder_name="rqlite-v8.36.12-linux-amd64"
+  local rqlite_tar_name="rqlite-v8.36.12-linux-amd64.tar.gz"
+  local rqlite_download_url="https://github.com/rqlite/rqlite/releases/download/v8.36.12/rqlite-v8.36.12-linux-amd64.tar.gz"
+  CMD_DESC+=("download rqlite")
+  CMD+=("wget --quiet --no-clobber $rqlite_download_url && rm -rf $rqlite_folder_name")
+  CMD_DESC+=("extract rqlite")
+  CMD+=("tar xvfz $rqlite_tar_name && mv $rqlite_folder_name rqlite")
+  CMD_DESC+=("add rqlite to PATH var")
+  CMD+=('echo "export PATH=$PATH:$PWD/rqlite" | sudo tee -a /etc/environment')
 
   for i in "${!CMD_DESC[@]}"; do
     desc=${CMD_DESC[$i]}
@@ -302,8 +312,11 @@ function upload_binaries() {
   # TODO: check that fuselog and fuselog-apply are working
 
   CMD=()
+  CMD+=('/$HOME/xdn/bin/build_xdn_cli.sh')
+  CMD+=("sudo rm -rf /usr/local/bin/xdn")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
+  CMD+=('sudo ln -s $HOME/xdn/bin/xdn /usr/local/bin/xdn')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuselog')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuselog-apply')
   CMD+=("sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf")
