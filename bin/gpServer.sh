@@ -206,12 +206,12 @@ if [[ ${args[1]} == "all" ]]; then
 
   # get reconfigurators
   reconfigurators=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
-    grep "^[ \t]*$RECONFIGURATOR.[a-zA-Z0-9\-_]*="|\
+    grep -E "^[ \t]*$RECONFIGURATOR\.[a-zA-Z0-9_-]+="|\
     sed s/"^.*$RECONFIGURATOR\."//g|sed s/"=.*$"//g`
   
   # get actives
 	actives=`cat $GP_PROPERTIES|grep -v "^[ \t]*#"|\
-    grep "^[ \t]*$ACTIVE.[a-zA-Z0-9\-_]*="| \
+    grep -E "^[ \t]*$ACTIVE\.[a-zA-Z0-9_-]+="| \
     sed s/"^.*$ACTIVE\."//g|\
     sed s/"=.*$"//g`
   
