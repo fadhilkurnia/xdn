@@ -1,0 +1,42 @@
+Name,City,Country,Latitude,Longitude
+africa-south1,Johannesburg,South Africa,26.2056,28.0337
+asia-east1,Taiwan,Republic of China,23.69781,120.960515
+asia-east2,Hong Kong,People's Republic of China,22.396428,114.109497
+asia-northeast1,Tokyo,Japan,35.6762,139.6503
+asia-northeast2,Osaka,Japan,34.6937,135.5023
+asia-northeast3,Seoul,South Korea,37.5665,126.978
+asia-south1,Mumbai,India,19.076,72.8777
+asia-south2,Delhi,India,28.7041,77.1025
+asia-southeast1,Singapore,Singapore,1.3521,103.8198
+asia-southeast2,Jakarta,Indonesia,-6.2088,106.8456
+australia-southeast1,Sydney,Australia,-33.8688,151.2093
+australia-southeast2,Melbourne,Australia,-37.8136,144.9631
+europe-central2,Warsaw,Poland,52.2297,21.0122
+europe-north1,Hamina,Finland,60.5693,27.1878
+europe-southwest1,Madrid,Spain,40.4167,-3.7025
+europe-west1,Belgium,Belgium,50.5039,4.4699
+europe-west2,London,UK,51.5074,-0.1278
+europe-west3,Frankfurt,Germany,50.1109,8.6821
+europe-west4,Netherlands,Netherlands,52.1326,5.2913
+europe-west6,Zurich,Switzerland,47.3769,8.5417
+europe-west8,Milan,Italy,45.4669,9.19
+europe-west9,Paris,France,48.8566,2.3522
+europe-west10,Berlin,Germany,52.52,13.405
+europe-west12,Turin,Italy,45.0703,7.6869
+me-west1,Tel Aviv,Israel,32.0853,34.7818
+me-central1,Doha,Qatar,25.2854,51.531
+me-central2,Dammam,Kingdom of Saudi Arabia,26.4207,50.0888
+northamerica-northeast1,Montréal,Canada,45.5017,-73.5673
+northamerica-northeast2,Toronto,Canada,43.7417,-79.3733
+southamerica-east1,São Paulo,Brazil,-23.5505,-46.6333
+southamerica-west1,Santiago,Chile,-33.45,-70.6667
+us-central1,Iowa,USA,41.878,-93.0977
+us-central2,Oklahoma,USA,35.3925,-97.6005
+us-east1,South Carolina,USA,33.8361,-81.1637
+us-east4,Northern Virginia,USA,38.8334,-77.2365
+us-east5,Columbus,USA,39.9622,-83.0006
+us-south1,Dallas,USA,32.7792,-96.8089
+us-west1,Oregon,USA,43.8041,-120.5542
+us-west2,Los Angeles,USA,34.0522,-118.2437
+us-west3,Salt Lake City,USA,40.7608,-111.891
+us-west4,Las Vegas,USA,36.1699,-115.1398
