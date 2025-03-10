@@ -31,8 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     env_logger::init();
 
-    // Our proxy will bind to 0.0.0.0:8080
-    let address = SocketAddr::from(([0, 0, 0, 0], 8080));
+    // Our proxy will bind to 127.0.0.1:8080
+    let address = SocketAddr::from(([127, 0, 0, 1], 8080));
 
     // Create a shared Hyper client to forward requests
     let client = Client::new();
