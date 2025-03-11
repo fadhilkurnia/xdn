@@ -3,11 +3,13 @@
 # Script to emulate latency based on the geolocation data provided in the
 # gigapaxos properties file. We emulate latency by injecting it using tcconfig.
 
+import time
 import math
 import subprocess
 
 DEFAULT_NET_DEV_INTERFACE_NAME = 'eth1'
 DEFAULT_CONFIG_FILE = 'conf/gigapaxos.cloudlab-virtual.properties'
+MINIMUM_INTER_SERVER_LATENCY_MS=1
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -168,7 +170,8 @@ def get_estimated_latency(distance_km, slowdown_factor):
 
     return time_milliseconds
 
-def inject_server_latency(servers, net_device, slowdown):
+def inject_server_latency(servers, net_device, slowdown, 
+                          device_exception_map=None, enable_minimum_latency=False):
     server_names = list(servers.keys())
 
     # reseting the injected latency
@@ -186,6 +189,8 @@ def inject_server_latency(servers, net_device, slowdown):
             lat2, lon2 = servers[s2]["geolocation"]
             distance_km = haversine_distance(lat1, lon1, lat2, lon2)
             expected_latency_ms = get_estimated_latency(distance_km, slowdown)
+            if enable_minimum_latency:
+                expected_latency_ms = max(expected_latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
 
             src_network = servers[s1]["host"]
             dst_network = servers[s2]["host"]
@@ -199,8 +204,13 @@ def inject_server_latency(servers, net_device, slowdown):
             injected_latency_ms = expected_latency_ms - offset_latency_ms
             injected_latency_ms = max(injected_latency_ms, 0.0)
             print(f">>> {src_network} <-> {dst_network}: exp={expected_latency_ms:.3f}ms off={offset_latency_ms:.3f}ms dly={injected_latency_ms:.3f}ms")
+
+            # handle device exception
+            target_net_device = net_device
+            if device_exception_map != None and src_network in device_exception_map:
+                target_net_device = device_exception_map[src_network]
             
-            command = f"ssh {src_network} sudo tcset {net_device} --delay {injected_latency_ms}ms --network {dst_network} --add"
+            command = f"ssh {src_network} sudo tcset {target_net_device} --delay {injected_latency_ms}ms --network {dst_network} --add"
             print(">> " + command)
             proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
             if proc_result.returncode != 0:
@@ -209,14 +219,20 @@ def inject_server_latency(servers, net_device, slowdown):
     return
 
 
-def reset_latency_injection(servers, net_device):
+def reset_latency_injection(servers, net_device, device_exception_map=None):
     server_names = list(servers.keys())
     
     # reseting the injected latency
     for i in range(len(server_names)):
         s1 = server_names[i]
         host = servers[s1]["host"]
-        cmd = f"ssh {host} sudo tcdel {net_device} --all"
+
+        # handle device exception
+        target_net_device = net_device
+        if device_exception_map != None and host in device_exception_map:
+            target_net_device = device_exception_map[host]
+
+        cmd = f"ssh {host} sudo tcdel {target_net_device} --all"
         print(">> " + cmd)
         proc_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if proc_result.returncode != 0:
@@ -224,7 +240,7 @@ def reset_latency_injection(servers, net_device):
     return
 
 
-def printout_injected_latency(servers, slowdown):
+def printout_injected_latency(servers, slowdown, enable_minimum_latency=False):
     # Get a list of server names so we can pair them
     server_names = list(servers.keys())
 
@@ -246,12 +262,20 @@ def printout_injected_latency(servers, slowdown):
             lat2, lon2 = servers[s2]["geolocation"]
             distance_km = haversine_distance(lat1, lon1, lat2, lon2)
             latency_ms = get_estimated_latency(distance_km, slowdown)
+            if enable_minimum_latency:
+                latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
             print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t{distance_km:8.2f} km \t ({latency_ms} ms)")
 
 
-def verify_injected_latency(servers, slowdown):
+def verify_injected_latency(servers, slowdown, enable_minimum_latency=False):
+    """
+    Returns True if the observed latency is within 0.5 ms of the expectation,
+    otherwise returns False.
+    """
     printout_injected_latency(servers, slowdown)
     server_names = list(servers.keys())
+
+    max_lat_diff = 0.0
     
     print("\nObserved latency between server pairs:")
     for i in range(len(server_names)):
@@ -264,21 +288,52 @@ def verify_injected_latency(servers, slowdown):
             lat2, lon2 = servers[s2]["geolocation"]
             distance_km = haversine_distance(lat1, lon1, lat2, lon2)
             latency_ms = get_estimated_latency(distance_km, slowdown)
+            if enable_minimum_latency:
+                latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
+
+            max_trials = 5
 
             # from h1
             command = f"ssh {h1} ping -c 3 {h2} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
-            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-            latency_h1_ms = float(proc_result.stdout.strip())
+            latency_h1_ms = 0
+            for curr_trial in range(max_trials):
+                try:
+                    proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                    latency_h1_ms = float(proc_result.stdout.strip())
+                    break
+                except:
+                    if curr_trial == max_trials-1:
+                        raise Exception(f"Failed to observe latency after {max_trials} attempts.")
+                    else:
+                        time.sleep(10 ** (curr_trial))
+                        continue
 
             # from h2
             command = f"ssh {h2} ping -c 3 {h1} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
-            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-            latency_h2_ms = float(proc_result.stdout.strip())
+            latency_h2_ms = 0
+            for curr_trial in range(max_trials):
+                try:
+                    proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                    latency_h2_ms = float(proc_result.stdout.strip())
+                    break
+                except:
+                    if curr_trial == max_trials-1:
+                        raise Exception(f"Failed to observe latency after {max_trials} attempts.")
+                    else:
+                        time.sleep(10 ** (curr_trial))
+                        continue
 
             avg_lat_ms = (float(latency_h1_ms) + float(latency_h2_ms)) / 2
             diff_lat_ms = avg_lat_ms - latency_ms
             
             print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t({latency_h1_ms:6.3f} ms) & ({latency_h2_ms:6.3f} ms)\t vs. ({latency_ms:6.3f} ms)\t diff={diff_lat_ms:.2f}ms")
+
+            if diff_lat_ms > max_lat_diff:
+                max_lat_diff = diff_lat_ms
+
+    if max_lat_diff > 0.5:
+        return False
+    return True
 
 
 if __name__ == "__main__":
@@ -290,6 +345,8 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--mode", type=str, default="execute", help=f"Supported mode: {valid_modes}")
     parser.add_argument("-d", "--device", type=str, default=DEFAULT_NET_DEV_INTERFACE_NAME, help="Network device interface name (e.g: eno1)")
     parser.add_argument("-c", "--config", type=str, default=DEFAULT_CONFIG_FILE, help="Gigapaxos config file, containing servers data")
+    parser.add_argument("-l", "--enable-minimum-lat", type=bool, default=False, help="Enable minimum latency, suitable for availability zone with same geolocation.")
+    parser.add_argument("-e", "--device-exceptions", type=str, default="", help="Comma separated exception for device name, e.g., '10.10.1.1/ens2f1np1,10.10.1.3/ens2f0np0'. The usage is when some machines in the cluster has different device name.")
 
     args = parser.parse_args()
 
@@ -303,15 +360,44 @@ if __name__ == "__main__":
         print("Invalid network device interface name.")
         exit(-1)
 
+    # Validate device exceptions
+    dev_exception_map = None
+    if args.device_exceptions != "":
+        dev_exception_map = {}
+        temp_pairs = args.device_exceptions.split(",")
+        if len(temp_pairs) == 0:
+            print("Invalid network device exception. Example: '10.10.1.1/ens2f1np1,10.10.1.3/ens2f0np0'")
+            exit(-1)
+        for pair in temp_pairs:
+            parts = pair.split("/")
+            if len(parts) != 2:
+                print("Invalid network device exception. Example: '10.10.1.1/ens2f1np1,10.10.1.3/ens2f0np0'")
+                exit(-1)
+            address = parts[0]
+            dev_name = parts[1]
+            if dev_name == args.device:
+                print(f"Cannot use the default device {args.device} in the exception list")
+                exit(-1)
+            dev_exception_map[address] = dev_name
+
+
     # Read all servers' geolocations and IP
     servers = read_servers_from_property_file(args.config)
     slowdown = get_latency_slowdown_from_property_file(args.config)
 
     if args.mode == "execute":
-        inject_server_latency(servers, args.device, slowdown)
+        inject_server_latency(servers, args.device, slowdown, 
+                              device_exception_map=dev_exception_map, 
+                              enable_minimum_latency=args.enable_minimum_lat)
     elif args.mode == "reset":
-        reset_latency_injection(servers, args.device)
+        reset_latency_injection(servers, args.device, 
+                                device_exception_map=dev_exception_map)
     elif args.mode == "dry":
-        printout_injected_latency(servers, slowdown)
+        printout_injected_latency(servers, slowdown, 
+                                  enable_minimum_latency=args.enable_minimum_lat)
     elif args.mode == "verify":
-        verify_injected_latency(servers, slowdown)
+        is_expected = verify_injected_latency(servers, slowdown, 
+                                              enable_minimum_latency=args.enable_minimum_lat)
+        if not is_expected:
+            print("Found ping latency larger than 0.5ms of the expected latency :(")
+            exit(-1)
