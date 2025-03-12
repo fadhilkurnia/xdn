@@ -275,9 +275,15 @@ function install_dependencies() {
   CMD_DESC+=("download rqlite")
   CMD+=("wget --quiet --no-clobber $rqlite_download_url && rm -rf $rqlite_folder_name")
   CMD_DESC+=("extract rqlite")
-  CMD+=("tar xvfz $rqlite_tar_name && mv $rqlite_folder_name rqlite")
+  CMD+=("tar xvfz $rqlite_tar_name && rm -rf rqlite && mv $rqlite_folder_name rqlite")
   CMD_DESC+=("add rqlite to PATH var")
   CMD+=('echo "export PATH=$PATH:$PWD/rqlite" | sudo tee -a /etc/environment')
+
+  # install node for the durable object baseline
+  CMD_DESC+=("install npm")
+  CMD+=("sudo apt-get install -y npm")
+  CMD_DESC+=("update node version to latest stable")
+  CMD+=("sudo npm install -g n && sudo n stable && hash -r")
 
   for i in "${!CMD_DESC[@]}"; do
     desc=${CMD_DESC[$i]}
