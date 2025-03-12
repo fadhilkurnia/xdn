@@ -37,14 +37,14 @@ var LaunchCmd = &cobra.Command{
 	Use:   "launch <service-name>",
 	Short: "Launch a web service on edge servers",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 
 		serviceName := args[0]
 
 		fileName, err := cmd.Flags().GetString("file")
 		if err != nil {
 			fmt.Printf("failed to read file of service properties")
-			return
+			return err
 		}
 
 		prop := CommonProperties{}
@@ -54,12 +54,12 @@ var LaunchCmd = &cobra.Command{
 			prop, err = parseDeclaredPropertiesFromFile(fileName)
 			if err != nil {
 				fmt.Println(err.Error())
-				return
+				return err
 			}
 
 			if serviceName != prop.serviceName {
 				fmt.Println("unmatch service name specified in the file")
-				return
+				return err
 			}
 		}
 
@@ -68,11 +68,11 @@ var LaunchCmd = &cobra.Command{
 			prop, err = parseDeclaredPropertiesFromFlags(serviceName, cmd.Flags())
 			if err != nil {
 				fmt.Println(err.Error())
-				return
+				return err
 			}
 		}
 
-		runLaunchCommand(prop)
+		return runLaunchCommand(prop)
 	},
 }
 
@@ -261,12 +261,12 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 	return prop, nil
 }
 
-func runLaunchCommand(prop CommonProperties) {
+func runLaunchCommand(prop CommonProperties) error {
 	colorPrint := color.New(color.FgYellow).Add(color.Bold).Add(color.Underline)
 	errColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
 
 	fmt.Printf("Launching ")
-	colorPrint.Printf("%s", prop.serviceName)
+	_, _ = colorPrint.Printf("%s", prop.serviceName)
 	fmt.Printf(" service with the following configuration:\n")
 	fmt.Printf(" docker image  : %s\n", prop.imageName)
 	fmt.Printf(" http port     : %d\n", prop.httpPort)
@@ -284,14 +284,14 @@ func runLaunchCommand(prop CommonProperties) {
 	_, err := net.DialTimeout("tcp", controlPlaneHost, timeout)
 	if err != nil {
 		fmt.Printf(" ")
-		errColorPrint.Printf("ERROR")
+		_, _ = errColorPrint.Printf("ERROR")
 		fmt.Printf(":")
 		fmt.Printf(" Cannot reach XDN control plane at `%s`.\n\n", controlPlane)
 		fmt.Printf(" Is the Control Plane running there?\n\n")
 		fmt.Printf(" Alternatively use another XDN Control Plane by specifying\n")
 		fmt.Printf(" the environment variable, for example:\n")
 		fmt.Printf("   export XDN_CONTROL_PLANE=cp.xdnapp.com\n\n")
-		return
+		return fmt.Errorf("cannot reach XDN control plane at `%s`", controlPlane)
 	}
 
 	// contact the control plane to actually deploy the service
@@ -304,44 +304,44 @@ func runLaunchCommand(prop CommonProperties) {
 	if err != nil {
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			fmt.Printf(" ")
-			errColorPrint.Printf("ERROR")
+			_, _ = errColorPrint.Printf("ERROR")
 			fmt.Printf(": Cannot reach XDN control plane at `%s`.\n\n",
 				controlPlane)
 			fmt.Printf(" Is the Control Plane running there?\n\n")
-			return
+			return fmt.Errorf("cannot reach XDN control plane at `%s`", controlPlane)
 		}
 		fmt.Printf(" ")
-		errColorPrint.Printf("ERROR")
+		_, _ = errColorPrint.Printf("ERROR")
 		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
-		return
+		return fmt.Errorf("cannot send launch request to XDN control plane at `%s`", controlPlane)
 	}
 	if resp.StatusCode != 200 {
 		fmt.Printf(" ")
-		errColorPrint.Printf("ERROR")
+		_, _ = errColorPrint.Printf("ERROR")
 		fmt.Printf(": Failed to launch the service, received non success code.\n")
-		return
+		return fmt.Errorf("failed to launch the service, received http non success code %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf(" ")
-		errColorPrint.Printf("ERROR")
+		_, _ = errColorPrint.Printf("ERROR")
 		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
-		return
+		return fmt.Errorf("failed to launch the service, error reading the response: %s", err.Error())
 	}
 
 	bodyStr := string(body)
 	if strings.Contains(bodyStr, "\"FAILED\":true") {
 		fmt.Printf(" ")
-		errColorPrint.Printf("ERROR")
+		_, _ = errColorPrint.Printf("ERROR")
 		fmt.Printf(" ")
 		fmt.Printf("Failed to launch the service: \n")
 		var jsonMap map[string]interface{}
-		json.Unmarshal([]byte(bodyStr), &jsonMap)
+		_ = json.Unmarshal([]byte(bodyStr), &jsonMap)
 		errMsgIf := jsonMap["RESPONSE_MESSAGE"]
 		errMsg := errMsgIf.(string)
 		fmt.Printf(" %s\n", errMsg)
-		return
+		return fmt.Errorf("failed to launch the service, error: %s", errMsg)
 	}
 
 	dummyServiceURL := colorPrint.Sprintf(
@@ -363,4 +363,6 @@ func runLaunchCommand(prop CommonProperties) {
 	// fmt.Printf("  - http://%s.AR0.xdn.io/\n", serviceName)
 	// fmt.Printf("  - http://%s.AR1.xdn.io/\n", serviceName)
 	// fmt.Printf("  - http://%s.AR2.xdn.io/\n", serviceName)
+
+	return nil
 }
