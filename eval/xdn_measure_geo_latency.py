@@ -217,6 +217,10 @@ for approach in approaches:
                 "___________PLACEHOLDER_ACTIVES_GEOLOCATION___________", 
                 server_name_geolocation, 
                 udpated_cfg_content)
+            udpated_cfg_content = re.sub(
+                "___________PLACEHOLDER_RC_HOST___________", 
+                control_plane_address, 
+                udpated_cfg_content)
             updated_cfg_file = f"../conf/{approach_lc}-{geolocality}-{batch_id}-lat.properties"
             with open(updated_cfg_file, 'w') as file:
                 file.write(udpated_cfg_content)
