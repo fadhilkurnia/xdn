@@ -22,7 +22,7 @@ gigapaxos_template_config_file = "../conf/gigapaxos.xdnlat.template.properties"
 request_payload_file="measurement_payload.json"
 
 geolocalities = [1.0, 0.8, 0.5, 0.0]
-approaches = ["GD", "XDN", "CD", "ED"]
+approaches = ["ED", "GD", "XDN", "CD"]
 num_services = 50
 num_replicas = 3
 num_clients = 1000
@@ -99,10 +99,14 @@ for leader_name, menu in spanner_placement_menu_per_leader.items():
 for approach in approaches:
     approach_lc = approach.lower()
     approach_num_replicas = num_replicas
+    
+    # adjust batch size to maximize parellilism for approaches with no replication
     if approach == "CD" or approach == "ED":
         approach_num_replicas = 1
     num_service_per_batch = num_cloudlab_machines // approach_num_replicas
+    
     for geolocality in geolocalities:
+        
         # The high level algorithm:
         # - Select 10 server locations based on client distributions
         # - Replace Gigapaxos config to use the 10 selected server locations.
@@ -142,8 +146,17 @@ for approach in approaches:
                     replica_group_info = {"Replicas": [curr_static_nr_server], "Leader": curr_static_nr_server}
                     replica_group_info_per_city[city_name] = replica_group_info
                 elif approach == "ED":
-                    # TODO: support other approaches. deploy cloudflare durable objects
-                    exit(1)
+                    # deploy cloudflare durable object in one edge server.
+                    # we add id suffix in the server name, mitigating conflicting replica placement.
+                    curr_city_counter = idx + 1
+                    curr_global_city_counter = batch_id * num_service_per_batch + curr_city_counter
+                    replica_group_info = get_heuristic_replicas_placement(nf_edge_server_locations, clients, 1, True)
+                    assert len(replica_group_info["Replicas"]) == 1
+                    updated_replica_group_info = copy.deepcopy(replica_group_info)
+                    updated_replica_group_info["Leader"]["Name"] = f"{replica_group_info['Leader']['Name']}_{curr_global_city_counter}"
+                    for i, replica in enumerate(updated_replica_group_info['Replicas']):
+                        updated_replica_group_info["Replicas"][i]["Name"] = f"{updated_replica_group_info['Replicas'][i]['Name']}_{curr_global_city_counter}"
+                    replica_group_info_per_city[city_name] = updated_replica_group_info
                 elif approach == "GD":
                     # support other approaches. deploy rqlite
                     # we artificially use global_city_counter prefix to prevent conflict with other replica group
@@ -157,7 +170,6 @@ for approach in approaches:
                         replica_group_info["Replicas"][i]["Name"] = f"{replica_group_info['Replicas'][i]['Name']}_{curr_global_city_counter}"
                     replica_group_info_per_city[city_name] = replica_group_info
                 else:
-                    # TODO: support other approaches
                     raise Exception(f"Unknown approach of {approach}")
             
             # gather the required server names in this batch
@@ -225,8 +237,8 @@ for approach in approaches:
             ret_code = os.system(command)
             assert ret_code == 0
 
-            # deploys xdn in the prepared machines
-            print(f" > starting xdn cluster:")
+            # clear any remaining running xdn or other processes
+            print(f" > resetting the measurement cluster:")
             for i in range(num_cloudlab_machines):
                 os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 2000/tcp")
                 os.system(f"ssh 10.10.1.{i+1} sudo rm -rf /tmp/gigapaxos")
@@ -234,8 +246,13 @@ for approach in approaches:
                 os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 4001/tcp")
                 os.system(f"ssh 10.10.1.{i+1} sudo rm -rf /tmp/rqlite_data")
                 os.system(f"ssh 10.10.1.{i+1} 'containers=$(docker ps -a -q); if [ -n \"$containers\" ]; then docker stop $containers; fi'")
+                ret_code = os.system(f'ssh 10.10.1.{i+1} "rm -rf xdn/eval/durable_objects/bookcatalog/.wrangler/state/"')
+                assert ret_code == 0
             os.system(f"ssh {control_plane_address} sudo fuser -k 3000/tcp")
             os.system(f"ssh {control_plane_address} sudo rm -rf /tmp/gigapaxos")
+
+            # deploys xdn in the prepared machines
+            print(f" > starting the measurement cluster:")
             for server_name, address in server_address_by_name.items():
                 print(f"   + {server_name}: {address}")
             if approach == "XDN" or approach == "CD":
@@ -249,7 +266,8 @@ for approach in approaches:
                 ret_code = os.system(command)
                 assert ret_code == 0
                 time.sleep(120)
-            elif approach == "GD":
+            elif approach == "GD" or approach == "ED":
+                # do nothing as we will start rqlite or durable object later
                 pass
 
             # Iterates over locality (i.e., city)
@@ -308,9 +326,9 @@ for approach in approaches:
                         for server_id, server in enumerate(replica_group_info["Replicas"]):
                             node_id = server_id + 1
                             address = server_address_by_name[server["Name"]]
-                            command = f'ssh {leader_address} nohup rqlited -node-id={node_id} -http-addr={leader_address}:4001 -raft-addr={leader_address}:4002 /tmp/rqlite_data >/dev/null 2>&1 &'
+                            command = f'ssh {leader_address} nohup rqlited -node-id={node_id} -http-addr={leader_address}:4001 -raft-addr={leader_address}:4002 /tmp/rqlite_data > /dev/null 2>&1 &'
                             if server["Name"] != leader_name:
-                                command = f'ssh {address} nohup rqlited -node-id={node_id} -http-addr={address}:4001 -raft-addr={address}:4002 -join={leader_address}:4002 /tmp/rqlite_data >/dev/null 2>&1 &'
+                                command = f'ssh {address} nohup rqlited -node-id={node_id} -http-addr={address}:4001 -raft-addr={address}:4002 -join={leader_address}:4002 /tmp/rqlite_data > /dev/null 2>&1 &'
                             print("   ", command)
                             ret_code = os.system(command)
                             assert ret_code == 0
@@ -323,6 +341,16 @@ for approach in approaches:
                             ret_code = os.system(command)
                             assert ret_code == 0
                         pass
+                    elif approach == "ED":
+                        assert len(replica_group_info["Replicas"]) == 1
+                        replica = replica_group_info["Leader"]
+                        address = server_address_by_name[replica["Name"]]
+                        command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && npm install > /dev/null 2>&1 && fuser -k 2300/tcp"'
+                        ret_code = os.system(command)
+                        command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && nohup npx wrangler dev --ip {address} --port 2300 --log-level error" &'
+                        print("   ", command)
+                        ret_code = os.system(command)
+                        assert ret_code == 0
 
                     # get the closest replica for each client
                     target_replica_by_cid = {}
@@ -394,6 +422,17 @@ for approach in approaches:
                             ret_code = os.system(f"ssh {address} sudo rm -rf /tmp/rqlite_data")
                             assert ret_code == 0
                         pass
+                    elif approach == "ED":
+                        for server_id, server in enumerate(replica_group_info["Replicas"]):
+                            address = server_address_by_name[server["Name"]]
+                            command = f'ssh {address} fuser -k 2300/tcp'
+                            print("   ", command)
+                            ret_code = os.system(command)
+                            assert ret_code == 0
+                            command = f'ssh {address} rm -rf xdn/eval/durable_objects/bookcatalog/.wrangler/state/'
+                            print("   ", command)
+                            ret_code = os.system(command)
+                            assert ret_code == 0
                     
                     return
     
@@ -423,4 +462,3 @@ for approach in approaches:
             assert ret_code == 0
 
             time.sleep(60)
-        
