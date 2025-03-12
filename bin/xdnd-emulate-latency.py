@@ -5,6 +5,7 @@
 
 import time
 import math
+import threading
 import subprocess
 
 DEFAULT_NET_DEV_INTERFACE_NAME = 'eth1'
@@ -176,53 +177,83 @@ def inject_server_latency(servers, net_device, slowdown,
 
     # reseting the injected latency
     print("\nResetting the emulated latency:")
-    reset_latency_injection(servers, net_device)
+    reset_latency_injection(servers, net_device, device_exception_map=device_exception_map)
+
+    def inject_worker(src_name, dst_name):
+        lat1, lon1 = servers[src_name]["geolocation"]
+        lat2, lon2 = servers[dst_name]["geolocation"]
+        distance_km = haversine_distance(lat1, lon1, lat2, lon2)
+        expected_latency_ms = get_estimated_latency(distance_km, slowdown)
+        if enable_minimum_latency:
+            expected_latency_ms = max(expected_latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
+
+        src_network = servers[src_name]["host"]
+        dst_network = servers[dst_name]["host"]
+
+        # observe the current ping latency to get the offset
+        command = f"ssh {src_network} ping -c 3 {dst_network} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
+        proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        offset_latency_ms = float(proc_result.stdout.strip())
+
+        # calculate the injected latency
+        injected_latency_ms = expected_latency_ms - offset_latency_ms
+        injected_latency_ms = max(injected_latency_ms, 0.0)
+
+        # handle device exception
+        target_net_device = net_device
+        if device_exception_map != None and src_network in device_exception_map:
+            target_net_device = device_exception_map[src_network]
+
+        command = f"ssh {src_network} sudo tcset {target_net_device} --delay {injected_latency_ms}ms --network {dst_network} --add"
+        print(f">>> {src_network} <-> {dst_network}: exp={expected_latency_ms:.3f}ms off={offset_latency_ms:.3f}ms dly={injected_latency_ms:.3f}ms\n" + ">> " + command)
+        proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        if proc_result.returncode != 0:
+            print("ERROR :(")
+            
+        return
     
-    # injecting the latency
-    print("\nInjecting emulated latency:")
+    # preparing all threads
+    per_machine_threads = {}
+    total_num_workers = 0
     for i in range(len(server_names)):
+        per_machine_threads[i] = []
         for j in range(i + 1, len(server_names)):
-            # calculate the expected latency between server pair
             s1 = server_names[i]
             s2 = server_names[j]
-            lat1, lon1 = servers[s1]["geolocation"]
-            lat2, lon2 = servers[s2]["geolocation"]
-            distance_km = haversine_distance(lat1, lon1, lat2, lon2)
-            expected_latency_ms = get_estimated_latency(distance_km, slowdown)
-            if enable_minimum_latency:
-                expected_latency_ms = max(expected_latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
-
-            src_network = servers[s1]["host"]
-            dst_network = servers[s2]["host"]
-
-            # observe the current ping latency to get the offset
-            command = f"ssh {src_network} ping -c 3 {dst_network} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
-            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-            offset_latency_ms = float(proc_result.stdout.strip())
-
-            # calculate the injected latency
-            injected_latency_ms = expected_latency_ms - offset_latency_ms
-            injected_latency_ms = max(injected_latency_ms, 0.0)
-            print(f">>> {src_network} <-> {dst_network}: exp={expected_latency_ms:.3f}ms off={offset_latency_ms:.3f}ms dly={injected_latency_ms:.3f}ms")
-
-            # handle device exception
-            target_net_device = net_device
-            if device_exception_map != None and src_network in device_exception_map:
-                target_net_device = device_exception_map[src_network]
-            
-            command = f"ssh {src_network} sudo tcset {target_net_device} --delay {injected_latency_ms}ms --network {dst_network} --add"
-            print(">> " + command)
-            proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-            if proc_result.returncode != 0:
-                print("ERROR :(")
+            t = threading.Thread(target=inject_worker, args=(s1, s2))
+            per_machine_threads[i].append(t)
+            total_num_workers += 1
+    
+    # inter-machine concurrency
+    # we can only run the command in parallel from different machine
+    while total_num_workers > 0:
+        threads = []
+        for i in range(len(server_names)):
+            if len(per_machine_threads[i]) > 0:
+                t = per_machine_threads[i].pop(0)
+                threads.append(t)
+        total_num_workers -= len(threads)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     return
 
-
 def reset_latency_injection(servers, net_device, device_exception_map=None):
     server_names = list(servers.keys())
+
+    # prepare threads for reseting latency
+    def reset_thread(server_host, net_dev_if_name):
+        command = f'ssh {server_host} sudo tcdel {net_dev_if_name} --all'
+        print(">> " + command)
+        proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        if proc_result.returncode != 0:
+            print(f"ERROR, retcode={proc_result.returncode}")
+        return
     
-    # reseting the injected latency
+    # reseting the injected latency, in multiple threads
+    threads = []
     for i in range(len(server_names)):
         s1 = server_names[i]
         host = servers[s1]["host"]
@@ -232,13 +263,14 @@ def reset_latency_injection(servers, net_device, device_exception_map=None):
         if device_exception_map != None and host in device_exception_map:
             target_net_device = device_exception_map[host]
 
-        cmd = f"ssh {host} sudo tcdel {target_net_device} --all"
-        print(">> " + cmd)
-        proc_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if proc_result.returncode != 0:
-            print(f"ERROR, retcode={proc_result.returncode}")
+        t = threading.Thread(target=reset_thread, args=(host, target_net_device))
+        threads.append(t)
+        t.start()
+    
+    for t in threads:
+        t.join()
+    
     return
-
 
 def printout_injected_latency(servers, slowdown, enable_minimum_latency=False):
     # Get a list of server names so we can pair them
@@ -266,7 +298,6 @@ def printout_injected_latency(servers, slowdown, enable_minimum_latency=False):
                 latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
             print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t{distance_km:8.2f} km \t ({latency_ms} ms)")
 
-
 def verify_injected_latency(servers, slowdown, enable_minimum_latency=False):
     """
     Returns True if the observed latency is within 0.5 ms of the expectation,
@@ -274,65 +305,75 @@ def verify_injected_latency(servers, slowdown, enable_minimum_latency=False):
     """
     printout_injected_latency(servers, slowdown)
     server_names = list(servers.keys())
+    expectation_map = {}
 
-    max_lat_diff = 0.0
+    def verify_worker(i, j):
+        s1 = server_names[i]
+        s2 = server_names[j]
+        h1 = servers[s1]["host"]
+        h2 = servers[s2]["host"]
+        lat1, lon1 = servers[s1]["geolocation"]
+        lat2, lon2 = servers[s2]["geolocation"]
+        distance_km = haversine_distance(lat1, lon1, lat2, lon2)
+        latency_ms = get_estimated_latency(distance_km, slowdown)
+        if enable_minimum_latency:
+            latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
+
+        max_trials = 5
+
+        # from h1
+        command = f"ssh {h1} ping -c 3 {h2} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
+        latency_h1_ms = 0
+        for curr_trial in range(max_trials):
+            try:
+                proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                latency_h1_ms = float(proc_result.stdout.strip())
+                break
+            except:
+                if curr_trial == max_trials-1:
+                    raise Exception(f"Failed to observe latency after {max_trials} attempts.")
+                else:
+                    time.sleep(10 ** (curr_trial))
+                    continue
+
+        # from h2
+        command = f"ssh {h2} ping -c 3 {h1} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
+        latency_h2_ms = 0
+        for curr_trial in range(max_trials):
+            try:
+                proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                latency_h2_ms = float(proc_result.stdout.strip())
+                break
+            except:
+                if curr_trial == max_trials-1:
+                    raise Exception(f"Failed to observe latency after {max_trials} attempts.")
+                else:
+                    time.sleep(10 ** (curr_trial))
+                    continue
+
+        avg_lat_ms = (float(latency_h1_ms) + float(latency_h2_ms)) / 2
+        diff_lat_ms = avg_lat_ms - latency_ms
+        
+        print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t({latency_h1_ms:6.3f} ms) & ({latency_h2_ms:6.3f} ms)\t vs. ({latency_ms:6.3f} ms)\t diff={diff_lat_ms:.2f}ms")
+        
+        expectation_map[f"{i}:{j}"] = diff_lat_ms
+        return
     
     print("\nObserved latency between server pairs:")
+    threads = []
     for i in range(len(server_names)):
         for j in range(i + 1, len(server_names)):
-            s1 = server_names[i]
-            s2 = server_names[j]
-            h1 = servers[s1]["host"]
-            h2 = servers[s2]["host"]
-            lat1, lon1 = servers[s1]["geolocation"]
-            lat2, lon2 = servers[s2]["geolocation"]
-            distance_km = haversine_distance(lat1, lon1, lat2, lon2)
-            latency_ms = get_estimated_latency(distance_km, slowdown)
-            if enable_minimum_latency:
-                latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
+            t = threading.Thread(target=verify_worker, args=(i, j))
+            threads.append(t)
+            t.start()
 
-            max_trials = 5
+    for t in threads:
+        t.join()
 
-            # from h1
-            command = f"ssh {h1} ping -c 3 {h2} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
-            latency_h1_ms = 0
-            for curr_trial in range(max_trials):
-                try:
-                    proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-                    latency_h1_ms = float(proc_result.stdout.strip())
-                    break
-                except:
-                    if curr_trial == max_trials-1:
-                        raise Exception(f"Failed to observe latency after {max_trials} attempts.")
-                    else:
-                        time.sleep(10 ** (curr_trial))
-                        continue
-
-            # from h2
-            command = f"ssh {h2} ping -c 3 {h1} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
-            latency_h2_ms = 0
-            for curr_trial in range(max_trials):
-                try:
-                    proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-                    latency_h2_ms = float(proc_result.stdout.strip())
-                    break
-                except:
-                    if curr_trial == max_trials-1:
-                        raise Exception(f"Failed to observe latency after {max_trials} attempts.")
-                    else:
-                        time.sleep(10 ** (curr_trial))
-                        continue
-
-            avg_lat_ms = (float(latency_h1_ms) + float(latency_h2_ms)) / 2
-            diff_lat_ms = avg_lat_ms - latency_ms
-            
-            print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t({latency_h1_ms:6.3f} ms) & ({latency_h2_ms:6.3f} ms)\t vs. ({latency_ms:6.3f} ms)\t diff={diff_lat_ms:.2f}ms")
-
-            if diff_lat_ms > max_lat_diff:
-                max_lat_diff = diff_lat_ms
-
-    if max_lat_diff > 0.5:
-        return False
+    for pair, lat_diff in expectation_map.items():
+        if abs(lat_diff) > 0.5:
+            print(f"ERROR: unexpected latency pair {pair} {lat_diff}ms")
+            return False
     return True
 
 
@@ -379,7 +420,6 @@ if __name__ == "__main__":
                 print(f"Cannot use the default device {args.device} in the exception list")
                 exit(-1)
             dev_exception_map[address] = dev_name
-
 
     # Read all servers' geolocations and IP
     servers = read_servers_from_property_file(args.config)
