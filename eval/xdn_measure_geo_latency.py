@@ -22,13 +22,13 @@ gigapaxos_template_config_file = "../conf/gigapaxos.xdnlat.template.properties"
 request_payload_file="measurement_payload.json"
 
 geolocalities = [1.0, 0.8, 0.5, 0.0]
-approaches = ["ED", "GD", "XDN", "CD"]
+approaches = ["XDNNR", "ED", "GD", "XDN", "CD"]
 num_services = 50
 num_replicas = 3
 num_clients = 1000
 city_area_sqkm = 1000
-net_device_if_names=["enp3s0f0np0", "enp4s0f0np0"]
-net_device_if_names=["ens1f1np1"]
+net_device_if_name="enp3s0f0np0"        # example: "ens1f1np1"
+net_device_if_name_exception_list=""    # example: "10.10.1.6/enp130s0f0np0,10.10.1.8/enp4s0f0np0"
 service_name="bookcatalog"
 request_endpoint="/api/books"
 num_cloudlab_machines = 10
@@ -93,6 +93,13 @@ for leader_name, menu in spanner_placement_menu_per_leader.items():
     server = gcp_og_server_by_name[leader_name]
     spanner_leader_locations.append(server.copy())
 
+# verifying the required software
+command = "ls xdn_latency_proxy/target/release/xdn_latency_proxy"
+ret_code = os.system(command)
+assert ret_code == 0, f"cannot find the xdn_latency_proxy program"
+command = "xdn --help > /dev/null"
+ret_code = os.system(command)
+assert ret_code == 0, f"cannot find the xdn program"
 
 
 # begin measurement with all the parameters
@@ -101,7 +108,7 @@ for approach in approaches:
     approach_num_replicas = num_replicas
     
     # adjust batch size to maximize parellilism for approaches with no replication
-    if approach == "CD" or approach == "ED":
+    if approach == "CD" or approach == "ED" or approach == "XDNNR":
         approach_num_replicas = 1
     num_service_per_batch = num_cloudlab_machines // approach_num_replicas
     
@@ -136,6 +143,10 @@ for approach in approaches:
                 if approach == "XDN":
                     # xdn with 3 replicas at the edge
                     replica_group_info = get_heuristic_replicas_placement(nf_edge_server_locations, clients, num_replicas, True)
+                    replica_group_info_per_city[city_name] = replica_group_info
+                elif approach == "XDNNR":
+                    # xdn with 1 replica at the edge
+                    replica_group_info = get_heuristic_replicas_placement(nf_edge_server_locations, clients, 1, True)
                     replica_group_info_per_city[city_name] = replica_group_info
                 elif approach == "CD":
                     # xdn with 1 replica in aws us-east-1, we artificially use us-east-1-1, us-east-1-2, us-east-1-3, ...
@@ -212,13 +223,15 @@ for approach in approaches:
             
             # emulate and verify inter-server latency
             if enable_inter_city_lat_emulation:
-                print(f" > emulating edge inter-server latencies, net_dev_if={net_device_if_names}")
-                for net_device_if_name in net_device_if_names:
-                    command = f"python ../bin/xdnd-emulate-latency.py --device={net_device_if_name} --config={updated_cfg_file}"
-                    print("   ", command)
-                    ret_code = os.system(command)
-                    assert ret_code == 0
-                command = f"python ../bin/xdnd-emulate-latency.py --mode=verify --device={net_device_if_name} --config={updated_cfg_file}"
+                print(f" > emulating edge inter-server latencies, net_dev_if={net_device_if_name}, exception={net_device_if_name_exception_list}")
+                net_dev_exception_flag=""
+                if net_device_if_name_exception_list != "":
+                    net_dev_exception_flag = f"--device-exceptions={net_device_if_name_exception_list}"
+                command = f"python ../bin/xdnd-emulate-latency.py --device={net_device_if_name} --config={updated_cfg_file} {net_dev_exception_flag}"
+                print("   ", command)
+                ret_code = os.system(command)
+                assert ret_code == 0
+                command = f"python ../bin/xdnd-emulate-latency.py --mode=verify --config={updated_cfg_file}"
                 print("   ", command)
                 ret_code = os.system(command)
                 assert ret_code == 0
@@ -241,6 +254,7 @@ for approach in approaches:
             print(f" > resetting the measurement cluster:")
             for i in range(num_cloudlab_machines):
                 os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 2000/tcp")
+                os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 2300/tcp")
                 os.system(f"ssh 10.10.1.{i+1} sudo rm -rf /tmp/gigapaxos")
                 os.system(f"ssh 10.10.1.{i+1} docker network prune --force > /dev/null 2>&1")
                 os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 4001/tcp")
@@ -255,7 +269,7 @@ for approach in approaches:
             print(f" > starting the measurement cluster:")
             for server_name, address in server_address_by_name.items():
                 print(f"   + {server_name}: {address}")
-            if approach == "XDN" or approach == "CD":
+            if approach == "XDN" or approach == "CD" or approach == "XDNNR":
                 gp_screen_name = screen_session_base_name + "_gp"
                 command = f"screen -S {gp_screen_name} -X quit  > /dev/null 2>&1"
                 print("   ", command)
@@ -291,7 +305,7 @@ for approach in approaches:
                     # deploy the service
                     print(f"   > deploying local service based in {city_name}")
                     deployed_service_name=f"bookcatalog{global_city_counter:03}"
-                    if approach == "XDN" or approach == "CD":
+                    if approach == "XDN" or approach == "CD" or approach == "XDNNR":
                         command = f"XDN_CONTROL_PLANE={control_plane_address} xdn launch {deployed_service_name} --image=fadhilkurnia/xdn-bookcatalog --deterministic=true --consistency=linearizability --state=/app/data/"
                         print("   ", command)
                         res = subprocess.run(command, shell=True, capture_output=True, text=True)
@@ -299,13 +313,14 @@ for approach in approaches:
                         output = res.stdout
                         assert "Error" not in output, f"output: {output}"
                         time.sleep(60)
-                    elif approach == "GD":
+                    elif approach == "GD" or approach == "ED":
+                        # do nothing as we will start them on reconfiguration later
                         pass
 
                     # reconfigure the leader
                     leader_name = replica_group_info["Leader"]["Name"]
                     leader_address = server_address_by_name[leader_name]
-                    if approach == "XDN" or approach == "CD":
+                    if approach == "XDN" or approach == "CD" or approach == "XDNNR":
                         # we dont need to do this if we only have 1 active.
                         if len(server_set) != 1:
                             replica_names = []
@@ -404,7 +419,7 @@ for approach in approaches:
                         assert ret_code == 0, f"Command failed after {max_repetitions} attempts."
 
                     # destroy the service
-                    if approach == "XDN" or approach == "CD":
+                    if approach == "XDN" or approach == "CD" or approach == "XDNNR":
                         command = f"yes \"yes\" | XDN_CONTROL_PLANE={control_plane_address} xdn service destroy {deployed_service_name}"
                         print("   ", command)
                         ret_code = os.system(command)
