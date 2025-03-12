@@ -31,11 +31,12 @@ print("Geolocality      : ", geolocalities)
 print("Locality Names   : ", locality_names)
 
 with open(target_aggr_filename, 'w') as target_aggragate_file:
-    target_aggragate_file.write("approach, geolocality, locality_name, lat_avg_ms, lat_var")
+    target_aggragate_file.write("approach, geolocality, locality_name, lat_avg_ms, lat_var\n")
     approach_stats = {}
     for approach in approaches:
+        approach_stats[approach] = {}
         for geolocality in geolocalities:
-            approach_stats[geolocality] = []
+            approach_stats[approach][geolocality] = []
             for locality_name in locality_names:
                 pattern = f"{approach}_latency_g{geolocality}_b[0-9]*_s{locality_name}_c[a-zA-Z]*_i[0-9]*.tsv"
                 matching_files = [f for f in latency_files if re.search(pattern, f)]
@@ -52,8 +53,8 @@ with open(target_aggr_filename, 'w') as target_aggragate_file:
                 var_latency = statistics.variance(latencies_ms)
 
                 print(f">>> {approach} g={geolocality} city={locality_name}\t: avg_lat={avg_latency:.2f}ms\t variance={var_latency:.2f}")
-                target_aggragate_file.write(f"{approach}, {geolocality}, {locality_name}, {avg_latency:.2f}, {var_latency:.2f}")
-                approach_stats[geolocality].append(avg_latency)
+                target_aggragate_file.write(f"{approach}, {geolocality}, {locality_name}, {avg_latency:.2f}, {var_latency:.2f}\n")
+                approach_stats[approach][geolocality].append(avg_latency)
     
     target_aggragate_file.close()
     
