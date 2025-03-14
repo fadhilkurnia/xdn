@@ -13,6 +13,7 @@ from utils import get_client_count_per_city
 from utils import get_uniform_client_per_city
 from utils import get_server_locations
 from utils import get_spanner_placement_menu
+from utils import get_per_city_clients
 
 population_data_file = "location_distributions/client_us_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
@@ -26,6 +27,7 @@ approaches = ["XDNNR", "ED", "GD", "XDN", "CD"]
 num_services = 50
 num_replicas = 3
 num_clients = 1000
+num_req_per_client = 10
 city_area_sqkm = 1000
 net_device_if_name="enp3s0f0np0"        # example: "ens1f1np1"
 net_device_if_name_exception_list=""    # example: "10.10.1.6/enp130s0f0np0,10.10.1.8/enp4s0f0np0"
@@ -38,6 +40,7 @@ static_nr_server_name="us-east-1"
 enable_city_parallelism=True
 enable_inter_city_lat_emulation=True
 is_sample_city=True
+is_spread_city_client=False
 
 results_base_dir="/mydata/latency-results"
 os.makedirs(results_base_dir, exist_ok=True)
@@ -135,7 +138,11 @@ for approach in approaches:
             for idx, city_name in enumerate(city_batch):
                 # distribute the clients in all cities
                 client_count_per_city = get_client_count_per_city(population_ratio_per_city, num_clients, geolocality, city_name)
-                clients = get_uniform_client_per_city(client_count_per_city, city_locations, city_area_sqkm)
+                clients = []
+                if is_spread_city_client:
+                    clients = get_uniform_client_per_city(client_count_per_city, city_locations, city_area_sqkm)
+                else:
+                    clients = get_per_city_clients(client_count_per_city, city_locations)
                 client_distributions_per_city[city_name] = clients
                 
                 # pick server location
@@ -410,7 +417,8 @@ for approach in approaches:
                         client_name = client["City"].replace(" ", "")
                         target_latency_file = f"{results_base_dir}/{approach_lc}_latency_g{geolocality}_b{batch_id}_s{locality_name}_c{client_name}_i{client_id:04d}.tsv"
 
-                        command = f"ab -X 127.0.0.1:8080 -k -g {target_latency_file} -p {request_payload_file} -T application/json -H 'XDN: {deployed_service_name}' -H 'X-Client-Location: {client_lat};{client_lon}' -c 1 -n 100 http://{target_address}:2300{request_endpoint} 2>/dev/null | grep \"Time per request:\""
+                        num_requests = num_req_per_client * int(client['Count'])
+                        command = f"ab -X 127.0.0.1:8080 -k -g {target_latency_file} -p {request_payload_file} -T application/json -H 'XDN: {deployed_service_name}' -H 'X-Client-Location: {client_lat};{client_lon}' -c 1 -n {num_requests} http://{target_address}:2300{request_endpoint} 2>/dev/null | grep \"Time per request:\""
                         print("   ", command)
                         max_repetitions = 3; num_attempt = 0; ret_code = 0
                         while num_attempt < max_repetitions:
