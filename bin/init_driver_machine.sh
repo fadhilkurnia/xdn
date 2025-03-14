@@ -11,6 +11,7 @@ python -m pip install -U requests
 
 ant jar
 ./bin/build_xdn_cli.sh
+sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
 cd eval/xdn_latency_proxy && cargo build --release
 
 echo "Dont forget to initialize machines for xdn cluster using 'xdnd dist-init'"
