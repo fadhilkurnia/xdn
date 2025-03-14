@@ -427,7 +427,10 @@ for approach in approaches:
                         command = f"yes \"yes\" | XDN_CONTROL_PLANE={control_plane_address} xdn service destroy {deployed_service_name}"
                         print("   ", command)
                         ret_code = os.system(command)
-                        assert ret_code == 0
+                        assert ret_code == 0 or ret_code == 100 
+                        # ret_code 100 is for timeout, it is fine to ignore the timeout error (fail open) since we 
+                        # decouple the service name for different locality, also we will destroy the service anyway 
+                        # at the end of the batch.
                     elif approach == "GD":
                         for server_id, server in enumerate(replica_group_info["Replicas"]):
                             node_id = server_id + 1
