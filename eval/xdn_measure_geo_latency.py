@@ -44,8 +44,6 @@ os.makedirs(results_base_dir, exist_ok=True)
 os.makedirs("screen_logs", exist_ok=True)
 
 city_locations = get_client_locations(population_data_file)
-if is_sample_city:
-    city_locations = city_locations[0:3] + city_locations[23:26] + city_locations[47:50]
 population_ratio_per_city = get_population_ratio_per_city(city_locations)
 nf_edge_server_locations = get_server_locations([server_edge_location_file], remove_duplicate_location=True)
 aws_server_locations = get_server_locations([server_aws_location_file])
@@ -124,6 +122,8 @@ for approach in approaches:
 
         #  groups cities into batch, due to the limited number of machines
         city_list = list(population_ratio_per_city.keys())
+        if is_sample_city:
+            city_list = city_list[0:3] + city_list[23:26] + city_list[47:50]
         batch_of_cities = [city_list[i:i + num_service_per_batch] for i in range(0, len(city_list), num_service_per_batch)]
 
         for batch_id, city_batch in enumerate(batch_of_cities):
