@@ -41,6 +41,7 @@ enable_city_parallelism=True
 enable_inter_city_lat_emulation=True
 is_sample_city=True
 is_spread_city_client=False
+is_cache_docker_image=True
 
 results_base_dir="/mydata/latency-results"
 os.makedirs(results_base_dir, exist_ok=True)
@@ -48,7 +49,7 @@ os.makedirs("screen_logs", exist_ok=True)
 
 city_locations = get_client_locations(population_data_file)
 population_ratio_per_city = get_population_ratio_per_city(city_locations)
-nf_edge_server_locations = get_server_locations([server_edge_location_file], remove_duplicate_location=True)
+nf_edge_server_locations = get_server_locations([server_edge_location_file], remove_duplicate_location=False)
 aws_server_locations = get_server_locations([server_aws_location_file])
 gcp_server_locations = get_server_locations([server_gcp_location_file])
 
@@ -101,6 +102,17 @@ assert ret_code == 0, f"cannot find the xdn_latency_proxy program"
 command = "xdn --help > /dev/null"
 ret_code = os.system(command)
 assert ret_code == 0, f"cannot find the xdn program"
+
+# pull the used docker images in all machines, which is helpful to mitigate
+# the pulls limit from Docker Hub.
+if is_cache_docker_image:
+    for i in range(num_cloudlab_machines):
+        command = f'ssh 10.10.1.{i+1} "docker pull fadhilkurnia/xdn-bookcatalog:latest"'
+        res = subprocess.run(command, shell=True, capture_output=True, text=True)
+        assert res.returncode == 0, f"ERROR: {res.stdout}"
+    command = f'ssh {control_plane_address} "docker pull fadhilkurnia/xdn-bookcatalog:latest"'
+    res = subprocess.run(command, shell=True, capture_output=True, text=True)
+    assert res.returncode == 0, f"ERROR: {res.stdout}"
 
 
 # begin measurement with all the parameters
