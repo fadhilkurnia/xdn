@@ -329,6 +329,37 @@ def get_uniform_client_per_city(client_count_per_city, city_locations,
     
     return clients
 
+def get_per_city_clients(client_count_per_city, city_locations):
+    """
+    This is the same as the `get_uniform_client_per_city` function, but we dont 
+    spread the client in each city.
+    """
+    # maps city location by name
+    city_by_name = {}
+    for city in city_locations:
+        city_by_name[city['City']] = city
+
+    # distribute the client in each city
+    clients = []
+    curr_client_id = 0
+    for city_name, num_city_clients in client_count_per_city.items():
+        if num_city_clients == 0:
+            continue
+        city_lat = float(city_by_name[city_name]['Latitude'])
+        city_lon = float(city_by_name[city_name]['Longitude'])
+        
+        curr_client = {
+            'ClientID': curr_client_id, 
+            'City': city_name, 
+            'Count': num_city_clients, 
+            'Latitude': city_lat,
+            'Longitude': city_lon
+        }
+        clients.append(curr_client)
+        curr_client_id += 1
+    
+    return clients
+
 def find_k_closest_servers(servers, reference_server, k):
     """
     Find the k closest servers to server x in arr using a max-heap approach.
