@@ -480,6 +480,8 @@ def get_latency_expectation_for_gd(frontend_locations, datastore_location, c_lat
     return latencies
 
 def printout_lat_stats(latencies, title = None):
+    if len(latencies) == 0:
+        return
     # Calculate and display statistics
     avg_latency = statistics.mean(latencies)
     med_latency = statistics.median(latencies)

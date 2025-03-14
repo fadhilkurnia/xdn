@@ -1,5 +1,6 @@
 import csv
 import math
+import heapq
 import random
 import numpy as np
 from sklearn.cluster import KMeans
@@ -296,6 +297,9 @@ def get_client_count_per_city(population_ratio_per_city, total_clients,
 
 def get_uniform_client_per_city(client_count_per_city, city_locations, 
                                 city_area_sqkm):
+    assert type(client_count_per_city) == dict
+    assert type(city_locations) == list
+    assert type(city_area_sqkm) == int
     # maps city location by name
     city_by_name = {}
     for city in city_locations:
@@ -324,3 +328,164 @@ def get_uniform_client_per_city(client_count_per_city, city_locations,
             curr_client_id += 1
     
     return clients
+
+def find_k_closest_servers(servers, reference_server, k):
+    """
+    Find the k closest servers to server x in arr using a max-heap approach.
+    
+    :param servers: List of servers, each containing:
+        {
+            "Name": str,
+            "Latitude": float,
+            "Longitude": float
+        }
+    :param reference_server: The target server we measure distance against.
+    :param k: The number of closest servers to find.
+    :return: List of the k closest servers, ordered by distance. Example:
+        {
+            "Name": str,
+            "Latitude": float,
+            "Longitude": float,
+            "Distance": float
+        }
+    """
+    if k <= 0:
+        return []
+
+    # If k >= length of arr, simply return all elements
+    if k >= len(servers):
+        for i, s in enumerate(servers):
+            distance = get_distance((reference_server["Latitude"], 
+                                     reference_server["Longitude"]),
+                                    (s["Latitude"], s["Longitude"]))
+            servers[i]["Distance"] = distance
+        return sorted(servers, key=lambda d: d['Distance'])
+    
+    # We'll maintain a max-heap of size k.
+    # In Python, heapq implements a min-heap, so we'll store negative distances
+    # to simulate a max-heap.
+    max_heap = []
+
+    leader_lat = reference_server["Latitude"]
+    leader_lon = reference_server["Longitude"]
+
+    for value in servers:
+        server_lat = value["Latitude"]
+        server_lon = value["Longitude"]
+        distance =  get_distance((leader_lat, leader_lon), (server_lat, server_lon))
+        value["Distance"] = distance
+        
+        # Push a tuple (negative_distance, value)
+        value_tuples = [(k, v) for k, v in value.items()] 
+        heapq.heappush(max_heap, (-distance, value_tuples))
+        
+        # If the heap size exceeds k, pop the element with the largest distance (smallest negative_distance)
+        if len(max_heap) > k:
+            heapq.heappop(max_heap)
+    
+    # The heap now contains k elements with the smallest distances.
+    # Extract the values (second item in the tuple) from the heap
+    closest_values = [dict(item[1]) for item in max_heap]
+
+    closest_values = sorted(closest_values, key=lambda d: d['Distance'])
+    return closest_values
+
+def get_expected_latencies(replica_locations, client_locations, leader_name, 
+                           lat_slowdown_factor):
+    """
+    Given a replica group placement and client spatial distribution, this 
+    function calculates the expected latencies.
+    """
+    assert len(replica_locations) > 0
+    assert len(client_locations) > 0
+    assert lat_slowdown_factor > 0 and lat_slowdown_factor <= 1
+    replica_names = set()
+    for r in replica_locations:
+        replica_names.add(r['Name'])
+    assert leader_name in replica_names
+
+    _EXECUTION_LAT_MS = 2
+    _LCL_COOR_LAT_OVERHEAD_MS = 1.5
+
+    replicas = replica_locations
+    leader = None
+    for r in replicas:
+        if r['Name'] == leader_name:
+            leader = r
+            break
+    assert leader != None
+    
+    # Calculate the estimated coordination latency for the leader.
+    # For leader as the entry replica: leader -> quorum -> leader.
+    # Get RTT to the closest quorum, that is the latency to the furthest
+    # server in the closest quorum. Note that find_k_closest_servers
+    # returns servers ordered by distance (ascending).
+    quorum_size = (len(replicas)+1) // 2
+    closest_peers = find_k_closest_servers(replicas, leader, quorum_size+1)
+    assert len(closest_peers) >= 1
+    furthest_quorum_server = closest_peers[-1]
+    expected_quorum_rtt_lat_ms = get_estimated_rtt_latency(
+                    (furthest_quorum_server["Latitude"], 
+                     furthest_quorum_server["Longitude"]), 
+                    (leader["Latitude"], leader["Longitude"]),
+                    lat_slowdown_factor)
+    # handle edge case for local coordination
+    estimated_coor_lat_ms = expected_quorum_rtt_lat_ms + _LCL_COOR_LAT_OVERHEAD_MS
+    estimated_coor_exec_lat_ms = estimated_coor_lat_ms + _EXECUTION_LAT_MS
+    leader['Latency'] = estimated_coor_exec_lat_ms
+
+    
+    # Iterates over the non-leader entry replicas, for each get the expected 
+    # execution latency, considering the leader-based coordination.
+    for r in replicas:
+
+        # for leader as the entry replica, we did the calculation already.
+        if r["Name"] == leader["Name"]:
+            r['Latency'] = leader['Latency']
+            continue
+
+        # for non-leader as the entry replica: entry -> leader -> quorum -> leader -> entry
+        if r["Name"] != leader["Name"]:
+            entry_leader_rtt_lat_ms = get_estimated_rtt_latency(
+                    (leader["Latitude"], 
+                     leader["Longitude"]), 
+                    (r["Latitude"], r["Longitude"]),
+                    lat_slowdown_factor)
+            estimated_coor_lat_ms = entry_leader_rtt_lat_ms + leader['Latency']
+            estimated_coor_exec_lat_ms = estimated_coor_lat_ms + _EXECUTION_LAT_MS
+            r['Latency'] = estimated_coor_exec_lat_ms
+            continue
+
+        raise Exception("Unknown replica type")
+
+    # Iterates over the client, for each client get the closest replica
+    for i, c in enumerate(client_locations):
+        dummy_client_reference = {'Name': c["City"], 
+                                  'Latitude': c["Latitude"], 
+                                  'Longitude': c["Longitude"]}
+        closest_replica = find_k_closest_servers(replicas, dummy_client_reference, 1)
+        assert len(closest_replica) == 1
+        client_locations[i]["TargetReplica"] = closest_replica[0]['Name']
+
+    replica_by_name = {}
+    for r in replicas:
+        replica_by_name[r["Name"]] = r
+
+    # Iterate over the clients, gather the expected latencies
+    replica_by_name = {}
+    for r in replicas:
+        replica_by_name[r["Name"]] = r
+    latencies = []
+    for c in client_locations:
+        target_entry_replica_name = c["TargetReplica"]
+        target_entry_replica = replica_by_name[target_entry_replica_name]
+        expected_rtt_lat_ms = get_estimated_rtt_latency(
+            (c["Latitude"], c["Longitude"]),
+            (target_entry_replica["Latitude"], target_entry_replica["Longitude"]),
+            lat_slowdown_factor
+        )
+        expected_e2e_lat_ms = target_entry_replica["Latency"] + expected_rtt_lat_ms
+        for i in range(c["Count"]):
+            latencies.append(expected_e2e_lat_ms)
+
+    return latencies
