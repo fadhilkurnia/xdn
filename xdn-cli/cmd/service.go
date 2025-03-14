@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -196,11 +198,11 @@ var ServiceInfoCmd = &cobra.Command{
 			// example format: c240g5-110201.wisc.cloudlab.us/128.105.144.59:2000
 			rawAddressComponents := strings.Split(rawAddressStr, ":")
 			if len(rawAddressComponents) != 2 {
-				panic("unexpected address format")
+				panic(any("unexpected address format"))
 			}
 			rawHostComponents := strings.Split(rawAddressComponents[0], "/")
 			if len(rawHostComponents) != 2 {
-				panic("unexpected address host format")
+				panic(any("unexpected address host format"))
 			}
 			host := rawHostComponents[0]
 			ipAddress := rawHostComponents[1]
@@ -285,15 +287,15 @@ var ServiceDestroyCmd = &cobra.Command{
 	Use:   "destroy <service-name>",
 	Short: "Permanently remove a replicated web service from edge servers",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		infoColorPrint := color.New(color.FgYellow).Add(color.Bold)
 		successColorPrint := color.New(color.FgGreen).Add(color.Bold).Add(color.Underline)
 		errorColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
 
 		err := ValidateControlPlaneConn()
 		if err != nil {
-			fmt.Errorf("Failed to reach the control plane: %s.\n", err.Error())
-			return
+			_ = fmt.Errorf("Failed to reach the control plane: %s.\n", err.Error())
+			return fmt.Errorf("failed to reach the control plane: %s", err.Error())
 		}
 
 		serviceName := args[0]
@@ -321,56 +323,68 @@ var ServiceDestroyCmd = &cobra.Command{
 
 		if !isRemoveConfirmed {
 			fmt.Printf("  '%s' is not removed.\n", serviceName)
-			return
+			return fmt.Errorf("'%s' is not removed", serviceName)
 		}
 
 		controlPlaneHost := GetControlPlaneHostPort()
-		infoEndpoint := fmt.Sprintf("http://%s/?type=DELETE&name=%s",
+		deleteEndpoint := fmt.Sprintf("http://%s/?type=DELETE&name=%s",
 			controlPlaneHost, serviceName)
 		fmt.Printf("Removing service '")
-		infoColorPrint.Printf("%s", serviceName)
+		_, _ = infoColorPrint.Printf("%s", serviceName)
 		fmt.Printf("' ...\n")
-		resp, err := http.Get(infoEndpoint)
-		if err != nil {
-			fmt.Errorf("Failed to destroy the service, error: %s", err.Error())
-			return
+		client := http.Client{
+			Timeout: 3 * time.Second,
 		}
-
+		resp, err := client.Get(deleteEndpoint)
+		if err != nil {
+			fmt.Printf(" ")
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" ")
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				fmt.Println("request timed out:", err)
+				os.Exit(100)
+				return netErr
+			}
+			fmt.Printf("Failed to destroy the service, error: %s", err.Error())
+			return fmt.Errorf("failed to destroy the service, error: %s", err.Error())
+		}
 		if resp.StatusCode != 200 {
 			fmt.Printf(" ")
-			errorColorPrint.Printf("ERROR")
+			_, _ = errorColorPrint.Printf("ERROR")
 			fmt.Printf(" ")
 			fmt.Printf("Failed to remove the service, received non success code.\n")
-			return
+			return fmt.Errorf("failed to remove the service, received http non success code %d", resp.StatusCode)
 		}
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			fmt.Printf(" ")
-			errorColorPrint.Printf("ERROR")
+			_, _ = errorColorPrint.Printf("ERROR")
 			fmt.Printf(" ")
 			fmt.Printf("Failed to remove the service: \n%s\n", err.Error())
-			return
+			return fmt.Errorf("failed to remove the service: %s", err.Error())
 		}
 
 		bodyStr := string(body)
 		if strings.Contains(bodyStr, "\"FAILED\":true") {
 			fmt.Printf(" ")
-			errorColorPrint.Printf("ERROR")
+			_, _ = errorColorPrint.Printf("ERROR")
 			fmt.Printf(" ")
 			fmt.Printf("Failed to remove the service: \n")
 			var jsonMap map[string]interface{}
-			json.Unmarshal([]byte(bodyStr), &jsonMap)
+			_ = json.Unmarshal([]byte(bodyStr), &jsonMap)
 			errMsgIf := jsonMap["RESPONSE_MESSAGE"]
 			errMsg := errMsgIf.(string)
 			fmt.Printf(" %s\n", errMsg)
-			return
+			return fmt.Errorf("failed to remove the service: %s", errMsg)
 		}
 
-		successColorPrint.Printf("SUCCESS")
+		_, _ = successColorPrint.Printf("SUCCESS")
 		fmt.Printf(": service ")
-		infoColorPrint.Printf("%s", serviceName)
+		_, _ = infoColorPrint.Printf("%s", serviceName)
 		fmt.Printf(" is removed successfully.\n")
+
+		return nil
 	},
 }
 
