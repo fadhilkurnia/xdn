@@ -378,6 +378,7 @@ for approach in approaches:
                             print("   ", command)
                             ret_code = os.system(command)
                             assert ret_code == 0
+                        time.sleep(5)
                         pass
                     elif approach == "ED":
                         assert len(replica_group_info["Replicas"]) == 1
