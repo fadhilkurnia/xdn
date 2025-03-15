@@ -2,6 +2,7 @@ import os
 import re
 import csv
 import statistics
+import numpy as np
 
 latency_result_dir_path = "/mydata/latency-results"
 latency_files = os.listdir(latency_result_dir_path)
@@ -59,7 +60,24 @@ with open(target_aggr_filename, 'w') as target_aggragate_file:
     target_aggragate_file.close()
     
     print()
-    for approach in approaches:
-        for geolocality in geolocalities:
-            avg_latency = statistics.mean(approach_stats[approach][geolocality])
-            print(f">>> {approach} g={geolocality} avg_lat={avg_latency:.2f}ms")
+    print()
+    geolocalities = list(geolocalities)
+    geolocalities.sort(reverse=True)
+    approaches = list(approaches)
+    approaches.sort(reverse=True)
+    for geolocality in geolocalities:
+        for approach in approaches:
+            latencies = approach_stats[approach][geolocality]
+            if len(latencies) == 0:
+                continue
+            latencies = np.array(latencies)
+            avg_latency = statistics.mean(latencies)
+            med_latency = statistics.median(latencies)
+            var_latency = statistics.variance(latencies)
+            min_latency = min(latencies)
+            max_latency = max(latencies)
+            p90_latency = np.percentile(latencies, 90)
+            p95_latency = np.percentile(latencies, 95)
+            p99_latency = np.percentile(latencies, 99)
+            print(f'>> Approach={approach:5}\t g={geolocality}\t avg={avg_latency:6.2f}ms var={var_latency:8.2f} | min={min_latency:6.2f}ms max={max_latency:6.2f}ms | p50={med_latency:6.2f}ms p90={p90_latency:6.2f}ms p95={p95_latency:6.2f}ms p99={p99_latency:6.2f}ms')
+        print()
