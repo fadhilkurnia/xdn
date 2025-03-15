@@ -186,18 +186,31 @@ def inject_server_latency(servers, net_device, slowdown,
         expected_latency_ms = get_estimated_latency(distance_km, slowdown)  # one-way delay
         expected_rtt_latency_ms = expected_latency_ms * 2.0                 # double for rtt
         if enable_minimum_latency:
-            expected_latency_ms = max(expected_rtt_latency_ms, MINIMUM_INTER_SERVER_RTT_LATENCY_MS)
+            expected_rtt_latency_ms = max(expected_rtt_latency_ms, MINIMUM_INTER_SERVER_RTT_LATENCY_MS)
 
         src_network = servers[src_name]["host"]
         dst_network = servers[dst_name]["host"]
 
+        max_trials = 5
+
         # observe the current ping latency to get the offset
         command = f"ssh {src_network} ping -c 3 {dst_network} | tail -1 | awk '{{print $4}}' | cut -d '/' -f 2"
         proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        offset_latency_ms = float(proc_result.stdout.strip())
+        offset_latency_ms = 0.0
+        for curr_trial in range(max_trials):
+            try:
+                proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                offset_latency_ms = float(proc_result.stdout.strip())
+                break
+            except:
+                if curr_trial == max_trials-1:
+                    raise Exception(f"Failed to observe latency after {max_trials} attempts.")
+                else:
+                    time.sleep(10 ** (curr_trial))
+                    continue
 
         # calculate the injected latency
-        injected_latency_ms = expected_latency_ms - offset_latency_ms
+        injected_latency_ms = expected_rtt_latency_ms - offset_latency_ms
         injected_latency_ms = max(injected_latency_ms, 0.0)
 
         # handle device exception
@@ -206,7 +219,7 @@ def inject_server_latency(servers, net_device, slowdown,
             target_net_device = device_exception_map[src_network]
 
         command = f"ssh {src_network} sudo tcset {target_net_device} --delay {injected_latency_ms}ms --network {dst_network} --add"
-        print(f">>> {src_network} <-> {dst_network}: exp={expected_latency_ms:.3f}ms off={offset_latency_ms:.3f}ms dly={injected_latency_ms:.3f}ms\n" + ">> " + command)
+        print(f">>> {src_network} <-> {dst_network}: exp={expected_rtt_latency_ms:.3f}ms off={offset_latency_ms:.3f}ms dly={injected_latency_ms:.3f}ms\n" + ">> " + command)
         proc_result = subprocess.run(command, shell=True, capture_output=True, text=True)
         if proc_result.returncode != 0:
             print("ERROR :(")
@@ -295,9 +308,10 @@ def printout_injected_latency(servers, slowdown, enable_minimum_latency=False):
             lat2, lon2 = servers[s2]["geolocation"]
             distance_km = haversine_distance(lat1, lon1, lat2, lon2)
             latency_ms = get_estimated_latency(distance_km, slowdown)
+            rtt_latency_ms = latency_ms * 2.0
             if enable_minimum_latency:
-                latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
-            print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t{distance_km:8.2f} km \t ({latency_ms} ms)")
+                rtt_latency_ms = max(rtt_latency_ms, MINIMUM_INTER_SERVER_RTT_LATENCY_MS)
+            print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t{distance_km:8.2f} km \t ({rtt_latency_ms} ms)")
 
 def verify_injected_latency(servers, slowdown, enable_minimum_latency=False):
     """
@@ -317,8 +331,9 @@ def verify_injected_latency(servers, slowdown, enable_minimum_latency=False):
         lat2, lon2 = servers[s2]["geolocation"]
         distance_km = haversine_distance(lat1, lon1, lat2, lon2)
         latency_ms = get_estimated_latency(distance_km, slowdown)
+        rtt_latency_ms = latency_ms * 2.0
         if enable_minimum_latency:
-            latency_ms = max(latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
+            rtt_latency_ms = max(rtt_latency_ms, MINIMUM_INTER_SERVER_RTT_LATENCY_MS)
 
         max_trials = 5
 
@@ -353,9 +368,9 @@ def verify_injected_latency(servers, slowdown, enable_minimum_latency=False):
                     continue
 
         avg_lat_ms = (float(latency_h1_ms) + float(latency_h2_ms)) / 2
-        diff_lat_ms = avg_lat_ms - latency_ms
+        diff_lat_ms = avg_lat_ms - rtt_latency_ms
         
-        print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t({latency_h1_ms:6.3f} ms) & ({latency_h2_ms:6.3f} ms)\t vs. ({latency_ms:6.3f} ms)\t diff={diff_lat_ms:.2f}ms")
+        print(f" >> {s1}/{h1} <-> {s2}/{h2}:\t({latency_h1_ms:6.3f} ms) & ({latency_h2_ms:6.3f} ms)\t vs. ({rtt_latency_ms:6.3f} ms)\t diff={diff_lat_ms:.2f}ms")
         
         expectation_map[f"{i}:{j}"] = diff_lat_ms
         return
