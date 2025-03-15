@@ -422,7 +422,7 @@ def find_k_closest_servers(servers, reference_server, k):
     return closest_values
 
 def get_expected_latencies(replica_locations, client_locations, leader_name, 
-                           lat_slowdown_factor):
+                           lat_slowdown_factor, is_report_per_city=False):
     """
     Given a replica group placement and client spatial distribution, this 
     function calculates the expected latencies.
@@ -507,6 +507,7 @@ def get_expected_latencies(replica_locations, client_locations, leader_name,
     for r in replicas:
         replica_by_name[r["Name"]] = r
     latencies = []
+    latencies_per_city = {}
     for c in client_locations:
         target_entry_replica_name = c["TargetReplica"]
         target_entry_replica = replica_by_name[target_entry_replica_name]
@@ -518,5 +519,15 @@ def get_expected_latencies(replica_locations, client_locations, leader_name,
         expected_e2e_lat_ms = target_entry_replica["Latency"] + expected_rtt_lat_ms
         for i in range(c["Count"]):
             latencies.append(expected_e2e_lat_ms)
+
+        if is_report_per_city:
+            city_name = c['City']
+            if city_name not in latencies_per_city:
+                latencies_per_city[city_name] = []
+            for i in range(c['Count']):
+                latencies_per_city[city_name].append(expected_e2e_lat_ms)
+
+    if is_report_per_city:
+        return latencies_per_city
 
     return latencies
