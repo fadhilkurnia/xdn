@@ -10,7 +10,7 @@ import subprocess
 
 DEFAULT_NET_DEV_INTERFACE_NAME = 'eth1'
 DEFAULT_CONFIG_FILE = 'conf/gigapaxos.cloudlab-virtual.properties'
-MINIMUM_INTER_SERVER_LATENCY_MS=1
+MINIMUM_INTER_SERVER_RTT_LATENCY_MS=1
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """
@@ -183,9 +183,10 @@ def inject_server_latency(servers, net_device, slowdown,
         lat1, lon1 = servers[src_name]["geolocation"]
         lat2, lon2 = servers[dst_name]["geolocation"]
         distance_km = haversine_distance(lat1, lon1, lat2, lon2)
-        expected_latency_ms = get_estimated_latency(distance_km, slowdown)
+        expected_latency_ms = get_estimated_latency(distance_km, slowdown)  # one-way delay
+        expected_rtt_latency_ms = expected_latency_ms * 2.0                 # double for rtt
         if enable_minimum_latency:
-            expected_latency_ms = max(expected_latency_ms, MINIMUM_INTER_SERVER_LATENCY_MS)
+            expected_latency_ms = max(expected_rtt_latency_ms, MINIMUM_INTER_SERVER_RTT_LATENCY_MS)
 
         src_network = servers[src_name]["host"]
         dst_network = servers[dst_name]["host"]
