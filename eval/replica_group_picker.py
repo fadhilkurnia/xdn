@@ -184,6 +184,10 @@ def get_client_locations(client_location_filename, num_clients = None):
             latitude = float(parts[0])
             longitude = float(parts[1])
             
+            timezone = ""
+            if "timezone" in row:
+                timezone = row["timezone"]
+            
             city_name = row["city"]
             if city_name in parsed_cities:
                 raise Exception(f"Found duplicate city of {city_name}")
@@ -195,6 +199,7 @@ def get_client_locations(client_location_filename, num_clients = None):
                 "Count": int(row["population"]),
                 "Latitude": latitude,
                 "Longitude": longitude,
+                "Timezone": timezone,
             })
 
     # sort clients by their counts
