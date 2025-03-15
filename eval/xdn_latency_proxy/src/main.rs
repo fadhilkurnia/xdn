@@ -103,8 +103,7 @@ async fn proxy_handler(
             client_longitude = client_location[1].trim().parse::<f64>().ok();
         }
 
-        // Calculates the injected client -> replica latency (given the slowdown factor).
-        //   The injected latency is the (ping latency / 2).
+        // Gets server location from the config, given the url.
         let mut server_latitude: Option<f64> = None;
         let mut server_longitude: Option<f64> = None;
         let target_server = req.uri().host().unwrap();
@@ -116,7 +115,8 @@ async fn proxy_handler(
             server_longitude = Some(server_location.longitude);
         }
 
-        // Calculates the emulated latency, given the client and server location
+        // Calculates the emulated latency, given the client and server location.
+        //   The injected latency is the ping latency of client <=> replica (two way delays).
         if client_latitude.is_some() && client_longitude.is_some() &&
             server_latitude.is_some() && server_longitude.is_some() {
             let client_server_distance =
@@ -126,7 +126,8 @@ async fn proxy_handler(
             let emulated_latency_ms =
                 utils::get_emulated_latency(client_server_distance, slowdown_factor)
                     .unwrap_or(0.0);
-            request_delay_ns = (emulated_latency_ms * 1_000_000.0) as u64;
+            let emulated_rtt_latency_ms = emulated_latency_ms * 2.0;      // double for Rtt
+            request_delay_ns = (emulated_rtt_latency_ms * 1_000_000.0) as u64; // converts to ns
 
             log::debug!("Path: Client({:.2};{:.2}) <=> Replica:{}({:.2};{:.2}) \
             dist={:.2}m slw={:.2}x",
