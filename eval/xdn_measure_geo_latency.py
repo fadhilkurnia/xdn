@@ -112,7 +112,7 @@ if is_cache_docker_image:
         assert res.returncode == 0, f"ERROR: {res.stdout}"
     command = f'ssh {control_plane_address} "docker pull fadhilkurnia/xdn-bookcatalog:latest"'
     res = subprocess.run(command, shell=True, capture_output=True, text=True)
-    assert res.returncode == 0, f"ERROR: {res.stdout}"
+    assert res.returncode == 0, f"ERROR: out={res.stdout} err={res.stderr}"
 
 
 # begin measurement with all the parameters
@@ -384,12 +384,15 @@ for approach in approaches:
                         assert len(replica_group_info["Replicas"]) == 1
                         replica = replica_group_info["Leader"]
                         address = server_address_by_name[replica["Name"]]
+                        locality_name = city_name.replace(" ", "")
+                        log_filename = f'{screen_session_base_name}_l{locality_name}.log'
                         command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && npm install > /dev/null 2>&1 && fuser -k 2300/tcp"'
                         ret_code = os.system(command)
-                        command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && nohup npx wrangler dev --ip {address} --port 2300 --log-level error" &'
+                        command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && nohup npx wrangler dev --ip {address} --port 2300 > {log_filename}" &'
                         print("   ", command)
                         ret_code = os.system(command)
                         assert ret_code == 0
+                        time.sleep(5)
 
                     # get the closest replica for each client
                     target_replica_by_cid = {}
@@ -473,6 +476,12 @@ for approach in approaches:
                             ret_code = os.system(command)
                             assert ret_code == 0
                             command = f'ssh {address} rm -rf xdn/eval/durable_objects/bookcatalog/.wrangler/state/'
+                            print("   ", command)
+                            ret_code = os.system(command)
+                            assert ret_code == 0
+                            locality_name = city_name.replace(" ", "")
+                            log_filename = f'{screen_session_base_name}_l{locality_name}.log'
+                            command = f'scp -q -o LogLevel=QUIET {address}:~/xdn/eval/durable_objects/bookcatalog/{log_filename} screen_logs/{log_filename} && ssh {address} "rm -rf xdn/eval/durable_objects/bookcatalog/{log_filename}"'
                             print("   ", command)
                             ret_code = os.system(command)
                             assert ret_code == 0
