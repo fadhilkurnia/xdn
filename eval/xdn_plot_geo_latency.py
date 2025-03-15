@@ -53,7 +53,7 @@ with open(target_aggr_filename, 'w') as target_aggragate_file:
                 med_latency = statistics.median(latencies_ms)
                 var_latency = statistics.variance(latencies_ms)
 
-                print(f">>> {approach} g={geolocality} city={locality_name}\t: avg_lat={avg_latency:.2f}ms\t variance={var_latency:.2f}")
+                print(f">>> {approach:5} g={geolocality} city={locality_name:11}\t: avg_lat={avg_latency:.2f}ms\t variance={var_latency:.2f}")
                 target_aggragate_file.write(f"{approach}, {geolocality}, {locality_name}, {avg_latency:.2f}, {var_latency:.2f}\n")
                 approach_stats[approach][geolocality].append(avg_latency)
     
