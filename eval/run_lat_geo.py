@@ -246,18 +246,27 @@ for approach in approaches:
             
             # emulate and verify inter-server latency
             if enable_inter_city_lat_emulation:
-                print(f" > emulating edge inter-server latencies, net_dev_if={net_device_if_name}, exception={net_device_if_name_exception_list}")
-                net_dev_exception_flag=""
-                if net_device_if_name_exception_list != "":
-                    net_dev_exception_flag = f"--device-exceptions={net_device_if_name_exception_list}"
-                command = f"python ../bin/xdnd-emulate-latency.py --device={net_device_if_name} --config={updated_cfg_file} {net_dev_exception_flag}"
-                print("   ", command)
-                ret_code = os.system(command)
-                assert ret_code == 0
-                command = f"python ../bin/xdnd-emulate-latency.py --mode=verify --config={updated_cfg_file}"
-                print("   ", command)
-                ret_code = os.system(command)
-                assert ret_code == 0
+                max_attempt = 3; curr_attempt = 0; is_success = False
+                while curr_attempt < max_attempt and not is_success:
+                    try:
+                        print(f" > emulating edge inter-server latencies, net_dev_if={net_device_if_name}, exception={net_device_if_name_exception_list}")
+                        net_dev_exception_flag=""
+                        if net_device_if_name_exception_list != "":
+                            net_dev_exception_flag = f"--device-exceptions={net_device_if_name_exception_list}"
+                        command = f"python ../bin/xdnd-emulate-latency.py --device={net_device_if_name} --config={updated_cfg_file} {net_dev_exception_flag}"
+                        print("   ", command)
+                        ret_code = os.system(command)
+                        assert ret_code == 0
+                        command = f"python ../bin/xdnd-emulate-latency.py --mode=verify --config={updated_cfg_file}"
+                        print("   ", command)
+                        ret_code = os.system(command)
+                        assert ret_code == 0
+                        is_success = True
+                    except:
+                        time.sleep(10 ** (curr_attempt))
+                        curr_attempt += 1
+                    finally:
+                        assert curr_attempt < max_attempt, f'Failed to emulate and verify latency after {max_attempt} attempts'
             
             # start latency-injector proxy in the background
             proxy_screen_name = screen_session_base_name + "_prx"
