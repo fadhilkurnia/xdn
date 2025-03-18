@@ -2,8 +2,12 @@
 # split clients into 4 timezone
 # create client distribution for every 30 minutes following the sinusoidal distribution
 
+import os
+import re
 import copy
+import time
 import statistics
+import subprocess
 import numpy as np
 import matplotlib.pyplot as plt
 from replica_group_picker import get_client_locations
@@ -50,18 +54,29 @@ population_data_file = "location_distributions/client_us_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
 server_aws_region_location_file = "location_distributions/server_aws_region.csv"
 server_gcp_region_location_file = "location_distributions/server_gcp_region.csv"
+gigapaxos_template_config_file = "../conf/gigapaxos.xdnlat.template.properties"
+request_payload_file="measurement_payload.json"
 
+approaches = ['XDN', 'CD', 'ED', 'GD']
+num_cloudlab_machines = 12
+control_plane_address="10.10.1.11"
+net_device_if_name="enp3s0f0np0"        # example: "ens1f1np1"
+net_device_if_name_exception_list=""    # example: "10.10.1.6/enp130s0f0np0,10.10.1.8/enp4s0f0np0"
+control_plane_http_port="3300"
 max_num_clients = 1000
 num_replicas = 3
-c_lat_slowdown_factor = 0.32258064516
 static_nr_server = 'us-east-1'
+c_lat_slowdown_factor = 0.32258064516
+is_run_real_measurement=False
 is_print_client_temporal_dist=False
-approaches = ['XDN', 'CD', 'ED', 'GD']
+enable_inter_city_lat_emulation=True
 
 city_locations = get_client_locations(population_data_file)
-nf_edge_server_locations = get_server_locations([server_edge_location_file], remove_duplicate_location=True)
 aws_region_servers = get_server_locations([server_aws_region_location_file])
 gcp_region_servers = get_server_locations([server_gcp_region_location_file])
+nf_edge_server_locations = get_server_locations([server_edge_location_file], 
+                                                remove_duplicate_location=False,
+                                                remove_nonredundant_city_servers=True)
 
 # prepare static location for CD
 cd_replica_group = []
@@ -71,12 +86,23 @@ for s in aws_region_servers:
         break
 
 # provide replica group options for multi-region datastore (e.g., spanner)
+# deduplicates menu in spanner with same region name
 spanner_placement_menu_info = get_spanner_placement_menu(gcp_region_servers)
 spanner_placement_menu = spanner_placement_menu_info["PlacementMenu"]
 spanner_placement_menu_per_leader = spanner_placement_menu_info["PlacementMenuByLeader"]
 gcp_server_by_name = {}
 for server in gcp_region_servers:
     gcp_server_by_name[server['Name']] = server
+spanner_replica_group_by_menu = {}
+for menu, placement in spanner_placement_menu.items():
+    replicas = []
+    for server_name in placement:
+        replicas.append(gcp_server_by_name[server_name].copy())
+    for i, server in enumerate(replicas):
+        replicas[i]["Name"] = server["Name"].replace("-", "_")
+    replicas[0]["Name"] = replicas[0]["Name"] + "_a"
+    replicas[1]["Name"] = replicas[1]["Name"] + "_b"
+    spanner_replica_group_by_menu[menu] = {"Replicas": replicas, "Leader": replicas[0].copy()}
 spanner_leader_locations = []
 for leader_name, menu in spanner_placement_menu_per_leader.items():
     server = gcp_server_by_name[leader_name]
@@ -161,6 +187,13 @@ print()
 #                           Expectation Calculation
 # ==============================================================================
 
+xdn_required_servers = []
+cd_required_servers = []
+ed_required_servers = []
+gd_required_servers = []
+
+required_server_by_name = {}
+
 # do numerical latency measurement for each approach
 raw_result = []
 for approach in approaches:
@@ -169,6 +202,7 @@ for approach in approaches:
     active_cities = set()           # capture all cities with clients
 
     ed_replica_group_info = None
+    gd_replica_group_info = None
     
     for timestamp in timestamps:
         clients = client_list_by_timestamp[timestamp]
@@ -207,16 +241,17 @@ for approach in approaches:
                 replica_group_info = ed_replica_group_info
         
         elif approach == 'GD':
-            replica_group_info = get_heuristic_replicas_placement(spanner_leader_locations, 
-                                                                  clients, 
-                                                                  1, 
-                                                                  is_silent=True)
-            placement_menu_name = spanner_placement_menu_per_leader[replica_group_info['Leader']['Name']]
-            replica_group_member = spanner_placement_menu[placement_menu_name]
-            replica_group = []
-            for member in replica_group_member:
-                replica_group.append(gcp_server_by_name[member])
-            replica_group_info['Replicas'] = replica_group
+            # in GD/MultiRegion/Spanner we assume no automatic reconfiguration, thus we keep
+            # the first replica group placement info.
+            replica_group_info = gd_replica_group_info
+            if gd_replica_group_info == None:
+                gd_replica_group_info = get_heuristic_replicas_placement(spanner_leader_locations, 
+                                                                         clients, 
+                                                                         1, 
+                                                                         is_silent=True)
+                placement_menu_name = spanner_placement_menu_per_leader[gd_replica_group_info['Leader']['Name']]
+                gd_replica_group_info = copy.deepcopy(spanner_replica_group_by_menu[placement_menu_name])
+                replica_group_info = gd_replica_group_info
         
         else:
             raise Exception(f'Unknown approach {approach}')
@@ -224,7 +259,7 @@ for approach in approaches:
         # gather the required servers
         for r in replica_group_info['Replicas']:
             required_servers.add(r['Name'])
-        
+            required_server_by_name[r['Name']] = r
         
         # get the expected latency, grouped by city
         latencies_per_city = get_expected_latencies(replica_group_info['Replicas'], 
@@ -267,6 +302,15 @@ for approach in approaches:
     print()
     print(f">>> required servers [{len(required_servers)}]: {required_servers}")
     print(f">>> active cities    [{len(active_cities)}]: {active_cities}")
+    
+    if approach == "XDN":
+        xdn_required_servers = required_servers
+    elif approach == "GD":
+        gd_required_servers = required_servers
+    elif approach == "ED":
+        ed_required_servers = required_servers
+    elif approach == "CD":
+        cd_required_servers = required_servers
 
 # ==============================================================================
 
@@ -282,12 +326,162 @@ for approach in approaches:
 #   - Start the cluster
 #   - Start latency injector for client
 
-for approach in approaches:
+if is_run_real_measurement:
 
-    config_filename = f'temporal_xdn_{approach}.properties'
+    # ensure we have enough machines for XDN
+    assert len(xdn_required_servers) <= num_cloudlab_machines, f"Not enough machines available to emulate XDN"
 
-    for timestamp in timestamps:
-        pass
+    # verifying the required programs
+    command = "ls xdn_latency_proxy/target/release/xdn_latency_proxy"
+    ret_code = os.system(command)
+    assert ret_code == 0, f"cannot find the xdn_latency_proxy program"
+    command = "xdn --help > /dev/null"
+    ret_code = os.system(command)
+    assert ret_code == 0, f"cannot find the xdn program"
+
+    for approach in approaches:
+
+        print(f">> Start measurement for approach={approach}")
+
+        # pre-process the used servers
+        config_filename = f'temporal_{approach}.properties'
+        required_server_names = []
+        if approach == "XDN":
+            required_server_names = xdn_required_servers
+        elif approach == "GD":
+            required_server_names = gd_required_servers
+        elif approach == "CD":
+            required_server_names = cd_required_servers
+        elif approach == "ED":
+            required_server_names = ed_required_servers
+        
+        # prepare config string, including assigning address for each server name
+        machine_counter = 1
+        server_name_address=""
+        server_name_geolocation=""
+        server_address_by_name = {}
+        for server_name in required_server_names:
+            assert server_name in required_server_by_name
+            server = required_server_by_name[server_name]
+            server_name_address += f"active.{server_name}=10.10.1.{machine_counter}:2000\n"
+            server_name_geolocation += f"active.{server_name}.geolocation=\"{server['Latitude']},{server['Longitude']}\"\n"
+            server_address_by_name[server_name] = f"10.10.1.{machine_counter}"
+            machine_counter += 1
+        assert machine_counter <= num_cloudlab_machines + 1
+
+        # replace gigapaxos config file
+        print(" > updating gigapaxos config file")
+        template_cfg_content = None
+        with open(gigapaxos_template_config_file, 'r') as file:
+            template_cfg_content = file.read()
+        udpated_cfg_content = re.sub(
+            "___________PLACEHOLDER_ACTIVES_ADDRESS___________", 
+            server_name_address, 
+            template_cfg_content)
+        udpated_cfg_content = re.sub(
+            "___________PLACEHOLDER_ACTIVES_GEOLOCATION___________", 
+            server_name_geolocation, 
+            udpated_cfg_content)
+        udpated_cfg_content = re.sub(
+            "___________PLACEHOLDER_RC_HOST___________", 
+            control_plane_address, 
+            udpated_cfg_content)
+        updated_cfg_file = f"../conf/{config_filename}"
+        with open(updated_cfg_file, 'w') as file:
+            file.write(udpated_cfg_content)
+
+        # emulate and verify inter-server latency
+        if enable_inter_city_lat_emulation:
+            max_attempt = 3; curr_attempt = 0; is_success = False
+            while curr_attempt < max_attempt and not is_success:
+                try:
+                    print(f" > emulating edge inter-server latencies, net_dev_if={net_device_if_name}, exception={net_device_if_name_exception_list}")
+                    net_dev_exception_flag=""
+                    if net_device_if_name_exception_list != "":
+                        net_dev_exception_flag = f"--device-exceptions={net_device_if_name_exception_list}"
+                    command = f"python ../bin/xdnd-emulate-latency.py --device={net_device_if_name} --config={updated_cfg_file} {net_dev_exception_flag}"
+                    print("   ", command)
+                    ret_code = os.system(command)
+                    assert ret_code == 0
+                    command = f"python ../bin/xdnd-emulate-latency.py --mode=verify --config={updated_cfg_file}"
+                    print("   ", command)
+                    ret_code = os.system(command)
+                    assert ret_code == 0
+                    is_success = True
+                except:
+                    time.sleep(10 ** (curr_attempt))
+                    curr_attempt += 1
+                finally:
+                    assert curr_attempt < max_attempt, f'Failed to emulate and verify latency after {max_attempt} attempts'
+
+        # clear any remaining running xdn or other processes
+        print(f" > resetting the measurement cluster:")
+        for i in range(num_cloudlab_machines):
+            os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 2000/tcp")
+            os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 2300/tcp")
+            os.system(f"ssh 10.10.1.{i+1} sudo rm -rf /tmp/gigapaxos")
+            os.system(f"ssh 10.10.1.{i+1} docker network prune --force > /dev/null 2>&1")
+            os.system(f"ssh 10.10.1.{i+1} sudo fuser -k 4001/tcp")
+            os.system(f"ssh 10.10.1.{i+1} sudo rm -rf /tmp/rqlite_data")
+            os.system(f"ssh 10.10.1.{i+1} 'containers=$(docker ps -a -q); if [ -n \"$containers\" ]; then docker stop $containers; fi'")
+            ret_code = os.system(f'ssh 10.10.1.{i+1} "rm -rf xdn/eval/durable_objects/bookcatalog/.wrangler/state/"')
+            assert ret_code == 0
+        os.system(f"ssh {control_plane_address} sudo fuser -k 3000/tcp")
+        os.system(f"ssh {control_plane_address} sudo rm -rf /tmp/gigapaxos")
+
+        # start latency-injector proxy in the background in this driver machine
+        screen_session_base_name=f"temporal_scr_{approach}"
+        proxy_screen_name = screen_session_base_name + "_prx"
+        print(f" > starting client's latency injector, location_config={updated_cfg_file}")
+        command = f"fuser -s -k 8080/tcp"
+        print("   ", command)
+        os.system(command)
+        command = f"screen -S {proxy_screen_name} -X quit > /dev/null 2>&1"
+        print("   ", command)
+        os.system(command)
+        os.system(f"rm -f screen_logs/{proxy_screen_name}.log")
+        command = f"RUST_LOG=debug screen -L -Logfile screen_logs/{proxy_screen_name}.log -S {proxy_screen_name} -d -m ./xdn_latency_proxy_go/latency-injector -config={updated_cfg_file}"
+        print("   ", command)
+        ret_code = os.system(command)
+        assert ret_code == 0
+
+        # deploys xdn in the prepared machines
+        print(f" > starting the measurement cluster:")
+        for server_name, address in server_address_by_name.items():
+            print(f"   + {server_name}: {address}")
+        if approach == "XDN" or approach == "CD" or approach == "XDNNR":
+            gp_screen_name = screen_session_base_name + "_gp"
+            command = f"screen -S {gp_screen_name} -X quit  > /dev/null 2>&1"
+            print("   ", command)
+            os.system(command)
+            os.system(f"rm -f screen_logs/{gp_screen_name}.log")
+            command = f"screen -L -Logfile screen_logs/{gp_screen_name}.log -S {gp_screen_name} -d -m bash -c '../bin/gpServer.sh -DgigapaxosConfig={updated_cfg_file} start all; exec bash'"
+            print("   ", command)
+            ret_code = os.system(command)
+            assert ret_code == 0
+            time.sleep(120)
+        elif approach == "GD" or approach == "ED":
+            # do nothing as we will start rqlite or durable object later
+            pass
+
+        # deploy the service
+        print(f"   > deploying the service")
+        deployed_service_name=f"bookcatalog"
+        if approach == "XDN" or approach == "CD":
+            command = f"XDN_CONTROL_PLANE={control_plane_address} xdn launch {deployed_service_name} --image=fadhilkurnia/xdn-bookcatalog --deterministic=true --consistency=linearizability --state=/app/data/"
+            print("   ", command)
+            res = subprocess.run(command, shell=True, capture_output=True, text=True)
+            assert res.returncode == 0
+            output = res.stdout
+            assert "Error" not in output, f"output: {output}"
+            time.sleep(60)
+        elif approach == "GD" or approach == "ED":
+            # TODO
+            pass
+        
+        for timestamp in timestamps:
+            clients = client_list_by_timestamp[timestamp]
+            pass
 
 # ==============================================================================
 
@@ -392,7 +586,7 @@ for idx, ax, latencies, title, color in zip(idxs, axes_flat, all_latencies, titl
     
     # Remove left/right padding
     ax.set_xlim(left=0.5, right=50.5)
-    ax.set_ylim(bottom=0, top=90)
+    ax.set_ylim(bottom=0, top=120)
     
     # Titles and labels
     ax.text(1, 65, title, fontsize=12)
