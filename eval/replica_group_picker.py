@@ -348,7 +348,7 @@ def get_latency_expectation(replica_locations, client_locations, leader_name,
     # server in the closest quorum. Note that find_k_closest_servers
     # returns servers ordered by distance.
     quorum_size = (len(replicas)+1) // 2
-    closest_peers = find_k_closest_servers(replicas, leader, quorum_size+1)
+    closest_peers = find_k_closest_servers(replicas, leader, quorum_size)
     assert len(closest_peers) >= 1
     furthest_quorum_server = closest_peers[-1]
     expected_quorum_rtt_lat_ms = get_estimated_rtt_latency(
