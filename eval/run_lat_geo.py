@@ -49,9 +49,11 @@ os.makedirs("screen_logs", exist_ok=True)
 
 city_locations = get_client_locations(population_data_file)
 population_ratio_per_city = get_population_ratio_per_city(city_locations)
-nf_edge_server_locations = get_server_locations([server_edge_location_file], remove_duplicate_location=False)
 aws_server_locations = get_server_locations([server_aws_location_file])
 gcp_server_locations = get_server_locations([server_gcp_location_file])
+nf_edge_server_locations = get_server_locations([server_edge_location_file], 
+                                                remove_duplicate_location=False,
+                                                remove_nonredundant_city_servers=True)
 
 # replace dash with underscore as gigapaxos does not support dash in the server name
 for i, server in enumerate(nf_edge_server_locations):
@@ -268,20 +270,6 @@ for approach in approaches:
                     finally:
                         assert curr_attempt < max_attempt, f'Failed to emulate and verify latency after {max_attempt} attempts'
             
-            # start latency-injector proxy in the background
-            proxy_screen_name = screen_session_base_name + "_prx"
-            print(f" > starting client's latency injector, location_config={updated_cfg_file}")
-            command = f"fuser -s -k 8080/tcp"
-            print("   ", command)
-            os.system(command)
-            command = f"screen -S {proxy_screen_name} -X quit > /dev/null 2>&1"
-            print("   ", command)
-            os.system(command)
-            command = f"RUST_LOG=debug screen -S {proxy_screen_name} -d -m ./xdn_latency_proxy/target/release/xdn_latency_proxy {updated_cfg_file}"
-            print("   ", command)
-            ret_code = os.system(command)
-            assert ret_code == 0
-
             # clear any remaining running xdn or other processes
             print(f" > resetting the measurement cluster:")
             for i in range(num_cloudlab_machines):
@@ -296,6 +284,21 @@ for approach in approaches:
                 assert ret_code == 0
             os.system(f"ssh {control_plane_address} sudo fuser -k 3000/tcp")
             os.system(f"ssh {control_plane_address} sudo rm -rf /tmp/gigapaxos")
+            
+            # start latency-injector proxy in the background in this driver machine
+            proxy_screen_name = screen_session_base_name + "_prx"
+            print(f" > starting client's latency injector, location_config={updated_cfg_file}")
+            command = f"fuser -s -k 8080/tcp"
+            print("   ", command)
+            os.system(command)
+            command = f"screen -S {proxy_screen_name} -X quit > /dev/null 2>&1"
+            print("   ", command)
+            os.system(command)
+            os.system(f"rm -f screen_logs/{proxy_screen_name}.log")
+            command = f"RUST_LOG=debug screen -L -Logfile screen_logs/{proxy_screen_name}.log -S {proxy_screen_name} -d -m ./xdn_latency_proxy_go/latency-injector -config={updated_cfg_file}"
+            print("   ", command)
+            ret_code = os.system(command)
+            assert ret_code == 0
 
             # deploys xdn in the prepared machines
             print(f" > starting the measurement cluster:")
