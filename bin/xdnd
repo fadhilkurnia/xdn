@@ -283,7 +283,7 @@ function install_dependencies() {
   CMD_DESC+=("install npm")
   CMD+=("sudo apt-get install -y npm")
   CMD_DESC+=("update node version to latest stable")
-  CMD+=("sudo npm install -g n && sudo n stable && hash -r")
+  CMD+=("sudo npm install -g n && sudo n stable && hash -r && sudo npm install --save-dev wrangler@4")
 
   for i in "${!CMD_DESC[@]}"; do
     desc=${CMD_DESC[$i]}
