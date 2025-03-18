@@ -52,10 +52,15 @@ with open(target_aggr_filename, 'w') as target_aggragate_file:
                 avg_latency = statistics.mean(latencies_ms)
                 med_latency = statistics.median(latencies_ms)
                 var_latency = statistics.variance(latencies_ms)
+                min_latency = min(latencies_ms)
+                max_latency = max(latencies_ms)
+                p90_latency = np.percentile(latencies_ms, 90)
+                p95_latency = np.percentile(latencies_ms, 95)
+                p99_latency = np.percentile(latencies_ms, 99)
 
-                print(f">>> {approach:5} g={geolocality} city={locality_name:11}\t: avg_lat={avg_latency:.2f}ms\t variance={var_latency:.2f}")
+                print(f">>> {approach:5} g={geolocality} city={locality_name:11}\t: avg_lat={avg_latency:.2f}ms\t variance={var_latency:3.2f} | min={min_latency:6.2f}ms max={max_latency:6.2f}ms | p50={med_latency:6.2f}ms p90={p90_latency:6.2f}ms p95={p95_latency:6.2f}ms p99={p99_latency:6.2f}ms")
                 target_aggragate_file.write(f"{approach}, {geolocality}, {locality_name}, {avg_latency:.2f}, {var_latency:.2f}\n")
-                approach_stats[approach][geolocality].append(avg_latency)
+                approach_stats[approach][geolocality].extend(latencies_ms)
     
     target_aggragate_file.close()
     
