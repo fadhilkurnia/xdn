@@ -104,7 +104,9 @@ def get_spanner_placement_menu(gcp_region_server_locations):
     
     return {"PlacementMenu": spanner_placement_menu, "PlacementMenuByLeader": spanner_placement_menu_by_leader}
 
-def get_server_locations(server_location_filenames, remove_duplicate_location=False):
+def get_server_locations(server_location_filenames, 
+                         remove_duplicate_location=False, 
+                         remove_nonredundant_city_servers=False):
     server_names = set()
     servers = []
     for filename in server_location_filenames:
@@ -118,6 +120,8 @@ def get_server_locations(server_location_filenames, remove_duplicate_location=Fa
                     server_names.add(server_name)
                 servers.append({
                     "Name": server_name,
+                    "City": row['City'],
+                    "Country": row['Country'],
                     "Latitude": float(row["Latitude"]),
                     "Longitude": float(row["Longitude"]),
                 })
@@ -133,6 +137,19 @@ def get_server_locations(server_location_filenames, remove_duplicate_location=Fa
             visited_locations.add(curr_location)
             unique_server_locations.append(s)
         servers = unique_server_locations
+
+    # remove server location with only one server available
+    if remove_nonredundant_city_servers:
+        server_count_per_city = {}
+        for s in servers:
+            if s['City'] not in server_count_per_city:
+                server_count_per_city[s['City']] = 0
+            server_count_per_city[s['City']] += 1
+        redundant_server_locations = []
+        for s in servers:
+            if server_count_per_city[s['City']] > 1:
+                redundant_server_locations.append(s)
+        servers = redundant_server_locations
 
     return servers
 
@@ -452,7 +469,7 @@ def get_expected_latencies(replica_locations, client_locations, leader_name,
     # server in the closest quorum. Note that find_k_closest_servers
     # returns servers ordered by distance (ascending).
     quorum_size = (len(replicas)+1) // 2
-    closest_peers = find_k_closest_servers(replicas, leader, quorum_size+1)
+    closest_peers = find_k_closest_servers(replicas, leader, quorum_size)
     assert len(closest_peers) >= 1
     furthest_quorum_server = closest_peers[-1]
     expected_quorum_rtt_lat_ms = get_estimated_rtt_latency(
