@@ -28,7 +28,6 @@
 
 import statistics
 import numpy as np
-from replica_group_picker import get_server_locations
 from replica_group_picker import get_client_locations
 from replica_group_picker import get_heuristic_replicas_placement
 from replica_group_picker import get_latency_expectation
@@ -36,7 +35,9 @@ from utils import get_spanner_placement_menu
 from utils import get_population_ratio_per_city
 from utils import get_client_count_per_city
 from utils import get_uniform_client_per_city
+from utils import get_per_city_clients
 from utils import get_expected_latencies
+from utils import get_server_locations
 
 # define constant variables
 population_data_file = "location_distributions/client_us_metro_population.csv"
@@ -52,15 +53,19 @@ num_clients = 1000
 num_replicas = 3
 c_lat_slowdown_factor = 0.32258064516
 is_keep_duplicate_edge_server_location=True
-is_sample_city=True
+is_remove_non_redundant_city=True
+is_sample_city=False
+is_spread_city_client=False
 
 print(">> is_sample_city ", is_sample_city)
 
 # read and parse servers
-edge_server_locations = get_server_locations([server_edge_location_file])
 cf_edge_server_locations = get_server_locations([server_cf_edge_location_file])
 aws_region_servers = get_server_locations([server_aws_region_location_file])
 gcp_region_servers = get_server_locations([server_gcp_region_location_file])
+edge_server_locations = get_server_locations([server_edge_location_file], 
+                                             remove_duplicate_location=(not is_keep_duplicate_edge_server_location),
+                                             remove_nonredundant_city_servers=is_remove_non_redundant_city)
 
 # provide replica group options for spanner
 spanner_placement_menu_info = get_spanner_placement_menu(gcp_region_servers)
@@ -77,24 +82,12 @@ for leader_name, menu in spanner_placement_menu_per_leader.items():
 # read and parse clients
 city_locations = get_client_locations(population_data_file)
 if is_sample_city:
+    # TODO: sample should be in post ratio calculation
     city_locations = city_locations[0:3] + city_locations[23:26] + city_locations[47:50]
 population_ratio_per_city = get_population_ratio_per_city(city_locations)
 city_by_name = {}
 for city in city_locations:
     city_by_name[city['City']] = city
-
-# remove servers with redundant location
-if not is_keep_duplicate_edge_server_location:
-    visited_locations = set()
-    unique_edge_server_locations = []
-    for s in edge_server_locations:
-        curr_location = f"{s['Latitude']}:{s['Longitude']}"
-        if curr_location in visited_locations:
-            continue
-        visited_locations.add(curr_location)
-        unique_edge_server_locations.append(s)
-    edge_server_locations = unique_edge_server_locations
-
 
 for geolocality in geolocalities:
     # prepare containers for expectation results
@@ -111,7 +104,11 @@ for geolocality in geolocalities:
         # assigning local and non-local clients
         local_city_name = picked_city
         client_count_per_city = get_client_count_per_city(population_ratio_per_city, num_clients, geolocality, local_city_name)
-        clients = get_uniform_client_per_city(client_count_per_city, city_locations, city_area_sqkm)
+        clients = []
+        if is_spread_city_client:
+            clients = get_uniform_client_per_city(client_count_per_city, city_locations, city_area_sqkm)
+        else:
+            clients = get_per_city_clients(client_count_per_city, city_locations)
 
         # STEP-2: Choosing where to put our replicas, for each approach
         for approach in approaches:
@@ -188,6 +185,8 @@ for geolocality in geolocalities:
         p99_latency = np.percentile(latencies, 99)
         print(f'>> Approach={approach:5}\t g={geolocality}\t avg={avg_latency:6.2f}ms var={var_latency:8.2f} | min={min_latency:6.2f}ms max={max_latency:6.2f}ms | p50={med_latency:6.2f}ms p90={p90_latency:6.2f}ms p95={p95_latency:6.2f}ms p99={p99_latency:6.2f}ms')
     
+    approaches = list(approaches)
+    approaches.sort(reverse=True)
     for approach in approaches:
         printout_stats(approach, all_city_latencies_by_approach[approach])
     print()
