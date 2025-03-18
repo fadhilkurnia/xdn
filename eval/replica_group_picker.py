@@ -141,25 +141,6 @@ def find_k_closest_servers(servers, reference_server, k):
     closest_values = sorted(closest_values, key=lambda d: d['Distance'])
     return closest_values
 
-def get_server_locations(server_location_filenames):
-    server_names = set()
-    servers = []
-    for filename in server_location_filenames:
-        with open(filename, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                server_name = row["Name"]
-                if server_name in server_names:
-                    raise Exception(f"Found duplicate server name of {server_name}")
-                else:
-                    server_names.add(server_name)
-                servers.append({
-                    "Name": server_name,
-                    "Latitude": float(row["Latitude"]),
-                    "Longitude": float(row["Longitude"]),
-                })
-    return servers
-
 def get_client_locations(client_location_filename, num_clients = None):
     """
     Find the city client from an external csv file. The expected header is:
