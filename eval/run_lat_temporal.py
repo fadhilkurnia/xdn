@@ -52,7 +52,7 @@ def school_hours_distribution(t, mean_local=12, std_hours=2.0, tz_offset=0):
 
     return dist
 
-population_data_file = "location_distributions/client_world_metro_population.csv"
+population_data_file = "location_distributions/client_us_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
 server_aws_region_location_file = "location_distributions/server_aws_region.csv"
 server_gcp_region_location_file = "location_distributions/server_gcp_region.csv"
