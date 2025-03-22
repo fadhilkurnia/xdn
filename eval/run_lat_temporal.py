@@ -6,12 +6,14 @@ import os
 import re
 import copy
 import time
+import json
 import statistics
 import subprocess
 import numpy as np
 import matplotlib.pyplot as plt
 from replica_group_picker import get_client_locations
 from replica_group_picker import get_heuristic_replicas_placement
+from replica_group_picker import find_k_closest_servers
 from utils import get_server_locations
 from utils import get_expected_latencies
 from utils import get_spanner_placement_menu
@@ -50,7 +52,7 @@ def school_hours_distribution(t, mean_local=12, std_hours=2.0, tz_offset=0):
 
     return dist
 
-population_data_file = "location_distributions/client_us_metro_population.csv"
+population_data_file = "location_distributions/client_world_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
 server_aws_region_location_file = "location_distributions/server_aws_region.csv"
 server_gcp_region_location_file = "location_distributions/server_gcp_region.csv"
@@ -67,6 +69,8 @@ max_num_clients = 1000
 num_replicas = 3
 static_nr_server = 'us-east-1'
 c_lat_slowdown_factor = 0.32258064516
+request_endpoint="/api/books"
+is_cache_docker_image=True
 is_run_real_measurement=False
 is_print_client_temporal_dist=False
 enable_inter_city_lat_emulation=True
@@ -78,6 +82,16 @@ nf_edge_server_locations = get_server_locations([server_edge_location_file],
                                                 remove_duplicate_location=False,
                                                 remove_nonredundant_city_servers=True)
 
+# replace dash with underscore as gigapaxos does not support dash in the server name
+for i, server in enumerate(nf_edge_server_locations):
+    nf_edge_server_locations[i]["Name"] = nf_edge_server_locations[i]["Name"].replace("-", "_")
+for i, server in enumerate(aws_region_servers):
+    aws_region_servers[i]["Name"] = aws_region_servers[i]["Name"].replace("-", "_")
+gcp_og_server_locations = copy.deepcopy(gcp_region_servers)
+for i, server in enumerate(gcp_region_servers):
+    gcp_region_servers[i]["Name"] = gcp_region_servers[i]["Name"].replace("-", "_")
+static_nr_server = static_nr_server.replace("-", "_")
+
 # prepare static location for CD
 cd_replica_group = []
 for s in aws_region_servers:
@@ -87,17 +101,17 @@ for s in aws_region_servers:
 
 # provide replica group options for multi-region datastore (e.g., spanner)
 # deduplicates menu in spanner with same region name
-spanner_placement_menu_info = get_spanner_placement_menu(gcp_region_servers)
+spanner_placement_menu_info = get_spanner_placement_menu(gcp_og_server_locations)
 spanner_placement_menu = spanner_placement_menu_info["PlacementMenu"]
 spanner_placement_menu_per_leader = spanner_placement_menu_info["PlacementMenuByLeader"]
-gcp_server_by_name = {}
-for server in gcp_region_servers:
-    gcp_server_by_name[server['Name']] = server
+gcp_og_server_by_name = {}
+for server in gcp_og_server_locations:
+    gcp_og_server_by_name[server["Name"]] = server
 spanner_replica_group_by_menu = {}
 for menu, placement in spanner_placement_menu.items():
     replicas = []
     for server_name in placement:
-        replicas.append(gcp_server_by_name[server_name].copy())
+        replicas.append(gcp_og_server_by_name[server_name].copy())
     for i, server in enumerate(replicas):
         replicas[i]["Name"] = server["Name"].replace("-", "_")
     replicas[0]["Name"] = replicas[0]["Name"] + "_a"
@@ -105,7 +119,7 @@ for menu, placement in spanner_placement_menu.items():
     spanner_replica_group_by_menu[menu] = {"Replicas": replicas, "Leader": replicas[0].copy()}
 spanner_leader_locations = []
 for leader_name, menu in spanner_placement_menu_per_leader.items():
-    server = gcp_server_by_name[leader_name]
+    server = gcp_og_server_by_name[leader_name]
     spanner_leader_locations.append(server.copy())
 
 # get the timezone
@@ -188,9 +202,12 @@ print()
 # ==============================================================================
 
 xdn_required_servers = []
+xdnnr_required_servers = []
 cd_required_servers = []
 ed_required_servers = []
 gd_required_servers = []
+
+replica_group_info_per_approach_tz = {}
 
 required_server_by_name = {}
 
@@ -203,8 +220,11 @@ for approach in approaches:
 
     ed_replica_group_info = None
     gd_replica_group_info = None
+
+    replica_group_info_per_approach_tz[approach] = {}
     
     for timestamp in timestamps:
+        replica_group_info_per_approach_tz[approach][timestamp] = None
         clients = client_list_by_timestamp[timestamp]
 
         # observe the client spatial distribution at current timestamp
@@ -225,6 +245,12 @@ for approach in approaches:
                                                                   num_replicas, 
                                                                   is_silent=True)
         
+        elif approach == 'XDNNR':
+            replica_group_info = get_heuristic_replicas_placement(nf_edge_server_locations, 
+                                                                  clients, 
+                                                                  1, 
+                                                                  is_silent=True)
+
         elif approach == 'CD':
             replica_group_info = {'Replicas': cd_replica_group, 
                                   'Leader': {'Name': static_nr_server}}
@@ -257,6 +283,7 @@ for approach in approaches:
             raise Exception(f'Unknown approach {approach}')
         
         # gather the required servers
+        replica_group_info_per_approach_tz[approach][timestamp] = copy.deepcopy(replica_group_info)
         for r in replica_group_info['Replicas']:
             required_servers.add(r['Name'])
             required_server_by_name[r['Name']] = r
@@ -278,6 +305,12 @@ for approach in approaches:
             if len(latencies) > 0:
                 city_name_no_space = city_name.replace(" ", "")
                 avg_lat_ms = statistics.mean(latencies)
+                med_latency = statistics.median(latencies)
+                min_latency = min(latencies)
+                max_latency = max(latencies)
+                p90_latency = np.percentile(latencies, 90)
+                p95_latency = np.percentile(latencies, 95)
+                p99_latency = np.percentile(latencies, 99)
                 
                 print(f"         city={city_name_no_space:15}\t avg_lat_ms={avg_lat_ms:5.2f}ms")
                 active_cities.add(city_name_no_space)
@@ -291,7 +324,14 @@ for approach in approaches:
                         'Longitude': city['Longitude'],
                         'CityName': city_name,
                         'NumClient': city['Count'],
-                        'AvgLatMilisecond': avg_lat_ms}
+                        'AvgLatMilisecond': avg_lat_ms,
+                        'MinLatMilisecond': min_latency,
+                        'MaxLatMilisecond': max_latency,
+                        'P50LatMilisecond': med_latency,
+                        'P90LatMilisecond': p90_latency,
+                        'P95LatMilisecond': p95_latency,
+                        'P99LatMilisecond': p99_latency,
+                        }
                 raw_result.append(data)
 
             latency_across_cities.extend(latencies)
@@ -305,12 +345,25 @@ for approach in approaches:
     
     if approach == "XDN":
         xdn_required_servers = required_servers
+    elif approach == "XDNNR":
+        xdnnr_required_servers = required_servers
     elif approach == "GD":
         gd_required_servers = required_servers
     elif approach == "ED":
         ed_required_servers = required_servers
     elif approach == "CD":
         cd_required_servers = required_servers
+    else:
+        raise Exception(f'Unknown approach {approach}')
+
+# write the raw results into a csv file, with the following format:
+#   timestamp_utc, approach, city_lat, city_lon, city_name, client_count, avg_lat_ms, min_lat_ms, max_lat_ms, p50_lat_ms, p90_lat_ms, p95_lat_ms, p99_lat_ms
+result_filename = 'temporal_latencies_expected.csv'
+with open(result_filename, 'w') as result_file:
+    result_file.write('timestamp_utc,approach,city_lat,city_lon,city_name,client_count,avg_lat_ms,min_lat_ms,max_lat_ms,p50_lat_ms,p90_lat_ms,p95_lat_ms,p99_lat_ms\n')
+    for data in raw_result:
+        result_file.write(f"{data['Timestamp']},{data['Approach']},{data['Latitude']},{data['Longitude']},{data['CityName']},{data['NumClient']},{data['AvgLatMilisecond']},{data['MinLatMilisecond']},{data['MaxLatMilisecond']},{data['P50LatMilisecond']},{data['P90LatMilisecond']},{data['P95LatMilisecond']},{data['P99LatMilisecond']}\n")
+    result_file.close()
 
 # ==============================================================================
 
@@ -319,7 +372,7 @@ for approach in approaches:
 #                        Actual Measurement on Simulation
 # ==============================================================================
 
-# TODO: ACTUAL MEASUREMENT IN SIMULATED WAN
+# ACTUAL MEASUREMENT IN SIMULATED WAN
 # - Prepare the cluster for XDN
 #   - Prepare the config file
 #   - Enable latency emulation
@@ -328,32 +381,57 @@ for approach in approaches:
 
 if is_run_real_measurement:
 
+    print()
+    print()
+    print()
+    print()
+
     # ensure we have enough machines for XDN
     assert len(xdn_required_servers) <= num_cloudlab_machines, f"Not enough machines available to emulate XDN"
 
     # verifying the required programs
-    command = "ls xdn_latency_proxy/target/release/xdn_latency_proxy"
+    command = "ls xdn_latency_proxy_go/latency-injector"
     ret_code = os.system(command)
     assert ret_code == 0, f"cannot find the xdn_latency_proxy program"
     command = "xdn --help > /dev/null"
     ret_code = os.system(command)
     assert ret_code == 0, f"cannot find the xdn program"
+    command = "mkdir -p results_lat_temporal"
+    ret_code = os.system(command)
+    assert ret_code == 0, f"cannot prepare directory for latency results"
+
+    # pull the used docker images in all machines, which is helpful to mitigate
+    # the pulls limit from Docker Hub.
+    if is_cache_docker_image:
+        for i in range(num_cloudlab_machines):
+            command = f'ssh 10.10.1.{i+1} "docker pull fadhilkurnia/xdn-bookcatalog:latest"'
+            res = subprocess.run(command, shell=True, capture_output=True, text=True)
+            assert res.returncode == 0, f"ERROR: {res.stdout}"
+        command = f'ssh {control_plane_address} "docker pull fadhilkurnia/xdn-bookcatalog:latest"'
+        res = subprocess.run(command, shell=True, capture_output=True, text=True)
+        assert res.returncode == 0, f"ERROR: out={res.stdout} err={res.stderr}"
 
     for approach in approaches:
 
+        print(f"\n\n>> ======================================================================")
         print(f">> Start measurement for approach={approach}")
+        print(f">> ======================================================================")
 
         # pre-process the used servers
         config_filename = f'temporal_{approach}.properties'
         required_server_names = []
         if approach == "XDN":
             required_server_names = xdn_required_servers
+        elif approach == "XDNNR":
+            required_server_names = xdnnr_required_servers
         elif approach == "GD":
             required_server_names = gd_required_servers
         elif approach == "CD":
             required_server_names = cd_required_servers
         elif approach == "ED":
             required_server_names = ed_required_servers
+        else:
+            raise Exception(f'Unknown approach {approach}')
         
         # prepare config string, including assigning address for each server name
         machine_counter = 1
@@ -363,9 +441,10 @@ if is_run_real_measurement:
         for server_name in required_server_names:
             assert server_name in required_server_by_name
             server = required_server_by_name[server_name]
-            server_name_address += f"active.{server_name}=10.10.1.{machine_counter}:2000\n"
-            server_name_geolocation += f"active.{server_name}.geolocation=\"{server['Latitude']},{server['Longitude']}\"\n"
-            server_address_by_name[server_name] = f"10.10.1.{machine_counter}"
+            escaped_server_name = server_name.replace("-", "_") # convert '-' into '_' as gigapaxos does not support '-'
+            server_name_address += f"active.{escaped_server_name}=10.10.1.{machine_counter}:2000\n"
+            server_name_geolocation += f"active.{escaped_server_name}.geolocation=\"{server['Latitude']},{server['Longitude']}\"\n"
+            server_address_by_name[escaped_server_name] = f"10.10.1.{machine_counter}"
             machine_counter += 1
         assert machine_counter <= num_cloudlab_machines + 1
 
@@ -467,7 +546,7 @@ if is_run_real_measurement:
         # deploy the service
         print(f"   > deploying the service")
         deployed_service_name=f"bookcatalog"
-        if approach == "XDN" or approach == "CD":
+        if approach == "XDN" or approach == "CD" or approach == "XDNNR":
             command = f"XDN_CONTROL_PLANE={control_plane_address} xdn launch {deployed_service_name} --image=fadhilkurnia/xdn-bookcatalog --deterministic=true --consistency=linearizability --state=/app/data/"
             print("   ", command)
             res = subprocess.run(command, shell=True, capture_output=True, text=True)
@@ -476,146 +555,186 @@ if is_run_real_measurement:
             assert "Error" not in output, f"output: {output}"
             time.sleep(60)
         elif approach == "GD" or approach == "ED":
-            # TODO
+            # do nothing as we will start them on reconfiguration later
             pass
+
+        prev_ts_leader = None
         
         for timestamp in timestamps:
             clients = client_list_by_timestamp[timestamp]
+
+            # skip this timestamp if there is no clients
+            total_clients = 0
+            for c in clients:
+                total_clients += c['Count']
+            if total_clients == 0:
+                continue
+
+            # reconfigure replica group
+            replica_group_info = replica_group_info_per_approach_tz[approach][timestamp]
+            assert replica_group_info is not None, f"Unknown replica group info for approach {approach} at ts={timestamp}"
+            leader_name = replica_group_info['Leader']['Name']
+            leader_address = server_address_by_name[leader_name]
+            if approach == "XDN" or approach == "XDNNR" or approach == "CD":
+                #  only reconfigure if the replica group/leader changes
+                if prev_ts_leader == None or prev_ts_leader != replica_group_info['Leader']['Name']:
+                    prev_ts_leader = leader_name
+                    replica_names = []
+                    for replica in replica_group_info["Replicas"]:
+                        replica_names.append(replica['Name'])
+                    command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{deployed_service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
+                    print("   ", command)
+                    res = subprocess.run(command, shell=True, capture_output=True, text=True)
+                    assert res.returncode == 0
+                    output = res.stdout
+                    print("   ", output)
+                    output_json = json.loads(output)
+                    if "FAILED" in output_json:
+                        assert output_json["FAILED"] == False
+                    time.sleep(90)
+            elif approach == "GD":
+                assert len(replica_group_info["Replicas"]) == 3
+                #  only reconfigure if the replica group/leader changes
+                if prev_ts_leader == None or prev_ts_leader != replica_group_info['Leader']['Name']:
+                    prev_ts_leader = leader_name
+                    for server_id, server in enumerate(replica_group_info["Replicas"]):
+                        node_id = server_id + 1
+                        address = server_address_by_name[server["Name"]]
+                        command = f'ssh {leader_address} nohup rqlited -node-id={node_id} -http-addr={leader_address}:4001 -raft-addr={leader_address}:4002 /tmp/rqlite_data > /dev/null 2>&1 &'
+                        if server["Name"] != leader_name:
+                            command = f'ssh {address} nohup rqlited -node-id={node_id} -http-addr={address}:4001 -raft-addr={address}:4002 -join={leader_address}:4002 /tmp/rqlite_data > /dev/null 2>&1 &'
+                        print("   ", command)
+                        ret_code = os.system(command)
+                        assert ret_code == 0
+                        time.sleep(5)
+                    for server_id, server in enumerate(replica_group_info["Replicas"]):
+                        node_id = server_id + 1
+                        address = server_address_by_name[server["Name"]]
+                        command = f'ssh {address} docker run --rm --detach --env DB_TYPE=rqlite --env DB_HOST={address} --publish 2300:80 --name bookcatalog_gd_{node_id} fadhilkurnia/xdn-bookcatalog > /dev/null 2>&1'
+                        print("   ", command)
+                        ret_code = os.system(command)
+                        assert ret_code == 0
+                    time.sleep(5)
+                pass
+            elif approach == "ED":
+                assert len(replica_group_info["Replicas"]) == 1
+                #  only reconfigure if the replica group/leader changes
+                if prev_ts_leader == None or prev_ts_leader != replica_group_info['Leader']['Name']:
+                    prev_ts_leader = leader_name
+                    replica = replica_group_info["Leader"]
+                    address = server_address_by_name[replica["Name"]]
+                    log_filename = f'{screen_session_base_name}_t{timestamp}.log'
+                    command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && npm install > /dev/null 2>&1 && fuser -k 2300/tcp"'
+                    ret_code = os.system(command)
+                    command = f'ssh {address} "cd xdn/eval/durable_objects/bookcatalog && nohup npx wrangler dev --ip {address} --port 2300 > {log_filename}" &'
+                    print("   ", command)
+                    ret_code = os.system(command)
+                    assert ret_code == 0
+                    time.sleep(5)
+                pass
+
+            # get the closest replica for each client
+            target_replica_address_by_city_client_name = {}
+            for client in clients:
+                client_city_name = client['City'].replace(" ", "")
+                client_lat = float(client["Latitude"])
+                client_lon = float(client["Longitude"])
+                closest_servers = find_k_closest_servers(replica_group_info["Replicas"], {"Latitude": client_lat, "Longitude": client_lon}, 1)
+                assert len(closest_servers) == 1
+                closest_server_name = closest_servers[0]['Name']
+                assert closest_server_name in server_address_by_name, f"Unknown address for server {closest_server_name}"
+                target_address = server_address_by_name[closest_server_name]
+                target_replica_address_by_city_client_name[client_city_name] = target_address
+
+            # start small warmup
+            command = f"ab -X 127.0.0.1:8080 -k -p {request_payload_file} -T application/json -H 'XDN: {deployed_service_name}' -c 3 -n 30 http://{leader_address}:2300{request_endpoint} 2>/dev/null | grep \"Time per request:\""
+            print("\n   ", command)
+            max_repetitions = 3; num_attempt = 0; ret_code = 0
+            while num_attempt < max_repetitions:
+                ret_code = os.system(command)
+                if ret_code == 0:
+                    break
+                num_attempt += 1
+                if num_attempt < max_repetitions:
+                    time.sleep(10 ** (num_attempt))
+            assert ret_code == 0, f"Warmup failed after {max_repetitions} attempts."
+
+            print(f">> running measurement of approach={approach} at time={timestamp}")
+            for client in clients:
+                # TODO run all clients in parallel
+                num_city_clients = client['Count']
+                city_name = client['City'].replace(" ", "")
+                if num_city_clients == 0:
+                    continue
+                num_requests = 10 * client['Count'] # 10 requests per client
+                client_lat = client['Latitude']
+                client_lon = client['Longitude']
+                target_address = target_replica_address_by_city_client_name[city_name]
+                target_latency_file = f"results_lat_temporal/lat_temporal_{approach}_t{timestamp}_c{city_name}.tsv"
+                command = f"ab -X 127.0.0.1:8080 -k -p {request_payload_file} -g {target_latency_file} -T application/json -H 'XDN: {deployed_service_name}' -c 1 -n {num_requests} -H 'X-Client-Location: {client_lat};{client_lon}' http://{target_address}:2300{request_endpoint} 2>/dev/null | grep \"Time per request:\""
+                print(f"  - {city_name:15}: {command}")
+                max_repetitions = 3; num_attempt = 0; ret_code = 0
+                while num_attempt < max_repetitions:
+                    ret_code = os.system(command)
+                    if ret_code == 0:
+                        break
+                    num_attempt += 1
+                    if num_attempt < max_repetitions:
+                        time.sleep(10 ** (num_attempt))
+                assert ret_code == 0, f"Command failed after {max_repetitions} attempts."
+
             pass
 
-# ==============================================================================
-
-
-# ===== DATA PROCESSING ========================================================
-# write the raw results into csv file, with the following format:
-#   timestamp_utc, approach, city_lat, city_lon, city_name, client_count, avg_lat_ms
-result_filename = 'temporal_latencies.csv'
-with open(result_filename, 'w') as result_file:
-    result_file.write('timestamp_utc, approach, city_lat, city_lon, city_name, client_count, avg_lat_ms\n')
-    for data in raw_result:
-        result_file.write(f"{data['Timestamp']},{data['Approach']},{data['Latitude']},{data['Longitude']},{data['CityName']},{data['NumClient']},{data['AvgLatMilisecond']}\n")
-    result_file.close()
-
-# sort city by latitude and longitude, from east to west.
-# assign metro ID consistent across different approaches
-# TODO: handle other approaches
-sorted_cities = sorted(city_locations, key=lambda d: (d['Longitude'], d['Latitude']), reverse=True)
-for i in range(len(sorted_cities)):
-    city_name = sorted_cities[i]['City']
-    sorted_cities[i]['MetroID'] = i + 1
-sorted_city_names = []
-for city in sorted_cities:
-    sorted_city_names.append(city['City'])
-
-latencies_xdn = []
-latencies_gd = []
-latencies_cd = []
-latencies_ed = []
-for approach in approaches:
-    per_city_latencies = {}
-    for data in raw_result:
-        if data['Approach'] != approach:
-            continue
-        city_name = data['CityName']
-        if city_name not in per_city_latencies:
-            per_city_latencies[city_name] = []
-        for i in range(data['NumClient']):
-            per_city_latencies[city_name].append(data['AvgLatMilisecond'])
-    
-    per_city_avg_lat_ms = {}
-    for city_name, latencies in per_city_latencies.items():
-        if len(latencies) > 0:
-            avg_lat_ms = statistics.mean(latencies)
-            per_city_avg_lat_ms[city_name] = avg_lat_ms
-
-    for i in range(len(sorted_cities)):
-        city_name = sorted_cities[i]['City']
-        curr_city_avg_lat_ms = 0
-        if city_name in per_city_avg_lat_ms:
-            curr_city_avg_lat_ms = per_city_avg_lat_ms[city_name]
-        
-        if approach == 'XDN':
-            latencies_xdn.append(curr_city_avg_lat_ms)
-        elif approach == 'CD':
-            latencies_cd.append(curr_city_avg_lat_ms)
-        elif approach == 'ED':
-            latencies_ed.append(curr_city_avg_lat_ms)
-        elif approach == 'GD':
-            latencies_gd.append(curr_city_avg_lat_ms)
+        # destroy the service after we iterate through all the timestamps
+        print(f" > removing the deployed service")
+        if approach == "XDN" or approach == "CD" or approach == "XDNNR":
+            command = f"yes \"yes\" | XDN_CONTROL_PLANE={control_plane_address} xdn service destroy {deployed_service_name}"
+            print("   ", command)
+            ret_code = os.system(command)
+            assert ret_code == 0 or ret_code == 100 
+            # ret_code 100 is for timeout, it is fine to ignore the timeout error (fail open) since we 
+            # decouple the service name for different locality, also we will destroy the service anyway 
+            # at the end of the batch.
+        elif approach == "GD":
+            for server_id, server in enumerate(replica_group_info["Replicas"]):
+                node_id = server_id + 1
+                address = server_address_by_name[server["Name"]]
+                command = f'ssh {address} docker stop bookcatalog_gd_{node_id}'
+                print("   ", command)
+                ret_code = os.system(command)
+                assert ret_code == 0
+                ret_code = os.system(f"ssh {address} sudo fuser -k 4001/tcp")
+                assert ret_code == 0
+                ret_code = os.system(f"ssh {address} sudo rm -rf /tmp/rqlite_data")
+                assert ret_code == 0
+            pass
+        elif approach == "ED":
+            for server_id, server in enumerate(replica_group_info["Replicas"]):
+                address = server_address_by_name[server["Name"]]
+                command = f'ssh {address} fuser -k 2300/tcp'
+                print("   ", command)
+                ret_code = os.system(command)
+                assert ret_code == 0
+                command = f'ssh {address} rm -rf xdn/eval/durable_objects/bookcatalog/.wrangler/state/'
+                print("   ", command)
+                ret_code = os.system(command)
+                assert ret_code == 0
+                log_filename = f'{screen_session_base_name}_t*.log'
+                command = f'scp -q -o LogLevel=QUIET "{address}:~/xdn/eval/durable_objects/bookcatalog/{log_filename}" screen_logs && ssh {address} "rm -rf \'xdn/eval/durable_objects/bookcatalog/{log_filename}\'"'
+                print("   ", command)
+                ret_code = os.system(command)
+                assert ret_code == 0
         else:
-            raise Exception(f'Unsupported approach {approach}')
+            raise Exception(f"Unknown approach {approach}")
+
+        # destroy the cluster
+        print(f" > removing the xdn cluster")
+        command = f"../bin/gpServer.sh -DgigapaxosConfig={updated_cfg_file} forceclear all > /dev/null 2>&1"
+        print("   ", command)
+        ret_code = os.system(command)
+        assert ret_code == 0
+
+        time.sleep(60)
 
 
-# actually plot the data
-num_metros = len(sorted_cities)
-x = 1 + np.arange(num_metros)
-
-# Example data (replace with real latency data)
-latencies_1 = latencies_gd
-latencies_2 = latencies_cd
-latencies_3 = latencies_ed
-latencies_4 = latencies_xdn
-
-# Create figure + 4×1 subplots
-fig, axes = plt.subplots(4, 1, figsize=(4.5, 5))
-
-# List of data arrays for convenience
-all_latencies = [latencies_1, latencies_2, latencies_3, latencies_4]
-titles = ['Multi Region', 'Static', 'Durable Object', 'XDN']
-colors = ['red', 'green', 'orange', 'gold']
-
-# Flatten axes so we can iterate easily
-axes_flat = axes.flat
-idxs = np.arange(4)
-
-for idx, ax, latencies, title, color in zip(idxs, axes_flat, all_latencies, titles, colors):
-    # Plot the bar chart
-    ax.bar(x, latencies, color=color, alpha=0.4)
-
-    if idx == 3:
-        updated_sorted_city_names = []
-        for i, name in enumerate(sorted_city_names):
-            if i % 2 == 0:
-                updated_sorted_city_names.append(name)
-            else:
-                updated_sorted_city_names.append("")
-        ax.set_xticks(x, sorted_city_names, rotation=90, fontsize=7)
-        ax.set_xlabel('Metro Area')
-    else:
-        ax.set_xticks([])
-    
-    # Remove left/right padding
-    ax.set_xlim(left=0.5, right=50.5)
-    ax.set_ylim(bottom=0, top=120)
-    
-    # Titles and labels
-    ax.text(1, 65, title, fontsize=12)
-    ax.set_ylabel(' ')
-    
-    # Compute the average
-    mean_val = np.mean(latencies)
-    
-    # Add a horizontal line at the average
-    ax.axhline(y=mean_val, color='red', linestyle='--', linewidth=1)
-    
-    # Option A: Place the text in data coordinates near the horizontal line
-    # Adjust 'va' and 'ha' to avoid overlapping the line if you prefer
-    ax.text(
-        x[-1],              # Place text near the right-most bar
-        mean_val,           # Align with the average line vertically
-        f"{mean_val:.2f} ms",
-        ha='right',
-        va='bottom',
-        color='black',
-        fontsize=10,
-        weight="bold"
-    )
-
-fig.text(0.04, 0.6, 'Avg. Latency (ms)', va='center', rotation='vertical')
-
-# If text or axes are clipped, you can do:
-plt.tight_layout()
-plt.savefig("latency_temporal_clients.pdf", format="pdf", bbox_inches="tight")
-plt.show()
-
-exit(0)
+# ==============================================================================
