@@ -12,6 +12,8 @@ python -m pip install -U requests
 ant jar
 ./bin/build_xdn_cli.sh
 sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
+mkdir -p eval/screen_logs
+sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results
 cd eval/xdn_latency_proxy_go && go build .
 
 echo "Dont forget to initialize machines for xdn cluster using 'xdnd dist-init'"
