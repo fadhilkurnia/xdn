@@ -22,7 +22,7 @@ function main() {
   cd ./xdn-cli/
 
   # actually build the xdn cli
-  go build -o ../bin/xdn -v .
+  go build -o ../bin/xdn .
 
   echo "Success! the CLI is accessible at \$XDN_ROOT/bin/xdn"
   echo ""
