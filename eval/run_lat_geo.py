@@ -22,7 +22,7 @@ server_gcp_location_file = "location_distributions/server_gcp_region.csv"
 gigapaxos_template_config_file = "../conf/gigapaxos.xdnlat.template.properties"
 request_payload_file="measurement_payload.json"
 
-geolocalities = [1.0, 0.8, 0.5, 0.0]
+geolocalities = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.2, 0.0]
 approaches = ["XDNNR", "ED", "GD", "XDN", "CD"]
 num_services = 50
 num_replicas = 3
@@ -98,9 +98,9 @@ for leader_name, menu in spanner_placement_menu_per_leader.items():
     spanner_leader_locations.append(server.copy())
 
 # verifying the required software
-command = "ls xdn_latency_proxy/target/release/xdn_latency_proxy"
+command = "ls xdn_latency_proxy_go/latency-injector"
 ret_code = os.system(command)
-assert ret_code == 0, f"cannot find the xdn_latency_proxy program"
+assert ret_code == 0, f"cannot find the latency-injector program"
 command = "xdn --help > /dev/null"
 ret_code = os.system(command)
 assert ret_code == 0, f"cannot find the xdn program"
@@ -291,7 +291,7 @@ for approach in approaches:
             command = f"fuser -s -k 8080/tcp"
             print("   ", command)
             os.system(command)
-            command = f"screen -S {proxy_screen_name} -X quit > /dev/null 2>&1"
+            command = f"screen -XS {proxy_screen_name} quit"
             print("   ", command)
             os.system(command)
             os.system(f"rm -f screen_logs/{proxy_screen_name}.log")
@@ -306,7 +306,7 @@ for approach in approaches:
                 print(f"   + {server_name}: {address}")
             if approach == "XDN" or approach == "CD" or approach == "XDNNR":
                 gp_screen_name = screen_session_base_name + "_gp"
-                command = f"screen -S {gp_screen_name} -X quit  > /dev/null 2>&1"
+                command = f"screen -XS {gp_screen_name} quit"
                 print("   ", command)
                 os.system(command)
                 os.system(f"rm -f screen_logs/{gp_screen_name}.log")
