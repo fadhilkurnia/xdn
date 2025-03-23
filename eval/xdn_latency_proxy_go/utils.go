@@ -19,7 +19,7 @@ type ServerLocation struct {
 
 // Config holds everything loaded from the JSON config file.
 type Config struct {
-	ServerLocations map[string]ServerLocation `json:"server_locations"`
+	ServerLocations map[string]ServerLocation `json:"server_locations"` // host is the key
 	SlowdownFactor  float64                   `json:"slowdown_factor"`
 }
 
@@ -62,6 +62,7 @@ func readConfig(path string) (*Config, error) {
 
 		key := strings.TrimSpace(line[:eqIndex])
 		val := strings.TrimSpace(line[eqIndex+1:])
+		val = strings.Trim(val, "\"")
 
 		// 1. Check for slowdown factor
 		if key == "XDN_EVAL_LATENCY_SLOWDOWN_FACTOR" {
@@ -69,6 +70,7 @@ func readConfig(path string) (*Config, error) {
 				slowdown = f
 			} else {
 				log.Printf("Warning: could not parse slowdown factor '%s': %v\n", val, err)
+				panic(-1)
 			}
 			continue
 		}
@@ -95,9 +97,11 @@ func readConfig(path string) (*Config, error) {
 						serversMap[serverName].Lon = lonF
 					} else {
 						log.Printf("Warning: invalid geolocation format for %s: %s\n", serverName, val)
+						panic(-1)
 					}
 				} else {
 					log.Printf("Warning: invalid geolocation format: %s\n", val)
+					panic(-1)
 				}
 			} else {
 				// Otherwise, it's the host:port value, e.g. active.bos=10.10.1.1:2000
@@ -120,7 +124,13 @@ func readConfig(path string) (*Config, error) {
 		if s.HostPort == "" {
 			continue // skip anything missing host:port
 		}
-		serverLocations[s.HostPort] = ServerLocation{
+		hostPortParts := strings.Split(s.HostPort, ":")
+		if len(hostPortParts) != 2 {
+			log.Printf("Error: invalid host port format: %s", s.HostPort)
+			panic(-1)
+		}
+		hostIp := hostPortParts[0]
+		serverLocations[hostIp] = ServerLocation{
 			Name:      s.Name,
 			HostPort:  s.HostPort,
 			Latitude:  s.Lat,

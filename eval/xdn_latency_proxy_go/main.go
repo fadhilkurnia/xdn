@@ -32,17 +32,29 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if requestDelayNs == 0 && r.Header.Get("X-Client-Location") != "" {
 		clientLoc := r.Header.Get("X-Client-Location") // e.g. "39.9526; -75.1652"
 		parts := strings.Split(clientLoc, ";")
-		if len(parts) == 2 {
+		if len(parts) != 2 {
+			log.Printf("Error: invalid client location format %s", clientLoc)
+		} else {
 			latC, err1 := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
 			lonC, err2 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+			if err1 != nil {
+				log.Printf("Error: invalid client latitude, %s", err1.Error())
+			}
+			if err2 != nil {
+				log.Printf("Error: invalid client longitude, %s", err2.Error())
+			}
 			if err1 == nil && err2 == nil {
 				// Find server location from the request's hostname.
 				hostName := r.Host
 				if u, err := url.Parse(r.RequestURI); err == nil && u.Hostname() != "" {
 					hostName = u.Hostname()
 				}
-
-				if srv, ok := p.serverLocations[hostName]; ok {
+				hostPortParts := strings.Split(hostName, ":")
+				hostIp := hostPortParts[0]
+				if _, ok := p.serverLocations[hostIp]; !ok {
+					log.Printf("Error: unknon data for host, %s", hostIp)
+				}
+				if srv, ok := p.serverLocations[hostIp]; ok {
 					dist := calculateHaversineDistance(latC, lonC, srv.Latitude, srv.Longitude)
 					emulatedLatencyMs := getEmulatedLatency(dist, p.slowdownFactor)
 					emulatedRttLatencyMs := emulatedLatencyMs * 2.0             // double for rtt
