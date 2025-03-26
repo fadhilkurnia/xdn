@@ -15,7 +15,7 @@ from utils import get_server_locations
 from utils import get_spanner_placement_menu
 from utils import get_per_city_clients
 
-population_data_file = "location_distributions/client_us_metro_population.csv"
+population_data_file = "location_distributions/client_world_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
 server_aws_location_file = "location_distributions/server_aws_region.csv"
 server_gcp_location_file = "location_distributions/server_gcp_region.csv"
@@ -36,7 +36,7 @@ request_endpoint="/api/books"
 num_cloudlab_machines = 10
 control_plane_address="10.10.1.11"
 control_plane_http_port="3300"
-static_nr_server_name="us-east-1"
+static_nr_server_name="ap-northeast-1"  # Tokyo, Japan
 enable_city_parallelism=True
 enable_inter_city_lat_emulation=True
 is_sample_city=True
@@ -96,6 +96,10 @@ spanner_leader_locations = []
 for leader_name, menu in spanner_placement_menu_per_leader.items():
     server = gcp_og_server_by_name[leader_name]
     spanner_leader_locations.append(server.copy())
+
+# add spanner placement options for XDN
+for menu, replica_group_info in spanner_replica_group_by_menu.items():
+    nf_edge_server_locations.extend(replica_group_info['Replicas'])
 
 # verifying the required software
 command = "ls xdn_latency_proxy_go/latency-injector"
@@ -460,13 +464,16 @@ for approach in approaches:
 
                     # destroy the service
                     if approach == "XDN" or approach == "CD" or approach == "XDNNR":
-                        command = f"yes \"yes\" | XDN_CONTROL_PLANE={control_plane_address} xdn service destroy {deployed_service_name}"
+                        command = f"yes \"yes\" | XDN_CONTROL_PLANE={control_plane_address} timeout 3s xdn service destroy {deployed_service_name}"
                         print("   ", command)
-                        ret_code = os.system(command)
-                        assert ret_code == 0 or ret_code == 100 
-                        # ret_code 100 is for timeout, it is fine to ignore the timeout error (fail open) since we 
-                        # decouple the service name for different locality, also we will destroy the service anyway 
-                        # at the end of the batch.
+                        try:
+                            ret_code = os.system(command)
+                            assert ret_code == 0 or ret_code == 100, f"return_code={ret_code}"
+                            # ret_code 100 is for timeout, it is fine to ignore the timeout error (fail open) since we 
+                            # decouple the service name for different locality, also we will destroy the service anyway 
+                            # at the end of the batch.
+                        except Exception:
+                            print(f"Failed to destroy service {deployed_service_name}, skipping it...")
                     elif approach == "GD":
                         for server_id, server in enumerate(replica_group_info["Replicas"]):
                             node_id = server_id + 1

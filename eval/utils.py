@@ -59,6 +59,12 @@ def get_spanner_placement_menu(gcp_region_server_locations):
     for server in gcp_region_server_locations:
         gcp_server_by_name[server['Name']] = server
     spanner_og_placement_menu = {
+        'asia1': ['asia-northeast1', 'asia-northeast1', 'asia-northeast2'],
+        'asia2': ['asia-south1', 'asia-south1', 'asia-south2'],
+        'eur3': ['europe-west1', 'europe-west1', 'europe-west4'],
+        'eur5': ['europe-west2', 'europe-west2', 'europe-west1'],
+        'eur6': ['europe-west4', 'europe-west4', 'europe-west3'],
+        'eur7': ['europe-west8', 'europe-west8', 'europe-west3'],
         'nam3': ['us-east4', 'us-east4', 'us-east1'],
         'nam6': ['us-central1', 'us-central1', 'us-east1'],
         'nam7': ['us-central1', 'us-central1', 'us-east4'],
@@ -70,7 +76,9 @@ def get_spanner_placement_menu(gcp_region_server_locations):
         'nam13': ['us-central2', 'us-central2', 'us-central1'],
         'nam14': ['us-east4', 'us-east4', 'northamerica-northeast1'],
         'nam15': ['us-south1', 'us-south1', 'us-east4'],
-        'nam16': ['us-central1', 'us-central1', 'us-east4']
+        'nam16': ['us-central1', 'us-central1', 'us-east4'],
+        'nam-eur-asia1': ['us-central1', 'us-central1', 'us-central2'],
+        'nam-eur-asia1': ['us-central1', 'us-central1', 'us-east1'],
     }
     gcp_nam_unique_leader_servers = set()
     for menu, rg in spanner_og_placement_menu.items():
@@ -78,7 +86,7 @@ def get_spanner_placement_menu(gcp_region_server_locations):
     gcp_nam_leader_servers = []
     for leader in gcp_nam_unique_leader_servers:
         gcp_nam_leader_servers.append(gcp_server_by_name[leader])
-    # having menu with the same leader, pick one with lower coordination latency
+    # having menu with the same leader, pick one with the lowest coordination latency
     spanner_rg_by_leader = {}
     for menu, rg in spanner_og_placement_menu.items():
         if rg[0] in spanner_rg_by_leader:
@@ -439,7 +447,8 @@ def find_k_closest_servers(servers, reference_server, k):
     return closest_values
 
 def get_expected_latencies(replica_locations, client_locations, leader_name, 
-                           lat_slowdown_factor, is_report_per_city=False):
+                           lat_slowdown_factor, is_report_per_city=False,
+                           is_direct_all_to_leader=False):
     """
     Given a replica group placement and client spatial distribution, this 
     function calculates the expected latencies.
@@ -508,11 +517,15 @@ def get_expected_latencies(replica_locations, client_locations, leader_name,
 
     # Iterates over the client, for each client get the closest replica
     for i, c in enumerate(client_locations):
-        dummy_client_reference = {'Name': c["City"], 
-                                  'Latitude': c["Latitude"], 
-                                  'Longitude': c["Longitude"]}
-        closest_replica = find_k_closest_servers(replicas, dummy_client_reference, 1)
-        assert len(closest_replica) == 1
+        closest_replica = []
+        if not is_direct_all_to_leader:
+            dummy_client_reference = {'Name': c["City"], 
+                                    'Latitude': c["Latitude"], 
+                                    'Longitude': c["Longitude"]}
+            closest_replica = find_k_closest_servers(replicas, dummy_client_reference, 1)
+        if is_direct_all_to_leader:
+            closest_replica = [leader]
+        assert len(closest_replica) == 1, f"size={len(closest_replica)}: {closest_replica}"
         client_locations[i]["TargetReplica"] = closest_replica[0]['Name']
 
     replica_by_name = {}
