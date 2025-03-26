@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: "postgres:bookworm"
+    environment:
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_DB=books
+  app:
+    image: "bookcatalog"
+    ports:
+      - 8000:8000
+    environment:
+      - DB_TYPE=postgres
+      - DB_HOST=postgres
+    depends_on:
+      - postgres
