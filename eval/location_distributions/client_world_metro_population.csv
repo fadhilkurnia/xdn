@@ -1,0 +1,101 @@
+city,country,population,location,timezone_utc,timezone
+Tokyo,Japan,37280000,35.6895;139.6917,UTC+9,East Asia
+Mumbai,India,25970000,19.0760;72.8777,UTC+5:30,Central Asia
+Delhi,India,25830000,28.7041;77.1025,UTC+5:30,Central Asia
+Dhaka,Bangladesh,22040000,23.8103;90.4125,UTC+6,Central Asia
+Mexico City,Mexico,21810000,19.4326;-99.1332,UTC-6,America
+São Paulo,Brazil,21570000,-23.5505;-46.6333,UTC-3,America
+Lagos,Nigeria,21510000,6.5244;3.3792,UTC+1,Europe
+Jakarta,Indonesia,20770000,-6.2088;106.8456,UTC+7,East Asia
+New York,USA,20430000,40.7128;-74.0060,UTC-5,America
+Karachi,Pakistan,18940000,24.8607;67.0011,UTC+5,Central Asia
+Calcutta,India,18540000,22.5726;88.3639,UTC+5:30,Central Asia
+Buenos Aires,Argentina,15480000,-34.6037;-58.3816,UTC-3,America
+Cairo,Egypt,14020000,30.0444;31.2357,UTC+2,Europe
+Manila,Philippines,13400000,14.5995;120.9842,UTC+8,East Asia
+Los Angeles,USA,13250000,34.0522;-118.2437,UTC-8,America
+Rio de Janeiro,Brazil,13230000,-22.9068;-43.1729,UTC-3,America
+Istanbul,Turkey,12760000,41.0082;28.9784,UTC+3,Europe
+Shanghai,China,12630000,31.2304;121.4737,UTC+8,East Asia
+Moscow,Russia,11730000,55.7558;37.6173,UTC+3,Europe
+Osaka, Japan,11530000,34.6937;135.5022,UTC+9,East Asia
+Beijing,China,11150000,39.9042;116.4074,UTC+8,East Asia
+Lima,Peru,10320000,-12.0464;-77.0428,UTC-5,America
+Paris,France,10180000,48.8566;2.3522,UTC+1,Europe
+Tianjin,China,10140000,39.3434;117.3616,UTC+8,East Asia
+Lahore,Pakistan,10100000,31.5497;74.3436,UTC+5,Central Asia
+Bogotá,Colombia,10080000,4.7110;-74.0721,UTC-5,America
+Kinshasa,Congo,10040000,-4.4419;15.2663,UTC+1,Europe
+Bangalore,India,9920000,12.9716;77.5946,UTC+5:30,Central Asia
+Chicago,USA,9840000,41.8781;-87.6298,UTC-6,America
+Wuhan,China,9180000,30.5928;114.3055,UTC+8,East Asia
+Seoul,South Korea,8880000,37.5665;126.9780,UTC+9,East Asia
+Chennai,India,8880000,13.0827;80.2707,UTC+5:30,Central Asia
+Tehran,Iran,8860000,35.6892;51.3890,UTC+3:30,Europe
+Riyadh,Saudi Arabia,8820000,24.7136;46.6753,UTC+3,Europe
+Hyderabad,India,8610000,17.3850;78.4867,UTC+5:30,Central Asia
+Baghdad,Iraq,8410000,33.3152;44.3661,UTC+3,Europe
+Hong Kong,China,8330000,22.3193;114.1694,UTC+8,East Asia
+Chittagong,Bangladesh,7870000,22.3569;91.7832,UTC+6,Central Asia
+Ahmadabad,India,7780000,23.0225;72.5714,UTC+5:30,Central Asia
+Bangkok,Thailand,7760000,13.7563;100.5018,UTC+7,East Asia
+Surat,India,7720000,21.1702;72.8311,UTC+5:30,Central Asia
+London,UK,7590000,51.5074;-0.1278,UTC+0,Europe
+Pune,India,7530000,18.5204;73.8567,UTC+5:30,Central Asia
+Belo Horizonte,Brazil,7180000,-19.9167;-43.9345,UTC-3,America
+Ho Chi Minh City,Vietnam,6790000,10.8231;106.6297,UTC+7,East Asia
+Santiago,Chile,6710000,-33.4489;-70.6693,UTC-4,America
+Dortmund,Germany,6610000,51.5136;7.4653,UTC+1,Europe
+Miami,USA,6590000,25.7617;-80.1918,UTC-5,America
+Kabul,Afghanistan,6560000,34.5553;69.2075,UTC+4:30,Central Asia
+Khartoum,Sudan,6460000,15.5007;32.5599,UTC+2,Europe
+Atlanta,USA,6440000,33.7490;-84.3880,UTC-5,America
+Toronto,Canada,6340000,43.6532;-79.3832,UTC-5,America
+Chongqing,China,6200000,29.5630;106.5516,UTC+8,East Asia
+Bandung,Indonesia,6190000,-6.9175;107.6191,UTC+7,East Asia
+Jidda,Saudi Arabia,5940000,21.4858;39.1925,UTC+3,Europe
+Philadelphia,USA,5880000,39.9526;-75.1652,UTC-5,America
+Yangon,Myanmar,5870000,16.8409;96.1735,UTC+6:30,Central Asia
+Dallas,USA,5830000,32.7767;-96.7970,UTC-6,America
+Beihai,China,5820000,21.4833;109.1167,UTC+8,East Asia
+Hanoi,Vietnam,5780000,21.0278;105.8342,UTC+7,East Asia
+Houston,USA,5490000,29.7604;-95.3698,UTC-6,America
+Madrid,Spain,5390000,40.4168;-3.7038,UTC+1,Europe
+St Petersburg,Russia,5390000,59.9311;30.3609,UTC+3,Europe
+Shenyang,China,5300000,41.8057;123.4315,UTC+8,East Asia
+Brasília,Brazil,5250000,-15.8267;-47.9218,UTC-3,America
+Singapore,Singapore,5240000,1.3521;103.8198,UTC+8,East Asia
+Sydney,Australia,5180000,-33.8688;151.2093,UTC+10,East Asia
+Dar es Salaam,Tanzania,5120000,-6.7924;39.2083,UTC+3,Europe
+Abidjan,Côte d'Ivoire,5110000,5.3453;-4.0244,UTC+0,Europe
+Casablanca,Morocco,5090000,33.5731;-7.5898,UTC+0,Europe
+Boston,USA,5080000,42.3601;-71.0589,UTC-5,America
+Luanda,Angola,5060000,-8.8390;13.2894,UTC+1,Europe
+Nairobi,Kenya,5020000,-1.2864;36.8172,UTC+3,Europe
+Algiers,Algeria,4930000,36.7538;3.0588,UTC+1,Europe
+Washington DC,USA,4900000,38.9072;-77.0369,UTC-5,America
+Ankara,Turkey,4850000,39.9208;32.8541,UTC+3,Europe
+East Rand,South Africa,4820000,-26.1777;28.2272,UTC+2,Europe
+Jaipur,India,4790000,26.9124;75.7873,UTC+5:30,Central Asia
+Alexandria,Egypt,4770000,31.2001;29.9187,UTC+2,Europe
+Addis Ababa,Ethiopia,4760000,8.9806;38.7578,UTC+3,Europe
+Phoenix,USA,4690000,33.4484;-112.0740,UTC-7,America
+Johannesburg,South Africa,4670000,-26.2041;28.0473,UTC+2,Europe
+Pôrto Alegre,Brazil,4600000,-30.0346;-51.2177,UTC-3,America
+Guadalajara,Mexico,4560000,20.6597;-103.3496,UTC-6,America
+Barcelona,Spain,4520000,41.3851;2.1734,UTC+1,Europe
+Kanpur,India,4440000,26.4499;80.3319,UTC+5:30,Central Asia
+Fortaleza,Brazil,4390000,-3.7319;-38.5267,UTC-3,America
+Salvador,Brazil,4380000,-12.9777;-38.5016,UTC-3,America
+Medellín,Colombia,4380000,6.2442;-75.5812,UTC-5,America
+Recife,Brazil,4360000,-8.0522;-34.9286,UTC-3,America
+Detroit,USA,4290000,42.3314;-83.0458,UTC-5,America
+Monterrey,Mexico,4270000,25.6866;-100.3161,UTC-6,America
+Melbourne,Australia,4260000,-37.8136;144.9631,UTC+10,East Asia
+Chengdu,China,4140000,30.5728;104.0668,UTC+8,East Asia
+Faisalabad,Pakistan,4130000,31.4504;73.1350,UTC+5,Central Asia
+Kano,Nigeria,4070000,12.0022;8.5920,UTC+1,Europe
+Curitiba,Brazil,4000000,-25.4284;-49.2733,UTC-3,America
+Guangzhou,China,3970000,23.1291;113.2644,UTC+8,East Asia
+Cape Town,South Africa,3920000,-33.9249;18.4241,UTC+2,Europe
+Lucknow,India,3890000,26.8467;80.9462,UTC+5:30,Central Asia
