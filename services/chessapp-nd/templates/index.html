@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Chess App</title>
+    {% load static %}
+    <link rel="icon" href="{% static 'favicon.png' %}">
+    <link rel="stylesheet" href="{% static 'css/output.css' %}">
+    <script src="{% static 'js/main-menu.js' %}" defer></script>
+</head>
+<body>
+
+    <main class="bg-neutral-950 h-screen w-screen p-5 text-neutral-200 font-[Inter] overflow-clip">
+        <h1 class="text-5xl text-right mr-50">chess app.</h1>
+
+        <div class="h-full flex items-center justify-center pb-50">
+
+            <div class="flex flex-col gap-5">
+                <div class="group text-2xl border-b-2 border-neutral-200 bg-transparent h-12 relative">
+                    <div class="absolute right-0 bg-cyan-900 w-0 h-full group-hover:w-full duration-500"></div>
+                    <button id="createBtn" class="px-4 py-2 bg-transparent relative text-right w-full">Create Room</button>
+                </div>
+
+                <div class="text-2xl h-12 flex gap-4">
+                    <div class="group border-b-2 border-neutral-200 bg-transparent relative">
+                        <input
+                            id="roomInput"
+                            class="relative h-full text-xl w-40 outline-0 focus:bg-neutral-900 duration-200 px-4"
+                            type="text" 
+                            maxlength="4"
+                            placeholder="Enter Room ID"
+                        />
+                    </div>
+
+                    <div class="group border-b-2 border-neutral-200 bg-transparent relative">
+                        <div class="absolute right-0 bg-teal-700 w-0 h-full group-hover:w-full duration-500"></div>
+                        <button id="joinBtn" class="px-4 py-2 bg-transparent relative text-right w-full">Join Room</button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+
+
+    </main>
+    
+</body>
+</html>

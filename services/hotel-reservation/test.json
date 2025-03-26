@@ -1,0 +1,19 @@
+{
+  "name": "My API test",
+  "testCases": {
+    "test_case_1": {
+      "path": "/hotels",
+      "method": "GET",
+      "query": {
+          "inDate": "2015-04-09",
+          "outDate": "2015-04-10",
+          "lat": 37.7749,
+          "lon": -122.4194
+      }
+    }
+  },
+  "url": "localhost:5000",
+  "header": {
+    "Authorization": "Bearer <ACCESS_TOKEN>"
+  }
+}

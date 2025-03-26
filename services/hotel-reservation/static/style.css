@@ -1,0 +1,507 @@
+/* Inter Font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+
+:root {
+    --slate-950: #020617;
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-400: #94A3B8;
+    --slate-300: #CBD5E1;
+    --slate-200: #E2E8F0;
+    --slate-50: #F8FAFC;
+
+    --violet-600: #7C3AED;
+    --violet-500: #8B5CF6;
+    --violet-400: #A78BFA;
+    --rose-600: #E11D48;
+    --rose-500: #F43F5E;
+    --rose-400: #FB7185;
+    --sky-600: #0284C7;
+    --sky-500: #0EA5E9;
+    --sky-400: #38BDF8;
+
+    --red-600: #DC2626;
+    --red-500: #EF4444;
+    --red-400: #F87171;
+}
+
+* {
+    padding: 0;
+    margin: 0;
+    font-family: Inter, serif;
+    box-sizing: border-box;
+}
+
+#overlay { 
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 50;
+}
+
+#map { 
+    height: 100vh; 
+    width: 100vw;
+    z-index: 1;
+}
+
+/* Hotels & Recommendations Button */
+#overlay .selection-box {
+    position: fixed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    top: 10px;
+    left: 50%;
+    transform: translate(-50%, 0);
+    z-index: 100;
+}
+
+#overlay .hotels-button,
+#overlay .recom-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 6px 10px;
+
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+    background-color: var(--slate-50);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--slate-950);
+    border-radius: 30px;
+    border: none;
+
+    margin: 0px 5px;
+    transition-duration: 100ms;
+}
+
+#overlay .hotels-button:hover,
+#overlay .recom-button:hover {
+    background-color: var(--slate-200);
+}
+
+#overlay .hotels-button:active,
+#overlay .hotels-button.active {
+    transition-duration: 500ms;
+    background-color: var(--violet-500);
+}
+
+#overlay .recom-button:active,
+#overlay .recom-button.active {
+    transition-duration: 500ms;
+    background-color: var(--rose-500);
+}
+
+#overlay svg {
+    fill: var(--slate-950);
+}
+/*----------*/
+
+/* Login Button */
+#overlay .login-button {
+    position: fixed;
+    top: 10px;
+    right: 50px;
+    z-index: 100;
+    padding: 6px 10px;
+
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--slate-950);
+    border-radius: 5px;
+    border: none;
+
+    margin: 0px 5px;
+    transition-duration: 100ms;
+}
+
+#overlay .login { background-color: var(--sky-500); }
+#overlay .logout { background-color: var(--red-500); }
+#overlay .login:hover { background-color: var(--sky-600); }
+#overlay .logout:hover { background-color: var(--red-600); }
+
+#overlay .login-overlay {
+    position: fixed;
+    width: 100vw;
+    height: 100vh;
+    z-index: 100;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background-color: rgba(0, 0, 0, 0.60);
+    backdrop-filter: blur(1px);
+}
+
+.login-dialog {
+    display: flex;
+    flex-direction: column;
+    align-items: start;
+    width: auto;
+
+    padding: 20px;
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+    background-color: var(--slate-50);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--slate-950);
+    border-radius: 10px;
+
+    transition-duration: 100ms;
+}
+
+.login-dialog h3 {
+    font-size: 1.3rem;
+    margin-bottom: 5px;
+    font-weight: 700;
+    text-align: center;
+    width: 100%;
+    color: var(--slate-950);
+}
+
+.login-dialog label {
+    font-size: 0.9rem;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: var(--slate-950);
+}
+
+.login-dialog input {
+    margin-bottom: 20px;
+    font-size: 1rem;
+    appearance: none;
+    outline: none;
+    padding: 7px 12px;
+    border-radius: 5px;
+    border: solid 1px var(--slate-300);
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    transition-duration: 300ms;
+}
+
+.login-dialog .button-box {
+    align-self: flex-end;
+    display: flex;
+    gap: 10px;
+}
+
+.button-box button {
+    padding: 6px 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--slate-950);
+    border-radius: 5px;
+    border: none;
+
+    transition-duration: 100ms;
+}
+
+.login-dialog .confirm-button { background-color: var(--sky-500); }
+.login-dialog .confirm-button:hover { background-color: var(--sky-600); }
+.login-dialog .cancel-button { background-color: var(--red-500); }
+.login-dialog .cancel-button:hover { background-color: var(--red-600); }
+/*----------*/
+
+/* Hotel, Recom - Marker Info */
+.marker-info-box {
+    position: fixed;
+    z-index: 50;
+    right: 10px;
+    top: 100px;
+    width: 150px;
+
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+
+    padding: 15px;
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+    background-color: var(--slate-50);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--slate-950);
+    border-radius: 10px;
+
+    transition-duration: 100ms;
+}
+
+.marker-info-box h3 {
+    font-size: 1.1rem;
+    margin-bottom: 5px;
+    font-weight: 700;
+    text-align: center;
+    width: 100%;
+    color: var(--slate-950);
+}
+
+.marker-info-box label {
+    font-size: 0.9rem;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: var(--slate-950);
+}
+
+.marker-info-box input {
+    flex: 1;
+
+    margin-bottom: 10px;
+    font-size: 1rem;
+    appearance: none;
+    outline: none;
+    padding: 7px 12px;
+    border-radius: 5px;
+    border: solid 1px var(--slate-300);
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    transition-duration: 300ms;
+}
+/*----------*/
+
+/* Hotel, Recom - Reservation Date */
+.reservation-box {
+    position: fixed;
+    z-index: 50;
+    right: 10px;
+    bottom: 50px;
+    width: 200px;
+
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+
+    padding: 15px;
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+    background-color: var(--slate-50);
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--slate-950);
+    border-radius: 10px;
+
+    transition-duration: 100ms;
+}
+
+.reservation-box h3 {
+    font-size: 1.1rem;
+    margin-bottom: 5px;
+    font-weight: 700;
+    text-align: center;
+    width: 100%;
+    color: var(--slate-950);
+}
+
+
+/* Hotels List */
+.hotel-list-anchor {
+    position: fixed;
+    z-index: 50;
+    left: 10px;
+    top: 100px;
+    width: 220px;
+    height: 500px;
+
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    border-radius: 10px;
+
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+}
+
+.hotel-list-box {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+
+    background-color: var(--slate-50);
+    color: var(--slate-950);
+    border-radius: 10px 0 0 10px;
+
+    transition-duration: 100ms;
+}
+
+.hotel-list-box .hotel-row {
+    padding: 10px 15px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+
+    text-overflow: ellipsis;
+    text-wrap: no-wrap;
+
+}
+
+.hotel-list-box .hotel-row:hover {
+    background-color: var(--slate-200);
+}
+
+.hotel-row .name {
+    font-size: 0.9rem;
+    font-weight: 400;
+}
+
+.hotel-row .desc {
+    margin-left: auto;
+    font-size: 0.6rem;
+    color: var(--slate-600);
+}
+/*----------*/
+
+/* Hotel, Recom - Hotel */
+.hotel-view-anchor {
+    position: fixed;
+    z-index: 100;
+    left: 0px;
+    top: 0px;
+    width: 380px;
+    height: 100vh;
+
+    overflow-x: hidden;
+    scrollbar-width: thin;
+
+    box-shadow: 8px 9px 11px -10px rgba(0,0,0,0.71);
+}
+
+.hotel-view {
+    min-height: 100vh;
+    width: 100%;
+
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+
+    background-color: var(--slate-50);
+    color: var(--slate-950);
+
+    transition-duration: 100ms;
+}
+
+.hotel-view img {
+    width: 100%;
+    height: 250px;
+    object-fit: cover;
+}
+
+.hotel-view h3 {
+    font-size: 1.2rem;
+    font-weight: 400;
+    padding: 10px;
+}
+
+.hotel-view p {
+    font-size: 0.85rem;
+    font-weight: 400;
+    padding: 0px 15px;
+}
+
+.hotel-view p.desc {
+    color: var(--slate-600);
+    padding-bottom: 10px;
+    border-bottom: solid 1px var(--slate-400);
+}
+
+.hotel-view .desc-box {
+    display: flex;
+    align-items: center;
+    padding: 10px 15px;
+    transition-duration: 100ms;
+    fill: var(--slate-950);
+}
+
+.hotel-view .desc-box:hover {
+    background-color: var(--slate-200);
+}
+/*----------*/
+
+
+/* Animations */
+.slide-in-left {
+	-webkit-animation: slide-in-left 0.1s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+	        animation: slide-in-left 0.1s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+}
+
+/* ----------------------------------------------
+ * Generated by Animista on 2025-2-20 9:22:30
+ * Licensed under FreeBSD License.
+ * See http://animista.net/license for more info. 
+ * w: http://animista.net, t: @cssanimista
+ * ---------------------------------------------- */
+
+/**
+ * ----------------------------------------
+ * animation slide-in-left
+ * ----------------------------------------
+ */
+@-webkit-keyframes slide-in-left {
+  0% {
+    -webkit-transform: translateX(-1000px);
+            transform: translateX(-1000px);
+    opacity: 0;
+  }
+  100% {
+    -webkit-transform: translateX(0);
+            transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes slide-in-left {
+  0% {
+    -webkit-transform: translateX(-1000px);
+            transform: translateX(-1000px);
+    opacity: 0;
+  }
+  100% {
+    -webkit-transform: translateX(0);
+            transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.slide-out-left {
+	-webkit-animation: slide-out-left 0.5s cubic-bezier(0.550, 0.085, 0.680, 0.530) both;
+	        animation: slide-out-left 0.5s cubic-bezier(0.550, 0.085, 0.680, 0.530) both;
+}
+
+/* ----------------------------------------------
+ * Generated by Animista on 2025-2-20 9:24:32
+ * Licensed under FreeBSD License.
+ * See http://animista.net/license for more info. 
+ * w: http://animista.net, t: @cssanimista
+ * ---------------------------------------------- */
+
+/**
+ * ----------------------------------------
+ * animation slide-out-left
+ * ----------------------------------------
+ */
+@-webkit-keyframes slide-out-left {
+  0% {
+    -webkit-transform: translateX(0);
+            transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    -webkit-transform: translateX(-1000px);
+            transform: translateX(-1000px);
+    opacity: 0;
+  }
+}
+@keyframes slide-out-left {
+  0% {
+    -webkit-transform: translateX(0);
+            transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    -webkit-transform: translateX(-1000px);
+            transform: translateX(-1000px);
+    opacity: 0;
+  }
+}
+

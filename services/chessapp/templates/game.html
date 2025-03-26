@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    {% load static %}
+    <link rel="icon" href="{% static 'favicon.png' %}">
+    <link rel="stylesheet" href="{% static 'css/output.css' %}">
+    <link rel="stylesheet" href="{% static 'css/chessboard-1.0.0.min.css' %}">
+
+    <script src="{% static 'js/jquery-3.7.1.min.js' %}"></script>
+    <script src="{% static 'js/chessboard-1.0.0.js' %}"></script>
+    <script src="{% static 'js/chess-0.11.0.min.js' %}"></script>
+    <script src="{% static 'js/game-logic.js' %}" defer></script>
+
+    <title>Game</title>
+</head>
+<body>
+    <div id="gameOver" class="hidden fixed w-screen h-screen left-0 top-0 z-100 backdrop-blur-sm items-center justify-center font-[Inter]">
+        <div class="border-2 border-neutral-200 p-6 text-neutral-200 rounded flex flex-col items-center gap-5 bg-neutral-950">
+            <h2 class="text-2xl">Game Over</h2>
+
+            <div class="group border-b-2 border-neutral-200 bg-transparent relative text-xl">
+                <div class="absolute right-0 bg-teal-700 w-0 h-full group-hover:w-full duration-500"></div>
+                <button id="leaveBtn" class="px-4 py-2 bg-transparent relative text-right w-full">Main Menu</button>
+            </div>
+        </div>
+    </div>
+
+    <main class="flex gap-10 justify-center bg-neutral-950 h-screen w-screen p-5 text-neutral-200 font-[Inter] overflow-clip z-10 items-center flex-col">
+        <div id="myBoard" style="width: 400px"></div>
+
+        <div class="group border-b-2 border-neutral-200 bg-transparent relative text-xl">
+            <div class="absolute right-0 bg-red-700 w-0 h-full group-hover:w-full duration-500"></div>
+            <button id="leaveBtn1" class="px-4 py-2 bg-transparent relative text-right w-full">Quit Game</button>
+        </div>
+    </main>
+</body>
+</html>
