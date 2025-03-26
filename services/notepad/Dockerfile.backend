@@ -1,0 +1,18 @@
+FROM node:21-alpine3.18
+
+# To build the image: 
+# docker build --tag=notepad-be --file Dockerfile.backend .
+
+RUN mkdir -p /app/
+WORKDIR /app
+COPY packages/server/package.json /app/package.json
+RUN yarn install
+
+COPY packages/server/src/ ./src
+COPY packages/server/prisma/schema.prisma ./prisma/schema.prisma
+COPY packages/server/.env ./.env
+RUN yarn db:migrate
+RUN yarn db:push
+
+EXPOSE 8000
+CMD [ "yarn", "start" ]
