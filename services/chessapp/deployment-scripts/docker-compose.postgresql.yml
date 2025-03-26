@@ -1,0 +1,36 @@
+name: chessapp
+services:
+  app:
+    container_name: chessapp
+    networks:
+      - chessapp-network
+    environment:
+      - DEBUG=False
+      - DJANGO_SECRET_KEY=fallback-secret123
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_USER=postgres
+      - DB_PASSWORD=testing123
+      - DB_NAME=test_db
+      - DB_HOST=chess-postgres
+      - DB_PORT=5432
+    ports:
+      - 8000:8000
+    restart: unless-stopped
+    image: chessapp:1
+
+  postgres:
+    container_name: chess-postgres 
+    networks:
+      - chessapp-network
+    environment:
+      - POSTGRES_PASSWORD=testing123
+      - POSTGRES_DB=test_db
+    ports:
+      - 3400:5432
+    restart: unless-stopped
+    image: postgres:17.4-bookworm
+
+networks:
+  chessapp-network:
+    external: false
+    name: chessapp-network 

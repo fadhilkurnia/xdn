@@ -1,0 +1,6 @@
+FROM ollama/ollama:0.5.13-rc0
+
+# Expose the Ollama default port
+EXPOSE 11434
+
+RUN nohup bash -c "ollama serve &" && sleep 5 && ollama pull deepseek-r1:1.5b

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        <link rel="icon" href="./favicon.png">
+        <link rel="stylesheet" href="./output.css">
+        <script src="./script.js" defer></script>
+
+        <title>Simple LLM</title>
+    </head>
+    <body>
+        <div>
+            <!-- Topbar -->
+            <div class="w-full flex justify-between top-0 fixed px-8 py-3 bg-transparent backdrop-blur-xs border-b-1 border-slate-800">
+                <h1 class="text-slate-950 text-xl font-bold">llm-chat</h1>
+            </div>
+
+            <!-- Main Section -->
+            <main
+                id="main-section"
+                class="min-h-screen w-screen bg-gradient-to-br from-green-50 to-green-100 flex flex-col items-center px-2 py-25 overflow-y-scroll z-10">
+                <div id="chat-box" class="max-w-170 flex w-170 flex-col gap-4">
+                    <!--
+                        <For each={data()}>
+                        {(chat) => (
+                        <>
+                        <div class="bg-slate-600 text-green-50 p-2 rounded-lg self-end">
+                        {chat.prompt}
+                        </div>
+                        <div class="text-slate-900 p-2">{chat.response}</div>
+                        </>
+                        )}
+                        </For>
+                    -->
+                </div>
+
+                <!-- Prompt Input Box -->
+                <div class="fixed bottom-10 flex justify-center items-center px-2 max-w-170 w-170 bg-green-50 shadow-md p-0 rounded-3xl border-1 border-slate-300">
+                    <input
+                    id="prompt-input"
+                    name="prompt"
+                    type="text"
+                    autofocus
+                    placeholder="Ask anything"
+                    class="w-full h-12 px-4 py-2 rounded-3xl outline-0 ring-0 placeholder:text-slate-400 text-black"
+                    />
+                    <button
+                        id="prompt-button"
+                        disabled
+                        class="flex justify-center items-center text-green-50 min-w-[35px] min-h-[35px] max-w-[35px] max-h-[35px] p-0 disabled:bg-slate-400 not-disabled:bg-slate-900 rounded-full self-center duration-200 transition-colors hover:not-disabled:bg-slate-700">
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            height="24px"
+                            viewBox="0 -960 960 960"
+                            width="20px"
+                            fill="currentColor">
+                            <path d="M440-160v-487L216-423l-56-57 320-320 320 320-56 57-224-224v487h-80Z" />
+                        </svg>
+                    </button>
+                </div>
+
+            </main>
+
+            <!-- Loading Box -->
+            <div id="loading-box" class="fixed hidden top-0 left-0 justify-center items-center h-screen w-screen z-100 bg-transparent backdrop-blur-xs">
+                <svg
+                    class="animate-spin h-8 w-8 text-blue-500"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg">
+                    <path
+                    d="M12,4a8,8,0,0,1,7.89,6.7A1.53,1.53,0,0,0,21.38,12h0a1.5,1.5,0,0,0,1.48-1.75,11,11,0,0,0-21.72,0A1.5,1.5,0,0,0,2.62,12h0a1.53,1.53,0,0,0,1.49-1.3A8,8,0,0,1,12,4Z"
+                    />
+                </svg>
+            </div>
+
+        </div>
+    </body>
+</html>

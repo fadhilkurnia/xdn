@@ -1,0 +1,24 @@
+name: simple-llm
+services:
+    ollama:
+        container_name: ollama
+        networks:
+            - simple-llm-network
+        ports:
+            - 11434:11434
+        restart: unless-stopped
+        image: simple-ollama:1
+
+    simple-llm:
+        container_name: simple-llm
+        networks:
+            - simple-llm-network
+        ports:
+            - 5000:3000
+        restart: unless-stopped
+        image: simple-llm:1
+
+networks:
+    simple-llm-network:
+        external: false
+        name: simple-llm-network

@@ -1,0 +1,17 @@
+---
+name: hotel-reservation
+components:
+   - hotel-reservation-db:
+        image: mongo:8.0.5-rc2-noble
+        expose: 27017
+        stateful: true
+        environments:
+          - MONGO_INITDB_ROOT_USERNAME: root
+          - MONGO_INITDB_ROOT_PASSWORD: testing123
+   - frontend:
+        image: hotel-reservation:1
+        port: 5000
+        entry: true
+state: hotel-reservation-db:/data/
+deterministic: true
+consistency: linearizability

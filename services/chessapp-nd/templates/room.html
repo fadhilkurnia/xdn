@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Waiting Room</title>
+    {% load static %}
+    <link rel="icon" href="{% static 'favicon.png' %}">
+    <link rel="stylesheet" href="{% static 'css/output.css' %}">
+    <script src="{% static 'js/waiting-room.js' %}" defer></script>
+</head>
+<body>
+    <main class="flex gap-10 justify-center bg-neutral-950 h-screen w-screen p-5 text-neutral-200 font-[Inter] overflow-clip">
+        <div class="flex flex-col items-center w-100">
+            <h1 class="text-4xl text-center">waiting room.</h1>
+
+            <h2 id="idText" class="text-xl text-center"></h2>
+
+            <div class="flex flex-col gap-4 mt-10 w-full">
+                <div id="player1Text" class="border-b-2 border-neutral-200 text-xl px-4 py-2 duration-100">
+                    Player 1
+                </div>
+
+                <div id="player2Text" class="border-b-2 border-neutral-200 text-xl px-4 py-2 duration-100">
+                    Player 2
+                </div>
+            </div>
+
+            <h3 id="statusText" class="mt-4 italic text-right w-full"></h3>
+
+            <div class="flex justify-between mt-10 w-full text-lg">
+                <div class="group border-b-2 border-neutral-200 bg-transparent relative w-30">
+                    <div id="readyBtnBg" class="absolute right-0 bottom-0 bg-green-700  h-0 w-full group-hover:h-full duration-500"></div>
+                    <button id="readyBtn" class="px-4 py-2 relative text-left bg-transparent w-full">Ready</button>
+                </div>
+
+                <div class="group border-b-2 border-neutral-200 bg-transparent relative">
+                    <div id="leaveBtnBg" class="absolute right-0 bottom-0 bg-red-700  h-0 w-full group-hover:h-full duration-500"></div>
+                    <button id="leaveBtn" class="px-4 py-2 relative text-right bg-transparent">Leave</button>
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

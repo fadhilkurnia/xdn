@@ -1,0 +1,15 @@
+---
+name: solid-llm
+components:
+   - ollama:
+        image: simple-ollama:1
+        expose: 11434
+        stateful: false
+   - server:
+        image: solid-llm:1
+        stateful: true
+        port: 3000
+        entry: true
+state: server:/usr/src/app/data/
+deterministic: false
+consistency: linearizability
