@@ -2,6 +2,7 @@ package edu.umass.cs.xdn;
 
 import edu.umass.cs.clientcentric.BayouReplicaCoordinator;
 import edu.umass.cs.causal.CausalReplicaCoordinator;
+import edu.umass.cs.eventual.LazyReplicaCoordinator;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
@@ -21,9 +22,11 @@ import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
+import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
+import edu.umass.cs.xdn.service.RequestMatcher;
 import edu.umass.cs.xdn.service.ServiceProperty;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
@@ -31,9 +34,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -55,9 +56,13 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     private final AbstractReplicaCoordinator<NodeIDType> awReplicaCoordinator;
     private final AbstractReplicaCoordinator<NodeIDType> clientCentricReplicaCoordinator;
     private final AbstractReplicaCoordinator<NodeIDType> causalReplicaCoordinator;
+    private final AbstractReplicaCoordinator<NodeIDType> lazyReplicaCoordinator;
 
     // mapping between service name to the service's coordination manager
     private final Map<String, AbstractReplicaCoordinator<NodeIDType>> serviceCoordinator;
+
+    // mapping between service name to the service property
+    private final Map<String, ServiceProperty> serviceProperties;
 
     private final Set<IntegerPacketType> requestTypes;
 
@@ -103,7 +108,6 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         PrimaryBackupReplicaCoordinator<NodeIDType> primaryBackupReplicaCoordinator =
                 new PrimaryBackupReplicaCoordinator<>(
                         preProcessedApp, myID, unstringer, messenger, paxosManager);
-        // FIXME: how does the modified paxos manager impact sequential here?
         AwReplicaCoordinator<NodeIDType> awReplicaCoordinator =
                 new AwReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
         PramReplicaCoordinator<NodeIDType> pramReplicaCoordinator =
@@ -112,17 +116,23 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                 new BayouReplicaCoordinator<>(app, myID, unstringer, messenger);
         CausalReplicaCoordinator<NodeIDType> causalReplicaCoordinator =
                 new CausalReplicaCoordinator<>(app, myID, unstringer, messenger);
+        LazyReplicaCoordinator<NodeIDType> lazyReplicaCoordinator =
+                new LazyReplicaCoordinator<>(app, myID, unstringer, messenger);
 
         this.primaryBackupCoordinator = primaryBackupReplicaCoordinator;
         this.paxosCoordinator = paxosReplicaCoordinator;
-        this.chainReplicationCoordinator = null;
+        this.chainReplicationCoordinator = null; // not used for now
         this.pramReplicaCoordinator = pramReplicaCoordinator;
         this.awReplicaCoordinator = awReplicaCoordinator;
         this.clientCentricReplicaCoordinator = bayouReplicaCoordinator;
         this.causalReplicaCoordinator = causalReplicaCoordinator;
+        this.lazyReplicaCoordinator = lazyReplicaCoordinator;
 
         // initialize empty service -> coordinator mapping
         this.serviceCoordinator = new ConcurrentHashMap<>();
+
+        // initialize empty service -> service-property mapping
+        this.serviceProperties = new ConcurrentHashMap<>();
 
         // registering all request types handled by XDN,
         // including all request types of each coordination managers.
@@ -135,7 +145,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         // get request
         this.setGetRequestImpl(new AppRequestParser() {
             @Override
-            public Request getRequest(String stringified) throws RequestParseException {
+            public Request getRequest(String stringified) {
                 return null;
             }
 
@@ -165,8 +175,32 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         }
 
         // prepare gigapaxos' request
-        ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(request);
-        gpRequest.setClientAddress(messenger.getListeningSocketAddress());
+        ReplicableClientRequest gpRequest = null;
+        if (request instanceof ReplicableClientRequest rcr) {
+            gpRequest = rcr;
+        } else {
+            gpRequest = ReplicableClientRequest.wrap(request);
+        }
+        // TODO: validate what client address to set here. We need to explicitly set the
+        //  client's address because down the pipeline that is being used for equals() method.
+        if (gpRequest.getClientAddress() == null) {
+            gpRequest.setClientAddress(messenger.getListeningSocketAddress());
+        }
+
+        // set the service's request matcher for this request
+        if (gpRequest.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
+            List<RequestMatcher> serviceRequestMatchers = new ArrayList<>();
+            ServiceProperty serviceProperty = this.serviceProperties.get(serviceName);
+            if (serviceProperty == null) {
+                logger.log(Level.WARNING,
+                        "Unknown service property for service=" + serviceName);
+            }
+            if (serviceProperty != null) {
+                serviceRequestMatchers = serviceProperty.getRequestMatchers();
+            }
+            xdnHttpRequest.setRequestMatchers(serviceRequestMatchers);
+            xdnHttpRequest.getBehaviors(); // populate cached behaviors
+        }
 
         // prepare updated callback that logs the elapsed time
         ExecutedCallback loggedCallback = (response, handled) -> {
@@ -268,9 +302,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             encodedProperties = raw[1];
         }
         assert encodedProperties != null;
-        ServiceProperty serviceProperties = null;
+        ServiceProperty serviceProperty = null;
         try {
-            serviceProperties = ServiceProperty.createFromJsonString(encodedProperties);
+            serviceProperty = ServiceProperty.createFromJsonString(encodedProperties);
         } catch (JSONException e) {
             logger.log(Level.SEVERE, "Invalid service properties given: " + encodedProperties);
             throw new RuntimeException(e);
@@ -278,13 +312,13 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
         // Infer the replica coordinator based on the declared properties
         AbstractReplicaCoordinator<NodeIDType> coordinator =
-                inferCoordinatorByProperties(serviceProperties);
+                inferCoordinatorByProperties(serviceProperty);
         assert coordinator != null :
                 "XDN does not know what coordinator to be used for the specified service";
 
         // Create the replica group using the coordinator
         boolean isSuccess;
-        if (isClientCentricConsistency(serviceProperties.getConsistencyModel())) {
+        if (isClientCentricConsistency(serviceProperty.getConsistencyModel())) {
             // A special case for client-centric replica coordinator, Bayou, that require
             // us to specify the client-centric consistency model because Bayou support
             // four different client-centric consistency models.
@@ -292,7 +326,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             isSuccess = ((BayouReplicaCoordinator<NodeIDType>) coordinator)
                     .createReplicaGroup(
                             getBayouConsistencyModel(
-                                    serviceProperties.getConsistencyModel()),
+                                    serviceProperty.getConsistencyModel()),
                             serviceName,
                             placementEpoch,
                             initialState,
@@ -312,6 +346,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
         // Store the service->coordinator mapping
         this.serviceCoordinator.put(serviceName, coordinator);
+
+        // Store the service->service-property mapping
+        this.serviceProperties.put(serviceName, serviceProperty);
 
         System.out.printf(">> XDNReplicaCoordinator:%s name=%s coordinator=%s\n",
                 myNodeID, serviceName, coordinator.getClass().getSimpleName());
@@ -348,39 +385,85 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     private AbstractReplicaCoordinator<NodeIDType> inferCoordinatorByProperties(
             ServiceProperty serviceProperties) {
-        // for non-deterministic service we always use primary-backup
+        // For non-deterministic service we always use primary-backup, the only coordinator
+        // we have implemented that can handle non-determinism.
         if (!serviceProperties.isDeterministic()) {
             return this.primaryBackupCoordinator;
         }
 
-        // for deterministic service, we have more options based on the consistency model
-        // but for now we just use paxos for all consistency model
+        // For deterministic service, we have more options based on the consistency model,
+        // especially when the service only has read-only and write-only requests.
         // TODO: introduce new coordinator for different consistency models.
         else {
-            switch (serviceProperties.getConsistencyModel()) {
-                case PRAM -> {
-                    return this.pramReplicaCoordinator;
-                }
-                case SEQUENTIAL -> {
-                    return this.awReplicaCoordinator;
-                }
-                case READ_YOUR_WRITES,
-                        WRITES_FOLLOW_READS,
-                        MONOTONIC_READS,
-                        MONOTONIC_WRITES -> {
-                    return this.clientCentricReplicaCoordinator;
-                }
-                case CAUSAL -> {
-                    return this.causalReplicaCoordinator;
-                }
-                case LINEARIZABILITY,
-                        EVENTUAL -> {
-                    return this.paxosCoordinator;
-                }
-                default -> {
-                    return null;
-                }
+            ConsistencyModel declaredConsModel = serviceProperties.getConsistencyModel();
+            Set<RequestBehaviorType> allDeclaredBehaviors = serviceProperties.getAllBehaviors();
+
+            if (declaredConsModel.equals(ConsistencyModel.LINEARIZABILITY)) {
+                return this.paxosCoordinator;
             }
+
+            // Our sequential consistency protocol does not have many constraints, it coordinates
+            // all non read-oly requests using Paxos, and execute all read-only requests locally.
+            if (declaredConsModel.equals(ConsistencyModel.SEQUENTIAL)) {
+                return this.awReplicaCoordinator;
+            }
+
+            // Our protocol implementing client-centric consistency models support almost all
+            // behaviors. It generally treats all non-read-only requests as write.
+            Set<ConsistencyModel> clientCentricConsModels = new HashSet<>(Arrays.asList(
+                    ConsistencyModel.MONOTONIC_READS,
+                    ConsistencyModel.MONOTONIC_WRITES,
+                    ConsistencyModel.READ_YOUR_WRITES,
+                    ConsistencyModel.WRITES_FOLLOW_READS));
+            if (clientCentricConsModels.contains(declaredConsModel)) {
+                return this.clientCentricReplicaCoordinator;
+            }
+
+            // Our implemented causal consistency protocol supports all behaviors other than
+            // read-modify-write requests. which can cause diverging state between replica and
+            // thus require reconciliation mechanism, which is generally hard with blackbox service
+            // (i.e., we need to know the state semantics to "merge" the state). We fall back to
+            // sequential consistency protocol, which support ready-modify-write operations.
+            Set<RequestBehaviorType> nonRmwBehaviors = new HashSet<>(Arrays.asList(
+                    RequestBehaviorType.READ_ONLY, RequestBehaviorType.WRITE_ONLY,
+                    RequestBehaviorType.NIL_EXTERNAL, RequestBehaviorType.MONOTONIC));
+            if (declaredConsModel.equals(ConsistencyModel.CAUSAL) &&
+                    nonRmwBehaviors.containsAll(allDeclaredBehaviors)) {
+                return this.causalReplicaCoordinator;
+            }
+            if (declaredConsModel.equals(ConsistencyModel.CAUSAL) &&
+                    !nonRmwBehaviors.containsAll(allDeclaredBehaviors)) {
+                return this.awReplicaCoordinator;
+            }
+
+            // Our implemented protocol for PRAM does not support read-modify-write as it
+            // can cause diverging state across replicas, similar reasoning as in the causal
+            // consistency protocol. We fall back to sequential consistency if the service has
+            // read-modify-write operations.
+            if (declaredConsModel.equals(ConsistencyModel.PRAM) &&
+                    nonRmwBehaviors.containsAll(allDeclaredBehaviors)) {
+                return this.pramReplicaCoordinator;
+            }
+            if (declaredConsModel.equals(ConsistencyModel.PRAM) &&
+                    !nonRmwBehaviors.containsAll(allDeclaredBehaviors)) {
+                return this.awReplicaCoordinator;
+            }
+
+            // Lazy replications generally works for service whose operations are monotonic.
+            Set<RequestBehaviorType> protocolConstraints = new HashSet<>(Arrays.asList(
+                    RequestBehaviorType.MONOTONIC,
+                    RequestBehaviorType.READ_ONLY,
+                    RequestBehaviorType.WRITE_ONLY));
+            allDeclaredBehaviors.remove(RequestBehaviorType.NIL_EXTERNAL); // optional
+            if (declaredConsModel.equals(ConsistencyModel.EVENTUAL) &&
+                    allDeclaredBehaviors.equals(protocolConstraints)) {
+                return this.lazyReplicaCoordinator;
+            }
+
+            // It is always safe to fall back with sequential consistency, if the service
+            // does not have any read-only operations, it essentially similar to Paxos with
+            // linearizability.
+            return this.awReplicaCoordinator;
         }
     }
 
@@ -391,6 +474,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         if (coordinator == null) {
             return true;
         }
+        this.serviceProperties.remove(serviceName);
         return coordinator.deleteReplicaGroup(serviceName, epoch);
     }
 

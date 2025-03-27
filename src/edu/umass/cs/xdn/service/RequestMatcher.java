@@ -3,13 +3,15 @@ package edu.umass.cs.xdn.service;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import io.netty.handler.codec.http.HttpMethod;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 public class RequestMatcher {
+
     private final String matcherName;  // can be null
     private final String pathPrefix;
-    private final List<String> httpMethods;
+    private final Set<String> httpMethods;
     private final RequestBehaviorType behavior;
 
     public RequestMatcher(String matcherName, String pathPrefix, List<String> httpMethods,
@@ -34,7 +36,19 @@ public class RequestMatcher {
 
         this.matcherName = matcherName;
         this.pathPrefix = pathPrefix;
-        this.httpMethods = httpMethods;
+        this.httpMethods = new HashSet<>(httpMethods);
         this.behavior = behavior;
+    }
+
+    public RequestBehaviorType getBehavior() {
+        return behavior;
+    }
+
+    public Set<String> getHttpMethods() {
+        return httpMethods;
+    }
+
+    public String getPathPrefix() {
+        return pathPrefix;
     }
 }

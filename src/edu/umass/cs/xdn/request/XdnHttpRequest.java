@@ -11,7 +11,8 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.proto.XdnHttpRequestProto;
-import edu.umass.cs.xdn.service.ServiceProperty;
+import edu.umass.cs.xdn.service.RequestMatcher;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.Cookie;
@@ -37,13 +38,18 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
     private final long requestId;
     private final String serviceName;
+
     private final HttpRequest httpRequest;
     private final HttpContent httpRequestContent;
+
     private HttpResponse httpResponse;
+    private ByteBuf httpResponseBody;
 
     // The set for BehavioralRequest interface that requires returning
-    // the behaviors of this HttpRequest.
-    private final Set<RequestBehaviorType> behaviors;
+    // the behaviors of this HttpRequest. Note that requestMatcher must
+    // be set to know the behaviors of this HttpRequest.
+    private Set<RequestBehaviorType> behaviors;
+    private List<RequestMatcher> requestMatchers;
 
     public XdnHttpRequest(HttpRequest request, HttpContent content) {
         assert request != null : "HttpRequest must be specified";
@@ -60,11 +66,8 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         this.httpRequest.headers().set(XDN_HTTP_REQUEST_ID_HEADER, this.requestId);
 
         // Infers service name from httpRequest.
-        this.serviceName = this.inferServiceName(request);
+        this.serviceName = inferServiceName(request);
         assert this.serviceName != null : "Failed to infer service name from the given HttpRequest";
-
-        // Infers request behaviors based on httpRequest
-        this.behaviors = this.inferRequestBehaviors(request, null);
     }
 
     // In general, we infer the HTTP request ID based on these headers:
@@ -129,19 +132,28 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         return null;
     }
 
-    // TODO: complete this implementation, possibly need to infer from the service properties.
-    //  Currently we assume all Http Get/Options/Head request is read-only, while others
-    //  are write-only.
-    private Set<RequestBehaviorType> inferRequestBehaviors(HttpRequest httpRequest,
-                                                           ServiceProperty serviceProperty) {
+    private Set<RequestBehaviorType> matchRequestBehaviors(List<RequestMatcher> svcReqMatchers) {
+        assert svcReqMatchers != null : "request matcher must be set before calling this method";
+        assert this.httpRequest.uri().startsWith("/")
+                : "unexpected path in the http request: " + httpRequest.uri();
         Set<RequestBehaviorType> types = new HashSet<>();
-        HttpMethod httpMethod = httpRequest.method();
-        if (httpMethod == GET || httpMethod == HttpMethod.OPTIONS ||
-                httpMethod == HttpMethod.HEAD) {
-            types.add(RequestBehaviorType.READ_ONLY);
-        } else {
-            types.add(RequestBehaviorType.WRITE_ONLY);
+
+        // TODO: we should handle the hierarchy of paths and behaviors.
+        //  e.g., "POST /" is declared as READ_MODIFY_WRITE but "POST /api/books/123" is WRITE_ONLY,
+        //  then WRITE_ONLY should take the priority since it is more "specific".
+        for (RequestMatcher matcher : svcReqMatchers) {
+            if (matcher.getHttpMethods().contains(this.httpRequest.method().name()) &&
+                    this.httpRequest.uri().startsWith(matcher.getPathPrefix())) {
+                types.add(matcher.getBehavior());
+            }
         }
+
+        // default behavior with no matched behavior
+        if (types.isEmpty()) {
+            types.add(RequestBehaviorType.READ_MODIFY_WRITE);
+            return types;
+        }
+
         return types;
     }
 
@@ -172,7 +184,14 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
     @Override
     public Set<RequestBehaviorType> getBehaviors() {
+        if (this.behaviors == null) {
+            this.behaviors = matchRequestBehaviors(this.requestMatchers);
+        }
         return this.behaviors;
+    }
+
+    public void setRequestMatchers(List<RequestMatcher> requestMatchers) {
+        this.requestMatchers = requestMatchers;
     }
 
     @Override
@@ -250,7 +269,11 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
     public void setHttpResponse(HttpResponse httpResponse) {
         assert httpRequest != null;
-        this.httpResponse = httpResponse;
+        assert httpResponse instanceof FullHttpResponse;
+        FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;
+        this.httpResponse = fullHttpResponse;
+        this.httpResponseBody = fullHttpResponse.content() != null
+                ? fullHttpResponse.content().copy() : null;
     }
 
     public java.net.http.HttpRequest getJavaNetHttpRequest(boolean isUseLocalhost, int targetPort) {
@@ -385,9 +408,10 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
                     this.getHeaderList(this.httpResponse.headers());
 
             // Serialize the response body
-            assert this.httpResponse instanceof DefaultFullHttpResponse;
-            DefaultFullHttpResponse fullHttpResponse = (DefaultFullHttpResponse) this.httpResponse;
-            byte[] responseBody = fullHttpResponse.content().array();
+            ByteBuf httpResponseBody = this.httpResponseBody;
+            assert httpResponseBody != null;
+            byte[] responseBody = new byte[httpResponseBody.readableBytes()];
+            httpResponseBody.getBytes(0, responseBody);
 
             XdnHttpRequestProto.XdnHttpRequest.Response.Builder responseProtoBuilder =
                     XdnHttpRequestProto.XdnHttpRequest.Response.newBuilder()
@@ -442,6 +466,53 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
             headerList.add(header);
         }
         return headerList;
+    }
+
+    public String getLogText() {
+        Set<String> textContentTypes =
+                Set.of("text/javascript", "application/json", "application/text",
+                        "text/plain", "text/html");
+        boolean isTextContent = false;
+        StringBuilder headerStringListBuilder = new StringBuilder();
+        Iterator<Map.Entry<String, String>> iter = this.httpRequest.headers().iteratorAsString();
+        while (iter.hasNext()) {
+            var it = iter.next();
+            headerStringListBuilder.append(it.getKey());
+            headerStringListBuilder.append(":");
+            headerStringListBuilder.append(it.getValue());
+            headerStringListBuilder.append(" ");
+            if (it.getKey().equalsIgnoreCase("Content-Type") &&
+                    textContentTypes.contains(it.getValue().toLowerCase())) {
+                isTextContent = true;
+            }
+        }
+        String headerStringList = headerStringListBuilder.toString();
+
+        StringBuilder contentStringBuilder = new StringBuilder();
+        if (this.httpRequestContent.content().readableBytes() == 0) {
+            contentStringBuilder.append("<empty>");
+            isTextContent = false;
+        }
+        if (isTextContent) {
+            int length = Math.min(50, this.httpRequestContent.content().readableBytes());
+            byte[] prefixArray = new byte[length];
+            this.httpRequestContent.content().getBytes(0, prefixArray);
+            contentStringBuilder.append(new String(prefixArray));
+            if (length == 50) {
+                contentStringBuilder.append("...");
+            }
+        } else {
+            contentStringBuilder.append("<bytes>");
+        }
+        String contentString = contentStringBuilder.toString();
+        
+        return String.format("id=%d %s %s:%s hdr=%s body=%s",
+                this.requestId,
+                this.httpRequest.method(),
+                this.getServiceName(),
+                this.httpRequest.uri(),
+                headerStringList,
+                contentString);
     }
 
     @Override

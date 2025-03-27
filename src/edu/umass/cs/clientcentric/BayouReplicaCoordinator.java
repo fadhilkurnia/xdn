@@ -8,7 +8,9 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -89,7 +91,11 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        logger.log(Level.INFO, "Coordinating request " + request);
+        if (request instanceof ReplicableClientRequest rcr
+                && rcr.getRequest() instanceof XdnHttpRequest httpRequest) {
+            String requestLog = httpRequest.getLogText();
+            logger.log(Level.INFO, "Coordinating request " + requestLog);
+        }
 
         String serviceName = request.getServiceName();
         ReplicaInstance<NodeIDType> serviceInstance = instances.get(serviceName);

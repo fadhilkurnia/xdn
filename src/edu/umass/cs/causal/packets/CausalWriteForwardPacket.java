@@ -221,7 +221,8 @@ public class CausalWriteForwardPacket extends CausalPacket implements Byteable {
         try {
             Request request = clientRequestParser.getRequest(
                     decodedProto.getEncodedWriteRequest().toByteArray(), null);
-            assert request instanceof ClientRequest;
+            assert request instanceof ClientRequest :
+                    "Expecting ClientRequest but found " + request.getRequestType().toString();
             clientWriteOnlyRequest = (ClientRequest) request;
         } catch (RequestParseException e) {
             throw new RuntimeException(e);

@@ -12,6 +12,7 @@ import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -46,7 +47,7 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         this.paxosManager = paxosManager;
         this.app = app;
 
-        assert messenger.getMyID().equals(myID) : "Invalid node id given in the messenger";
+        assert messenger.getMyID().equals(myID) : "Invalid node ID given in the messenger";
         assert this.nodeIdDeserializer.valueOf(this.myNodeID.toString()).equals(this.myNodeID)
                 : "Invalid node ID deserializer given";
 
@@ -60,13 +61,21 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        logger.log(Level.INFO, String.format(">> %s:AwReplicaCoordinator -- coordinateRequest %s\n",
-                this.myNodeID, request));
         if (!(request instanceof ReplicableClientRequest rcr)) {
-            throw new RuntimeException("Unknown request/packet handled by AwReplicaCoordinator");
+            throw new RuntimeException("Unknown request/packet handled by AwReplicaCoordinator " +
+                    request.getRequestType());
         }
         Request clientRequest = rcr.getRequest();
         String serviceName = clientRequest.getServiceName();
+
+        String requestLogText = "";
+        if (clientRequest instanceof XdnHttpRequest xdnHttpRequest) {
+            requestLogText = xdnHttpRequest.getLogText();
+        } else {
+            requestLogText = clientRequest.getRequestType().toString();
+        }
+        logger.log(Level.INFO, String.format("%s:AwReplicaCoordinator -- coordinateRequest %s\n",
+                this.myNodeID, requestLogText));
 
         // We handle read-only request locally, with no coordination.
         if (clientRequest instanceof BehavioralRequest br && br.isReadOnlyRequest()) {
@@ -93,7 +102,12 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         // Most requests, especially write-only and read-modify-write requests need to
         // be coordinated. Note that the code below is asynchronous, we wait for the
         // coordination confirmation before returning to client.
-        this.paxosManager.propose(serviceName, clientRequest, callback);
+        ExecutedCallback chainedCallback = (executedRequest, handled) -> {
+            System.out.println(">> executed");
+            callback.executed(executedRequest, handled);
+        };
+        System.out.println(">>> " + rcr.getClientAddress());
+        this.paxosManager.propose(serviceName, rcr, chainedCallback);
 
         return true;
     }

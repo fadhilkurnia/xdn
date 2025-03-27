@@ -167,7 +167,7 @@ public class ReadYourWritesHandler {
                 // Finally, send the sync packets.
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.INFO, "Sending ClientCentricSyncRequestPacket: "
+                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
                                 + m.msgs[0]);
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
@@ -210,7 +210,7 @@ public class ReadYourWritesHandler {
             GenericMessagingTask<NodeIDType, JSONPacket> m =
                     new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
             try {
-                logger.log(Level.INFO, "Sending ClientCentricWriteAfterPacket: "
+                logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
                         + writeAfterPacket);
                 messenger.send(m);
             } catch (JSONException | IOException e) {
@@ -282,7 +282,7 @@ public class ReadYourWritesHandler {
                                 syncRequestPacket);
 
                 try {
-                    logger.log(Level.INFO, "Sending ClientCentricSyncRequestPacket: "
+                    logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
                             + syncRequestPacket);
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
@@ -331,12 +331,14 @@ public class ReadYourWritesHandler {
             GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                     new GenericMessagingTask<>(senderId, responsePacket);
             try {
-                logger.log(Level.INFO, "Sending ClientCentricSyncResponsePacket: "
+                logger.log(Level.FINER, "Sending ClientCentricSyncResponsePacket: "
                         + responsePacket);
                 messenger.send(m);
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);
             }
+
+            return;
         }
 
         // Handle SyncResPacket
@@ -389,6 +391,8 @@ public class ReadYourWritesHandler {
                 // process the buffered read requests, if any
                 processBufferedReadRequests(serviceInstance, app);
             }
+
+            return;
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +

@@ -39,7 +39,7 @@ import java.util.logging.Logger;
  * half of the replicas are unavailable.
  * <p>
  * TODO:
- *  - Implement background sub-graph prunning by removing vertices that are already acknowledged
+ *  - Implement background sub-graph pruning by removing vertices that are already acknowledged
  *    by *all* the nodes. This requires recording the acknowledgements.
  *  - Implement optimization by keep track of the peer's timestamp (matrix clock) to send the needed
  *    dependencies for each peer, preventing the peer to wait (or ask) for the dependencies.

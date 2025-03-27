@@ -387,7 +387,27 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                 "Unknown XDN Request handled by XdnGigapaxosApp. Request: " + stringified;
 
         if (packetType.equals(XdnRequestType.XDN_SERVICE_HTTP_REQUEST)) {
-            return XdnHttpRequest.createFromString(stringified);
+            XdnHttpRequest httpRequest = XdnHttpRequest.createFromString(stringified);
+
+            // we need to set the request matcher after creating XdnHttpRequest
+            // TODO: this code will fail if the service name doesnt exist in this replica,
+            //   we need to refactor XdnHttpRequest so that we don't need to set the
+            //   request matcher after each creation.
+            //   The issue is there because the behavior of each request is service specific.
+            //   The request can either be constructed in the entry replica, or when a replica
+            //   receive forwarded request.
+            if (httpRequest == null) return null;
+            String serviceName = httpRequest.getServiceName();
+            Map<Integer, ServiceInstance> currServiceInstance =
+                    this.serviceInstances.get(serviceName);
+            if (currServiceInstance == null) return null;
+            Integer currServicePlacementEpoch = this.servicePlacementEpoch.get(serviceName);
+            if (currServicePlacementEpoch == null) return null;
+            ServiceInstance currInstance = currServiceInstance.get(currServicePlacementEpoch);
+            if (currInstance == null) return null;
+            ServiceProperty serviceProperty = currInstance.property;
+            httpRequest.setRequestMatchers(serviceProperty.getRequestMatchers());
+            return httpRequest;
         }
 
         if (packetType.equals(XdnRequestType.XDN_STOP_REQUEST)) {
@@ -959,7 +979,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private int createDockerNetwork(String networkName) {
         String createNetCmd = String.format("docker network create %s",
                 networkName);
-        int exitCode = runShellCommand(createNetCmd, true);
+        int exitCode = runShellCommand(createNetCmd, false);
         if (exitCode != 0 && exitCode != 1) {
             // 1 is the exit code of creating already exist network
             System.err.println("Error: failed to create network");

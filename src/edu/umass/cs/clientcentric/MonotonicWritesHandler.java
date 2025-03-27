@@ -163,7 +163,7 @@ public class MonotonicWritesHandler {
                 GenericMessagingTask<NodeIDType, JSONPacket> m =
                         new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
                 try {
-                    logger.log(Level.INFO, "Sending ClientCentricWriteAfterPacket: "
+                    logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
                             + writeAfterPacket);
                     messenger.send(m);
                 } catch (JSONException | IOException e) {
@@ -203,7 +203,7 @@ public class MonotonicWritesHandler {
                 // Send the sync packets
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.INFO, "Sending ClientCentricSyncRequestPacket: "
+                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
                                 + m.msgs[0]);
                         messenger.send(m);
                     } catch (IOException | JSONException e) {

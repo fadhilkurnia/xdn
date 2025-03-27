@@ -29,6 +29,7 @@ public class DirectedAcyclicGraph {
 
         // Prepare the DFS traversal stack
         Stack<GraphVertex> traversalStack = new Stack<>();
+        Set<String> visitedVertices = new HashSet<>();
         for (GraphVertex n : this.startingVertices) {
             traversalStack.push(n);
         }
@@ -36,6 +37,7 @@ public class DirectedAcyclicGraph {
         // Traverse through all the vertices in the graph
         while (!traversalStack.isEmpty()) {
             GraphVertex current = traversalStack.pop();
+            visitedVertices.add(current.getTimestamp().toString());
 
             List<GraphVertex> children = current.getChildren();
             if (children.isEmpty()) {
@@ -43,10 +45,14 @@ public class DirectedAcyclicGraph {
             }
 
             for (GraphVertex child : children) {
-                traversalStack.push(child);
+                if (!visitedVertices.contains(child.getTimestamp().toString())) {
+                    traversalStack.push(child);
+                }
             }
         }
 
+        assert !result.isEmpty() : "Expecting leaf vertices but found none";
+        assert result.size() < 100 : "Too big of a result: " + result.size();
         return result;
     }
 

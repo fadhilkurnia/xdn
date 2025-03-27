@@ -28,15 +28,17 @@ public class ServiceProperty {
     private ServiceComponent entryComponent;
     private ServiceComponent statefulComponent;
 
-    private List<RequestMatcher> requestMatchers;
+    private final List<RequestMatcher> requestMatchers;
 
     private ServiceProperty(String serviceName, boolean isDeterministic, String stateDirectory,
-                            ConsistencyModel consistencyModel, List<ServiceComponent> components) {
+                            ConsistencyModel consistencyModel, List<ServiceComponent> components,
+                            List<RequestMatcher> requestMatchers) {
         this.serviceName = serviceName;
         this.isDeterministic = isDeterministic;
         this.stateDirectory = stateDirectory;
         this.consistencyModel = consistencyModel;
         this.components = components;
+        this.requestMatchers = requestMatchers;
     }
 
     public ServiceComponent getEntryComponent() {
@@ -169,7 +171,8 @@ public class ServiceProperty {
                 isDeterministic,
                 stateDirectory,
                 consistencyModel,
-                components
+                components,
+                parsedRequestMatchers
         );
 
         // automatically infer is-stateful of component via the state directory
@@ -219,7 +222,7 @@ public class ServiceProperty {
             pathPrefix = matcherItem.has("prefix")
                     ? matcherItem.getString("prefix") : null;
             pathPrefix = matcherItem.has("path_prefix")
-                    ? matcherItem.getString("path_prefix") : null;
+                    ? matcherItem.getString("path_prefix") : pathPrefix;
             if (pathPrefix == null) {
                 throw new IllegalStateException("prefix is required for request matcher");
             }
@@ -250,6 +253,15 @@ public class ServiceProperty {
             parsedMatchers.add(matcher);
         }
         return parsedMatchers;
+    }
+
+    public Set<RequestBehaviorType> getAllBehaviors() {
+        Set<RequestBehaviorType> allBehaviors = new HashSet<>();
+        if (this.requestMatchers != null)
+            for (RequestMatcher matcher : this.requestMatchers) {
+                allBehaviors.add(matcher.getBehavior());
+            }
+        return allBehaviors;
     }
 
     private static List<RequestMatcher> createDefaultMatchers() {
@@ -475,6 +487,10 @@ public class ServiceProperty {
 
     public List<ServiceComponent> getComponents() {
         return components;
+    }
+
+    public List<RequestMatcher> getRequestMatchers() {
+        return requestMatchers;
     }
 
     public String toJsonString() {
