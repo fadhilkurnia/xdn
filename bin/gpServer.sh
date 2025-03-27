@@ -539,6 +539,7 @@ function clear_all {
           clear $server
 
         docker ps -aq | xargs -r docker stop | xargs -r docker rm
+        docker network prune --force
 
       else
         # remote clear
@@ -556,6 +557,7 @@ function clear_all {
 
         # remove all docker container instances
         $SSH $username@$address "docker ps -aq | xargs -r docker stop | xargs -r docker rm";
+        $SSH $username@$address " docker network prune --force";
 
         # unmount all filesystem
         local cmd='sudo df | grep xdn/state/fuselog | awk '\''{print $6}'\'' | xargs -r sudo umount';
