@@ -92,7 +92,7 @@ for approach in approaches:
         replace_placeholder(target_conf_filename, "___IS_DETERMINISTIC___", is_deterministic)
         replace_placeholder(target_conf_filename, "___EXEC_TIME___", "1")
         replace_placeholder(target_conf_filename, "___STATEDIFF_SIZE_BYTES___", "8")
-        command = f"XDN_CONTROL_PLANE={control_plane_address} {xdn_binary} launch {service_name} --file=xdn_vrs.yaml"
+        command = f"XDN_CONTROL_PLANE={control_plane_address} {xdn_binary} launch {service_name} --file=static/xdn_vrs.yaml"
         try:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
@@ -208,7 +208,7 @@ for approach in approaches:
         replace_placeholder(target_conf_filename, "___IS_DETERMINISTIC___", is_deterministic)
         replace_placeholder(target_conf_filename, "___EXEC_TIME___", "1")
         replace_placeholder(target_conf_filename, "___STATEDIFF_SIZE_BYTES___", f"{statediff_size}")
-        command = f"XDN_CONTROL_PLANE={control_plane_address} {xdn_binary} launch {service_name} --file=xdn_vsd.yaml"
+        command = f"XDN_CONTROL_PLANE={control_plane_address} {xdn_binary} launch {service_name} --file=static/xdn_vsd.yaml"
         try:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
@@ -322,7 +322,7 @@ for approach in approaches:
         replace_placeholder(target_conf_filename, "___IS_DETERMINISTIC___", is_deterministic)
         replace_placeholder(target_conf_filename, "___EXEC_TIME___", f"{exec_time}")
         replace_placeholder(target_conf_filename, "___STATEDIFF_SIZE_BYTES___", "8")
-        command = f"XDN_CONTROL_PLANE={control_plane_address} {xdn_binary} launch {service_name} --file=xdn_vet.yaml"
+        command = f"XDN_CONTROL_PLANE={control_plane_address} {xdn_binary} launch {service_name} --file=static/xdn_vet.yaml"
         try:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
