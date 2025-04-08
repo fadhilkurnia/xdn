@@ -240,9 +240,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     @Override
     public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
         String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
-        int umountRetCode = Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
+        int umountRetCode = Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1", false);
         int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
-        assert umountRetCode == 0 && rmRetCode == 0;
+        assert rmRetCode == 0;
         return true;
     }
 }

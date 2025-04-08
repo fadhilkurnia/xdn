@@ -810,6 +810,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         }
 
         // clean the mounted dir for this epoch
+        stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
         String removeDirCommand = String.format("rm -rf %s", toBeRemovedMountDir);
         int code = Shell.runCommand(removeDirCommand);
         assert code == 0;
