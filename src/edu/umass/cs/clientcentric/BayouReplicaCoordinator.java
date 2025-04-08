@@ -1,6 +1,7 @@
 package edu.umass.cs.clientcentric;
 
 import edu.umass.cs.clientcentric.packets.ClientCentricPacketType;
+import edu.umass.cs.clientcentric.packets.ClientCentricSyncResponsePacket;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -8,6 +9,7 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
+import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
@@ -91,17 +93,35 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        if (request instanceof ReplicableClientRequest rcr
-                && rcr.getRequest() instanceof XdnHttpRequest httpRequest) {
-            String requestLog = httpRequest.getLogText();
-            logger.log(Level.INFO, "Coordinating request " + requestLog);
-        }
+//        if (request instanceof ReplicableClientRequest rcr
+//                && rcr.getRequest() instanceof XdnHttpRequest httpRequest) {
+//            String requestLog = httpRequest.getLogText();
+//            logger.log(Level.INFO, "Coordinating request " + requestLog);
+//        }
 
         String serviceName = request.getServiceName();
         ReplicaInstance<NodeIDType> serviceInstance = instances.get(serviceName);
         if (serviceInstance == null) {
-            logger.log(Level.WARNING, "Coordinating request for unknown service name="
-                    + serviceName);
+            // TODO: handle this cleanly
+            return true;
+//            logger.log(Level.WARNING, "Coordinating request for unknown service name="
+//                    + serviceName + " request: " + request.getClass().getSimpleName());
+//            if (request instanceof ClientCentricSyncResponsePacket ccSyncRespPacket) {
+//                logger.log(Level.WARNING, String.format("MyID: %s, Name: %s, Sender: %s, ID: %d",
+//                        this.myNodeID, ccSyncRespPacket.getServiceName(),
+//                        ccSyncRespPacket.getSenderId(), ccSyncRespPacket.getRequestID()));
+//            }
+//            if (callback != null)
+//                callback.executed(request, true);
+//            return true;
+        }
+
+        // handle StopEpoch request
+        if (request instanceof ReplicableClientRequest rcr &&
+                rcr.getRequest() instanceof ReconfigurableRequest rcRequest &&
+                rcRequest.isStop()) {
+            boolean isSuccess = this.app.restore(serviceName, null);
+            callback.executed(rcRequest, isSuccess);
             return true;
         }
 

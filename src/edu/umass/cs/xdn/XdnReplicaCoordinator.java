@@ -255,7 +255,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                                       String placementMetadata) {
         logger.log(Level.FINEST,
                 "{0}:XdnReplicaCoordinator - createReplicaGroup " +
-                        "name={1}, epoch={1}, state={2}, nodes={3}, metadata={4}",
+                        "name={1}, epoch={2}, state={3}, nodes={4}, metadata={5}",
                 new Object[]{myNodeID, serviceName, epoch, state, nodes, placementMetadata});
 
         // These are the default replica groups from Gigapaxos
@@ -398,7 +398,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             ConsistencyModel declaredConsModel = serviceProperties.getConsistencyModel();
             Set<RequestBehaviorType> allDeclaredBehaviors = serviceProperties.getAllBehaviors();
 
-            if (declaredConsModel.equals(ConsistencyModel.LINEARIZABILITY)) {
+            if (declaredConsModel.equals(ConsistencyModel.LINEARIZABILITY) ||
+                    declaredConsModel.equals(ConsistencyModel.LINEARIZABLE)) {
                 return this.paxosCoordinator;
             }
 

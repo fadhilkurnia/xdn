@@ -131,7 +131,8 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
 
     @Override
     public boolean deleteReplicaGroup(String serviceName, int epoch) {
-        this.paxosManager.proposeStop(serviceName, epoch, "stop",
+        Request stopRequest = this.getStopRequest(serviceName, epoch);
+        this.paxosManager.proposeStop(serviceName, epoch, stopRequest,
                 (executedStopRequest, isHandled) ->
                         paxosManager.deleteStoppedPaxosInstance(serviceName, epoch));
         return true;

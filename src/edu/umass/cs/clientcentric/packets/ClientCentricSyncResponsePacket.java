@@ -7,6 +7,7 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -65,7 +66,11 @@ public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
         JSONArray requestsJsonArr = new JSONArray();
         // FIXME: these are inefficient because we are converting byte[] to String,
         //  which later will be serialized and converted again into byte[].
-        for (byte[] req : this.encodedRequests) {
+        List<byte[]> copyList = null;
+        synchronized (this.encodedRequests) {
+            copyList = new ArrayList<>(this.encodedRequests);
+        }
+        for (byte[] req : copyList) {
             requestsJsonArr.put(new String(req, StandardCharsets.ISO_8859_1));
         }
         object.put("req", requestsJsonArr);
@@ -108,9 +113,14 @@ public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
                 String raw = requestJsonArr.getString(i);
                 encodedRequests.add(raw.getBytes(StandardCharsets.ISO_8859_1));
             }
+
+            assert !serviceName.equalsIgnoreCase("AR1");
+            assert !serviceName.equalsIgnoreCase("AR2");
+
             return new ClientCentricSyncResponsePacket(packetId, serviceName, senderId,
                     fromSeqNum, encodedRequests);
         } catch (JSONException e) {
+            System.out.println("receiving an invalid encoded client-centric-sync-resp packet, exception: " + e);
             Logger.getGlobal().log(Level.SEVERE,
                     "receiving an invalid encoded client-centric-sync-resp packet");
             return null;

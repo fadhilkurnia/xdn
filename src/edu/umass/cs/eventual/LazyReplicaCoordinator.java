@@ -12,6 +12,7 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
+import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
@@ -97,6 +98,14 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         Request currRequestOrPacket = request;
         if (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
             currRequestOrPacket = rcr.getRequest();
+        }
+
+        // handle StopEpoch packet
+        if (currRequestOrPacket instanceof ReconfigurableRequest rcRequest &&
+                rcRequest.isStop()) {
+            boolean isSuccess = this.app.restore(serviceName, null);
+            callback.executed(rcRequest, isSuccess);
+            return true;
         }
 
         // handle client-initiated request

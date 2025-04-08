@@ -534,7 +534,7 @@ public class HttpReconfigurator {
             InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
 
             // Parses and handles SetReplicaPlacementRequest
-            Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9]+/placement$");
+            Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/placement$");
             Matcher matcher = pattern.matcher(httpRequest.uri());
             if (httpRequest.method().equals(HttpMethod.POST) && matcher.matches()) {
                 parseAndHandleHttpSetReplicaPlacementRequest(

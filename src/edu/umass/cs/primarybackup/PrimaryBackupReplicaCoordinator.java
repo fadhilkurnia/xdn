@@ -111,9 +111,10 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
             throws IOException, RequestParseException {
         ExecutedCallback chainedCallback = callback;
 
-        // System.out.printf(">>> %s:PBRCoordinator - coordinateRequest %s %s\n\n",
-        //        getMyID(), request.getClass().getSimpleName(),
-        //        request instanceof ReplicableClientRequest rcr ? rcr.getRequest().getClass().getSimpleName() : "null");
+         System.out.printf(">>> %s:PBRCoordinator - coordinateRequest %s %s\n\n",
+                getMyID(), request.getClass().getSimpleName(),
+                request instanceof ReplicableClientRequest rcr
+                        ? rcr.getRequest().getClass().getSimpleName() : "null");
 
         // if packet comes from client (i.e., ReplicableClientRequest), wrap the
         // containing request with RequestPacket, and re-chain the callback.

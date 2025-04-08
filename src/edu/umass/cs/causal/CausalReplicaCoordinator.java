@@ -207,12 +207,14 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                                         ExecutedCallback callback) {
         assert clientReplicableRequest != null : "client request cannot be null";
 
-        // FIXME: stop packet should not be wrapped as client request
+        // Stop packet is sometimes wrapped in ClientRequest by ActiveReplica
         if (clientReplicableRequest.getRequest() instanceof ReconfigurableRequest rcRequest &&
                 rcRequest.isStop()) {
             System.out.println(">> CausalReplicaCoordinator -- stopping a service in epoch=" +
                     rcRequest.getEpochNumber());
-            return this.app.restore(clientReplicableRequest.getServiceName(), null);
+            boolean isSuccess = this.app.restore(clientReplicableRequest.getServiceName(), null);
+            callback.executed(rcRequest, isSuccess);
+            return isSuccess;
         }
 
         // Validates the client request

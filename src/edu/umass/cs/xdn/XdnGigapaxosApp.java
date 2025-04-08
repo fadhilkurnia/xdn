@@ -384,7 +384,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     public Request getRequest(String stringified) throws RequestParseException {
         XdnRequestType packetType = XdnRequest.getQuickPacketTypeFromEncodedPacket(stringified);
         assert packetType != null :
-                "Unknown XDN Request handled by XdnGigapaxosApp. Request: " + stringified;
+                "Unknown XDN Request handled by XdnGigapaxosApp. Request: '" + stringified + "'";
 
         if (packetType.equals(XdnRequestType.XDN_SERVICE_HTTP_REQUEST)) {
             XdnHttpRequest httpRequest = XdnHttpRequest.createFromString(stringified);
@@ -1261,14 +1261,14 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             Logger.getGlobal().log(Level.WARNING,
                     "Ignoring capture final state request for an unknown service with name=" +
                             serviceName);
-            return false;
+            return true;
         }
         ServiceInstance serviceInstance = epochToInstanceMap.get(epoch);
         if (serviceInstance == null) {
             Logger.getGlobal().log(Level.WARNING,
                     String.format("Ignoring capture final state request for an unknown " +
                             "epoch=%d for name=%s", epoch, serviceName));
-            return false;
+            return true;
         }
 
         // Remove the previously captured final state, if any.
@@ -1459,6 +1459,8 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             userSubCmd = String.format("--user=%d:%d", uid, gid);
         }
 
+        String clearCommand = String.format("docker container rm --force %s", containerName);
+        Shell.runCommand(clearCommand, true);
         String startCommand =
                 String.format("docker run --rm -d --name=%s --hostname=%s --network=%s " +
                                 "%s %s %s %s %s %s",

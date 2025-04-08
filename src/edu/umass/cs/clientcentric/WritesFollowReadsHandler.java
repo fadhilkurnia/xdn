@@ -283,12 +283,14 @@ public class WritesFollowReadsHandler {
 
                 try {
                     logger.log(Level.INFO, "Sending ClientCentricSyncRequestPacket: "
-                            + syncRequestPacket);
+                            + syncRequestPacket.getServiceName());
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
                     throw new RuntimeException(e);
                 }
             }
+
+            return;
         }
 
         // Handle SyncReqPacket
@@ -330,11 +332,13 @@ public class WritesFollowReadsHandler {
                     new GenericMessagingTask<>(senderId, responsePacket);
             try {
                 logger.log(Level.INFO, "Sending ClientCentricSyncResponsePacket: "
-                        + responsePacket);
+                        + responsePacket.getRequestID());
                 messenger.send(m);
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);
             }
+
+            return;
         }
 
         // Handle SynResPacket
@@ -387,6 +391,8 @@ public class WritesFollowReadsHandler {
                 // Process the buffered write requests, if any.
                 processBufferedWriteRequests(serviceInstance, app);
             }
+
+            return;
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +

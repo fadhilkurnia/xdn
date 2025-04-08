@@ -8,6 +8,7 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.packets.*;
 import edu.umass.cs.primarybackup.packets.PrimaryBackupPacketType;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
+import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
@@ -109,9 +110,17 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         } else if (request instanceof ReplicableClientRequest rcr &&
                 rcr.getRequest() instanceof PramPacket pp) {
             packet = pp;
+        } else if (request instanceof ReplicableClientRequest rcr &&
+                rcr.getRequest() instanceof ReconfigurableRequest rcRequest &&
+                rcRequest.isStop()) {
+            // handle stop epoch packet
+            boolean isSuccess = this.app.restore(rcr.getServiceName(), null);
+            callback.executed(rcRequest, isSuccess);
+            return true;
         } else {
             assert request instanceof PramPacket :
-                    "The received request must be ReplicableClientRequest or PramPacket";
+                    "The received request must be ReplicableClientRequest or PramPacket, found " +
+                            request.getClass().getSimpleName();
             packet = (PramPacket) request;
         }
 

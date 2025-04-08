@@ -167,8 +167,7 @@ public class ReadYourWritesHandler {
                 // Finally, send the sync packets.
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
-                                + m.msgs[0]);
+                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket");
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
                         throw new RuntimeException(e);
@@ -211,7 +210,7 @@ public class ReadYourWritesHandler {
                     new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
             try {
                 logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
-                        + writeAfterPacket);
+                        + writeAfterPacket.getServiceName());
                 messenger.send(m);
             } catch (JSONException | IOException e) {
                 throw new RuntimeException(e);
@@ -283,7 +282,7 @@ public class ReadYourWritesHandler {
 
                 try {
                     logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
-                            + syncRequestPacket);
+                            + syncRequestPacket.getServiceName());
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
                     throw new RuntimeException(e);
@@ -332,7 +331,7 @@ public class ReadYourWritesHandler {
                     new GenericMessagingTask<>(senderId, responsePacket);
             try {
                 logger.log(Level.FINER, "Sending ClientCentricSyncResponsePacket: "
-                        + responsePacket);
+                        + responsePacket.getServiceName());
                 messenger.send(m);
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);

@@ -172,7 +172,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     public boolean handlePrimaryBackupPacket(
             PrimaryBackupPacket packet, ExecutedCallback callback) {
-        // System.out.printf(">> PBManager-%s: handling packet %s\n", myNodeID, packet.getRequestType());
+         System.out.printf(">> PBManager-%s: handling packet %s, is_paxos_leader=%b\n",
+                 myNodeID, packet.getRequestType(),
+                 this.paxosManager.isPaxosCoordinator(packet.getServiceName()));
 
         // RequestPacket: client -> entry replica
         if (packet instanceof RequestPacket requestPacket) {
@@ -250,6 +252,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         Role currentServiceRole = this.currentRole.get(serviceName);
         assert currentServiceRole == Role.PRIMARY : String.format("%s my role for %s is %s",
                 myNodeID, serviceName, currentServiceRole.toString());
+
+        boolean isPaxosCoordinator = this.paxosManager.isPaxosCoordinator(serviceName);
+        if (!isPaxosCoordinator) {
+            this.paxosManager.tryToBePaxosCoordinator(serviceName);
+        }
 
         // RequestPacket -> AppRequest -> execute() -> AppResponse -> RequestPacket (with response)
         Request appRequest = null;

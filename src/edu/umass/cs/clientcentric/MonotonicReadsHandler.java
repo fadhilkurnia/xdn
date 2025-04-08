@@ -168,8 +168,7 @@ public class MonotonicReadsHandler {
                 // send the sync packets
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
-                                + m.msgs[0]);
+                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket");
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
                         throw new RuntimeException(e);
@@ -212,7 +211,7 @@ public class MonotonicReadsHandler {
                     new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
             try {
                 logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
-                        + writeAfterPacket);
+                        + writeAfterPacket.getServiceName());
                 messenger.send(m);
             } catch (JSONException | IOException e) {
                 throw new RuntimeException(e);
@@ -287,7 +286,7 @@ public class MonotonicReadsHandler {
 
                 try {
                     logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
-                            + syncRequestPacket);
+                            + syncRequestPacket.getServiceName());
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
                     throw new RuntimeException(e);
@@ -336,11 +335,13 @@ public class MonotonicReadsHandler {
                     new GenericMessagingTask<>(senderId, responsePacket);
             try {
                 logger.log(Level.FINER, "Sending ClientCentricSyncResponsePacket: "
-                        + responsePacket);
+                        + responsePacket.getServiceName());
                 messenger.send(m);
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);
             }
+
+            return;
         }
 
         // handle SyncResPacket
@@ -393,6 +394,8 @@ public class MonotonicReadsHandler {
                 // process the buffered read requests, if any
                 processBufferedReadRequests(serviceInstance, app);
             }
+
+            return;
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +
