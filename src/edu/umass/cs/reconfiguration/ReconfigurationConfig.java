@@ -446,6 +446,12 @@ public class ReconfigurationConfig {
          */
         INITIAL_STATE_VALIDATOR_CLASS(""),
 
+        /**
+         * Type of state-diff recorder used in the (@link XdnGigapaxosApp}
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_PB_STATEDIFF_RECORDER_TYPE("RSYNC")
+
         ;
 
         final Object defaultValue;
