@@ -1,0 +1,18 @@
+---
+name: ___SERVICE_NAME___
+image: fadhilkurnia/xdn-todo
+state: /app/data/
+port: 80
+consistency: ___CONSITENCY_MODEL___
+deterministic: true
+
+requests:
+  - path_prefix: "/"
+    methods: "GET,OPTIONS,HEAD"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: write_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: monotonic

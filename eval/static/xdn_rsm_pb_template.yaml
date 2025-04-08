@@ -1,0 +1,17 @@
+---
+name: ___SERVICE_NAME___
+state: main:/app/data/
+consistency: linearizability
+deterministic: ___IS_DETERMINISTIC___
+
+components:
+   - main:
+      image: rsmbench
+      port: 80
+      entry: true
+      stateful: true
+      environments:
+        - EXEC_TIME_MS: ___EXEC_TIME___
+        - STATEDIFF_SIZE_BYTES: ___STATEDIFF_SIZE_BYTES___
+   - busybox:
+      image: busybox
