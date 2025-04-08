@@ -457,6 +457,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             System.out.printf(">> %s already the primary for service name '%s'",
                     myNodeID,
                     groupName);
+            callback.executed(packet, true);
+            this.paxosManager.tryToBePaxosCoordinator(groupName);
             return true;
         }
 
@@ -483,6 +485,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     processOutstandingRequests();
 
                     callback.executed(packet, isHandled);
+
+                    this.paxosManager.tryToBePaxosCoordinator(groupName);
+                    this.paxosManager.tryToBePaxosCoordinator(groupName);
                 }
         );
         return true;
