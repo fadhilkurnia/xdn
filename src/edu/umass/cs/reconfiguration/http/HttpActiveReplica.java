@@ -636,6 +636,21 @@ public class HttpActiveReplica {
 
         private static void writeHttpResponse(HttpResponse httpResponse, ChannelHandlerContext ctx,
                                               boolean isKeepAlive, long startProcessingTime) {
+
+            // Observability: logging post-execution time.
+            String postExecTimestampHeaderKey = String.format("X-E-EXC-TS-%s", nodeId);
+            String postExecTimestampStr = httpResponse.headers().get(postExecTimestampHeaderKey);
+            if (postExecTimestampStr != null) {
+                long postExecTimestamp = Long.parseLong(postExecTimestampStr);
+                long postExecElapsedTime = System.nanoTime() - postExecTimestamp;
+                logger.log(Level.FINE, "{0}:{1} - HTTP post-execution over {2}ms",
+                        new Object[]{
+                                nodeId,
+                                HttpActiveReplica.class.getSimpleName(),
+                                (postExecElapsedTime / 1_000_000.0)});
+                httpResponse.headers().remove(postExecTimestampHeaderKey);
+            }
+
             if (isKeepAlive) {
                 httpResponse.headers().set(
                         HttpHeaderNames.CONNECTION,
@@ -657,22 +672,11 @@ public class HttpActiveReplica {
             });
 
             long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0}:{1} - HTTP execution within {2}ms",
+            logger.log(Level.FINE, "{0}:{1} - Overall HTTP execution within {2}ms",
                     new Object[]{
                             nodeId,
                             HttpActiveReplica.class.getSimpleName(),
                             (elapsedTime / 1_000_000.0)});
-
-            String postExecTimestampStr = httpResponse.headers().get("X-E-EXC-TS-" + nodeId);
-            if (postExecTimestampStr != null) {
-                long postExecTimestamp = Long.parseLong(postExecTimestampStr);
-                long postExecElapsedTime = System.nanoTime() - postExecTimestamp;
-                logger.log(Level.FINE, "{0}:{1} - HTTP post-execution over {2}ms",
-                        new Object[]{
-                                nodeId,
-                                HttpActiveReplica.class.getSimpleName(),
-                                (postExecElapsedTime / 1_000_000.0)});
-            }
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {

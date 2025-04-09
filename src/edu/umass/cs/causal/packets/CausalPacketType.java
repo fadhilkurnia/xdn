@@ -22,9 +22,6 @@ public enum CausalPacketType implements IntegerPacketType {
     // Replicas -> Entry Replica
     CAUSAL_READ_ACK_PACKET(41304);
 
-    // Client -> Entry Replica
-    // COPS_APP_REQUEST_PACKET(41302);
-
     private static final Map<Integer, CausalPacketType> numbers = new HashMap<>();
 
     /* ************** BEGIN static code block to ensure correct initialization *********** */
