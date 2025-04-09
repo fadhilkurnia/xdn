@@ -3,7 +3,7 @@ name: todo_wfr
 image: fadhilkurnia/xdn-todo
 state: /app/data/
 port: 80
-consistency: write_follow_reads
+consistency: writes_follow_reads
 deterministic: true
 
 requests:

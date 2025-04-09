@@ -6,7 +6,7 @@ deterministic: ___IS_DETERMINISTIC___
 
 components:
    - main:
-      image: rsmbench
+      image: fadhilkurnia/xdn-rsmbench
       port: 80
       entry: true
       stateful: true

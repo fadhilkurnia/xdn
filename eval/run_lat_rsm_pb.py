@@ -50,7 +50,6 @@ def run_xdn_cluster(gp_config_file, screen_session_name):
     screen_session_name = "xdn_lat_rsm_pb_vary_req_size"
     screen_log_filename = f"screen_logs/{screen_session_name}.log"
     os.system(f"rm -f {screen_log_filename}")
-    command = f"../bin/gpServer.sh -DgigapaxosConfig={gp_config_file} start all; exec bash"
     command = f"screen -L -Logfile screen_logs/{screen_session_name}.log -S {screen_session_name} -d -m bash -c '../bin/gpServer.sh -DgigapaxosConfig={gp_config_file} start all; exec bash'"
     print("   ", command)
     ret_code = os.system(command)
@@ -117,17 +116,19 @@ for approach in approaches:
             output_json = json.loads(output)
             if "FAILED" in output_json:
                 assert output_json["FAILED"] == False
+            time.sleep(90)
         if approach == "pb":
             try:
                 for i in range(num_machines):
-                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true"}, timeout=1)
-                    response_json = json.loads(response)
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true", "XDN": service_name}, timeout=1)
+                    response_json = json.loads(response.text)
                     if "role" in response_json and response_json["role"] == "primary":
-                        leader_address = f"http://10.10.1.{i+1}"
+                        leader_address = f"10.10.1.{i+1}"
+                        print("detected primary: ", leader_address)
+                        break
                 time.sleep(5)
             except Exception as e:
                 print(f"Exception: {e}")
-        time.sleep(90)
 
         service_endpoint = f"http://{leader_address}:2300/"
         headers = {"XDN": service_name}
@@ -235,17 +236,19 @@ for approach in approaches:
             output_json = json.loads(output)
             if "FAILED" in output_json:
                 assert output_json["FAILED"] == False
+            time.sleep(90)
         if approach == "pb":
             try:
                 for i in range(num_machines):
-                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true"}, timeout=1)
-                    response_json = json.loads(response)
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true", "XDN": service_name}, timeout=1)
+                    response_json = json.loads(response.text)
                     if "role" in response_json and response_json["role"] == "primary":
-                        leader_address = f"http://10.10.1.{i+1}"
+                        leader_address = f"10.10.1.{i+1}"
+                        print("detected primary: ", leader_address)
+                        break
                 time.sleep(5)
             except Exception as e:
                 print(f"Exception: {e}")
-        time.sleep(90)
 
         service_endpoint = f"http://{leader_address}:2300/"
         headers = {"XDN": service_name}
@@ -330,7 +333,7 @@ for approach in approaches:
         try:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
-            assert result.ret_code == 0
+            assert result.returncode == 0
         except Exception as e:
             print(f"Error executing command: {e}")
             print(e.stderr)
@@ -355,10 +358,12 @@ for approach in approaches:
         if approach == "pb":
             try:
                 for i in range(num_machines):
-                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true"}, timeout=1)
-                    response_json = json.loads(response)
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true", "XDN": service_name}, timeout=1)
+                    response_json = json.loads(response.text)
                     if "role" in response_json and response_json["role"] == "primary":
-                        leader_address = f"http://10.10.1.{i+1}"
+                        leader_address = f"10.10.1.{i+1}"
+                        print("detected primary: ", leader_address)
+                        break
                 time.sleep(5)
             except Exception as e:
                 print(f"Exception: {e}")
