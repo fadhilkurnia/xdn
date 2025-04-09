@@ -17,12 +17,12 @@ control_plane_http_port = "3300"
 result_filename = "results/latency_rsm_pb.csv"
 xdn_binary = "../bin/xdn"
 docker_image = "fadhilkurnia/xdn-rsmbench"
-num_repetitions = 10_000
+num_repetitions = 1_000
 gp_config_file = "static/gigapaxos.xdn.3way.cloudlab.properties"
 num_machines = 3
 is_cache_docker_image = False
-leader_address = "10.10.1.2"
-leader_name = "AR1"
+default_leader_address = "10.10.1.2"
+default_leader_name = "AR1"
 
 # validate xdn binary does exist
 command = f"{xdn_binary} --help > /dev/null"
@@ -103,6 +103,9 @@ for approach in approaches:
         time.sleep(10)
 
         # reconfigure the leader
+        print(">>> reconfiguring the leader ...")
+        leader_address = default_leader_address
+        leader_name = default_leader_name
         if approach == "rsm":
             replica_names = ["AR0", "AR1", "AR2"]
             command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
@@ -116,12 +119,11 @@ for approach in approaches:
                 assert output_json["FAILED"] == False
         if approach == "pb":
             try:
-                change_leader_header = {"XDN": service_name, "coordinate-request": "true", "node-id": leader_name}
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
-                time.sleep(5)
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
-                time.sleep(5)
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
+                for i in range(num_machines):
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true"}, timeout=1)
+                    response_json = json.loads(response)
+                    if "role" in response_json and response_json["role"] == "primary":
+                        leader_address = f"http://10.10.1.{i+1}"
                 time.sleep(5)
             except Exception as e:
                 print(f"Exception: {e}")
@@ -219,6 +221,9 @@ for approach in approaches:
         time.sleep(10)
 
         # reconfigure the leader
+        print(">>> reconfiguring the leader ...")
+        leader_address = default_leader_address
+        leader_name = default_leader_name
         if approach == "rsm":
             replica_names = ["AR0", "AR1", "AR2"]
             command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
@@ -232,12 +237,11 @@ for approach in approaches:
                 assert output_json["FAILED"] == False
         if approach == "pb":
             try:
-                change_leader_header = {"XDN": service_name, "coordinate-request": "true", "node-id": leader_name}
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
-                time.sleep(5)
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
-                time.sleep(5)
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
+                for i in range(num_machines):
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true"}, timeout=1)
+                    response_json = json.loads(response)
+                    if "role" in response_json and response_json["role"] == "primary":
+                        leader_address = f"http://10.10.1.{i+1}"
                 time.sleep(5)
             except Exception as e:
                 print(f"Exception: {e}")
@@ -333,6 +337,9 @@ for approach in approaches:
         time.sleep(10)
 
         # reconfigure the leader
+        print(">>> reconfiguring the leader ...")
+        leader_address = default_leader_address
+        leader_name = default_leader_name
         if approach == "rsm":
             replica_names = ["AR0", "AR1", "AR2"]
             command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
@@ -344,18 +351,17 @@ for approach in approaches:
             output_json = json.loads(output)
             if "FAILED" in output_json:
                 assert output_json["FAILED"] == False
+            time.sleep(90)
         if approach == "pb":
             try:
-                change_leader_header = {"XDN": service_name, "coordinate-request": "true", "node-id": leader_name}
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
-                time.sleep(5)
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
-                time.sleep(5)
-                response = requests.post(f"http://{leader_address}:2300/", headers=change_leader_header, timeout=1)
+                for i in range(num_machines):
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true"}, timeout=1)
+                    response_json = json.loads(response)
+                    if "role" in response_json and response_json["role"] == "primary":
+                        leader_address = f"http://10.10.1.{i+1}"
                 time.sleep(5)
             except Exception as e:
                 print(f"Exception: {e}")
-        time.sleep(90)
 
         service_endpoint = f"http://{leader_address}:2300/"
         headers = {"XDN": service_name}
