@@ -124,7 +124,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
         this.logger.log(Level.INFO, "node=" + this.myNodeID + " coordinating request " +
-                request);
+                request.getClass().getSimpleName());
 
         if (request instanceof ReplicableClientRequest r) {
             return this.handleClientRequest(r, callback);
