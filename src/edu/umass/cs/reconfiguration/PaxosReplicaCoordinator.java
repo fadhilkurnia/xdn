@@ -441,4 +441,10 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		if(this.app instanceof GigapaxosShutdownable)
 			((GigapaxosShutdownable)this.app).shutdown();
 	}
+
+	public boolean isPaxosCoordinator(String groupName) {
+		assert groupName != null : "Group name cannot be null";
+		return this.paxosManager.isPaxosCoordinator(groupName);
+	}
+
 }

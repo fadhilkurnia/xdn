@@ -1,7 +1,6 @@
 package edu.umass.cs.clientcentric;
 
 import edu.umass.cs.clientcentric.packets.ClientCentricPacketType;
-import edu.umass.cs.clientcentric.packets.ClientCentricSyncResponsePacket;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -12,13 +11,11 @@ import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
 import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 // TODO: allowing client to specify the requested consistency-model per-request (per session)
@@ -214,4 +211,14 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
         if (targetInstance == null) return null;
         return targetInstance.nodeIDs;
     }
+
+    public String getServiceConsistencyModel(String serviceName) {
+        assert serviceName != null : "Service Name cannot be null";
+        ReplicaInstance<NodeIDType> currInstance = instances.get(serviceName);
+        if (currInstance == null) {
+            return null;
+        }
+        return currInstance.consistencyModel.toString();
+    }
+
 }

@@ -11,7 +11,8 @@ public enum XdnRequestType implements IntegerPacketType {
     XDN_HTTP_FORWARD_REQUEST(31301),
     XDN_HTTP_FORWARD_RESPONSE(31302),
     XDN_STATEDIFF_APPLY_REQUEST(31303),
-    XDN_STOP_REQUEST(31304);
+    XDN_STOP_REQUEST(31304),
+    XDN_GET_PROTOCOL_ROLE(31305);
 
     private static final HashMap<Integer, XdnRequestType> numbers = new HashMap<>();
 

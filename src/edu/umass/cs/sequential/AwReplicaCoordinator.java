@@ -142,4 +142,10 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
     public Set<NodeIDType> getReplicaGroup(String serviceName) {
         return this.paxosManager.getReplicaGroup(serviceName);
     }
+
+    public boolean isPaxosCoordinator(String serviceName) {
+        assert serviceName != null : "Service name cannot be null";
+        return this.paxosManager.isPaxosCoordinator(serviceName);
+    }
+
 }

@@ -195,4 +195,7 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
         this.pbManager.stop();
     }
 
+    public boolean isPrimary(String serviceName) {
+        return this.pbManager.isCurrentPrimary2(serviceName);
+    }
 }

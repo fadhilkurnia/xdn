@@ -23,6 +23,7 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
+import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
@@ -174,6 +175,12 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             return createNotFoundResponse(request, callback);
         }
 
+        // one edge case, handling XdnGetProtocolRoleRequest
+        if (request instanceof XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest) {
+            this.handleXdnGetProtocolRoleRequest(xdnGetProtocolRoleRequest, callback);
+            return true;
+        }
+
         // prepare gigapaxos' request
         ReplicableClientRequest gpRequest = null;
         if (request instanceof ReplicableClientRequest rcr) {
@@ -245,6 +252,66 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         httpRequest.setHttpResponse(notFoundResponse);
         callback.executed(httpRequest, true);
         return true;
+    }
+
+    private void handleXdnGetProtocolRoleRequest(XdnGetProtocolRoleRequest request,
+                                                 ExecutedCallback callback) {
+        String serviceName = request.getServiceName();
+        assert serviceName != null : "Unknown service name";
+        ServiceProperty currServiceProperty = this.serviceProperties.get(serviceName);
+        if (currServiceProperty == null) {
+            callback.executed(request, true);
+            return;
+        }
+        AbstractReplicaCoordinator<NodeIDType> coordinator = this.serviceCoordinator.get(serviceName);
+
+        // prepare for the response
+        String protocolName = coordinator != null ? coordinator.getClass().getSimpleName() : "?";
+        String requestedConsistency = currServiceProperty.getConsistencyModel().toString();
+        String offeredConsistency = getConsistencyModelFromCoordinator(serviceName, coordinator);
+        String roleName = "replica";
+
+        // paxos, sequential, and primary-backup internally handle the request to know the role
+        // in this replica.
+        if (coordinator instanceof PaxosReplicaCoordinator<NodeIDType> paxos) {
+            boolean isCoordinator = paxos.isPaxosCoordinator(serviceName);
+            roleName = isCoordinator ? "leader" : "follower";
+        }
+        if (coordinator instanceof AwReplicaCoordinator<NodeIDType> sequentialCoordinator) {
+            boolean isCoordinator = sequentialCoordinator.isPaxosCoordinator(serviceName);
+            roleName = isCoordinator ? "leader" : "follower";
+        }
+        if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pbCoordinator) {
+            boolean isPrimary = pbCoordinator.isPrimary(serviceName);
+            roleName = isPrimary ? "primary" : "backup";
+        }
+
+        request.setResponse(
+                this.myNodeID, protocolName, requestedConsistency, offeredConsistency, roleName);
+        callback.executed(request, true);
+    }
+
+    private String getConsistencyModelFromCoordinator(String serviceName,
+                                                      AbstractReplicaCoordinator<NodeIDType> coordinator) {
+        if (coordinator instanceof PaxosReplicaCoordinator<NodeIDType>) {
+            return ConsistencyModel.LINEARIZABILITY.toString();
+        }
+        if (coordinator instanceof AwReplicaCoordinator<NodeIDType>) {
+            return ConsistencyModel.SEQUENTIAL.toString();
+        }
+        if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType>) {
+            return ConsistencyModel.LINEARIZABILITY.toString();
+        }
+        if (coordinator instanceof CausalReplicaCoordinator<NodeIDType>) {
+            return ConsistencyModel.CAUSAL.toString();
+        }
+        if (coordinator instanceof PramReplicaCoordinator<NodeIDType>) {
+            return ConsistencyModel.PRAM.toString();
+        }
+        if (coordinator instanceof BayouReplicaCoordinator<NodeIDType> bayou) {
+            return bayou.getServiceConsistencyModel(serviceName);
+        }
+        return "?";
     }
 
     @Override

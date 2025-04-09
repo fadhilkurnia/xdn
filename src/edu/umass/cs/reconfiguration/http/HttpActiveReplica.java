@@ -7,6 +7,7 @@ import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -529,6 +530,12 @@ public class HttpActiveReplica {
                     handleCoordinatorRequest(p, ctx);
                     return;
                 }
+                if (this.request.headers().get("XdnGetProtocolRoleRequest") != null) {
+                    XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest =
+                            new XdnGetProtocolRoleRequest(serviceName);
+                    handleCoordinatorRequest(xdnGetProtocolRoleRequest, ctx);
+                    return;
+                }
 
                 // instrumenting the request for latency measurement
                 this.request.headers().set("X-S-EXC-TS-" + nodeId, System.nanoTime());
@@ -559,9 +566,15 @@ public class HttpActiveReplica {
         }
 
         // TODO: cleanly handle this
-        private void handleCoordinatorRequest(ChangePrimaryPacket p, ChannelHandlerContext context) {
+        private void handleCoordinatorRequest(Request p, ChannelHandlerContext context) {
+            assert p instanceof ChangePrimaryPacket || p instanceof XdnGetProtocolRoleRequest :
+                    "Unexpected packet type of " + p.getClass().getSimpleName();
             arFunctions.handRequestToAppForHttp(p, (request, handled) -> {
-                sendStringResponse("OK\n", context, false);
+                String responseString = "OK\n";
+                if (request instanceof XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest) {
+                    responseString = xdnGetProtocolRoleRequest.getJsonResponse();
+                }
+                sendStringResponse(responseString, context, false);
             });
         }
 

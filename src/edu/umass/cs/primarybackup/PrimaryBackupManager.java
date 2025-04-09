@@ -836,6 +836,20 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         return myCurrentRole.equals(Role.PRIMARY);
     }
 
+    // same as isCurrentPrimary, but proactively try to make this node to be
+    // paxos coordinator as well.
+    public boolean isCurrentPrimary2(String groupName) {
+        Role myCurrentRole = this.currentRole.get(groupName);
+        if (myCurrentRole == null) {
+            return false;
+        }
+        boolean isPrimary = myCurrentRole.equals(Role.PRIMARY);
+        if (isPrimary) {
+            this.paxosManager.tryToBePaxosCoordinator(groupName);
+        }
+        return isPrimary;
+    }
+
     private void restartPaxosInstance(String groupName) {
         this.paxosManager.restartFromLastCheckpoint(groupName);
     }
