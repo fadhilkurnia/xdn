@@ -8,6 +8,8 @@ python -m pip install -U pip
 python -m pip install -U matplotlib
 python -m pip install -U scikit-learn
 python -m pip install -U requests
+python -m pip install -U pandas
+python -m pip install -U basemap
 
 ant jar
 ./bin/build_xdn_cli.sh
