@@ -41,6 +41,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
     private final HttpRequest httpRequest;
     private final HttpContent httpRequestContent;
+    private final ByteBuf httpRequestContentBytes;
 
     private HttpResponse httpResponse;
     private ByteBuf httpResponseBody;
@@ -57,6 +58,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
         this.httpRequest = request;
         this.httpRequestContent = content;
+        this.httpRequestContentBytes = content.content() != null ? content.content().copy() : null;
 
         // Infers requestId from httpRequest, otherwise generates random ID.
         Long inferredRequestId = this.inferRequestId(request);
@@ -314,10 +316,10 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         // Converts body, if any.
         java.net.http.HttpRequest.BodyPublisher bodyPublisher =
                 java.net.http.HttpRequest.BodyPublishers.noBody();
-        if (this.httpRequestContent.content() != null) {
-            int lenBody = this.httpRequestContent.content().readableBytes();
+        if (this.httpRequestContentBytes != null) {
+            int lenBody = this.httpRequestContentBytes.readableBytes();
             byte[] requestBody = new byte[lenBody];
-            this.httpRequestContent.content().duplicate().readBytes(requestBody);
+            this.httpRequestContentBytes.getBytes(0, requestBody);
             bodyPublisher = java.net.http.HttpRequest.BodyPublishers.ofByteArray(requestBody);
         }
 

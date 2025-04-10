@@ -100,6 +100,13 @@ public class ReadYourWritesHandler {
             requestLastWriteTimestamp = new VectorTimestamp(nodeIDs);
         }
 
+        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientWriteTs=%s ourTs=%s",
+                messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
+                clientReplicableRequest.getClass().getSimpleName(),
+                clientReplicableRequest.getRequestID(),
+                requestLastWriteTimestamp,
+                serviceLastTimestamp));
+
         // Reset the client's write timestamp, if it is not comparable
         boolean isTimestampComparable = requestLastWriteTimestamp.isComparableWith(serviceLastTimestamp);
         if (!isTimestampComparable) {
@@ -148,6 +155,7 @@ public class ReadYourWritesHandler {
                 List<GenericMessagingTask<NodeIDType, ClientCentricPacket>> syncPackets =
                         new ArrayList<>();
                 for (String nodeIdRaw : serviceLastTimestamp.getNodeIds()) {
+                    if (messenger.getMyID().toString().equals(nodeIdRaw)) continue;
                     long clientTs = requestLastWriteTimestamp.getNodeTimestamp(nodeIdRaw);
                     long replicaTs = serviceLastTimestamp.getNodeTimestamp(nodeIdRaw);
                     if (clientTs > replicaTs) {
@@ -161,13 +169,17 @@ public class ReadYourWritesHandler {
                         GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
+
+                        logger.log(Level.INFO,
+                                String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
+                                        messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
+                                        nodeIdRaw, clientTs, replicaTs));
                     }
                 }
 
                 // Finally, send the sync packets.
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket");
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
                         throw new RuntimeException(e);
@@ -280,7 +292,7 @@ public class ReadYourWritesHandler {
                 Long prevPeerRequestedFromSeqNum =
                         serviceInstance.peerLastSyncRequestSeqNum().get(senderNodeId);
                 if (prevPeerRequestedFromSeqNum != null && prevPeerRequestedFromSeqNum == peerFromSeqNum) {
-                    return;
+                     return;
                 }
 
                 ClientCentricSyncRequestPacket syncRequestPacket =
@@ -329,7 +341,7 @@ public class ReadYourWritesHandler {
             }
 
             // Gather the requested write operations.
-            // Note that index=0 stores seqNum=1 and timestamp starts at 1.
+            // Note that index=0 at executedRequests stores seqNum=1 and timestamp starts at 1.
             long size = serviceInstance.executedRequests().size();
             List<byte[]> reqs = new ArrayList<>();
             synchronized (serviceInstance.executedRequests()) {
@@ -346,7 +358,7 @@ public class ReadYourWritesHandler {
             // prepare the response packet
             ClientCentricSyncResponsePacket responsePacket =
                     new ClientCentricSyncResponsePacket(
-                            /*senderId=*/rawSenderId,
+                            /*senderId=*/messenger.getMyID().toString(),
                             /*serviceName=*/serviceName,
                             /*fromSequenceNumber=*/theirReqSeq,
                             /*encodedRequests=*/reqs);
@@ -376,20 +388,29 @@ public class ReadYourWritesHandler {
             assert serviceInstance.nodeIDs().contains(senderId) : "Invalid sender";
 
             // check the recency
-            long respStartingSeqNum = syncResponse.getStartingSequenceNumber();
-            long ourLatestSeqNum = serviceInstance.currTimestamp()
-                    .getNodeTimestamp(rawSenderId) - 1;
+            long respStartingSeqNum = syncResponse.getStartingSequenceNumber(); // inclusive
+            long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            // Case-1: got a more recent write ops
-            if (respStartingSeqNum > ourLatestSeqNum) {
+            logger.log(Level.INFO,
+                    String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
+                            messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
+                            senderId, respStartingSeqNum, ourLatestSeqNum));
+
+            // Case-1: there are unknown ops between our latest sequence number and the given ops.
+            //  For example, our sequence number is 0, but the given ops starts from seq number 5,
+            //  making us missing seq num [1,4]. We do nothing for this case.
+            if (respStartingSeqNum > ourLatestSeqNum + 1) {
+                logger.log(Level.WARNING,
+                        String.format("%s:%s - detecting missing operations from %s, theirSeqNum=%d ourSeqNum=%d",
+                                messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
+                                senderId, respStartingSeqNum, ourLatestSeqNum));
                 return;
             }
 
-            // Case-2: respStartingSeqNum < ourLatestSeqNum
-            {
-                // execute the given requests from our peer
+            // Case-2: we can execute the ops from our peers, we update our timestamp
+            if (respStartingSeqNum <= ourLatestSeqNum + 1 ) {
                 List<byte[]> writeOps = syncResponse.getEncodedRequests();
-                long lastSeqNum = respStartingSeqNum + writeOps.size() - 1;
+                long lastSeqNum = respStartingSeqNum + writeOps.size() - 1; // inclusive
                 for (long currSeqNum = respStartingSeqNum; currSeqNum <= lastSeqNum; ++currSeqNum) {
                     // skip the already executed write operations
                     if (currSeqNum <= ourLatestSeqNum) {
@@ -397,6 +418,7 @@ public class ReadYourWritesHandler {
                     }
 
                     // decode the write operation, then execute it
+                    // TODO: validate the behaviors of the operations given by our peer
                     try {
                         int idx = (int) (currSeqNum - respStartingSeqNum);
                         byte[] encodedReq = writeOps.get(idx);
@@ -414,9 +436,11 @@ public class ReadYourWritesHandler {
 
                 // process the buffered read requests, if any
                 processBufferedReadRequests(serviceInstance, app);
+
+                return;
             }
 
-            return;
+            throw new RuntimeException("This should not happen");
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +

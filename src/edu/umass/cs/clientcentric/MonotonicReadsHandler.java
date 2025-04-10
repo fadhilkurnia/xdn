@@ -144,7 +144,8 @@ public class MonotonicReadsHandler {
                 return true;
             }
 
-            // Case-2: We need to do sync before handle the read request.
+            // Case-2: this replica is not "recent" enough, we need to do
+            //  sync before handle the read request.
             {
                 // First, we buffer the request.
                 Long requestID = ((ClientRequest) clientRequest).getRequestID();
@@ -157,6 +158,7 @@ public class MonotonicReadsHandler {
                 List<GenericMessagingTask<NodeIDType, ClientCentricPacket>> syncPackets =
                         new ArrayList<>();
                 for (String nodeIdRaw : serviceLastTimestamp.getNodeIds()) {
+                    if (myNodeID.toString().equals(nodeIdRaw)) continue;
                     long clientTs = requestLastReadTimestamp.getNodeTimestamp(nodeIdRaw);
                     long replicaTs = serviceLastTimestamp.getNodeTimestamp(nodeIdRaw);
                     if (clientTs > replicaTs) {
@@ -350,7 +352,7 @@ public class MonotonicReadsHandler {
             }
 
             // Gather the requested write operations.
-            // Note that index=0 stores seqNum=1 and timestamp starts at 1.
+            // Note that index=0 at executedRequests stores seqNum=1 and timestamp starts at 1.
             long size = serviceInstance.executedRequests().size();
             List<byte[]> reqs = new ArrayList<>();
             synchronized (serviceInstance.executedRequests()) {
@@ -367,7 +369,7 @@ public class MonotonicReadsHandler {
             // prepare the response packet
             ClientCentricSyncResponsePacket responsePacket =
                     new ClientCentricSyncResponsePacket(
-                            /*senderId=*/rawSenderId,
+                            /*senderId=*/messenger.getMyID().toString(),
                             /*serviceName=*/serviceName,
                             /*fromSequenceNumber=*/theirReqSeq,
                             /*encodedRequests=*/reqs);
@@ -397,20 +399,29 @@ public class MonotonicReadsHandler {
             assert serviceInstance.nodeIDs().contains(senderId) : "Invalid sender";
 
             // check the recency
-            long respStartingSeqNum = syncResponse.getStartingSequenceNumber();
-            long ourLatestSeqNum = serviceInstance.currTimestamp()
-                    .getNodeTimestamp(rawSenderId) - 1;
+            long respStartingSeqNum = syncResponse.getStartingSequenceNumber(); // inclusive
+            long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            // Case-1: got a more recent write ops
-            if (respStartingSeqNum > ourLatestSeqNum) {
+            logger.log(Level.INFO,
+                    String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
+                            messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
+                            senderId, respStartingSeqNum, ourLatestSeqNum));
+
+            // Case-1: there are unknown ops between our latest sequence number and the given ops.
+            //  For example, our sequence number is 0, but the given ops starts from seq number 5,
+            //  making us missing seq num [1,4]. We do nothing for this case.
+            if (respStartingSeqNum > ourLatestSeqNum + 1) {
+                logger.log(Level.WARNING,
+                        String.format("%s:%s - detecting missing operations from %s, theirSeqNum=%d ourSeqNum=%d",
+                                messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
+                                senderId, respStartingSeqNum, ourLatestSeqNum));
                 return;
             }
 
-            // Case-2: respStartingSeqNum < ourLatestSeqNum
-            {
-                // execute the given requests from our peer
+            // Case-2: we can execute the ops from our peers, we update our timestamp
+            if (respStartingSeqNum <= ourLatestSeqNum + 1 ) {
                 List<byte[]> writeOps = syncResponse.getEncodedRequests();
-                long lastSeqNum = respStartingSeqNum + writeOps.size() - 1;
+                long lastSeqNum = respStartingSeqNum + writeOps.size() - 1; //inclusive
                 for (long currSeqNum = respStartingSeqNum; currSeqNum <= lastSeqNum; ++currSeqNum) {
                     // skip the already executed write operations
                     if (currSeqNum <= ourLatestSeqNum) {
@@ -435,9 +446,11 @@ public class MonotonicReadsHandler {
 
                 // process the buffered read requests, if any
                 processBufferedReadRequests(serviceInstance, app);
+
+                return;
             }
 
-            return;
+            throw new RuntimeException("Illegal State: This should not happen");
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +

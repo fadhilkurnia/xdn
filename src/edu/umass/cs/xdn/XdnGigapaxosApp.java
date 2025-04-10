@@ -199,7 +199,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                             xdnHttpRequest.getHttpRequest().method(),
                             serviceName,
                             xdnHttpRequest.getHttpRequest().uri(),
-                            xdnHttpRequest.getRequestID()});
+                            String.valueOf(xdnHttpRequest.getRequestID())});
             return true;
         }
 

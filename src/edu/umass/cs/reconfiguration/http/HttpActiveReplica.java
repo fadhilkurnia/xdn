@@ -634,8 +634,16 @@ public class HttpActiveReplica {
             }
         }
 
-        private static void writeHttpResponse(HttpResponse httpResponse, ChannelHandlerContext ctx,
+        private static void writeHttpResponse(Long requestId, HttpResponse httpResponse,
+                                              ChannelHandlerContext ctx,
                                               boolean isKeepAlive, long startProcessingTime) {
+            assert requestId != null;
+            if (httpResponse == null) {
+                logger.log(Level.WARNING,
+                        String.format("%s:%s - ignoring empty HTTP response (id: %d)",
+                                nodeId, HttpActiveReplica.class.getSimpleName(), requestId));
+                return;
+            }
 
             // Observability: logging post-execution time.
             String postExecTimestampHeaderKey = String.format("X-E-EXC-TS-%s", nodeId);
@@ -672,11 +680,12 @@ public class HttpActiveReplica {
             });
 
             long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0}:{1} - Overall HTTP execution within {2}ms",
+            logger.log(Level.FINE, "{0}:{1} - Overall HTTP execution within {2}ms (id: {3})",
                     new Object[]{
                             nodeId,
                             HttpActiveReplica.class.getSimpleName(),
-                            (elapsedTime / 1_000_000.0)});
+                            (elapsedTime / 1_000_000.0),
+                            String.valueOf(httpResponse)});
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {
@@ -745,7 +754,8 @@ public class HttpActiveReplica {
                 if (httpResponse != null) {
                     isKeepAlive = isKeepAlive && HttpUtil.isKeepAlive(httpResponse);
                 }
-                writeHttpResponse(httpResponse, ctx, isKeepAlive, startProcessingTime);
+                writeHttpResponse(xdnRequest.getRequestID(), httpResponse,
+                        ctx, isKeepAlive, startProcessingTime);
 
                 // Asynchronously sends statistics to the control plane (i.e., RC).
                 InetAddress clientInetAddress = null;

@@ -191,6 +191,7 @@ public class MonotonicWritesHandler {
                 List<GenericMessagingTask<NodeIDType, ClientCentricPacket>> syncPackets =
                         new ArrayList<>();
                 for (String nodeIdRaw : serviceLastTimestamp.getNodeIds()) {
+                    if (myNodeID.toString().equals(nodeIdRaw)) continue;
                     long clientTs = requestLastWriteTimestamp.getNodeTimestamp(nodeIdRaw);
                     long replicaTs = serviceLastTimestamp.getNodeTimestamp(nodeIdRaw);
                     if (clientTs > replicaTs) {
@@ -204,13 +205,17 @@ public class MonotonicWritesHandler {
                         GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
+
+                        logger.log(Level.INFO,
+                                String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
+                                        messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                                        nodeIdRaw, clientTs, replicaTs));
                     }
                 }
 
                 // Send the sync packets
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket");
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
                         throw new RuntimeException(e);
@@ -367,7 +372,7 @@ public class MonotonicWritesHandler {
             // prepare the response packet
             ClientCentricSyncResponsePacket responsePacket =
                     new ClientCentricSyncResponsePacket(
-                            /*senderId=*/rawSenderId,
+                            /*senderId=*/myNodeID.toString(),
                             /*serviceName=*/serviceName,
                             /*fromSequenceNumber=*/theirReqSeq,
                             /*encodedRequests=*/copiedRequests);
@@ -398,17 +403,21 @@ public class MonotonicWritesHandler {
 
             // check the recency
             long respStartingSeqNum = syncResponse.getStartingSequenceNumber();
-            long ourLatestSeqNum = serviceInstance.currTimestamp()
-                    .getNodeTimestamp(rawSenderId) - 1;
+            long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            // Case-1: got a more recent write ops
-            if (respStartingSeqNum > ourLatestSeqNum) {
+            // Case-1: there are unknown ops between our latest sequence number and the given ops.
+            //  For example, our sequence number is 0, but the given ops starts from seq number 5,
+            //  making us missing seq num [1,4]. We do nothing for this case.
+            if (respStartingSeqNum > ourLatestSeqNum + 1) {
+                logger.log(Level.WARNING,
+                        String.format("%s:%s - detecting missing operations from %s, theirSeqNum=%d ourSeqNum=%d",
+                                messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                                senderId, respStartingSeqNum, ourLatestSeqNum));
                 return;
             }
 
-            // Case-2: respStartingSeqNum < ourLatestSeqNum
-            {
-                // Execute the given requests from our peer
+            // Case-2: we can execute the ops from our peers, we update our timestamp
+            if (respStartingSeqNum <= ourLatestSeqNum + 1 ) {
                 List<byte[]> writeOps = syncResponse.getEncodedRequests();
                 long lastSeqNum = respStartingSeqNum + writeOps.size() - 1;
                 for (long currSeqNum = respStartingSeqNum; currSeqNum <= lastSeqNum; ++currSeqNum) {
@@ -435,9 +444,11 @@ public class MonotonicWritesHandler {
 
                 // Process the buffered write requests, if any.
                 processBufferedWriteRequests(serviceInstance, app);
+
+                return;
             }
 
-            return;
+            throw new RuntimeException("Illegal: this should not happen");
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +

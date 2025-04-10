@@ -210,12 +210,14 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         }
 
         // prepare updated callback that logs the elapsed time
+        ReplicableClientRequest finalGpRequest = gpRequest;
         ExecutedCallback loggedCallback = (response, handled) -> {
             callback.executed(response, handled);
             long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
-                    new Object[] {this.myNodeID, this.getClass().getSimpleName(),
-                            elapsedTime / 1_000_000.0});
+            logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms (id: {3})",
+                    new Object[]{this.myNodeID, this.getClass().getSimpleName(),
+                            elapsedTime / 1_000_000.0,
+                            String.valueOf(finalGpRequest.getRequestID())});
         };
 
         // asynchronously coordinate the request

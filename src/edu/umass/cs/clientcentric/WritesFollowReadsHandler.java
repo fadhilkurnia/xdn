@@ -14,6 +14,7 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
 import org.json.JSONException;
 
 import java.io.IOException;
@@ -24,7 +25,7 @@ import java.util.logging.Logger;
 
 public class WritesFollowReadsHandler {
 
-    private static final Logger logger = Logger.getGlobal();
+    private static final Logger logger = Logger.getLogger(WritesFollowReadsHandler.class.getSimpleName());
 
     protected static <NodeIDType> boolean coordinateRequest(
             Request request,
@@ -101,6 +102,13 @@ public class WritesFollowReadsHandler {
             requestLastReadTimestamp = new VectorTimestamp(nodeIDs);
         }
 
+        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
+                messenger.getMyID(), WritesFollowReadsHandler.class.getSimpleName(),
+                clientReplicableRequest.getClass().getSimpleName(),
+                clientReplicableRequest.getRequestID(),
+                requestLastReadTimestamp,
+                serviceLastTimestamp));
+
         // Reset the client's read timestamp, if it is not comparable
         boolean isTimestampComparable = requestLastReadTimestamp.isComparableWith(serviceLastTimestamp);
         if (!isTimestampComparable) {
@@ -166,8 +174,10 @@ public class WritesFollowReadsHandler {
                 GenericMessagingTask<NodeIDType, JSONPacket> m =
                         new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
                 try {
-                    logger.log(Level.INFO, "Sending ClientCentricWriteAfterPacket: "
-                            + writeAfterPacket);
+                    logger.log(Level.INFO,
+                            String.format("%s:%s - sending WriteAfterPacket for reqId=%d",
+                                    myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
+                                    ((ClientRequest) clientRequest).getRequestID()));
                     messenger.send(m);
                 } catch (JSONException | IOException e) {
                     throw new RuntimeException(e);
@@ -187,27 +197,31 @@ public class WritesFollowReadsHandler {
                 List<GenericMessagingTask<NodeIDType, ClientCentricPacket>> syncPackets =
                         new ArrayList<>();
                 for (String nodeIdRaw : serviceLastTimestamp.getNodeIds()) {
+                    if (myNodeID.toString().equals(nodeIdRaw)) continue;
                     long clientTs = requestLastReadTimestamp.getNodeTimestamp(nodeIdRaw);
                     long replicaTs = serviceLastTimestamp.getNodeTimestamp(nodeIdRaw);
                     if (clientTs > replicaTs) {
                         long startingSeqNum = replicaTs + 1;
                         ClientCentricSyncRequestPacket syncPacket =
                                 new ClientCentricSyncRequestPacket(
-                                        /*senderId=*/messenger.getMyID().toString(),
+                                        /*senderId=*/myNodeID.toString(),
                                         /*serviceName=*/serviceInstance.name(),
                                         /*fromSequenceNumber*/startingSeqNum);
                         NodeIDType targetReplicaNodeId = nodeIdDeserializer.valueOf(nodeIdRaw);
                         GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
+
+                        logger.log(Level.INFO,
+                                String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
+                                        messenger.getMyID(), WritesFollowReadsHandler.class.getSimpleName(),
+                                        nodeIdRaw, clientTs, replicaTs));
                     }
                 }
 
                 // Send the sync packets
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.INFO, "Sending ClientCentricSyncRequestPacket: "
-                                + m.msgs[0]);
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
                         throw new RuntimeException(e);
@@ -230,6 +244,10 @@ public class WritesFollowReadsHandler {
         NodeIDType myNodeID = messenger.getMyID();
         String serviceName = packet.getServiceName();
         assert serviceName != null : "unspecified service name";
+
+        logger.log(Level.INFO, String.format("%s:%s - handling coordination packet %s for name=%s",
+                myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
+                packet.getRequestType(), packet.getServiceName()));
 
         // Handle WriteAfterPacket
         if (packet.getRequestType() == ClientCentricPacketType.CLIENT_CENTRIC_WRITE_AFTER_PACKET) {
@@ -298,8 +316,11 @@ public class WritesFollowReadsHandler {
                 serviceInstance.peerLastSyncRequestSeqNum().put(senderNodeId, peerFromSeqNum);
 
                 try {
-                    logger.log(Level.INFO, "Sending ClientCentricSyncRequestPacket: "
-                            + syncRequestPacket.getServiceName());
+                    logger.log(Level.INFO,
+                            String.format(
+                                    "%s:%s - sending SyncRequestPacket to %s fromSeqNum=%d ourTs=%d",
+                                    myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
+                                    rawSenderID, peerFromSeqNum, ourTs));
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
                     throw new RuntimeException(e);
@@ -347,7 +368,7 @@ public class WritesFollowReadsHandler {
             // prepare the response packet
             ClientCentricSyncResponsePacket responsePacket =
                     new ClientCentricSyncResponsePacket(
-                            /*senderId=*/rawSenderId,
+                            /*senderId=*/messenger.getMyID().toString(),
                             /*serviceName=*/serviceName,
                             /*fromSequenceNumber=*/theirReqSeq,
                             /*encodedRequests=*/reqs);
@@ -356,8 +377,11 @@ public class WritesFollowReadsHandler {
             GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                     new GenericMessagingTask<>(senderId, responsePacket);
             try {
-                logger.log(Level.INFO, "Sending ClientCentricSyncResponsePacket: "
-                        + responsePacket.getRequestID());
+                logger.log(Level.INFO,
+                        String.format(
+                                "%s:%s - sending SyncResponsePacket to %s fromSeqNum=%d ourTs=%d",
+                                myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
+                                senderId, theirReqSeq, ourTs));
                 messenger.send(m);
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);
@@ -378,19 +402,29 @@ public class WritesFollowReadsHandler {
 
             // check the recency
             long respStartingSeqNum = syncResponse.getStartingSequenceNumber();
-            long ourLatestSeqNum = serviceInstance.currTimestamp()
-                    .getNodeTimestamp(rawSenderId) - 1;
+            long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            // Case-1: got a more recent write ops
-            if (respStartingSeqNum > ourLatestSeqNum) {
+            logger.log(Level.INFO,
+                    String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
+                            messenger.getMyID(), WritesFollowReadsHandler.class.getSimpleName(),
+                            senderId, respStartingSeqNum, ourLatestSeqNum));
+
+            // Case-1: there are unknown ops between our latest sequence number and the given ops.
+            //  For example, our sequence number is 0, but the given ops starts from seq number 5,
+            //  making us missing seq num [1,4]. We do nothing for this case.
+            if (respStartingSeqNum > ourLatestSeqNum + 1) {
+                logger.log(Level.WARNING,
+                        String.format("%s:%s - detecting missing operations from %s, theirSeqNum=%d ourSeqNum=%d",
+                                messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
+                                senderId, respStartingSeqNum, ourLatestSeqNum));
                 return;
             }
 
-            // Case-2: respStartingSeqNum < ourLatestSeqNum
-            {
+            // Case-2: we can execute the ops from our peers, we update our timestamp
+            if (respStartingSeqNum <= ourLatestSeqNum + 1) {
                 // Execute the given requests from our peer
                 List<byte[]> writeOps = syncResponse.getEncodedRequests();
-                long lastSeqNum = respStartingSeqNum + writeOps.size() - 1;
+                long lastSeqNum = respStartingSeqNum + writeOps.size() - 1; // inclusive
                 for (long currSeqNum = respStartingSeqNum; currSeqNum <= lastSeqNum; ++currSeqNum) {
                     // skip the already executed write operations
                     if (currSeqNum <= ourLatestSeqNum) {
@@ -404,7 +438,7 @@ public class WritesFollowReadsHandler {
                         Request appReq = app.getRequest(
                                 new String(encodedReq, StandardCharsets.ISO_8859_1));
                         boolean isExecSuccess = app.execute(appReq, false);
-                        assert isExecSuccess : "Failed to execute request";
+                        assert isExecSuccess : "Failed to execute request.";
                     } catch (RequestParseException e) {
                         throw new RuntimeException(e);
                     }
@@ -414,10 +448,12 @@ public class WritesFollowReadsHandler {
                 serviceInstance.currTimestamp().updateNodeTimestamp(rawSenderId, lastSeqNum);
 
                 // Process the buffered write requests, if any.
-                processBufferedWriteRequests(serviceInstance, app);
+                processBufferedWriteRequests(myNodeID, serviceInstance, app);
+
+                return;
             }
 
-            return;
+            throw new RuntimeException("Illegal state: this should not happen");
         }
 
         throw new IllegalStateException("Unexpected ClientCentricPacket: " +
@@ -425,6 +461,7 @@ public class WritesFollowReadsHandler {
     }
 
     private static <NodeIDType> void processBufferedWriteRequests(
+            NodeIDType myNodeId,
             BayouReplicaCoordinator.ReplicaInstance<NodeIDType> serviceInstance,
             Replicable app) {
         if (serviceInstance.pendingRequests().isEmpty()) return;
@@ -456,24 +493,30 @@ public class WritesFollowReadsHandler {
             }
 
             // execute the write request since we are already "recent" enough
-            Request clientReadRequest = clientWriteRequestAndMetadata.request();
+            Request clientWriteRequest = clientWriteRequestAndMetadata.request();
+            assert clientWriteRequest instanceof ClientRequest : "Unexpected non-client request";
             ExecutedCallback callback = clientWriteRequestAndMetadata.callback();
-            assert (clientReadRequest instanceof BehavioralRequest br) &&
+            assert (clientWriteRequest instanceof BehavioralRequest br) &&
                     ((br.isWriteOnlyRequest() || br.isReadModifyWriteRequest()))
                     : "Unexpected non WriteOnlyRequest nor ReadModifyWriteRequest " +
                     "is buffered in WritesFollowReadsHandler";
-            boolean isExecSuccess = app.execute(clientReadRequest, false);
+            boolean isExecSuccess = app.execute(clientWriteRequest, false);
             if (!isExecSuccess) {
                 logger.log(Level.WARNING,
-                        "Failed to execute write request: " + clientReadRequest);
+                        "Failed to execute write request: " + clientWriteRequest);
                 continue;
             }
 
+            logger.log(Level.INFO,
+                    String.format("%s:%s - just executed a pending write request with id=%d",
+                            myNodeId, WritesFollowReadsHandler.class.getSimpleName(),
+                            ((ClientRequest) clientWriteRequest).getRequestID()));
+
             // send response back to client
-            assert clientReadRequest instanceof TimestampedResponse;
-            ((TimestampedResponse) clientReadRequest).setLastTimestamp(
+            assert clientWriteRequest instanceof TimestampedResponse;
+            ((TimestampedResponse) clientWriteRequest).setLastTimestamp(
                     "W", serviceLastTimestamp);
-            callback.executed(clientReadRequest, true);
+            callback.executed(clientWriteRequest, true);
 
             // remove this executed write request from the buffered request
             it.remove();
