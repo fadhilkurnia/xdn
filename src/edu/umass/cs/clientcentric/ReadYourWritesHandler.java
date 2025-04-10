@@ -187,7 +187,9 @@ public class ReadYourWritesHandler {
             }
 
             // Enqueue the executed request
-            serviceInstance.executedRequests().add(clientRequest.toBytes());
+            synchronized (serviceInstance.executedRequests()) {
+                serviceInstance.executedRequests().add(clientRequest.toBytes());
+            }
 
             // Bump up the service's current timestamp
             serviceLastTimestamp = serviceInstance.currTimestamp()
@@ -270,15 +272,29 @@ public class ReadYourWritesHandler {
             // Case-3: missing some updates between the received update and the executed updates.
             //  Thus, we need to send sync packet.
             {
+                long peerFromSeqNum = ourTs + 1;
+                NodeIDType senderNodeId = nodeIdDeserializer.valueOf(rawSenderID);
+
+                // prevent storming our peer with repetitive sync request if we have requested before
+                // with the same fromSeqNum
+                Long prevPeerRequestedFromSeqNum =
+                        serviceInstance.peerLastSyncRequestSeqNum().get(senderNodeId);
+                if (prevPeerRequestedFromSeqNum != null && prevPeerRequestedFromSeqNum == peerFromSeqNum) {
+                    return;
+                }
+
                 ClientCentricSyncRequestPacket syncRequestPacket =
                         new ClientCentricSyncRequestPacket(
                                 /*senderId=*/myNodeID.toString(),
                                 /*serviceName=*/serviceInstance.name(),
-                                /*fromSequenceNumber*/ourTs + 1);
+                                /*fromSequenceNumber*/peerFromSeqNum);
                 GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                         new GenericMessagingTask<>(
                                 nodeIdDeserializer.valueOf(rawSenderID),
                                 syncRequestPacket);
+
+                // cache the last requested seqNum to prevent storming the same peer with same requests
+                serviceInstance.peerLastSyncRequestSeqNum().put(senderNodeId, peerFromSeqNum);
 
                 try {
                     logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
@@ -315,8 +331,17 @@ public class ReadYourWritesHandler {
             // Gather the requested write operations.
             // Note that index=0 stores seqNum=1 and timestamp starts at 1.
             long size = serviceInstance.executedRequests().size();
-            List<byte[]> reqs = serviceInstance.executedRequests().subList(
-                    (int) theirReqSeq - 1, (int) size);
+            List<byte[]> reqs = new ArrayList<>();
+            synchronized (serviceInstance.executedRequests()) {
+                // synchronized is needed, otherwise the messenger could throw
+                // ConcurrentModificationException when sending the response packet.
+                List<byte[]> subList = serviceInstance.executedRequests().subList(
+                        (int) theirReqSeq - 1, (int) size);
+                for (byte[] curr : subList) {
+                    byte[] copy = Arrays.copyOf(curr, curr.length);
+                    reqs.add(copy);
+                }
+            }
 
             // prepare the response packet
             ClientCentricSyncResponsePacket responsePacket =

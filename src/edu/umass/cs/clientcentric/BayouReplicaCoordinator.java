@@ -1,6 +1,7 @@
 package edu.umass.cs.clientcentric;
 
 import edu.umass.cs.clientcentric.packets.ClientCentricPacketType;
+import edu.umass.cs.clientcentric.packets.ClientCentricSyncResponsePacket;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -16,6 +17,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 // TODO: allowing client to specify the requested consistency-model per-request (per session)
@@ -24,7 +26,7 @@ import java.util.logging.Logger;
 // TODO: Provide validation that restrict this coordinator being used only for application
 //  whose all of its operations are monotonic.
 
-// TODO: implement prunning (or GC) mechanism to cut the prefix of the executedRequests list.
+// TODO: implement pruning (or GC) mechanism to cut the prefix of the executedRequests list.
 //  One approach is to use the peerTime to get the minimum sequenceNumber of write requests
 //  executed by this replica. Then we also need to store the startingSequenceNumber for this
 //  replica.
@@ -45,14 +47,16 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
              VectorTimestamp currTimestamp,                  // the service's current timestamp
              Map<Long, RequestAndCallback> pendingRequests,  // buffered request, waiting for sync
              List<byte[]> executedRequests,                  // ordered executed write requests
-             Map<NodeIDType, VectorTimestamp> peerTimestamp
+             long offsetSeqNumExecutedRequest,               // starting seq number for executedRequests // TODO: use this for pruning executedRequests
+             Map<NodeIDType, VectorTimestamp> peerTimestamp,
+             Map<NodeIDType, Long> peerLastSyncRequestSeqNum // last sequence number that we have requested to peer, preventing storming our peer with redundant request
             ) {
     }
 
     private final NodeIDType myNodeID;
     private final Stringifiable<NodeIDType> nodeIdDeserializer;
     private final Replicable app;
-    private final Logger logger = Logger.getGlobal();
+    private final Logger logger = Logger.getLogger(BayouReplicaCoordinator.class.getSimpleName());
     private final Set<IntegerPacketType> packetTypes;
     private final Map<String, ReplicaInstance<NodeIDType>> instances;
 
@@ -64,7 +68,7 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
         this.myNodeID = myNodeID;
         this.nodeIdDeserializer = nodeIdDeserializer;
         this.app = app;
-        this.instances = new HashMap<>();
+        this.instances = new ConcurrentHashMap<>();
 
         // validate the nodeIdDeserializer
         assert this.nodeIdDeserializer.valueOf(myNodeID.toString()).equals(myNodeID) :
@@ -90,27 +94,22 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-//        if (request instanceof ReplicableClientRequest rcr
-//                && rcr.getRequest() instanceof XdnHttpRequest httpRequest) {
-//            String requestLog = httpRequest.getLogText();
-//            logger.log(Level.INFO, "Coordinating request " + requestLog);
-//        }
+        logger.log(Level.INFO, String.format("%s:%s - Coordinating request %s name=%s",
+                this.myNodeID, this.getClass().getSimpleName(),
+                request.getClass().getSimpleName(), request.getServiceName()));
 
         String serviceName = request.getServiceName();
         ReplicaInstance<NodeIDType> serviceInstance = instances.get(serviceName);
         if (serviceInstance == null) {
-            // TODO: handle this cleanly
+            String msg = String.format(
+                    "%s:%s - coordinating request for unknown service type=%s id=%s name=%s sender=%s",
+                    this.myNodeID, BayouReplicaCoordinator.class.getSimpleName(),
+                    request.getClass().getSimpleName(),
+                    request instanceof ReplicableClientRequest rcr ? rcr.getRequestID() : "?",
+                    request.getServiceName(),
+                    request instanceof ClientCentricSyncResponsePacket cc ? cc.getSenderId() : "?");
+            logger.log(Level.WARNING, msg);
             return true;
-//            logger.log(Level.WARNING, "Coordinating request for unknown service name="
-//                    + serviceName + " request: " + request.getClass().getSimpleName());
-//            if (request instanceof ClientCentricSyncResponsePacket ccSyncRespPacket) {
-//                logger.log(Level.WARNING, String.format("MyID: %s, Name: %s, Sender: %s, ID: %d",
-//                        this.myNodeID, ccSyncRespPacket.getServiceName(),
-//                        ccSyncRespPacket.getSenderId(), ccSyncRespPacket.getRequestID()));
-//            }
-//            if (callback != null)
-//                callback.executed(request, true);
-//            return true;
         }
 
         // handle StopEpoch request
@@ -177,6 +176,12 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
             peerTimestamp.put(nodeID, new VectorTimestamp(nodeIDs));
         }
 
+        // initialize empty last requested sequence number cache
+        Map<NodeIDType, Long> lastRequestedSeqNum = new ConcurrentHashMap<>();
+        for (NodeIDType nodeId : nodes) {
+            lastRequestedSeqNum.put(nodeId, 0L);
+        }
+
         // Register the created instance.
         this.instances.put(serviceName,
                 new ReplicaInstance<>(
@@ -187,8 +192,10 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
                         /*nodeIDs=*/nodes,
                         /*currTimestamp=*/timestamp,
                         /*pendingRequests=*/new ConcurrentHashMap<>(),
-                        /*executedRequests=*/new ArrayList<>(),
-                        /*peerTimestamp=*/peerTimestamp));
+                        /*executedRequests=*/Collections.synchronizedList(new ArrayList<>()),
+                        /*offsetSeqNumExecutedRequest=*/0,
+                        /*peerTimestamp=*/peerTimestamp,
+                        /*peerLastSyncRequestSeqNum=*/lastRequestedSeqNum));
 
         // Start the app using the restore method with the passed initial state.
         return this.app.restore(serviceName, state);

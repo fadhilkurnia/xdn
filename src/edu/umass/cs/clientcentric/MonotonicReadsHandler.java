@@ -24,7 +24,7 @@ import java.util.logging.Logger;
 
 public class MonotonicReadsHandler {
 
-    private static final Logger logger = Logger.getGlobal();
+    private static final Logger logger = Logger.getLogger(MonotonicReadsHandler.class.getSimpleName());
 
     protected static <NodeIDType> boolean coordinateRequest(
             Request request,
@@ -60,7 +60,8 @@ public class MonotonicReadsHandler {
             Replicable app,
             Stringifiable<NodeIDType> nodeIdDeserializer,
             Messenger<NodeIDType, ?> messenger) {
-        // validate client request
+
+        // Validate client request
         Request clientRequest = clientReplicableRequest.getRequest();
         if (!(clientRequest instanceof ClientRequest) ||
                 !(clientRequest instanceof TimestampedRequest) ||
@@ -99,6 +100,13 @@ public class MonotonicReadsHandler {
         VectorTimestamp serviceLastTimestamp = serviceInstance.currTimestamp();
         assert serviceLastTimestamp != null :
                 "An active service=" + serviceName + " having null timestamp";
+
+        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
+                messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
+                clientReplicableRequest.getClass().getSimpleName(),
+                clientReplicableRequest.getRequestID(),
+                requestLastReadTimestamp,
+                serviceLastTimestamp));
 
         // reset the client's read timestamp, if it is not comparable
         boolean isTimestampComparable = requestLastReadTimestamp.isComparableWith(serviceLastTimestamp);
@@ -162,13 +170,17 @@ public class MonotonicReadsHandler {
                         GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
+
+                        logger.log(Level.INFO,
+                                String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
+                                        messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
+                                        nodeIdRaw, clientTs, replicaTs));
                     }
                 }
 
                 // send the sync packets
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
                     try {
-                        logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket");
                         messenger.send(m);
                     } catch (IOException | JSONException e) {
                         throw new RuntimeException(e);
@@ -188,7 +200,9 @@ public class MonotonicReadsHandler {
             }
 
             // enqueue the executed request
-            serviceInstance.executedRequests().add(clientRequest.toBytes());
+            synchronized (serviceInstance.executedRequests()) {
+                serviceInstance.executedRequests().add(clientRequest.toBytes());
+            }
 
             // bump up the service's current timestamp
             serviceLastTimestamp = serviceInstance.currTimestamp()
@@ -231,7 +245,10 @@ public class MonotonicReadsHandler {
         String serviceName = packet.getServiceName();
         assert serviceName != null : "unspecified service name";
 
-        NodeIDType myNodeID = messenger.getMyID();
+        NodeIDType myNodeId = messenger.getMyID();
+
+        logger.log(Level.INFO, String.format("%s:%s - handling coordination packet %s",
+                myNodeId, MonotonicReadsHandler.class.getSimpleName(), packet.getRequestType()));
 
         // handle WriteAfterPacket
         if (packet.getRequestType() == ClientCentricPacketType.CLIENT_CENTRIC_WRITE_AFTER_PACKET) {
@@ -274,19 +291,35 @@ public class MonotonicReadsHandler {
             // Case-3: missing some updates between the received update and the executed updates.
             //  Thus, we need to send sync packet.
             {
+                long peerFromSeqNum = ourTs + 1;
+
+                // prevent storming our peer with repetitive sync request if we have requested before
+                // with the same fromSeqNum
+                Long prevPeerRequestedFromSeqNum =
+                        serviceInstance.peerLastSyncRequestSeqNum().get(nodeIdDeserializer.valueOf(rawSenderID));
+                if (prevPeerRequestedFromSeqNum != null && prevPeerRequestedFromSeqNum == peerFromSeqNum) {
+                    return;
+                }
+
                 ClientCentricSyncRequestPacket syncRequestPacket =
                         new ClientCentricSyncRequestPacket(
-                                /*senderId=*/myNodeID.toString(),
+                                /*senderId=*/myNodeId.toString(),
                                 /*serviceName=*/serviceInstance.name(),
-                                /*fromSequenceNumber*/ourTs + 1);
+                                /*fromSequenceNumber*/peerFromSeqNum);
                 GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                         new GenericMessagingTask<>(
                                 nodeIdDeserializer.valueOf(rawSenderID),
                                 syncRequestPacket);
 
+                // cache the last requested seqNum to prevent storming the same peer with same requests
+                serviceInstance.peerLastSyncRequestSeqNum().put(
+                        nodeIdDeserializer.valueOf(rawSenderID), peerFromSeqNum);
+
                 try {
-                    logger.log(Level.FINER, "Sending ClientCentricSyncRequestPacket: "
-                            + syncRequestPacket.getServiceName());
+                    logger.log(Level.INFO, String.format(
+                            "%s:%s - missing writes (theirTs=%d), thus requesting them from %s with startSeqNum=%d",
+                            myNodeId, MonotonicReadsHandler.class.getSimpleName(),
+                            theirTs, rawSenderID, peerFromSeqNum));
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
                     throw new RuntimeException(e);
@@ -308,7 +341,7 @@ public class MonotonicReadsHandler {
 
             // check the recency
             long theirReqSeq = syncPacket.getStartingSequenceNumber();
-            long ourTs = serviceInstance.currTimestamp().getNodeTimestamp(myNodeID.toString());
+            long ourTs = serviceInstance.currTimestamp().getNodeTimestamp(myNodeId.toString());
 
             // the peer requesting non-existent requests
             if (theirReqSeq > ourTs) {
@@ -319,8 +352,17 @@ public class MonotonicReadsHandler {
             // Gather the requested write operations.
             // Note that index=0 stores seqNum=1 and timestamp starts at 1.
             long size = serviceInstance.executedRequests().size();
-            List<byte[]> reqs = serviceInstance.executedRequests().subList(
-                    (int) theirReqSeq - 1, (int) size);
+            List<byte[]> reqs = new ArrayList<>();
+            synchronized (serviceInstance.executedRequests()) {
+                // synchronized is needed, otherwise the messenger could throw
+                // ConcurrentModificationException when sending the response packet.
+                List<byte[]> subList = serviceInstance.executedRequests().subList(
+                        (int) theirReqSeq - 1, (int) size);
+                for (byte[] curr : subList) {
+                    byte[] copy = Arrays.copyOf(curr, curr.length);
+                    reqs.add(copy);
+                }
+            }
 
             // prepare the response packet
             ClientCentricSyncResponsePacket responsePacket =
