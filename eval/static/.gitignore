@@ -1,0 +1,13 @@
+# Ignore generated config files for diff consistency model
+gigapaxos.xdn.consistency.*.properties
+
+# Ignore generated service prop files for diff consistency model
+xdn_cons_*.yaml
+
+# Ignore generated service prop files for rsm vs pb benchmark
+xdn_vrs.yaml
+xdn_vsd.yaml
+xdn_vet.yaml
+
+# Except this file
+!.gitignore
