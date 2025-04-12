@@ -685,7 +685,7 @@ public class HttpActiveReplica {
                             nodeId,
                             HttpActiveReplica.class.getSimpleName(),
                             (elapsedTime / 1_000_000.0),
-                            String.valueOf(httpResponse)});
+                            String.valueOf(requestId)});
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {

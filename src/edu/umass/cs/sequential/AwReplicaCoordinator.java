@@ -102,12 +102,7 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         // Most requests, especially write-only and read-modify-write requests need to
         // be coordinated. Note that the code below is asynchronous, we wait for the
         // coordination confirmation before returning to client.
-        ExecutedCallback chainedCallback = (executedRequest, handled) -> {
-            System.out.println(">> executed");
-            callback.executed(executedRequest, handled);
-        };
-        System.out.println(">>> " + rcr.getClientAddress());
-        this.paxosManager.propose(serviceName, rcr, chainedCallback);
+        this.paxosManager.propose(serviceName, rcr, callback);
 
         return true;
     }
