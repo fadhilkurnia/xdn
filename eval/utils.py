@@ -449,7 +449,8 @@ def find_k_closest_servers(servers, reference_server, k):
 
 def get_expected_latencies(replica_locations, client_locations, leader_name, 
                            lat_slowdown_factor, is_report_per_city=False,
-                           is_direct_all_to_leader=False):
+                           is_direct_all_to_leader=False,
+                           data_commit_quorum_size=None):
     """
     Given a replica group placement and client spatial distribution, this 
     function calculates the expected latencies.
@@ -479,6 +480,9 @@ def get_expected_latencies(replica_locations, client_locations, leader_name,
     # server in the closest quorum. Note that find_k_closest_servers
     # returns servers ordered by distance (ascending).
     quorum_size = (len(replicas)+1) // 2
+    if data_commit_quorum_size != None:
+        assert data_commit_quorum_size <= len(replicas), f"Invalid data commit quorum size"
+        quorum_size = data_commit_quorum_size
     closest_peers = find_k_closest_servers(replicas, leader, quorum_size)
     assert len(closest_peers) >= 1
     furthest_quorum_server = closest_peers[-1]
