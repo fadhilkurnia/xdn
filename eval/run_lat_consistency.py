@@ -37,7 +37,9 @@ def get_protocol_aware_replica_placement(protocol_class, client_distribution, se
     
     if protocol_class == "sequential":
         import math
-        num_replicas = math.ceil(3 + (10-3) * float(read_ratio / 100.0))    # variable num_replica, ranging from 3-10
+        max_num_replicas = 10
+        min_num_replicas = 3
+        num_replicas = math.ceil(min_num_replicas + (max_num_replicas-min_num_replicas) * float(read_ratio / 100.0))    # variable num_replica, ranging from 3-10
         num_rw_replicas = 3
         num_ro_replicas = num_replicas - num_rw_replicas
         if num_replicas == 3:
