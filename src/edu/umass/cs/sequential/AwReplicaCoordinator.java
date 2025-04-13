@@ -10,9 +10,11 @@ import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
+import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -34,7 +36,7 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
     private final PaxosManager<NodeIDType> paxosManager;
     private final Replicable app;
 
-    private final Logger logger = Logger.getGlobal();
+    private final Logger logger = Logger.getLogger(AwReplicaCoordinator.class.getSimpleName());
 
     public AwReplicaCoordinator(Replicable app,
                                 NodeIDType myID,
@@ -120,6 +122,35 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
                     + " with state [" + state + "]") + "; existing_version=" +
                     this.paxosManager.getVersion(serviceName));
         }
+
+        // parse the placementMetadata, if provided
+        if (placementMetadata != null) {
+            String preferredCoordinatorNodeId = null;
+            try {
+                JSONObject json = new JSONObject(placementMetadata);
+                preferredCoordinatorNodeId = json.getString(
+                        AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
+            } catch (JSONException e) {
+                logger.log(Level.WARNING,
+                        "{0} failed to parse preferred coordinator in the placement metadata: {1}",
+                        new Object[] { this, e });
+            }
+            if (this.myNodeID.toString().equals(preferredCoordinatorNodeId)) {
+                this.paxosManager.tryToBePaxosCoordinator(serviceName);
+                Thread electionThread = new Thread(() -> {
+                    System.out.println(">>>>>>>>>> [1] Waiting 30s for " + this.getMyID() + " to be coordinator of " + serviceName);
+                    try {
+                        Thread.sleep(30_000);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    this.paxosManager.tryToBePaxosCoordinator(serviceName);
+                });
+                electionThread.start();
+            }
+        }
+
+        this.paxosManager.tryToBePaxosCoordinator(serviceName);
 
         return true;
     }
