@@ -37,8 +37,8 @@ def get_protocol_aware_replica_placement(protocol_class, client_distribution, se
     
     if protocol_class == "sequential":
         import math
-        num_replicas = math.ceil(3 + (10-3) * float(read_ratio / 100.0))
-        num_rw_replicas = (num_replicas + 1) // 2
+        num_replicas = math.ceil(3 + (10-3) * float(read_ratio / 100.0))    # variable num_replica, ranging from 3-10
+        num_rw_replicas = 3
         num_ro_replicas = num_replicas - num_rw_replicas
         if num_replicas == 3:
             num_rw_replicas = 3
@@ -279,7 +279,7 @@ def assign_clients_to_closest_replica(client_lists, replica_group_info,
 
 read_ratios = range(0, 101, 25)
 consistency_models = [
-    'linearizability', 'sequential', 'causal', 'pram', 
+    'sequential', 'linearizability', 'causal', 'pram', 
     'monotonic_reads', 'writes_follow_reads', 'read_your_writes', 
     'monotonic_writes', 'eventual']
 consistency_models_abbr = {
