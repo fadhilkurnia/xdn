@@ -268,7 +268,7 @@ public class ReconfigurationConfig {
         USE_DISK_MAP_RCDB(true),
 
         /**
-         * This parameter specifies the the number of active replicas for a name
+         * This parameter specifies the number of active replicas for a name
          * at upon creation of the name. This parameter is irrelevant if
          * {@link #REPLICATE_ALL} is true and is irrelevant after name creation
          * as the number of replicas thereafter is controlled by the
@@ -284,6 +284,7 @@ public class ReconfigurationConfig {
          * of replicas thereafter is controlled by the reconfiguration policy.
          */
         REPLICATE_ALL(true),
+
         /**
          *
          */

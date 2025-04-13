@@ -153,6 +153,7 @@ def prepare_xdn_config_file(config_file_template, config_target_filename,
     replace_placeholder(config_target_filename, "___________PLACEHOLDER_ACTIVES_ADDRESS___________", server_name_address_txt)
     replace_placeholder(config_target_filename, "___________PLACEHOLDER_ACTIVES_GEOLOCATION___________", server_name_geolocation_txt)
     replace_placeholder(config_target_filename, "___________PLACEHOLDER_RC_HOST___________", control_plane_host)
+    replace_placeholder(config_target_filename, "#___________PLACEHOLDER_CONFIG_FLAGS___________", "EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE=2")
 
 
     return server_address_by_name

@@ -1017,7 +1017,17 @@ public class PaxosConfig {
 		DISABLE_GET_LOGGED_MESSAGES(false, true),
 
 
-
+		/**
+		 * Option for flexible quorum size by specifying maximum size for Phase2 in Paxos.
+		 * The quorum size for Phase1 is automatically calculated from the number of
+		 * replica-group members, ensuring non-disjoint quorum intersection between
+		 * Phases of Paxos.
+		 * The default value of 0 indicates that the flexible quorum is not being used.
+		 * If the value is greater than the number of replicas, it will be capped to that
+		 * number of replicas (all nodes are needed for phase2).
+		 * This option is still experimental for XDN project.
+		 */
+		EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE(0),
 
 		/*********** End of unsafe testing options *****************/
 
