@@ -164,8 +164,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                         /*writeQuorumSize=*/writeQuorumSize,
                         /*readQuorumSize=*/readQuorumSize,
                         /*dag=*/new DirectedAcyclicGraph(zeroRootNode),
-//                        /*pendingRequests=*/new HashMap<>(),
-                        /*pendingForwardPackets=*/new HashMap<>(),
+                        /*pendingForwardPackets=*/new ConcurrentHashMap<>(),
                         /*writeQuorumRecord=*/new HashMap<>());
         this.instances.put(serviceName, instance);
 
