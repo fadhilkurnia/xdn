@@ -18,6 +18,8 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
@@ -42,9 +44,12 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // mapping service name and epoch into its fuselog filesystem socket
     private final Map<String, Map<Integer, SocketChannel>> serviceFsSocket;
 
+    private final Logger logger = Logger.getLogger(FuselogStateDiffRecorder.class.getSimpleName());
+
     public FuselogStateDiffRecorder(String nodeID) {
         super(nodeID, defaultWorkingBasePath + nodeID + "/");
-        System.out.println(">>> initializing fuse statediff recorder");
+        logger.log(Level.FINE, String.format("%s:%s - initializing FUSE stateDiff recorder",
+                nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
 
         // make sure that fuselog and fuselog-apply are exist
         File fuselog = new File(FUSELOG_BIN_PATH);
@@ -161,9 +166,12 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
         assert socketChannel != null : "unknown fs socket client for " + serviceName;
 
+        long startTime = System.nanoTime();
+
         // send get command (g) to the filesystem
         try {
-            System.out.println(">> sending fuselog command ...");
+            logger.log(Level.FINEST, String.format("%s:%s - sending FuselogFS command",
+                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
             socketChannel.write(ByteBuffer.wrap("g".getBytes()));
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -173,21 +181,21 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         ByteBuffer sizeBuffer = ByteBuffer.allocate(8);
         sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
         sizeBuffer.clear();
-        System.out.println(">> reading fuselog response ...");
+        logger.log(Level.FINEST, String.format("%s:%s - reading FuselogFS response",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
         int numRead;
         try {
             numRead = socketChannel.read(sizeBuffer);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        System.out.println(">> got " + numRead + "bytes: " + new String(sizeBuffer.array(),
-                StandardCharsets.UTF_8));
         if (numRead < 8) {
             System.err.println("failed to read size of the stateDiff");
             return null;
         }
         long stateDiffSize = sizeBuffer.getLong(0);
-        System.out.println(">> stateDiff size=" + stateDiffSize);
+        logger.log(Level.FINER, String.format("%s:%s - receiving stateDiff with size=%d bytes",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
 
         // read all the stateDiff
         ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
@@ -199,11 +207,21 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        System.out.println(">> complete reading stateDiff ...");
-        String stateDiff = Base64.getEncoder().encodeToString(stateDiffBuffer.array());
-        System.out.println(">> read stateDiff: " + stateDiff);
 
-        // convert the stateDiff into String
+        // convert the stateDiff into String using Base64
+        String stateDiff = Base64.getEncoder().encodeToString(stateDiffBuffer.array());
+        logger.log(Level.FINER, String.format("%s:%s - Base64-encoded stateDiff size=%d bytes",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiff.length()));
+        logger.log(Level.FINEST, String.format("%s:%s - encoded stateDiff: %s ",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiff));
+
+        long endTime = System.nanoTime();
+        long elapsedTime = endTime - startTime;
+        double elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
+        logger.log(Level.FINER, String.format("%s:%s - capturing stateDiff within %f ms",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+                elapsedTimeMs));
+
         return stateDiff;
     }
 
@@ -211,6 +229,15 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
         // TODO: directly apply stateDiff from the obtained byte[], not via
         //  the fuselog-apply program, which we currently use.
+
+        logger.log(Level.FINER,
+                String.format("%s:%s - applying stateDiff name=%s epoch=%d size=%d bytes",
+                        this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+                        serviceName, placementEpoch, encodedState.length()));
+        logger.log(Level.FINEST,
+                String.format("%s:%s - applying stateDiff: %s",
+                        this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+                        encodedState));
 
         String diffFile = this.baseDiffDirPath + serviceName + "::" + placementEpoch + ".diff";
         String targetDir = this.getTargetDirectory(serviceName, placementEpoch);

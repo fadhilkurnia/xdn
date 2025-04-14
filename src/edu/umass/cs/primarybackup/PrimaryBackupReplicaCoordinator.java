@@ -19,6 +19,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * PrimaryBackupReplicaCoordinator handles replica groups that use primary-backup, which
@@ -37,6 +39,9 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
 
     private final PrimaryBackupManager<NodeIDType> pbManager;
     private final Set<IntegerPacketType> requestTypes;
+
+    private final Logger logger =
+            Logger.getLogger(PrimaryBackupReplicaCoordinator.class.getSimpleName());
 
     // FIXME: app and paxosManager need to be treated at the beginning
     public PrimaryBackupReplicaCoordinator(Replicable app,
@@ -111,10 +116,12 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
             throws IOException, RequestParseException {
         ExecutedCallback chainedCallback = callback;
 
-         System.out.printf(">>> %s:PBRCoordinator - coordinateRequest %s %s\n\n",
-                getMyID(), request.getClass().getSimpleName(),
-                request instanceof ReplicableClientRequest rcr
-                        ? rcr.getRequest().getClass().getSimpleName() : "null");
+        logger.log(Level.FINE,
+                String.format("%s:%s - coordinating request %s %s",
+                        getMyID(), PrimaryBackupReplicaCoordinator.class.getSimpleName(),
+                        request.getClass().getSimpleName(),
+                        request instanceof ReplicableClientRequest rcr
+                                ? rcr.getRequest().getClass().getSimpleName() : "null"));
 
         // if packet comes from client (i.e., ReplicableClientRequest), wrap the
         // containing request with RequestPacket, and re-chain the callback.

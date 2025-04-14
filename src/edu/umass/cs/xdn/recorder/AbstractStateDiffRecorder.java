@@ -2,7 +2,7 @@ package edu.umass.cs.xdn.recorder;
 
 public abstract class AbstractStateDiffRecorder {
 
-    private final String nodeID;
+    protected final String nodeID;
     protected final String baseDirectoryPath;
 
     protected AbstractStateDiffRecorder(String nodeID, String basePath) {

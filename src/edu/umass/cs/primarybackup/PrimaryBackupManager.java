@@ -51,6 +51,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // requests forwarded to the PRIMARY
     private final Map<Long, RequestAndCallback> forwardedRequests;
 
+    private final Logger logger = Logger.getLogger(PrimaryBackupManager.class.getName());
+
     /**
      * The default constructor
      *
@@ -172,9 +174,14 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     public boolean handlePrimaryBackupPacket(
             PrimaryBackupPacket packet, ExecutedCallback callback) {
-         System.out.printf(">> PBManager-%s: handling packet %s, is_paxos_leader=%b\n",
-                 myNodeID, packet.getRequestType(),
-                 this.paxosManager.isPaxosCoordinator(packet.getServiceName()));
+        assert packet != null;
+        String serviceName = packet.getServiceName();
+        logger.log(Level.FINE,
+                String.format("%s:%s - handling packet name=%s %s isPrimary=%b isPaxosCoordinator=%b",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        serviceName, packet.getRequestType(),
+                        isCurrentPrimary(serviceName),
+                        this.paxosManager.isPaxosCoordinator(serviceName)));
 
         // RequestPacket: client -> entry replica
         if (packet instanceof RequestPacket requestPacket) {
@@ -210,6 +217,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         String exceptionMsg = String.format("unknown primary backup packet '%s'",
                 packet.getClass().getSimpleName());
+        logger.log(Level.SEVERE,
+                String.format("%s:%s - %s",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        exceptionMsg));
         throw new RuntimeException(exceptionMsg);
     }
 
@@ -218,7 +229,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         Role currentServiceRole = this.currentRole.get(serviceName);
         if (currentServiceRole == null) {
-            System.out.printf("Unknown service %s\n", serviceName);
+            logger.log(Level.FINE, String.format("%s:%s - unknown service name=%s",
+                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                    serviceName));
             return true;
         }
 
@@ -236,6 +249,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             return handRequestToPrimary(packet, callback);
         }
 
+        String exceptionMessage = String.format("unknown role %s for service %s\n",
+                currentServiceRole, serviceName);
+        logger.log(Level.SEVERE, String.format("%s:%s - %s",
+                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                exceptionMessage));
         throw new RuntimeException(String.format("Unknown role %s for service %s\n",
                 currentServiceRole, serviceName));
     }
@@ -243,9 +261,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // TODO: handle a batch of request from outstanding queue, instead of handling it one by one.
     private boolean executeRequestCoordinateStateDiff(RequestPacket packet,
                                                       ExecutedCallback callback) {
-        // System.out.printf(">> PBManager-%s: handling request on primary %s\n",
-        //        myNodeID, packet.toString());
-
         String serviceName = packet.getServiceName();
 
         // ensure this method is only invoked by the primary node
@@ -269,9 +284,16 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             throw new RuntimeException(e);
         }
 
+        logger.log(Level.FINER,
+                String.format(
+                        "%s:%s - handling request on primary name=%s request=%s reqSize=%d bytes",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        packet.getServiceName(),
+                        appRequest.getClass().getSimpleName(),
+                        packet.getEncodedServiceRequest().length));
 
         // execute the app request, and capture the stateDiff
-        PrimaryEpoch currentEpoch = null;
+        PrimaryEpoch<NodeIDType> currentEpoch = null;
         boolean isExecuteSuccess = false;
         String stateDiff = null;
         synchronized (this) {
@@ -279,28 +301,53 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             if (currentEpoch == null) {
                 throw new RuntimeException("Unknown current primary epoch for " + serviceName);
             }
+            long startTime = System.nanoTime();
             isExecuteSuccess = replicableApp.execute(appRequest);
             if (!isExecuteSuccess) {
                 throw new RuntimeException("Failed to execute request for " + serviceName);
             }
+            long endTime = System.nanoTime();
+            long elapsedTime = endTime - startTime;
+            double elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
+            logger.log(Level.FINER,
+                    String.format(
+                            "%s:%s - executing request within %f ms",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            elapsedTimeMs));
             stateDiff = backupableApp.captureStatediff(serviceName);
         }
 
         // propose the stateDiff
-        // System.out.printf(">>> %s:PBManager proposing epoch=%s statediff=%s\n",
-        //        myNodeID, currentEpoch, stateDiff);
-        PrimaryEpoch finalCurrentEpoch = currentEpoch;
-        String finalStateDiff = stateDiff;
         ApplyStateDiffPacket applyStateDiffPacket = new ApplyStateDiffPacket(
                 serviceName, currentEpoch, stateDiff);
         ReplicableClientRequest gpPacket = ReplicableClientRequest.wrap(applyStateDiffPacket);
         gpPacket.setClientAddress(messenger.getListeningSocketAddress());
+        logger.log(Level.FINER,
+                String.format(
+                        "%s:%s - primary proposing stateDiff id=%d name=%s pbEpoch=%s len=%d bytes",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        applyStateDiffPacket.getRequestID(),
+                        packet.getServiceName(),
+                        currentEpoch,
+                        stateDiff.length()));
         this.paxosManager.propose(
                 serviceName,
                 gpPacket,
                 (stateDiffPacket, handled) -> {
-                    // System.out.printf(">>> %s:PBManager epoch=%s statediff=%s is accepted\n",
-                    //        myNodeID, finalCurrentEpoch, finalStateDiff);
+                    assert stateDiffPacket instanceof ApplyStateDiffPacket :
+                            String.format("Unexpected accepted request, expecting %s but found %s",
+                                    ApplyStateDiffPacket.class.getSimpleName(),
+                                    stateDiffPacket.getClass().getSimpleName());
+                    ApplyStateDiffPacket acceptedStateDiffPacket =
+                            (ApplyStateDiffPacket) stateDiffPacket;
+                    logger.log(Level.FINER,
+                            String.format(
+                                    "%s:%s - stateDiff is committed id=%d name=%s pbEpoch=%s len=%d bytes",
+                                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                    acceptedStateDiffPacket.getRequestID(),
+                                    acceptedStateDiffPacket.getServiceName(),
+                                    acceptedStateDiffPacket.getPrimaryEpochString(),
+                                    acceptedStateDiffPacket.getStateDiff().length()));
                     callback.executed(packet, handled);
                 });
 
@@ -308,8 +355,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         if (appRequest instanceof ClientRequest) {
             ClientRequest responsePacket = ((ClientRequest) appRequest).getResponse();
             packet.setResponse(responsePacket);
-            // System.out.printf(">> PBManager-%s: set response to %s\n",
-            //        myNodeID, responsePacket.toString());
+            logger.log(Level.FINER,
+                    String.format(
+                            "%s:%s - primary set response id=%d name=%s pbEpoch=%s",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            packet.getRequestID(),
+                            packet.getServiceName(),
+                            currentEpoch));
         }
 
         return true;
@@ -327,8 +379,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             throw new RuntimeException("Unknown primary ID");
             // TODO: potential fix would be to ask the current Paxos' coordinator to be the Primary
         }
-        System.out.printf(">> PBManager-%s: handing request to primary at %s\n",
-                myNodeID, currentPrimaryIDStr);
+
+        logger.log(Level.FINE,
+                String.format(
+                        "%s:%s - backup forwarding request to primary at %s reqSize=%d bytes",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        currentPrimaryIDStr,
+                        packet.getEncodedServiceRequest().length));
 
         // store the request and callback, so later we can send the response back to client
         // after receiving the response from the primary
@@ -354,8 +411,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         return true;
     }
 
-    private boolean askClientToContactPrimary(RequestPacket packet, ExecutedCallback callback) {
-        throw new RuntimeException("unimplemented");
+    private void askClientToContactPrimary(RequestPacket packet, ExecutedCallback callback) {
+        throw new RuntimeException("Unimplemented");
     }
 
     private boolean handleForwardedRequestPacket(
@@ -407,6 +464,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         String exceptionMsg = String.format("%s:PrimaryBackupManager - unknown role for group '%s'",
                 myNodeID, groupName);
+        logger.log(Level.SEVERE,
+                String.format(
+                        "%s:%s - %s",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(), exceptionMsg));
         throw new RuntimeException(exceptionMsg);
     }
 
@@ -420,8 +481,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 Long executedRequestID = responsePacket.getRequestID();
                 RequestAndCallback rc = forwardedRequests.get(executedRequestID);
                 if (rc == null) {
-                    System.out.printf(">> PBManager-%s: unknown callback for RequestPacket-%d (%s)\n",
-                            myNodeID, executedRequestID, this.getAllForwardedRequestIDs());
+                    logger.log(Level.SEVERE,
+                            String.format(
+                                    "%s:%s - unknown callback for RequestPacket-%d (%s)",
+                                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                    executedRequestID,
+                                    this.getAllForwardedRequestIDs()));
                     return true;
                 }
 
@@ -450,21 +515,27 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             curEpoch = this.currentPrimaryEpoch.get(groupName);
         }
         if (myCurrentRole == null) {
-            System.out.printf(">> %s unknown role for service name '%s'", myNodeID, groupName);
+            logger.log(Level.SEVERE,
+                    String.format(
+                            "%s:%s - unknown role for service name '%s'",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(), groupName));
             return true;
         }
         if (myCurrentRole.equals(Role.PRIMARY)) {
-            System.out.printf(">> %s already the primary for service name '%s'",
-                    myNodeID,
-                    groupName);
+            logger.log(Level.FINER,
+                    String.format(
+                            "%s:%s - already the primary for service name name '%s'",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(), groupName));
             callback.executed(packet, true);
             this.paxosManager.tryToBePaxosCoordinator(groupName);
             return true;
         }
 
         if (curEpoch == null) {
-            System.out.printf(">> %s unknown current epoch for service name '%s'",
-                    myNodeID, groupName);
+            logger.log(Level.SEVERE,
+                    String.format(
+                            "%s:%s - unknown current epoch for service name '%s'",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(), groupName));
             return true;
         }
         PrimaryEpoch<NodeIDType> newEpoch = new PrimaryEpoch<NodeIDType>(
