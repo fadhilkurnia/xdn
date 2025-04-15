@@ -314,7 +314,17 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                             "%s:%s - executing request within %f ms",
                             myNodeID, PrimaryBackupManager.class.getSimpleName(),
                             elapsedTimeMs));
+            long sdCaptureStartTime = System.nanoTime();
             stateDiff = backupableApp.captureStatediff(serviceName);
+            endTime = System.nanoTime();
+            elapsedTime = endTime - sdCaptureStartTime;
+            elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
+            logger.log(Level.FINER,
+                    String.format(
+                            "%s:%s - capturing stateDiff within %f ms size=%d bytes",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            elapsedTimeMs,
+                            stateDiff.length()));
         }
 
         // propose the stateDiff
@@ -330,10 +340,14 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         packet.getServiceName(),
                         currentEpoch,
                         stateDiff.length()));
+        long proposeStartTime = System.nanoTime();
         this.paxosManager.propose(
                 serviceName,
                 gpPacket,
                 (stateDiffPacket, handled) -> {
+                    long currTime = System.nanoTime();
+                    long proposeElapsedTime = currTime - proposeStartTime;
+                    double proposeElapsedTimeMs = (double) proposeElapsedTime / 1_000_000.0;
                     assert stateDiffPacket instanceof ApplyStateDiffPacket :
                             String.format("Unexpected accepted request, expecting %s but found %s",
                                     ApplyStateDiffPacket.class.getSimpleName(),
@@ -342,8 +356,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                             (ApplyStateDiffPacket) stateDiffPacket;
                     logger.log(Level.FINER,
                             String.format(
-                                    "%s:%s - stateDiff is committed id=%d name=%s pbEpoch=%s len=%d bytes",
+                                    "%s:%s - stateDiff is committed within %f ms id=%d name=%s pbEpoch=%s len=%d bytes",
                                     myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                    proposeElapsedTimeMs,
                                     acceptedStateDiffPacket.getRequestID(),
                                     acceptedStateDiffPacket.getServiceName(),
                                     acceptedStateDiffPacket.getPrimaryEpochString(),
