@@ -1,4 +1,5 @@
 import os
+import csv
 import json
 import time
 import requests
@@ -22,14 +23,13 @@ gp_config_file = "static/gigapaxos.xdn.3way.cloudlab.properties"
 num_machines = 3
 is_cache_docker_image = False
 default_leader_address = "10.10.1.2"
-default_leader_name = "AR1"
 
 # validate xdn binary does exist
 command = f"{xdn_binary} --help > /dev/null"
 ret_code = os.system(command)
 assert ret_code == 0, "Cannot find the xdn cli."
 
-def run_xdn_cluster(gp_config_file, screen_session_name):
+def clear_xdn_cluster():
     # clear any remaining running xdn or other processes
     print(f" > resetting the measurement cluster:")
     for i in range(num_machines):
@@ -45,9 +45,11 @@ def run_xdn_cluster(gp_config_file, screen_session_name):
     os.system(f"ssh {control_plane_address} sudo fuser -k 3000/tcp")
     os.system(f"ssh {control_plane_address} sudo rm -rf /tmp/gigapaxos")
 
+def run_xdn_cluster(gp_config_file, screen_session_name):
+    clear_xdn_cluster()
+
     # deploy XDN cluster, store the log output in screen_logs
     print(f" > deploying the measurement cluster:")
-    screen_session_name = "xdn_lat_rsm_pb_vary_req_size"
     screen_log_filename = f"screen_logs/{screen_session_name}.log"
     os.system(f"rm -f {screen_log_filename}")
     command = f"screen -L -Logfile screen_logs/{screen_session_name}.log -S {screen_session_name} -d -m bash -c '../bin/gpServer.sh -DgigapaxosConfig={gp_config_file} start all; exec bash'"
@@ -70,14 +72,17 @@ if is_cache_docker_image:
 result_file = open(result_filename, "w")
 result_file.write("measurement,approach,req_size,exec_time,statediff_size,avg_lat_ms,p50_lat_ms,stdev_lat\n")
 
-# deploy XDN cluster, store the log output in screen_logs
-screen_session_name = "xdn_lat_rsm_pb_vary_req_size"
-run_xdn_cluster(gp_config_file, screen_session_name)
-
 # vary the request sizes
 print(">>> Vary request size ...")
 for approach in approaches:
     for req_size in req_sizes:
+
+        print(f" >> Handling approach={approach} req_size={req_size}")
+
+        # deploy XDN cluster, store the log output in screen_logs
+        screen_session_name = f"xdn_lat_rsm_pb_vary_req_size_{req_size}_{approach}"
+        run_xdn_cluster(gp_config_file, screen_session_name)
+
         # deploy the service
         is_deterministic = "true"
         if approach == "pb":
@@ -104,19 +109,18 @@ for approach in approaches:
         # reconfigure the leader
         print(">>> reconfiguring the leader ...")
         leader_address = default_leader_address
-        leader_name = default_leader_name
         if approach == "rsm":
-            replica_names = ["AR0", "AR1", "AR2"]
-            command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
-            print("   ", command)
-            res = subprocess.run(command, shell=True, capture_output=True, text=True)
-            assert res.returncode == 0
-            output = res.stdout
-            print("   ", output)
-            output_json = json.loads(output)
-            if "FAILED" in output_json:
-                assert output_json["FAILED"] == False
-            time.sleep(90)
+            try:
+                for i in range(num_machines):
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true", "XDN": service_name}, timeout=1)
+                    response_json = json.loads(response.text)
+                    if "role" in response_json and response_json["role"] == "leader":
+                        leader_address = f"10.10.1.{i+1}"
+                        print("detected leader: ", leader_address)
+                        break
+                time.sleep(5)
+            except Exception as e:
+                print(f"Exception: {e}")
         if approach == "pb":
             try:
                 for i in range(num_machines):
@@ -132,7 +136,13 @@ for approach in approaches:
 
         service_endpoint = f"http://{leader_address}:2300/"
         headers = {"XDN": service_name}
+
+        # save the POST request payload to external file
+        post_req_payload_filename = f"static/rsm_pb_payload_{req_size}.txt"
         post_data = generate_random_string(req_size)
+        post_data_file = open(post_req_payload_filename, "w")
+        post_data_file.write(post_data)
+        post_data_file.close()
 
         # run the warmup
         print(">>> warming up ...")
@@ -144,24 +154,26 @@ for approach in approaches:
                 print(f"Exception: {e}")
 
         # run the actual measurements
-        latencies = []
         print(">>> running measurements ...")
-        for i in range(num_repetitions):
-            start_time = time.perf_counter()
-            try:
-                response = requests.post(service_endpoint, headers=headers, 
-                                         data=post_data, timeout=3)
-            except Exception as e:
-                print(f"Exception: {e}")
-            end_time = time.perf_counter()
-            latency = end_time - start_time
-            latency_ms = latency * 1_000.0
-            latencies.append(latency_ms)
+        directory_path = "results_lat_rsm_pb"
+        os.makedirs(directory_path, exist_ok=True)
+        target_latency_filename = f"results_lat_rsm_pb/rsm_pb_raw_lat_vrs_{req_size}_{approach}.tsv"
+        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} > /dev/null"
+        print("   ", command)
+        ret_code = os.system(command)
+        assert ret_code == 0
+
+        # read the produced raw latency data
+        latencies = []
+        with open(target_latency_filename, 'r') as tsvfile:
+            tsv_reader = csv.DictReader(tsvfile, delimiter='\t')
+            for row in tsv_reader:
+                latencies.append(float(row["ttime"]))
 
         avg_lat_ms = statistics.mean(latencies)
         med_lat_ms = statistics.median(latencies)
         stdev_lat_ms = statistics.stdev(latencies)
-        print(f"Approach: {approach} \tReq Size: {req_size} \tAvg.Latency: {avg_lat_ms:.2f} ms")
+        print(f"Approach: {approach} \tReq Size: {req_size} \tAvg.Latency: {avg_lat_ms:.2f} ms \t Med.Latency: {med_lat_ms:.2f}")
         result_file.write(f"vary_req_size,{approach},{req_size},1,8,{avg_lat_ms},{med_lat_ms},{stdev_lat_ms}\n")
         result_file.flush()
 
@@ -171,33 +183,29 @@ for approach in approaches:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
             print(result.stdout)
+            time.sleep(3)
         except Exception as e:
             print(f"Error executing command: {e}")
             print(e.stderr)
 
-        # remove unused docker network
-        command = "docker network prune --force"
-        os.system(command=command)
-
+        # destroy the XDN cluster
+        clear_xdn_cluster()
         time.sleep(3)
         
         pass
 
-print(f" > removing the xdn cluster")
-command = f"../bin/gpServer.sh -DgigapaxosConfig={gp_config_file} forceclear all > /dev/null 2>&1"
-print("   ", command)
-ret_code = os.system(command)
-assert ret_code == 0
 time.sleep(10)
-
-# deploy XDN cluster, store the log output in screen_logs
-screen_session_name = "xdn_lat_rsm_pb_vary_statediff_size"
-run_xdn_cluster(gp_config_file, screen_session_name)
 
 # vary statediff size
 print(">>> Vary statediff size ...")
 for approach in approaches:
     for statediff_size in statediff_sizes:
+        print(f" >> Handling approach={approach} statediff_size={statediff_size}")
+
+        # deploy XDN cluster, store the log output in screen_logs
+        screen_session_name = f"xdn_lat_rsm_pb_vary_sd_size_{statediff_size}_{approach}"
+        run_xdn_cluster(gp_config_file, screen_session_name)
+    
         # deploy the service
         is_deterministic = "true"
         if approach == "pb":
@@ -224,19 +232,18 @@ for approach in approaches:
         # reconfigure the leader
         print(">>> reconfiguring the leader ...")
         leader_address = default_leader_address
-        leader_name = default_leader_name
         if approach == "rsm":
-            replica_names = ["AR0", "AR1", "AR2"]
-            command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
-            print("   ", command)
-            res = subprocess.run(command, shell=True, capture_output=True, text=True)
-            assert res.returncode == 0
-            output = res.stdout
-            print("   ", output)
-            output_json = json.loads(output)
-            if "FAILED" in output_json:
-                assert output_json["FAILED"] == False
-            time.sleep(90)
+            try:
+                for i in range(num_machines):
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true", "XDN": service_name}, timeout=1)
+                    response_json = json.loads(response.text)
+                    if "role" in response_json and response_json["role"] == "leader":
+                        leader_address = f"10.10.1.{i+1}"
+                        print("detected leader: ", leader_address)
+                        break
+                time.sleep(5)
+            except Exception as e:
+                print(f"Exception: {e}")
         if approach == "pb":
             try:
                 for i in range(num_machines):
@@ -252,7 +259,13 @@ for approach in approaches:
 
         service_endpoint = f"http://{leader_address}:2300/"
         headers = {"XDN": service_name}
+
+        # save the POST request payload to external file
+        post_req_payload_filename = f"static/rsm_pb_payload_8.txt"
         post_data = generate_random_string(8)
+        post_data_file = open(post_req_payload_filename, "w")
+        post_data_file.write(post_data)
+        post_data_file.close()
 
         # run the warmup
         for i in range(100):
@@ -263,23 +276,26 @@ for approach in approaches:
                 print(f"Exception: {e}")
 
         # run the actual measurements
+        print(">>> running measurements ...")
+        directory_path = "results_lat_rsm_pb"
+        os.makedirs(directory_path, exist_ok=True)
+        target_latency_filename = f"results_lat_rsm_pb/rsm_pb_raw_lat_vsd_{statediff_size}_{approach}.tsv"
+        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} > /dev/null"
+        print("   ", command)
+        ret_code = os.system(command)
+        assert ret_code == 0
+
+        # read the produced raw latency data
         latencies = []
-        for i in range(num_repetitions):
-            start_time = time.perf_counter()
-            try:
-                response = requests.post(service_endpoint, headers=headers, 
-                                         data=post_data, timeout=3)
-            except Exception as e:
-                print(f"Exception: {e}")
-            end_time = time.perf_counter()
-            latency = end_time - start_time
-            latency_ms = latency * 1_000.0
-            latencies.append(latency_ms)
+        with open(target_latency_filename, 'r') as tsvfile:
+            tsv_reader = csv.DictReader(tsvfile, delimiter='\t')
+            for row in tsv_reader:
+                latencies.append(float(row["ttime"]))
 
         avg_lat_ms = statistics.mean(latencies)
         med_lat_ms = statistics.median(latencies)
         stdev_lat_ms = statistics.stdev(latencies)
-        print(f"Approach: {approach} \tStatediff Size: {statediff_size} \tAvg.Latency: {avg_lat_ms:.2f} ms")
+        print(f"Approach: {approach} \tStatediff Size: {statediff_size} \tAvg.Latency: {avg_lat_ms:.2f} ms \t Med.Latency: {med_lat_ms:.2f}")
         result_file.write(f"vary_statediff_size,{approach},8,1,{statediff_size},{avg_lat_ms},{med_lat_ms},{stdev_lat_ms}\n")
         result_file.flush()
 
@@ -289,33 +305,28 @@ for approach in approaches:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
             print(result.stdout)
+            time.sleep(3)
         except Exception as e:
             print(f"Error executing command: {e}")
             print(e.stderr)
 
-        # remove unused docker network
-        command = "docker network prune --force"
-        os.system(command=command)
-
+        # destroy the XDN cluster
+        clear_xdn_cluster()
         time.sleep(3)
         pass
 
-# vary exec time
-print(">>> Vary execution time ...")
-
-print(f" > removing the xdn cluster")
-command = f"../bin/gpServer.sh -DgigapaxosConfig={gp_config_file} forceclear all > /dev/null 2>&1"
-print("   ", command)
-ret_code = os.system(command)
-assert ret_code == 0
 time.sleep(10)
 
-# deploy XDN cluster, store the log output in screen_logs
-screen_session_name = "xdn_lat_rsm_pb_vary_exec_time"
-run_xdn_cluster(gp_config_file, screen_session_name)
-
+# vary exec time
+print(">>> Vary execution time ...")
 for approach in approaches:
     for exec_time in exec_times:
+        print(f" >> Handling approach={approach} exec_time={exec_time}")
+
+        # deploy XDN cluster, store the log output in screen_logs
+        screen_session_name = f"xdn_lat_rsm_pb_vary_exec_time_{exec_time}_{approach}"
+        run_xdn_cluster(gp_config_file, screen_session_name)
+
         # deploy the service
         is_deterministic = "true"
         if approach == "pb":
@@ -342,19 +353,18 @@ for approach in approaches:
         # reconfigure the leader
         print(">>> reconfiguring the leader ...")
         leader_address = default_leader_address
-        leader_name = default_leader_name
         if approach == "rsm":
-            replica_names = ["AR0", "AR1", "AR2"]
-            command = f'curl -X POST http://{control_plane_address}:{control_plane_http_port}/api/v2/services/{service_name}/placement -d "{{"NODES" : {replica_names}, "COORDINATOR": "{leader_name}"}}"'
-            print("   ", command)
-            res = subprocess.run(command, shell=True, capture_output=True, text=True)
-            assert res.returncode == 0
-            output = res.stdout
-            print("   ", output)
-            output_json = json.loads(output)
-            if "FAILED" in output_json:
-                assert output_json["FAILED"] == False
-            time.sleep(90)
+            try:
+                for i in range(num_machines):
+                    response = requests.get(f"http://10.10.1.{i+1}:2300/", headers={"XdnGetProtocolRoleRequest": "true", "XDN": service_name}, timeout=1)
+                    response_json = json.loads(response.text)
+                    if "role" in response_json and response_json["role"] == "leader":
+                        leader_address = f"10.10.1.{i+1}"
+                        print("detected leader: ", leader_address)
+                        break
+                time.sleep(5)
+            except Exception as e:
+                print(f"Exception: {e}")
         if approach == "pb":
             try:
                 for i in range(num_machines):
@@ -370,7 +380,13 @@ for approach in approaches:
 
         service_endpoint = f"http://{leader_address}:2300/"
         headers = {"XDN": service_name}
+
+        # save the POST request payload to external file
+        post_req_payload_filename = f"static/rsm_pb_payload_8.txt"
         post_data = generate_random_string(8)
+        post_data_file = open(post_req_payload_filename, "w")
+        post_data_file.write(post_data)
+        post_data_file.close()
 
         # run the warmup
         for i in range(100):
@@ -381,23 +397,26 @@ for approach in approaches:
                 print(f"Exception: {e}")
 
         # run the actual measurements
+        print(">>> running measurements ...")
+        directory_path = "results_lat_rsm_pb"
+        os.makedirs(directory_path, exist_ok=True)
+        target_latency_filename = f"results_lat_rsm_pb/rsm_pb_raw_lat_vet_{exec_time}_{approach}.tsv"
+        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} > /dev/null"
+        print("   ", command)
+        ret_code = os.system(command)
+        assert ret_code == 0
+
+        # read the produced raw latency data
         latencies = []
-        for i in range(num_repetitions):
-            start_time = time.perf_counter()
-            try:
-                response = requests.post(service_endpoint, headers=headers, 
-                                         data=post_data, timeout=3)
-            except Exception as e:
-                print(f"Exception: {e}")
-            end_time = time.perf_counter()
-            latency = end_time - start_time
-            latency_ms = latency * 1_000.0
-            latencies.append(latency_ms)
+        with open(target_latency_filename, 'r') as tsvfile:
+            tsv_reader = csv.DictReader(tsvfile, delimiter='\t')
+            for row in tsv_reader:
+                latencies.append(float(row["ttime"]))
 
         avg_lat_ms = statistics.mean(latencies)
         med_lat_ms = statistics.median(latencies)
         stdev_lat_ms = statistics.stdev(latencies)
-        print(f"Approach: {approach} \tExec Time: {exec_time} ms \tAvg.Latency: {avg_lat_ms:.2f} ms")
+        print(f"Approach: {approach} \tExec Time: {exec_time} ms \tAvg.Latency: {avg_lat_ms:.2f} ms \t Med.Latency: {med_lat_ms:.2f}")
         result_file.write(f"vary_exec_time,{approach},8,{exec_time},8,{avg_lat_ms},{med_lat_ms},{stdev_lat_ms}\n")
         result_file.flush()
 
@@ -407,23 +426,15 @@ for approach in approaches:
             print(">>> ", command)
             result = subprocess.run(command, capture_output=True, text=True, shell=True)
             print(result.stdout)
+            time.sleep(3)
         except Exception as e:
             print(f"Error executing command: {e}")
             print(e.stderr)
 
-        # remove unused docker network
-        command = "docker network prune --force"
-        os.system(command=command)
-
+        # destroy the XDN cluster
+        clear_xdn_cluster()
         time.sleep(3)
         pass
-
-print(f" > removing the xdn cluster")
-command = f"../bin/gpServer.sh -DgigapaxosConfig={gp_config_file} forceclear all > /dev/null 2>&1"
-print("   ", command)
-ret_code = os.system(command)
-assert ret_code == 0
-time.sleep(10)
 
 # store the result in the output file
 result_file.close()

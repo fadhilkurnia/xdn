@@ -56,39 +56,34 @@ def get_protocol_aware_replica_placement(protocol_class, client_distribution, se
         # decide the read-only replica locations
         # TODO: non repetitive replicas
         location_list = []
-        for client in client_distribution:
-            for i in range(client['Count']):
-                location_list.append((client['Latitude'], client['Longitude']))
-        _, centroids = cluster_locations(location_list, num_ro_replicas)
         read_replica_name_set = set()
         read_replicas = []
-        for center in centroids:
-            ref_server = {'Name': 'ReferenceServer', 'Latitude': center[0], 'Longitude': center[1]}
-            closest_servers = find_k_closest_servers(server_distribution, ref_server, 1)
-            assert len(closest_servers) == 1
-            read_replica_name_set.add(closest_servers[0]['Name'])
-            read_replicas.append(closest_servers[0])
-        assert len(read_replica_name_set) == num_ro_replicas, f"We need more read only server in this case"
+        if num_ro_replicas > 0:
+            for client in client_distribution:
+                for i in range(client['Count']):
+                    location_list.append((client['Latitude'], client['Longitude']))
+            _, centroids = cluster_locations(location_list, num_ro_replicas)
+            for center in centroids:
+                ref_server = {'Name': 'ReferenceServer', 'Latitude': center[0], 'Longitude': center[1]}
+                closest_servers = find_k_closest_servers(server_distribution, ref_server, 1)
+                assert len(closest_servers) == 1
+                read_replica_name_set.add(closest_servers[0]['Name'])
+                read_replicas.append(closest_servers[0])
+            assert len(read_replica_name_set) == num_ro_replicas, f"We need more read only server in this case"
         
-        # assign each client to the closest read-only replicas
-        dummy_clients = []
-        read_replica_demand_aggr = {}
-        for client in client_distribution:
-            closest_servers = find_k_closest_servers(read_replicas, client, 1)
-            assert len(closest_servers) == 1
-            closest_server = closest_servers[0]
-            if closest_server['Name'] not in read_replica_demand_aggr:
-                read_replica_demand_aggr[closest_server['Name']] = 0
-            read_replica_demand_aggr[closest_server['Name']] += client['Count']
-        for read_server in read_replicas:
-            read_server['Count'] = read_replica_demand_aggr[read_server['Name']]
-            dummy_clients.append(read_server)
-
-        # # decide the read-write replicas, considering the read-only replicas
-        # rw_replica_group_info = get_heuristic_replicas_placement(server_distribution, 
-        #                                                          dummy_clients, 
-        #                                                          num_rw_replicas, 
-        #                                                          True)        
+            # assign each client to the closest read-only replicas
+            dummy_clients = []
+            read_replica_demand_aggr = {}
+            for client in client_distribution:
+                closest_servers = find_k_closest_servers(read_replicas, client, 1)
+                assert len(closest_servers) == 1
+                closest_server = closest_servers[0]
+                if closest_server['Name'] not in read_replica_demand_aggr:
+                    read_replica_demand_aggr[closest_server['Name']] = 0
+                read_replica_demand_aggr[closest_server['Name']] += client['Count']
+            for read_server in read_replicas:
+                read_server['Count'] = read_replica_demand_aggr[read_server['Name']]
+                dummy_clients.append(read_server)
         
         replica_group_info = rw_replica_group_info
         for server_name in read_replica_name_set:
@@ -280,7 +275,7 @@ def assign_clients_to_closest_replica(client_lists, replica_group_info,
 
 # ==============================================================================
 
-read_ratios = range(0, 101, 25)
+read_ratios = [0, 20, 40, 60, 80, 100]
 consistency_models = [
     'sequential', 'linearizability', 'causal', 'pram', 
     'monotonic_reads', 'writes_follow_reads', 'read_your_writes', 
@@ -304,7 +299,7 @@ result_filename = "results/latency_consistency.csv"
 service_prop_template_file = "static/xdn_consistency_template.yaml"
 service_endpoint = "/api/todo/tasks"
 xdn_binary = "../bin/xdn"
-num_request_per_loc = 10
+num_request_per_loc = 1000
 num_clients = 100
 random_seed = 313
 num_tasks = 100
@@ -386,7 +381,7 @@ for consistency in consistency_models:
         
         # generate graph of replica distribution
         target_map_figure_filename = f"plots/cons_replica_{consistency}_{read_ratio}.pdf"
-        generate_replica_dist_map_figure(target_map_figure_filename, replica_group_info, clients=clients)
+        generate_replica_dist_map_figure(target_map_figure_filename, replica_group_info)
 
         if consistency == 'linearizability' or consistency == 'sequential':
             numerical_latencies = get_expected_latencies(replica_group_info['Replicas'],
