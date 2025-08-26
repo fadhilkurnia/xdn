@@ -155,7 +155,6 @@
         <pathelement location="${lib.dir}/msgpack-core-0.8.8.jar"/>
         <pathelement location="${lib.dir}/jedis-2.8.1.jar"/>
         <pathelement location="${lib.dir}/netty-all-4.1.50.Final.jar"/>
-        <!--    <pathelement location="${conf.dir}"/>-->
     </path>
 
     <target name="ensure-test-name" unless="test">
@@ -313,16 +312,6 @@ command line with -Dclass="
         <echo>Current build number:${build.mmr.number}</echo>
     </target>
 
-    <!--
-    <target name="compile">
-       <antcall target="revision"></antcall>
-    </target>
-
-    <target name="dist">
-      <antcall target="minor"></antcall>
-    </target>
-    -->
-
     <target name="revision">
         <propertyfile file="build.properties">
             <entry key="build.revision.number" type="int" operation="+" value="1" pattern="00"/>
@@ -364,16 +353,5 @@ command line with -Dclass="
             <entry key="build.revision.number" type="int" value="0" pattern="00"/>
         </propertyfile>
     </target>
-
-
-    <!--
-    <target name="all">
-        <propertyfile  file="build_info.properties">
-                <entry key="build.major.number" type="int" operation="+" value="1" pattern="00"/>
-                <entry key="build.minor.number" type="int" operation="+" value="1" pattern="00"/>
-                <entry key="build.revision.number" type="int" operation="+" value="1" pattern="00"/>
-        </propertyfile>
-    </target>
-    -->
 
 </project>
