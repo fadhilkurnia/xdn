@@ -158,7 +158,7 @@ for approach in approaches:
         directory_path = "results_lat_rsm_pb"
         os.makedirs(directory_path, exist_ok=True)
         target_latency_filename = f"results_lat_rsm_pb/rsm_pb_raw_lat_vrs_{req_size}_{approach}.tsv"
-        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} > /dev/null"
+        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} 2>/dev/null"
         print("   ", command)
         ret_code = os.system(command)
         assert ret_code == 0
@@ -280,7 +280,7 @@ for approach in approaches:
         directory_path = "results_lat_rsm_pb"
         os.makedirs(directory_path, exist_ok=True)
         target_latency_filename = f"results_lat_rsm_pb/rsm_pb_raw_lat_vsd_{statediff_size}_{approach}.tsv"
-        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} > /dev/null"
+        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} 2>/dev/null"
         print("   ", command)
         ret_code = os.system(command)
         assert ret_code == 0
@@ -401,7 +401,7 @@ for approach in approaches:
         directory_path = "results_lat_rsm_pb"
         os.makedirs(directory_path, exist_ok=True)
         target_latency_filename = f"results_lat_rsm_pb/rsm_pb_raw_lat_vet_{exec_time}_{approach}.tsv"
-        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} > /dev/null"
+        command = f"ab -k -p {post_req_payload_filename} -g {target_latency_filename} -T text/plain -H 'XDN: {service_name}' -c 1 -n {num_repetitions} {service_endpoint} 2>/dev/null"
         print("   ", command)
         ret_code = os.system(command)
         assert ret_code == 0

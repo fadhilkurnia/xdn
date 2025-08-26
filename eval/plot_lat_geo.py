@@ -4,11 +4,11 @@ import csv
 import statistics
 import numpy as np
 
-latency_result_dir_path = "/mydata/latency-results"
+latency_result_dir_path = "./results_lat_geo"
 latency_files = os.listdir(latency_result_dir_path)
 
-target_aggr_filename = "latency_geolocality.csv"
-# approach  geolocality locality_name lat_avg_ms lat_var
+target_plot_filename = "./plots/latency_geolocality.pdf"
+target_aggr_filename = "./results/latency_geolocality.csv"
 
 # gather all the parameters
 geolocalities = set()
@@ -70,6 +70,13 @@ with open(target_aggr_filename, 'w') as target_aggragate_file:
     geolocalities.sort(reverse=True)
     approaches = list(approaches)
     approaches.sort(reverse=True)
+
+    avg_xdnnr = []
+    avg_xdn   = []
+    avg_gd    = []
+    avg_ed    = []
+    avg_cd    = []
+
     for geolocality in geolocalities:
         for approach in approaches:
             latencies = approach_stats[approach][geolocality]
@@ -85,4 +92,32 @@ with open(target_aggr_filename, 'w') as target_aggragate_file:
             p95_latency = np.percentile(latencies, 95)
             p99_latency = np.percentile(latencies, 99)
             print(f'>> Approach={approach:5}\t g={geolocality}\t avg={avg_latency:6.2f}ms var={var_latency:8.2f} | min={min_latency:6.2f}ms max={max_latency:6.2f}ms | p50={med_latency:6.2f}ms p90={p90_latency:6.2f}ms p95={p95_latency:6.2f}ms p99={p99_latency:6.2f}ms')
+
+            if approach == "xdnnr":
+                avg_xdnnr.append(avg_latency)
+            if approach == "xdn":
+                avg_xdn.append(avg_latency)
+            if approach == "gd":
+                avg_gd.append(avg_latency)
+            if approach == "ed":
+                avg_ed.append(avg_latency)
+            if approach == "cd":
+                avg_cd.append(avg_latency)
+        
         print()
+    
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(5, 3))
+    plt.plot(geolocalities, avg_xdnnr, label="Unreplicated Edge", linestyle='dotted', color='gray')
+    plt.plot(geolocalities, avg_cd,    marker='o', label="Static (us-east-1)")
+    plt.plot(geolocalities, avg_gd,    marker='o', label="Multi-Region")
+    plt.plot(geolocalities, avg_ed,    marker='o', label="Edge Datastore")
+    plt.plot(geolocalities, avg_xdn,   marker='o', label="XDN")
+
+    plt.xlabel("Geo-locality Factor (g)")
+    plt.ylabel("Avg. Latency (ms)")
+    plt.xlim(left=0.0, right=1.0)
+    plt.ylim(bottom=0.0)
+    plt.grid()
+    plt.legend()
+    plt.savefig(target_plot_filename, format="pdf", bbox_inches="tight")

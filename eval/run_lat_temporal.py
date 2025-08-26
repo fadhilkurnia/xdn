@@ -1,7 +1,3 @@
-# read clients
-# split clients into 4 timezone
-# create client distribution for every 30 minutes following the sinusoidal distribution
-
 import os
 import re
 import copy
@@ -21,7 +17,6 @@ from utils import get_spanner_placement_menu
 def school_hours_distribution(t, mean_local=12, std_hours=2.0, tz_offset=0):
     """
     Returns a Gaussian-like distribution restricted to [8, 14] local time.
-    Outside [8, 14], distribution is zero.
 
     Parameters
     ----------
@@ -35,14 +30,10 @@ def school_hours_distribution(t, mean_local=12, std_hours=2.0, tz_offset=0):
     dist       : array-like, distribution values for each t
     """
     # Convert UTC time into local time for this time zone
-    local_time = (t - tz_offset) % 24
+    local_time = (t + tz_offset) % 24
 
     # Gaussian shape, with peak at mean_local
     dist = np.exp(-0.5 * ((local_time - mean_local) / std_hours)**2)
-
-    # Zero out values outside the [8, 14] window (school hours)
-    mask = (local_time < 8) | (local_time > 14)
-    dist[mask] = 0
 
     # Optionally normalize so each distribution has a maximum of 1
     # (only if there’s at least one nonzero value)
@@ -56,13 +47,13 @@ population_data_file = "location_distributions/client_us_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
 server_aws_region_location_file = "location_distributions/server_aws_region.csv"
 server_gcp_region_location_file = "location_distributions/server_gcp_region.csv"
-gigapaxos_template_config_file = "../conf/gigapaxos.xdnlat.template.properties"
-request_payload_file="measurement_payload.json"
+gigapaxos_template_config_file = "static/gigapaxos.xdn.cloudlab.template.properties"
+request_payload_file="static/measurement_payload.json"
 
 approaches = ['XDN', 'CD', 'ED', 'GD']
-num_cloudlab_machines = 12
-control_plane_address="10.10.1.11"
-net_device_if_name="enp3s0f0np0"        # example: "ens1f1np1"
+num_cloudlab_machines = 24
+control_plane_address="10.10.1.25"
+net_device_if_name="enp65s0f0np0"       # example: "ens1f1np1"
 net_device_if_name_exception_list=""    # example: "10.10.1.6/enp130s0f0np0,10.10.1.8/enp4s0f0np0"
 control_plane_http_port="3300"
 max_num_clients = 1000
@@ -70,10 +61,17 @@ num_replicas = 3
 static_nr_server = 'us-east-1'
 c_lat_slowdown_factor = 0.32258064516
 request_endpoint="/api/books"
+dist_peak_local_hour=12
+dist_std_hours=1.5
 is_cache_docker_image=True
-is_run_real_measurement=False
+is_run_real_measurement=True
 is_print_client_temporal_dist=False
 enable_inter_city_lat_emulation=True
+is_use_world_population=True
+
+if is_use_world_population:
+    population_data_file = "location_distributions/client_world_metro_population.csv"
+    static_nr_server = "us-east-1"
 
 city_locations = get_client_locations(population_data_file)
 aws_region_servers = get_server_locations([server_aws_region_location_file])
@@ -146,28 +144,76 @@ for timezone in timezones:
         city_list_by_timezone[timezone][i]['PerTzPopulationRatio'] = float(city['Count']) / float(sum_population)
 
 # generate num of cients distributions in each timestamp and timezone, every 60 mins
-timestamps = np.arange(13, 20, 1)
+num_time_sample = 6
+timestamps = np.arange(15, 39, 3)
 offsets_utc = {
-    "Eastern":    5,   # UTC-5
-    "Central":    6,   # UTC-6
-    "Mountain":   7,   # UTC-7
-    "Pacific":    8    # UTC-8
+    "Eastern":    -5,   # UTC-5
+    "Central":    -6,   # UTC-6
+    "Mountain":   -7,   # UTC-7
+    "Pacific":    -8    # UTC-8
 }
+if is_use_world_population:
+    offsets_utc = {
+        "America":       -5,   # UTC-5
+        "East Asia":      8,   # UTC+8
+        "Central Asia":   5.5, # UTC+5:30
+        "Europe":         1,   # UTC+1
+    }
+
 client_tz_count_by_timestamp = {}
-num_et_clients = school_hours_distribution(timestamps, 10, 0.4, offsets_utc['Eastern']) * max_num_clients
-num_ct_clients = school_hours_distribution(timestamps, 10, 0.4, offsets_utc['Central']) * max_num_clients
-num_mt_clients = school_hours_distribution(timestamps, 10, 0.4, offsets_utc['Mountain']) * max_num_clients
-num_pt_clients = school_hours_distribution(timestamps, 10, 0.4, offsets_utc['Pacific']) * max_num_clients
+num_et_clients = 0.0
+num_ct_clients = 0.0
+num_mt_clients = 0.0
+num_pt_clients = 0.0
+if not is_use_world_population:
+    num_et_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['Eastern']) * max_num_clients
+    num_ct_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['Central']) * max_num_clients
+    num_mt_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['Mountain']) * max_num_clients
+    num_pt_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['Pacific']) * max_num_clients
+else:
+    num_et_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['East Asia']) * max_num_clients
+    num_ct_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['Central Asia']) * max_num_clients
+    num_mt_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['Europe']) * max_num_clients
+    num_pt_clients = school_hours_distribution(timestamps, dist_peak_local_hour, dist_std_hours, offsets_utc['America']) * max_num_clients
+
 for idx, timestamp in enumerate(timestamps):
     num_et_client = int(round(num_et_clients[idx]))
     num_ct_client = int(round(num_ct_clients[idx]))
     num_mt_client = int(round(num_mt_clients[idx]))
     num_pt_client = int(round(num_pt_clients[idx]))
-    print(f'>>> timestamp_utc={timestamp} |\t et={num_et_client:7d}\t ct={num_ct_client:7d}\t mt={num_mt_client:7d}\t pt={num_pt_client:7d}')
-    client_tz_count_by_timestamp[timestamp] = {'Eastern': num_et_client, 
-                                               'Central': num_ct_client,
-                                               'Mountain': num_mt_client,
-                                               'Pacific': num_pt_client}
+    if not is_use_world_population:
+        print(f'>>> timestamp_utc={timestamp:5} |\t et={num_et_client:7d}\t ct={num_ct_client:7d}\t mt={num_mt_client:7d}\t pt={num_pt_client:7d}')
+        client_tz_count_by_timestamp[timestamp] = {'Eastern': num_et_client, 
+                                                   'Central': num_ct_client,
+                                                   'Mountain': num_mt_client,
+                                                   'Pacific': num_pt_client}
+    else:
+        print(f'>>> timestamp_utc={timestamp:5} |\t eas={num_et_client:7d}\t cas={num_ct_client:7d}\t eur={num_mt_client:7d}\t amr={num_pt_client:7d}')
+        client_tz_count_by_timestamp[timestamp] = {'East Asia': num_et_client, 
+                                                   'Central Asia': num_ct_client,
+                                                   'Europe': num_mt_client,
+                                                   'America': num_pt_client}
+
+# Plot the demand frequency over time
+import matplotlib.pyplot as plt
+plt.figure(figsize=(6,1.5))
+ax1 = plt.subplot(1,1,1)
+colors = ['navy', 'darkgoldenrod', 'darkgreen', 'darkred']
+linestyles = ['dotted', 'dashdot', 'dashed', 'solid']
+counter = 0
+for label, offset in offsets_utc.items():
+    dist = school_hours_distribution(
+        timestamps, mean_local=dist_peak_local_hour, std_hours=dist_std_hours, tz_offset=offset
+    )
+    ax1.plot(timestamps, dist, linestyle=linestyles[counter], label=label, color=colors[counter])
+    counter += 1
+ax1.set_xlabel("UTC", loc='left', color=colors[0])
+ax1.set_ylabel("Normalized\nNum of Users")
+ax1.set_ylim(bottom=0)
+ax1.set_xlim(left=15, right=38)
+ax1.grid(True)
+ax1.legend()
+plt.savefig("plots/client_temporal_dist.pdf", format="pdf", bbox_inches="tight")
 
 # distribute the clients spatially, for each timestamp and timezone
 client_list_by_timestamp = {}
@@ -181,6 +227,8 @@ for timestamp in timestamps:
         tz_sum_client = client_tz_count_by_timestamp[timestamp][timezone]
         for city in client_list_by_timestamp_timezone[timestamp][timezone]:
             city['Count'] = int(round(tz_sum_client * city['PerTzPopulationRatio']))
+            if city['Count'] != 0:
+                print(f"      ts={timestamp} city={city['City']} count={city['Count']}")
         client_list_by_timestamp[timestamp].extend(client_list_by_timestamp_timezone[timestamp][timezone])
 
 # printout the number of client in each city at each timestamp
@@ -296,9 +344,12 @@ for approach in approaches:
                                                     is_report_per_city=True)
         
         # process the per city latencies
+        replica_group_members = []
+        for rep in replica_group_info['Replicas']:
+            replica_group_members.append(rep['Name'])
         print(f">>>> timestamp {timestamp}")
         print(f"      approach: {approach}")
-        print(f"      replica group: {replica_group_info['Leader']['Name']}")
+        print(f"      replica group:{replica_group_members} leader:{replica_group_info['Leader']['Name']}")
         print(f"      per-city avg. latencies:")
         latency_across_cities = []
         for city_name, latencies in latencies_per_city.items():
@@ -358,7 +409,7 @@ for approach in approaches:
 
 # write the raw results into a csv file, with the following format:
 #   timestamp_utc, approach, city_lat, city_lon, city_name, client_count, avg_lat_ms, min_lat_ms, max_lat_ms, p50_lat_ms, p90_lat_ms, p95_lat_ms, p99_lat_ms
-result_filename = 'temporal_latencies_expected.csv'
+result_filename = 'results/temporal_latencies_expected.csv'
 with open(result_filename, 'w') as result_file:
     result_file.write('timestamp_utc,approach,city_lat,city_lon,city_name,client_count,avg_lat_ms,min_lat_ms,max_lat_ms,p50_lat_ms,p90_lat_ms,p95_lat_ms,p99_lat_ms\n')
     for data in raw_result:
@@ -465,7 +516,7 @@ if is_run_real_measurement:
             "___________PLACEHOLDER_RC_HOST___________", 
             control_plane_address, 
             udpated_cfg_content)
-        updated_cfg_file = f"../conf/{config_filename}"
+        updated_cfg_file = f"static/{config_filename}"
         with open(updated_cfg_file, 'w') as file:
             file.write(udpated_cfg_content)
 
@@ -660,6 +711,8 @@ if is_run_real_measurement:
             assert ret_code == 0, f"Warmup failed after {max_repetitions} attempts."
 
             print(f">> running measurement of approach={approach} at time={timestamp}")
+            directory_path = "results_lat_temporal"
+            os.makedirs(directory_path, exist_ok=True)
             for client in clients:
                 # TODO run all clients in parallel
                 num_city_clients = client['Count']
@@ -735,6 +788,8 @@ if is_run_real_measurement:
         assert ret_code == 0
 
         time.sleep(60)
+
+    # TODO process all data from 'results_lat_temporal' directory into results/latency_temporal.csv
 
 
 # ==============================================================================

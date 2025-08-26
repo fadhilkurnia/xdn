@@ -73,7 +73,7 @@ def measure_latency_geo(service_name, replica_addresses, config_file, location_f
         print(f"Failed to get replica locations from config file '{config_file}'")
         sys.exit(1)
 
-    # prepare clients and assign to the closes replica
+    # prepare clients and assign to the closest replica
     city_clients = create_geo_clients(location_file, num_clients)
     prepared_clients = assign_client_replica(city_clients, servers)
     proxy_address = None
@@ -84,13 +84,34 @@ def measure_latency_geo(service_name, replica_addresses, config_file, location_f
     latencies = []
     for client in prepared_clients:
         for i in range(client["count"]):
-            for j in range(repetition):
-                target_server = client["target_replica"]
-                latitude = client["latitude"]
-                longitude = client["longitude"]
-                client_location = f"{latitude};{longitude}"
+            target_server = client["target_replica"]
+            latitude = client["latitude"]
+            longitude = client["longitude"]
+            client_location = f"{latitude};{longitude}"
 
+            """
+            ab -g latencies.tsv -p measurement_payload.json -T 'application/json' -P 127.0.0.1:8080 http://10.10.1.1:2300/api/books
+            """
+
+            # warming up the servers
+            print(f">> Warming up the servers via {target_server} for client in {latitude},{longitude}")
+            for j in range(repetition):
                 try:
+                    requests.post(f"http://{target_server}:2300{REQUEST_PATH}", 
+                                            timeout=timeout,
+                                            proxies=proxy_address,
+                                            headers={
+                                                "XDN": service_name, 
+                                                "X-Client-Location": client_location},
+                                            json=REQUEST_PAYLOAD)
+                except:
+                    pass
+
+            # do the actual measurement
+            print(f">> Run the actual measurement")
+            for j in range(repetition):
+                try:
+                    # TODO: use apache-bench instead of slow requests
                     start_time = time.perf_counter()
                     # Send a POST request
                     response = requests.post(f"http://{target_server}:2300{REQUEST_PATH}", 
@@ -203,7 +224,7 @@ def create_geo_clients(location_file, total_client_count):
     sum_client_count = 0
     for client in city_clients:
         client_count = float(client["population"]) / float(sum_population) * total_client_count
-        client_count = int(round(client_count))
+        client_count = max(int(round(client_count)), 1)
         if sum_client_count + client_count > total_client_count:
             client_count = total_client_count - sum_client_count
         

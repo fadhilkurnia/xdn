@@ -6,6 +6,7 @@ build.number
 /out/
 /derby.log
 /paxos_logs/
+/paxos_large_checkpoints/
 /reconfiguration_DB/
 /nbproject/
 /nbbuild.xml
@@ -14,3 +15,4 @@ build.number
 *.iml
 conf/gigapaxos.aws.properties
 cookie.txt
+output.txt

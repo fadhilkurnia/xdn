@@ -26,7 +26,6 @@
     <path id="classpath.base">
         <pathelement location="${build.dir}"/>
         <pathelement location="${build.classes.dir}"/>
-        <!--    <pathelement location="${conf.dir}"/>-->
         <fileset dir="${lib.dir}">
             <include name="*.jar"/>
         </fileset>
@@ -45,7 +44,6 @@
         <javac srcdir="${src.dir}" destdir="${build.classes.dir}" debug="true" debuglevel="lines,vars,source"
                includeantruntime="false" release="21">
             <compilerarg value="-Xlint:unchecked"/>
-            <!-- <compilerarg value="-Xlint:deprecation"/> -->
             <classpath refid="classpath.base"/>
         </javac>
     </target>
@@ -357,6 +355,14 @@
         </propertyfile>
     </target>
 
+    <fail message="Ant 1.10.4+ is required!">
+        <condition>
+            <not>
+                <antversion atleast="1.10.4"/>
+            </not>
+        </condition>
+    </fail>
+
     <!-- begin build configuration for junit5 tests -->
     <path id="junit5.lib.jars">
         <pathelement location="${lib.dir}/junit-jupiter-api-5.11.1.jar"/>
@@ -364,8 +370,13 @@
         <pathelement location="${lib.dir}/junit-platform-engine-1.11.1.jar"/>
         <pathelement location="${lib.dir}/junit-platform-launcher-1.11.1.jar"/>
         <pathelement location="${lib.dir}/junit-platform-commons-1.11.1.jar"/>
+        <pathelement location="${lib.dir}/junit-platform-console-standalone-1.11.3.jar"/>
+        <pathelement location="${lib.dir}/junit-4.12.jar"/>
+        <pathelement location="${lib.dir}/junit-vintage-engine-5.11.1.jar"/>
     </path>
+
     <target name="xdn-compile-tests">
+        <echo message="Compiling all tests inside the ./test/ directory ..."/>
         <mkdir dir="build/test-classes"/>
         <javac srcdir="test"
                destdir="build/test-classes"
@@ -378,28 +389,45 @@
         </javac>
     </target>
 
-    <!-- FIXME: this build target for our unit test still doesnt work,
-           we need to run the tests via IDE instead -->
     <target name="xdn-unit-tests"
             description="Run all unit tests inside the test/ directory"
             depends="xdn-compile-tests">
         <!-- prepare the tests output directory -->
         <mkdir dir="out/test-output"/>
-        <junitlauncher printsummary="true"
-                       haltonfailure="true">
+        <junitlauncher printSummary="true" haltOnFailure="false">
             <!-- include the JUnit platform related libraries required to run the tests -->
             <classpath refid="junit5.lib.jars"/>
 
             <!-- the test classes themselves -->
             <classpath location="build/classes"/>
             <classpath location="build/test-classes"/>
+            <classpath refid="classpath.base"/>
 
             <testclasses outputdir="out/test-output">
                 <fileset dir="build/test-classes">
-                    <include name="**/*Test*.class"/>
+                    <include name="edu/umass/cs/causal/dag/DirectedAcyclicGraphTest.class"/>
                 </fileset>
+                <listener type="legacy-plain" sendSysOut="true" />
             </testclasses>
         </junitlauncher>
+    </target>
+
+    <target name="xdn-unit-tests-console" depends="xdn-compile-tests"
+            description="Run all unit tests inside the test/ directory using the console launcher">
+        <java classname="org.junit.platform.console.ConsoleLauncher" fork="true" failOnError="false">
+            <redirector output="output.txt" alwayslog="true"/>
+            <!-- Enable assertion -->
+            <assertions>
+                <enable/>
+            </assertions>
+            <classpath refid="classpath.base"/>
+            <classpath refid="junit5.lib.jars"/>
+            <classpath location="build/classes"/>
+            <classpath location="build/test-classes"/>
+            <arg value="--scan-classpath"/>
+            <arg line="--details=verbose"/>
+            <arg line="--reports-dir=build/test-report-v"/>
+        </java>
     </target>
 
 </project>

@@ -2,8 +2,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 
-lat_min, lat_max = 28, 48     # For instance, from Central America up to Northern Canada
-lon_min, lon_max = -130, -65  # Roughly west coast of Alaska to east coast of Canada/US
+lat_min, lat_max = 15, 48     # For instance, from Central America up to Northern Canada
+lon_min, lon_max = -125, -70  # Roughly west coast of Alaska to east coast of Canada/US
 
 # 1. Read in the CSV file
 df = pd.read_csv('location_distributions/client_us_metro_population.csv')
@@ -14,7 +14,7 @@ df = df[df['location'] != 'NA;NA']
 df[['Latitude', 'Longitude']] = df['location'].str.split(';', expand=True).astype(float)
 df = df.sort_values('population', ascending=False).head(50)
 
-plt.figure(figsize=(8, 3))
+plt.figure(figsize=(4, 3))
 m = Basemap(projection='merc',
             llcrnrlat=lat_min, urcrnrlat=lat_max,
             llcrnrlon=lon_min, urcrnrlon=lon_max,
@@ -26,7 +26,7 @@ m.drawmapboundary(fill_color='white')
 x, y = m(df['Longitude'].values, df['Latitude'].values)
 
 m.scatter(x, y,
-          s=df['population'] / 10000,   # You can adjust this scaling factor as you like
+          s=df['population'] / 100_000,   # You can adjust this scaling factor as you like
           color='red',
           alpha=0.7,
           marker='o',
@@ -45,7 +45,7 @@ legend_populations = [
 for pop_value, label in legend_populations:
     plt.scatter(
         [], [],  # no x/y data
-        s=pop_value / 10000,
+        s=pop_value / 100_000,
         color='red',
         alpha=0.7,
         marker='o',
@@ -58,22 +58,24 @@ leg = plt.legend(
     scatterpoints=1,
     frameon=True,
     title="Population",
-    loc="upper left",
+    loc="lower center",
     ncol=4,
     reverse=True,
-    borderpad=1,
-    columnspacing=0.25,
+    borderpad=0.25,
+    columnspacing=0.0,
     handletextpad=0.3,
-    framealpha=0.90
+    framealpha=0.90,
+    fontsize=12
 )
 leg._legend_box.align = "center"
 
 # Optionally, add city names as labels:
 df = df.sort_values('population', ascending=False).head(15)
 txt_left_margin=150000.0
-txt_top_margin=100000.0
+txt_top_margin=200_000.0
+excluded_city_names = {"Riverside", "Miami", "Detroit", "Phoenix", "Boston", "New York", "Philadelphia", "Washington"}
 for city, xx, yy in zip(df['city'], x, y):
-    if city == "Riverside" or city == "Miami" or city == "Seattle":
+    if city in excluded_city_names:
       continue
     plt.text(xx+txt_left_margin, yy-txt_top_margin, city, fontsize=9, ha='left', va='bottom', zorder=30)
 

@@ -15,7 +15,7 @@ from utils import get_server_locations
 from utils import get_spanner_placement_menu
 from utils import get_per_city_clients
 
-population_data_file = "location_distributions/client_world_metro_population.csv"
+population_data_file = "location_distributions/client_us_metro_population.csv"
 server_edge_location_file = "location_distributions/server_netflix_oca.csv"
 server_aws_location_file = "location_distributions/server_aws_region.csv"
 server_gcp_location_file = "location_distributions/server_gcp_region.csv"
@@ -29,21 +29,21 @@ num_replicas = 3
 num_clients = 1000
 num_req_per_client = 10
 city_area_sqkm = 1000
-net_device_if_name="enp3s0f0np0"        # example: "ens1f1np1"
+net_device_if_name="enp65s0f0np0"       # example: "ens1f1np1"
 net_device_if_name_exception_list=""    # example: "10.10.1.6/enp130s0f0np0,10.10.1.8/enp4s0f0np0"
 service_name="bookcatalog"
 request_endpoint="/api/books"
 num_cloudlab_machines = 10
-control_plane_address="10.10.1.11"
+control_plane_address="10.10.1.25"
 control_plane_http_port="3300"
-static_nr_server_name="ap-northeast-1"  # Tokyo, Japan
+static_nr_server_name="us-east-1"
 enable_city_parallelism=True
 enable_inter_city_lat_emulation=True
 is_sample_city=True
 is_spread_city_client=False
 is_cache_docker_image=True
 
-results_base_dir="/mydata/latency-results"
+results_base_dir="results_lat_geo"
 os.makedirs(results_base_dir, exist_ok=True)
 os.makedirs("screen_logs", exist_ok=True)
 

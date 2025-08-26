@@ -23,8 +23,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testHttpRequestId_Random() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(128);
+        HttpRequest request = XdnHttpRequestTest.helpCreateDummyHttpRequest();
+        HttpContent content = XdnHttpRequestTest.helpCreateDummyHttpContent(128);
         XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
         assertNotEquals(httpRequest.getRequestID(), 0);
         assertNotNull(request.headers().get("XDN-Request-ID"));
