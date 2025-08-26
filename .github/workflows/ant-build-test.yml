@@ -2,13 +2,13 @@
 # For more information see: 
 # https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-ant
 
-name: Gigapaxos test workflow
+name: XDN test workflow
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "master", "main" ]
 
 jobs:
   build:
@@ -26,3 +26,5 @@ jobs:
       run: ant jar
     - name: 🧪 Running tests with ant ...
       run: ant test
+    - name: 🧪 Running other tests with ant ...
+      run: ant xdn-unit-test-console
