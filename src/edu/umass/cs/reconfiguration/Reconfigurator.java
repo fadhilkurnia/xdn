@@ -20,10 +20,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.security.cert.CertificateException;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +29,8 @@ import java.util.logging.Level;
 import javax.net.ssl.SSLException;
 
 import edu.umass.cs.reconfiguration.interfaces.*;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
+import edu.umass.cs.reconfiguration.reconfigurationutils.*;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -58,32 +57,13 @@ import edu.umass.cs.protocoltask.ProtocolTask;
 import edu.umass.cs.protocoltask.ProtocolTaskCreationException;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.RC;
 import edu.umass.cs.reconfiguration.http.HttpReconfigurator;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.BasicReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.CreateServiceName;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DeleteServiceName;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DemandReport;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.EchoRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.HelloRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.RCRecordRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.RCRecordRequest.RequestTypes;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigureActiveNodeConfig;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigureRCNodeConfig;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.RequestActiveReplicas;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ServerReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.StartEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.CommitWorker;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.ReconfiguratorProtocolTask;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckDropEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckStartEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitAckStopEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitPrimaryExecution;
-import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
-import edu.umass.cs.reconfiguration.reconfigurationutils.AggregateDemandProfiler;
-import edu.umass.cs.reconfiguration.reconfigurationutils.ConsistentReconfigurableNodeConfig;
-import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationPacketDemultiplexer;
-import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationRecord;
 import edu.umass.cs.reconfiguration.reconfigurationutils.ReconfigurationRecord.RCStates;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.ReconfigureUponActivesChange;
 import edu.umass.cs.reconfiguration.dns.DnsReconfigurator;
@@ -411,11 +391,25 @@ public class Reconfigurator<NodeIDType> implements
             this.updateDemandProfile(report); // no coordination
         ReconfigurationRecord<NodeIDType> record = this.DB
                 .getReconfigurationRecord(report.getServiceName());
-        if (record != null)
+        if (record != null) {
+            NodeIdsMetadataPair<NodeIDType> newActives =
+                    this.shouldReconfigure2(report.getServiceName());
+            String placementMetadata = newActives != null ? newActives.placementMetadata() : null;
+
             // coordinate and commit reconfiguration intent
-            this.initiateReconfiguration(report.getServiceName(), record,
-                    shouldReconfigure(report.getServiceName()), null, null,
-                    null, null, null, null, ReconfigurationConfig.ReconfigureUponActivesChange.DEFAULT); // coordinated
+            this.initiateReconfiguration(
+                    /*name=*/report.getServiceName(),
+                    /*reconfigurationRecord=*/record,
+                    /*newActives=*/shouldReconfigure(report.getServiceName()),
+                    /*sender=*/null,
+                    /*receiver=*/null,
+                    /*forwarder*/null,
+                    /*initialState=*/placementMetadata,
+                    /*nameState=*/null,
+                    /*newlyAddedNodes=*/null,
+                    /*policy=*/ReconfigurationConfig.
+                            ReconfigureUponActivesChange.DEFAULT); // coordinated
+        }
         trimAggregateDemandProfile();
         return null; // never any messaging or ptasks
     }
@@ -713,9 +707,6 @@ public class Reconfigurator<NodeIDType> implements
                 this.callbacksCRP.put(getCRPKey(create), callback);
             }
 
-            System.out.println(">>> initiating reconfiguration ... " + create.getInitGroup());
-            System.out.println(">>> ===== " + this.consistentNodeConfig.getReplicatedActives(
-                    create.getServiceName()));
             this.initiateReconfiguration(
                     create.getServiceName(),
                     record,
@@ -1092,7 +1083,7 @@ public class Reconfigurator<NodeIDType> implements
         // to support different client facing ports
         request.setActives(modifyPortsForSSL(activeIPs,
                 receivedOnSSLPort(request)));
-        // this.sendClientReconfigurationPacket
+        request.setPlacementEpochNumber(record.getEpoch());
         callback.processResponse(request.makeResponse());
         /* We message using sendActiveReplicasToClient above as opposed to
          * returning a messaging task below because protocolExecutor's messenger
@@ -1113,6 +1104,138 @@ public class Reconfigurator<NodeIDType> implements
                 me.getAddress().equals(incoming.getAddress()) &&
                         ReconfigurationConfig.getClientFacingSSLPort(me.getPort()) == incoming.getPort();
 
+    }
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleSetReplicaPlacementRequest(
+            SetReplicaPlacementRequest request,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
+            Callback<Request, ReconfiguratorRequest> callback) {
+        // get service metadata based on the provided name
+        String serviceName = request.getServiceName();
+        ReconfigurationRecord<NodeIDType> record = this.DB.getReconfigurationRecord(serviceName);
+        if (record == null) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);
+            request.setResponseMessage("Failed to get record for " + serviceName);
+            callback.processResponse(request.makeResponse());
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // Validate that the provided node ids do exist
+        Map<String, InetSocketAddress> allActives =
+                this.consistentNodeConfig.getAllActiveReplicas();
+        Set<String> allValidNodeIds = allActives.keySet();
+        Set<String> newActivesStringSet = request.getNewReplicaPlacement();
+        for (String nodeId : newActivesStringSet) {
+            if (!allValidNodeIds.contains(nodeId)) {
+                request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+                request.setResponseMessage("Invalid node id of " + nodeId);
+                callback.processResponse(request.makeResponse());
+                return null;
+            }
+        }
+
+        // If preferred coordinator id is given, validate that it is valid
+        String preferredCoordinatorId = request.getCoordinatorNodeId();
+        if (preferredCoordinatorId != null) {
+            if (!newActivesStringSet.contains(preferredCoordinatorId)) {
+                request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+                request.setResponseMessage("Invalid coordinator node id of " +
+                        preferredCoordinatorId);
+                callback.processResponse(request.makeResponse());
+                return null;
+            }
+        }
+
+        // parse the new placement location
+        Stringifiable<NodeIDType> nodeIdDeserialized = this.getUnstringer();
+        Set<NodeIDType> newActives = new HashSet<>();
+        for (String nodeId : newActivesStringSet) {
+            newActives.add(nodeIdDeserialized.valueOf(nodeId));
+        }
+
+        // parse the preferred coordinator as metadata within initial state
+        // checkout XdnGeoDemandProfiler for the similar placement metadata
+        String placementMetadata = null;
+        if (preferredCoordinatorId != null) {
+            JSONObject metadataJson = new JSONObject();
+            try {
+                metadataJson.put(AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString(),
+                        preferredCoordinatorId);
+            } catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
+            placementMetadata = metadataJson.toString();
+        }
+
+        // coordinate and commit reconfiguration (i.e., replacement) intent
+        boolean isHandled = this.initiateReconfiguration(
+                /*name=*/serviceName,
+                /*reconfigurationRecord=*/record,
+                /*newActives=*/newActives,
+                /*sender=*/null,
+                /*receiver=*/null,
+                /*forwarder=*/null,
+                /*initialState=*/placementMetadata,
+                /*nameStates=*/null,
+                /*newlyAddedNodes=*/null,
+                ReconfigureUponActivesChange.DEFAULT);
+        if (!isHandled) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+            request.setResponseMessage("Failed to coordinate replica placement for " + serviceName);
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // Reconfiguration is handled, and will eventually be executed.
+        // Sends success response back to client.
+        request.setResponseMessage("Replica placement request is processed");
+        callback.processResponse(request.makeResponse());
+        return null;
+    }
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleGetReplicaPlacementRequest(
+            GetReplicaPlacementRequest request,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
+            Callback<Request, ReconfiguratorRequest> callback) {
+        // TODO: handle redirection to appropriate RC, now we assume a single RC only.
+
+        // Query the data from reconfiguration DB
+        String serviceName = request.getServiceName();
+        ReconfigurationRecord<NodeIDType> record =
+                this.DB.getReconfigurationRecord(serviceName);
+
+        // Handle non-existent service name
+        if (record == null || record.getActiveReplicas() == null || record.isDeletePending()) {
+            String responseMessage = "No state found for name=" + serviceName;
+            request.setResponseMessage(responseMessage);
+            callback.processResponse(request);
+            return null;
+        }
+
+        // get the server ids where the replicas reside
+        List<String> stringNodeIds = new ArrayList<>();
+        List<NodeIDType> nodeIds = new ArrayList<>();
+        for (NodeIDType node : record.getActiveReplicas()) {
+            nodeIds.add(node);
+            stringNodeIds.add(node.toString());
+        }
+        request.setReplicaNodeIds(stringNodeIds);
+
+        // get the server addresses where the replicas are hosted
+        List<String> addresses = new ArrayList<>();
+        for (NodeIDType node : nodeIds) {
+            InetSocketAddress address = this.consistentNodeConfig.getNodeSocketAddress(node);
+            addresses.add(address.toString());
+        }
+        request.setReplicaAddresses(addresses);
+        request.setPlacementEpochNumber(record.getEpoch());
+
+        // TODO: query the replica roles and metadata by contacting them
+        // TODO: add service/name metadata in the reconfiguration record.
+
+        callback.processResponse(request.makeResponse());
+        return null;
     }
 
     /**
@@ -1838,7 +1961,7 @@ public class Reconfigurator<NodeIDType> implements
         Set<NodeIDType> oldActives = this.DB.getActiveReplicas(name);
         if (oldActives == null || oldActives.isEmpty())
             return null;
-        // get new IP addresses (via consistent hashing if no oldActives
+        // get new IP addresses (via consistent hashing if no oldActives)
         Set<String> newActiveIPs = this.demandProfiler
                 .testAndSetReconfigured(name,
                         getStringSet(oldActives), this.getReconfigurableAppInfo());
@@ -1849,6 +1972,46 @@ public class Reconfigurator<NodeIDType> implements
                 .getNodeIDs(newActiveIPs);
         return (!newActives.equals(oldActives) || ReconfigurationConfig
                 .shouldReconfigureInPlace()) ? newActives : null;
+    }
+
+    /**
+     * Indicates whether reconfiguration is needed. Exactly the same as
+     * {@link #shouldReconfigure(String)} with additional metadata in the return value, which is
+     * useful for conveying reconfiguration/placement metadata (e.g., which node is preferable as
+     * the coordinator).
+     * <p>
+     * TODO: handle configuration if the replica group does not change, but the preferred node for
+     *    coordinator does change.
+     *
+     * @param name The service name
+     * @return pair of Node ID set and optional metadata if reconfiguration is needed,
+     *          otherwise null is returned.
+     */
+    private NodeIdsMetadataPair<NodeIDType> shouldReconfigure2(String name) {
+        // returns null if no current actives
+        Set<NodeIDType> oldActives = this.DB.getActiveReplicas(name);
+        if (oldActives == null || oldActives.isEmpty())
+            return null;
+
+        // get new Node IDs (via consistent hashing if no oldActives)
+        NodeIdsMetadataPair<String> newActiveNodeIdsAndMetadata =
+                this.demandProfiler.testAndSetReconfigured2(
+                        name, getStringSet(oldActives), this.getReconfigurableAppInfo());
+        if (newActiveNodeIdsAndMetadata == null || newActiveNodeIdsAndMetadata.nodeIds() == null)
+            return null;
+
+        // get new actives based on the new Node IDs
+        Set<String> newActiveStringNodeIds = newActiveNodeIdsAndMetadata.nodeIds();
+        Set<NodeIDType> newActiveNodeIds = this.consistentNodeConfig.getNodeIDs(newActiveStringNodeIds);
+
+        // when RECONFIGURE_IN_PLACE flag is disabled, returns null if no changes
+        boolean isSameActives = oldActives.equals(newActiveNodeIds);
+        if (isSameActives && !ReconfigurationConfig.shouldReconfigureInPlace())
+            return null;
+
+        return new NodeIdsMetadataPair<>(
+                newActiveNodeIds,
+                newActiveNodeIdsAndMetadata.placementMetadata());
     }
 
     private ReconfigurableAppInfo getReconfigurableAppInfo() {

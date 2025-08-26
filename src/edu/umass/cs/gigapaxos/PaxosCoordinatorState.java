@@ -63,6 +63,9 @@ public class PaxosCoordinatorState extends PaxosCoordinator {
 	private static final double ACCEPT_RETRANSMISSION_BACKOFF_FACTOR = 1.5;
 	private static final double PREPARE_RETRANSMISSION_BACKOFF_FACTOR = 1.5;
 
+	private static final int EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE =
+			Config.getGlobalInt(PC.EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE);
+
 	private static final int RERUN_DELAY_THRESHOLD = PREPARE_TIMEOUT; //ms
 
 	// final ballot, takes birth and dies with this PaxosCoordinatorState
@@ -366,7 +369,11 @@ public class PaxosCoordinatorState extends PaxosCoordinator {
 		waitforMyBallot.updateHeardFrom(prepareReply.acceptor);
 		log.log(Level.FINEST, "{0} waitfor = {1}", new Object[] {
 				this, waitforMyBallot });
-		if (this.waitforMyBallot.heardFromMajority()) {
+		int _phase1QuorumSize = (members.length / 2) + 1;
+		if (EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE != 0) {
+			_phase1QuorumSize = members.length - EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE + 1;
+		}
+		if (this.waitforMyBallot.getHeardCount() >= _phase1QuorumSize) {
 			acceptedByMajority = true;
 			log.log(Level.FINE,
 					"{0}:{1} coordinator {2} acquired PREPARE majority {3} " +
@@ -624,7 +631,13 @@ private boolean isDuplicate(ProposalStateAtCoordinator psac,
 							waitfor,
 							pstate.pValuePacket.getSummary(log
 									.isLoggable(Level.FINEST)) });
-			if (waitfor.heardFromMajority()) {
+			int _phase2QuorumSize = (members.length/2) + 1;
+			if (EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE > 0) {
+				_phase2QuorumSize = EXPERIMENTAL_MAX_PHASE2_QUORUM_SIZE;
+				if (_phase2QuorumSize > members.length)
+					_phase2QuorumSize = members.length;
+			}
+			if (waitfor.getHeardCount() >= _phase2QuorumSize) {
 				// phase2b success
 				acceptedByMajority = true;
 				decision = (pstate.pValuePacket

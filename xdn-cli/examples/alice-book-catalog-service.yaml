@@ -1,0 +1,19 @@
+# declared properties of alice's bookcatalog service.
+---
+name: alice-book-catalog       # the service name
+image: bookcatalog             # docker image of the stateful service
+port: 80                       # http port endpoint where this service listen (default: 80)
+state: /app/data/              # absolute path where state is stored
+consistency: linearizability   # desired consistency model of the replicated service  (default: linearizability)
+deterministic: true            # flag indicating whether the service is deterministic, for all http endpoints (default: false)
+
+requests:
+  - path_prefix: "/"
+    methods: "GET"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,DELETE"
+    behavior: write_only
+  - path_prefix: "/"
+    methods: "DELETE"
+    behavior: nil_external

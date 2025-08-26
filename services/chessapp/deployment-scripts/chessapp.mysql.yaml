@@ -1,0 +1,29 @@
+---
+name: chessapp
+components:
+   - chess-mysql:
+        image: mysql:8.0.41-debian
+        expose: 3306
+        stateful: true
+        environments:
+          - MYSQL_USER: johndoe
+          - MYSQL_PASSWORD: testing123
+          - MYSQL_DATABASE: test_db
+          - MYSQL_ROOT_PASSWORD: secret-root-pass
+   - app:
+        image: chessapp:1
+        port: 8000
+        entry: true
+        environments:
+          - DEBUG: False
+          - DJANGO_SECRET_KEY: some-secret-key 
+          - DB_ENGINE: django.db.backends.mysql
+          - DB_USER: johndoe
+          - DB_PASSWORD: testing123
+          - DB_NAME: test_db
+          - DB_HOST: chess-mysql
+          - DB_PORT: 3306
+
+state: chess-mysql:/var/lib/mysql/
+deterministic: true
+consistency: linearizability

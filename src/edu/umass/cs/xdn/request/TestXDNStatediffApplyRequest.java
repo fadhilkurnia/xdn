@@ -6,6 +6,7 @@ import org.junit.Test;
 import java.nio.charset.StandardCharsets;
 import java.util.Random;
 
+@Deprecated
 public class TestXDNStatediffApplyRequest {
     @Test
     public void TestXDNStatediffApplyRequestSerializationDeserialization() {

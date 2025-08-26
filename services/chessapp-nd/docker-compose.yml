@@ -1,0 +1,13 @@
+name: chessapp-nd
+services:
+  app:
+    container_name: chessapp
+    environment:
+      - DB_ENGINE=django.db.backends.sqlite3
+      - DB_NAME=/app/data/db.sqlite3
+      - DJANGO_SECRET_KEY=fallback-secret123
+      - DEBUG=False
+    ports:
+      - 8000:8000
+    restart: unless-stopped
+    image: chessapp-nd:1

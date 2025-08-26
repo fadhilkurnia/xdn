@@ -1,0 +1,179 @@
+[
+    {
+      "code": "us-east-1",
+      "region": "US East",
+      "city": "Virginia",
+      "lat":  38.9940541,
+      "long": -77.4524237,
+      "country": "US"
+    },
+    {
+      "code": "us-east-2",
+      "region": "US East",
+      "city": "Ohio",
+      "lat":  40.0946354,
+      "long": -82.7541337,
+      "country": "US"
+    },
+    {
+      "code": "us-west-1",
+      "region": "US West",
+      "city": "California",
+      "lat":  37.443680,
+      "long": -122.153664,
+      "country": "US"
+    },
+    {
+      "code": "us-west-2",
+      "region": "US West",
+      "city": "Oregon",
+      "lat":  45.9174667,
+      "long": -119.2684488,
+      "country": "US"
+    },
+    {
+      "code": "eu-west-1",
+      "region": "Europe",
+      "city": "Ireland",
+      "lat":  53.4056545,
+      "long": -6.224503,
+      "country": "IE"
+    },
+    {
+      "code": "eu-west-2",
+      "region": "Europe",
+      "city": "London",
+      "lat":  51.5085036,
+      "long": -0.0609266,
+      "country": "GB"
+    },
+    {
+      "code": "eu-west-3",
+      "region": "Europe",
+      "city": "Paris",
+      "lat":  48.6009709,
+      "long": 2.2976644,
+      "country": "FR"
+    },
+    {
+      "code": "eu-central-1",
+      "region": "Europe",
+      "city": "Frankfurt",
+      "lat":  50.0992094,
+      "long": 8.6303932,
+      "country": "DE"
+    },
+    {
+      "code": "sa-east-1",
+      "region": "South America",
+      "city": "São Paulo",
+      "lat":  -23.4925798,
+      "long": -46.8105593,
+      "country": "BR"
+    },
+    {
+      "code": "ap-southeast-1",
+      "region": "Asia Pacific",
+      "city": "Singapore",
+      "lat":  1.3218269,
+      "long": 103.6930643,
+      "country": "SG"
+    },
+    {
+      "code": "ap-southeast-2",
+      "region": "Asia Pacific",
+      "city": "Sydney",
+      "lat":  -33.9117717,
+      "long": 151.1907535,
+      "country": "AU"
+    },
+    {
+      "code": "ap-northeast-1",
+      "region": "Asia Pacific",
+      "city": "Tokyo",
+      "lat":  35.617436,
+      "long": 139.7459176,
+      "country": "JP"
+    },
+    {
+      "code": "ap-northeast-2",
+      "region": "Asia Pacific",
+      "city": "Seoul",
+      "lat":  37.5616592,
+      "long": 126.8736237,
+      "country": "KR"
+    },
+    {
+      "code": "ap-south-1",
+      "region": "Asia Pacific",
+      "city": "Mumbai",
+      "lat":  19.2425503,
+      "long": 72.9667878,
+      "country": "IN"
+    },
+    {
+      "code": "ca-central-1",
+      "region": "Canada",
+      "city": "Canada Central",
+      "lat":  45.5,
+      "long": -73.6,
+      "country": "CA"
+    },
+    {
+      "code": "af-south-1",
+      "region": "Africa",
+      "city": "Cape Town",
+      "lat":  -33.914651,
+      "long": 18.3758801,
+      "country": "ZA"
+    },
+    {
+      "code": "eu-north-1",
+      "region": "Europe",
+      "city": "Stockholm",
+      "lat":  59.326242,
+      "long": 17.8419717,
+      "country": "SE"
+    },
+    {
+      "code": "eu-south-1",
+      "region": "Europe",
+      "city": "Milan",
+      "lat":  45.4628328,
+      "long": 9.1076927,
+      "country": "IT"
+    },
+    {
+      "code": "me-south-1",
+      "region": "Middle East",
+      "city": "Bahrain",
+      "lat":  25.941298,
+      "long": 50.3073907,
+      "country": "BH"
+    },
+    {
+      "code": "ap-east-1",
+      "region": "Asia Pacific",
+      "city": "Hong Kong",
+      "lat":  22.2908475,
+      "long": 114.2723379,
+      "country": "HK"
+    },
+    {
+      "code": "cn-north-1",
+      "region": "China",
+      "city": "Beijing",
+      "lat":  39.8094478,
+      "long": 116.5783234,
+      "country": "CN"
+    },
+    {
+      "code": "cn-northwest-1",
+      "region": "China",
+      "city": "Ningxia",
+      "lat":  37.5024418,
+      "long": 105.1627193,
+      "country": "CN"
+    }
+  ]
+  

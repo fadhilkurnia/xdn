@@ -2,7 +2,7 @@ package edu.umass.cs.xdn.recorder;
 
 public abstract class AbstractStateDiffRecorder {
 
-    private final String nodeID;
+    protected final String nodeID;
     protected final String baseDirectoryPath;
 
     protected AbstractStateDiffRecorder(String nodeID, String basePath) {
@@ -10,16 +10,17 @@ public abstract class AbstractStateDiffRecorder {
         this.baseDirectoryPath = basePath;
     }
 
-    abstract public String getTargetDirectory(String serviceName);
+    abstract public String getTargetDirectory(String serviceName, int placementEpoch);
 
-    abstract public boolean preInitialization(String serviceName);
+    abstract public boolean preInitialization(String serviceName, int placementEpoch);
 
-    abstract public boolean postInitialization(String serviceName);
+    abstract public boolean postInitialization(String serviceName, int placementEpoch);
 
-    abstract public String captureStateDiff(String serviceName);
+    abstract public String captureStateDiff(String serviceName, int placementEpoch);
 
-    abstract public boolean applyStateDiff(String serviceName, String encodedState);
+    abstract public boolean applyStateDiff(String serviceName, int placementEpoch,
+                                           String encodedState);
 
-    abstract public boolean removeServiceRecorder(String serviceName);
+    abstract public boolean removeServiceRecorder(String serviceName, int placementEpoch);
 
 }

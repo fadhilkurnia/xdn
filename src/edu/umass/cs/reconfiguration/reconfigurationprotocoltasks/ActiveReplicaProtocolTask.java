@@ -115,10 +115,6 @@ public class ActiveReplicaProtocolTask<NodeIDType> implements
             ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
             ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
 
-        System.out.printf(">> %s ActiveReplicaProtocolTask - event:%s handler:%s\n",
-                myID, event.getType(), HANDLER_METHOD_PREFIX +
-                        ReconfigurationPacket.getPacketTypeClassName(event.getType()));
-
         ReconfigurationPacket.PacketType type = event.getType();
         Object returnValue = null;
         try {

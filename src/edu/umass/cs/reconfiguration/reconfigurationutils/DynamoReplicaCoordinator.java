@@ -93,7 +93,7 @@ public class DynamoReplicaCoordinator<NodeIDType> extends
 	 */
 	@Override
 	public boolean createReplicaGroup(String serviceName, int epoch,
-			String state, Set<NodeIDType> nodes) {
+			String state, Set<NodeIDType> nodes, String placementMetadata) {
 		throw new RuntimeException(
 				"This method should not be invoked as groups are "
 				+ "implicitly defined with consistent hashing.");

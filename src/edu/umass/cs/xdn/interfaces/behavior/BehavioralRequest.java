@@ -19,19 +19,19 @@ public interface BehavioralRequest {
     Set<RequestBehaviorType> getBehaviors();
 
     // helper methods to check the behavior of a request
-    public default boolean isReadOnlyRequest() {
+    default boolean isReadOnlyRequest() {
         return this.getBehaviors().contains(RequestBehaviorType.READ_ONLY);
     }
-    public default boolean isWriteOnlyRequest() {
+    default boolean isWriteOnlyRequest() {
         return this.getBehaviors().contains(RequestBehaviorType.WRITE_ONLY);
     }
-    public default boolean isReadModifyWriteRequest() {
+    default boolean isReadModifyWriteRequest() {
         return this.getBehaviors().contains(RequestBehaviorType.READ_MODIFY_WRITE);
     }
-    public default boolean isMonotonicRequest() {
+    default boolean isMonotonicRequest() {
         return this.getBehaviors().contains(RequestBehaviorType.MONOTONIC);
     }
-    public default boolean isNilExternal() {
+    default boolean isNilExternal() {
         return this.getBehaviors().contains(RequestBehaviorType.NIL_EXTERNAL);
     }
 }

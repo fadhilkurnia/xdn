@@ -1,0 +1,29 @@
+---
+name: chessapp
+components:
+   - chess-mariadb:
+        image: mariadb:11.7-noble
+        expose: 3306
+        stateful: true
+        environments:
+          - MARIADB_USER: johndoe
+          - MARIADB_PASSWORD: testing123
+          - MARIADB_DATABASE: test_db
+          - MARIADB_ROOT_PASSWORD: secret-root-pass
+   - app:
+        image: chessapp:1
+        port: 8000
+        entry: true
+        environments:
+          - DEBUG: False
+          - DJANGO_SECRET_KEY: some-secret-key 
+          - DB_ENGINE: django.db.backends.mysql
+          - DB_USER: johndoe
+          - DB_PASSWORD: testing123
+          - DB_NAME: test_db
+          - DB_HOST: chess-mariadb
+          - DB_PORT: 3306
+
+state: chess-mariadb:/var/lib/mysql/
+deterministic: true
+consistency: linearizability

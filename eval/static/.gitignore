@@ -1,0 +1,17 @@
+# Ignore generated config files for diff consistency model
+gigapaxos.xdn.consistency.*.properties
+
+# Ignore generated service prop files for diff consistency model
+xdn_cons_*.yaml
+
+# Ignore generated service prop files for rsm vs pb benchmark
+xdn_vrs.yaml
+xdn_vsd.yaml
+xdn_vet.yaml
+rsm_pb_payload_*.txt
+
+# Ignore generated properties for temporal eval
+temporal_*.properties
+
+# Except this file
+!.gitignore

@@ -1,0 +1,28 @@
+{
+	"name": "API Test",
+	"testCases": {
+		"prompt-post": {
+			"path": "/api/prompt",
+			"method": "POST",
+			"body": {
+				"prompt": "What is the capital of Moldova?"
+			}
+		},
+		"prompt-get": {
+			"path": "/api/prompt",
+			"method": "GET"
+		},
+		"db-create": {
+			"path": "/api/db/create",
+			"method": "POST"
+		},
+		"db-clear": {
+			"path": "/api/db/clear",
+			"method": "POST"
+		}
+	},
+	"url": "localhost:3000",
+	"header": {
+		"Content-Type": "application/json"
+	}
+}

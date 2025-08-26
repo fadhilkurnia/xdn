@@ -1,38 +1,45 @@
 package edu.umass.cs.primarybackup.packets;
 
+import com.google.protobuf.ByteString;
+import com.google.protobuf.InvalidProtocolBufferException;
+import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.junit.Test;
-import org.junit.experimental.runners.Enclosed;
-import org.junit.runner.RunWith;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
-@RunWith(Enclosed.class)
-public class ForwardedRequestPacket extends PrimaryBackupPacket {
+public class ForwardedRequestPacket extends PrimaryBackupPacket implements Byteable {
 
+    @Deprecated
     public static final String SERIALIZED_PREFIX = "pb:fwd:";
-    private final String serviceName;
-    private final String entryNodeID;
-    private final byte[] forwardedRequest;
-    private final long packetID;
 
-    public ForwardedRequestPacket(String serviceName, String entryNodeID, byte[] forwardedRequest) {
-        this.serviceName = serviceName;
-        this.entryNodeID = entryNodeID;
-        this.forwardedRequest = forwardedRequest;
-        this.packetID = System.currentTimeMillis();
+    private final long packetId;
+    private final String serviceName;
+    private final String entryNodeId;
+    private final byte[] encodedForwardedRequest;
+
+    public ForwardedRequestPacket(String serviceName, String entryNodeId,
+                                  byte[] encodedForwardedRequest) {
+        this(Math.abs(UUID.randomUUID().getLeastSignificantBits()),
+                serviceName,
+                entryNodeId,
+                encodedForwardedRequest);
     }
 
-    private ForwardedRequestPacket(String serviceName, String entryNodeID, byte[] forwardedRequest,
-                                   long packetID) {
+    private ForwardedRequestPacket(long packetId, String serviceName, String entryNodeId, byte[] encodedForwardedRequest) {
         this.serviceName = serviceName;
-        this.entryNodeID = entryNodeID;
-        this.forwardedRequest = forwardedRequest;
-        this.packetID = packetID;
+        this.entryNodeId = entryNodeId;
+        this.encodedForwardedRequest = encodedForwardedRequest;
+        this.packetId = packetId;
     }
 
     @Override
@@ -47,7 +54,7 @@ public class ForwardedRequestPacket extends PrimaryBackupPacket {
 
     @Override
     public long getRequestID() {
-        return this.packetID;
+        return this.packetId;
     }
 
     @Override
@@ -55,12 +62,12 @@ public class ForwardedRequestPacket extends PrimaryBackupPacket {
         return true;
     }
 
-    public byte[] getForwardedRequest() {
-        return forwardedRequest;
+    public byte[] getEncodedForwardedRequest() {
+        return encodedForwardedRequest;
     }
 
-    public String getEntryNodeID() {
-        return entryNodeID;
+    public String getEntryNodeId() {
+        return entryNodeId;
     }
 
     @Override
@@ -68,36 +75,76 @@ public class ForwardedRequestPacket extends PrimaryBackupPacket {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ForwardedRequestPacket that = (ForwardedRequestPacket) o;
-        return packetID == that.packetID &&
+        return packetId == that.packetId &&
                 Objects.equals(serviceName, that.serviceName) &&
-                Objects.equals(entryNodeID, that.entryNodeID) &&
-                Arrays.equals(forwardedRequest, that.forwardedRequest);
+                Objects.equals(entryNodeId, that.entryNodeId) &&
+                Arrays.equals(encodedForwardedRequest, that.encodedForwardedRequest);
     }
 
     @Override
     public int hashCode() {
-        int result = Objects.hash(serviceName, packetID);
-        result = 31 * result + Arrays.hashCode(forwardedRequest);
+        int result = Objects.hash(serviceName, packetId);
+        result = 31 * result + Arrays.hashCode(encodedForwardedRequest);
         return result;
     }
 
     @Override
     public String toString() {
-        try {
-            JSONObject json = new JSONObject();
-            json.put("serviceName", this.serviceName);
-            json.put("entryID", this.entryNodeID);
-            json.put("forwardedRequest", new String(
-                    this.forwardedRequest,
-                    StandardCharsets.ISO_8859_1)
-            );
-            json.put("id", this.packetID);
-            return SERIALIZED_PREFIX + json.toString();
-        } catch (JSONException e) {
-            throw new RuntimeException(e);
-        }
+        return new String(this.toBytes(), StandardCharsets.ISO_8859_1);
     }
 
+    @Override
+    public byte[] toBytes() {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        // Serialize the packet type
+        int packetType = this.getRequestType().getInt();
+        byte[] encodedHeader = ByteBuffer.allocate(4).putInt(packetType).array();
+
+        // Prepare the packet proto builder
+        PrimaryBackupPacketProto.ForwardedRequestPacket.Builder protoBuilder =
+                PrimaryBackupPacketProto.ForwardedRequestPacket.newBuilder()
+                        .setPacketId(this.packetId)
+                        .setServiceName(this.serviceName)
+                        .setSenderNodeId(this.entryNodeId)
+                        .setEncodedRequest(ByteString.copyFrom(this.encodedForwardedRequest));
+
+        // Serialize the packetType in the header, followed by the protobuf
+        output.writeBytes(encodedHeader);
+        output.writeBytes(protoBuilder.build().toByteArray());
+        return output.toByteArray();
+    }
+
+    public static ForwardedRequestPacket createFromBytes(byte[] encodedPacket) {
+        assert encodedPacket != null && encodedPacket.length > 0;
+
+        // Decode the packet type
+        assert encodedPacket.length >= 4;
+        ByteBuffer headerBuffer = ByteBuffer.wrap(encodedPacket);
+        int packetType = headerBuffer.getInt(0);
+        assert packetType == PrimaryBackupPacketType.PB_FORWARDED_REQUEST_PACKET.getInt()
+                : "invalid packet header: " + packetType;
+        byte[] encoded = encodedPacket;
+        encoded = Arrays.copyOfRange(encoded, 4, encoded.length);
+
+        // Decode the bytes into Proto
+        PrimaryBackupPacketProto.ForwardedRequestPacket decodedProto = null;
+        try {
+            decodedProto = PrimaryBackupPacketProto.ForwardedRequestPacket.parseFrom(encoded);
+        } catch (InvalidProtocolBufferException e) {
+            Logger.getGlobal().log(Level.WARNING,
+                    "Invalid protobuf bytes given: " + e.getMessage());
+            return null;
+        }
+
+        return new ForwardedRequestPacket(
+                decodedProto.getPacketId(),
+                decodedProto.getServiceName(),
+                decodedProto.getSenderNodeId(),
+                decodedProto.getEncodedRequest().toByteArray());
+    }
+
+    @Deprecated
     public static ForwardedRequestPacket createFromString(String encodedPacket) {
         assert encodedPacket != null;
         assert !encodedPacket.isEmpty();
@@ -107,34 +154,19 @@ public class ForwardedRequestPacket extends PrimaryBackupPacket {
 
         try {
             JSONObject json = new JSONObject(encodedPacket);
+            long packetId = json.getLong("id");
             String serviceName = json.getString("serviceName");
             String entryNodeID = json.getString("entryID");
             String forwardedReqStr = json.getString("forwardedRequest");
-            long packetID = json.getLong("id");
 
             return new ForwardedRequestPacket(
+                    packetId,
                     serviceName,
                     entryNodeID,
-                    forwardedReqStr.getBytes(StandardCharsets.ISO_8859_1),
-                    packetID
+                    forwardedReqStr.getBytes(StandardCharsets.ISO_8859_1)
             );
         } catch (JSONException e) {
             throw new RuntimeException(e);
-        }
-    }
-
-    public static class TestForwardedRequestPacket {
-        @Test
-        public void TestForwardedRequestPacketSerializationDeserialization() {
-            String serviceName = "dummy-service-name";
-            String entryNodeID = "ar0";
-            byte[] forwardedReq = "raw-request".getBytes(StandardCharsets.ISO_8859_1);
-            ForwardedRequestPacket p1 = new ForwardedRequestPacket(
-                    serviceName, entryNodeID, forwardedReq);
-            ForwardedRequestPacket p2 = ForwardedRequestPacket.createFromString(p1.toString());
-
-            assert p2 != null;
-            assert Objects.equals(p1, p2);
         }
     }
 

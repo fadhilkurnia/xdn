@@ -109,7 +109,7 @@ public class AggregateDemandProfiler {
 	 * @param name
 	 * @param curActives
 	 * @param appInfo 
-	 * @return List of IP addresses to which the replicas have been
+	 * @return Set of IP addresses to which the replicas have been
 	 *         reconfigured. The testAndSet ensures atomicity.
 	 */
 	public synchronized Set<String> testAndSetReconfigured(
@@ -121,6 +121,33 @@ public class AggregateDemandProfiler {
 						appInfo)) == null)
 			return curActives;
 		// else should reconfigure
+		demand.justReconfigured();
+		return newActives;
+	}
+
+	/**
+	 * Similar as {@link #testAndSetReconfigured(String, Set, ReconfigurableAppInfo)} method, but
+	 * this variant also return optional metadata, which is useful for replica placement.
+	 *
+	 * @param name		  The service name.
+	 * @param curActives  The current ID of Nodes that host the replica.
+	 * @param appInfo     Interface that contains the application information, including method to
+	 *                       get possible Node for placing the replica.
+	 * @return A pair of Node IDs set and optional metadata for replica placement.
+	 */
+	public synchronized NodeIdsMetadataPair<String> testAndSetReconfigured2(
+			String name, Set<String> curActives, ReconfigurableAppInfo appInfo) {
+		AbstractDemandProfile demand = this.getDemandProfile(name);
+		if (demand == null) {
+			return new NodeIdsMetadataPair<>(curActives, null);
+		}
+
+		NodeIdsMetadataPair<String> newActives =
+				demand.getNewActivesPlacement(curActives, appInfo);
+		if (newActives == null) {
+			return new NodeIdsMetadataPair<>(curActives, null);
+		}
+
 		demand.justReconfigured();
 		return newActives;
 	}

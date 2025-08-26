@@ -208,9 +208,11 @@ public class WaitEpochFinalState<NodeIDType>
 			log.log(Level.INFO, "{0} received {1}",
 					new Object[] { this, state.getSummary(), state.getState() });
 			handled = this.appCoordinator.createReplicaGroup(
-					this.startEpoch.getServiceName(),
-					this.startEpoch.getEpochNumber(), state.getState(),
-					this.startEpoch.getCurEpochGroup());
+					/*serviceName=*/this.startEpoch.getServiceName(),
+					/*epoch=*/this.startEpoch.getEpochNumber(),
+					/*state=*/state.getState(),
+					/*nodes=*/this.startEpoch.getCurEpochGroup(),
+					/*placementMetadata=*/this.startEpoch.initialState);
 
 			// if !handled, we will be stuck retrying until it is true
 

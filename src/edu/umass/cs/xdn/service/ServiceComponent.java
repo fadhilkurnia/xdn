@@ -1,5 +1,9 @@
 package edu.umass.cs.xdn.service;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.Map;
 
 public class ServiceComponent {
@@ -68,4 +72,35 @@ public class ServiceComponent {
     public Map<String, String> getEnvironmentVariables() {
         return environmentVariables;
     }
+
+    public final JSONObject toJsonObject() {
+        JSONObject jsonObject = new JSONObject();
+        try {
+            jsonObject.put("image", this.imageName);
+            if (this.entryPort != null) jsonObject.put("port", this.entryPort);
+            if (this.exposedPort != null) jsonObject.put("expose", this.exposedPort);
+            if (this.isStateful) jsonObject.put("stateful", true);
+            if (this.isEntryComponent) jsonObject.put("entry", true);
+            if (this.environmentVariables != null && !this.environmentVariables.isEmpty()) {
+                JSONArray envArr = new JSONArray();
+                for (Map.Entry<String, String> env : this.environmentVariables.entrySet()) {
+                    JSONObject envItem = new JSONObject();
+                    envItem.put(env.getKey(), env.getValue());
+                    envArr.put(envItem);
+                }
+                jsonObject.put("environments", envArr);
+            }
+            JSONObject componentObject = new JSONObject();
+            componentObject.put(this.componentName, jsonObject);
+            return componentObject;
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public final String toJsonString() {
+        JSONObject jsonObject = this.toJsonObject();
+        return jsonObject.toString();
+    }
+
 }

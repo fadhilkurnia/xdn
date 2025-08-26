@@ -1,0 +1,51 @@
+city,population,location,timezone
+New York,19498249,40.7128;-74.006,Eastern
+Los Angeles,12799100,34.0522;-118.2437,Pacific
+Chicago,9262825,41.8781;-87.6298,Central
+Dallas,8100037,32.7767;-96.797,Central
+Houston,7510253,29.7604;-95.3698,Central
+Atlanta,6307261,33.749;-84.388,Eastern
+Washington,6304975,38.9072;-77.0369,Eastern
+Philadelphia,6246160,39.9526;-75.1652,Eastern
+Miami,6183199,25.7617;-80.1918,Eastern
+Phoenix,5070110,33.4484;-112.074,Mountain
+Boston,4919179,42.3601;-71.0589,Eastern
+Riverside,4688053,33.9806;-117.3755,Pacific
+San Francisco,4566961,37.7749;-122.4194,Pacific
+Detroit,4342304,42.3314;-83.0458,Eastern
+Seattle,4044837,47.6062;-122.3321,Pacific
+Minneapolis,3712020,44.9778;-93.265,Central
+Tampa,3342963,27.9506;-82.4572,Eastern
+San Diego,3269973,32.7157;-117.1611,Pacific
+Denver,3005131,39.7392;-104.9903,Mountain
+Baltimore,2834316,39.2904;-76.6122,Eastern
+Orlando,2817933,28.5383;-81.3792,Eastern
+Charlotte,2805115,35.2271;-80.8431,Eastern
+St. Louis,2796999,38.627;-90.1994,Central
+San Antonio,2703999,29.4241;-98.4936,Central
+Portland,2508050,45.5051;-122.675,Pacific
+Austin,2473275,30.2672;-97.7431,Central
+Pittsburgh,2422725,40.4406;-79.9959,Eastern
+Sacramento,2420608,38.5816;-121.4944,Pacific
+Las Vegas,2336573,36.1699;-115.1398,Pacific
+Cincinnati,2271479,39.1031;-84.512,Eastern
+Kansas City,2221343,39.0997;-94.5786,Central
+Columbus,2180271,39.9612;-82.9988,Eastern
+Cleveland,2158932,41.4993;-81.6944,Eastern
+Indianapolis,2138468,39.7684;-86.1581,Eastern
+Nashville,2102573,36.1627;-86.7816,Central
+San Jose,1945767,37.3382;-121.8863,Pacific
+Virginia Beach,1787169,36.8529;-75.978,Eastern
+Jacksonville,1713240,30.3322;-81.6557,Eastern
+Providence,1677803,41.824;-71.4128,Eastern
+Milwaukee,1560424,43.0389;-87.9065,Central
+Raleigh,1509231,35.7796;-78.6382,Eastern
+Oklahoma City,1477926,35.4676;-97.5164,Central
+Louisville,1365557,38.2527;-85.7585,Eastern
+Richmond,1349732,37.5407;-77.436,Eastern
+Memphis,1335674,35.1495;-90.049,Central
+Salt Lake City,1267864,40.7608;-111.891,Mountain
+Birmingham,1184290,33.5186;-86.8104,Central
+Fresno,1180020,36.7378;-119.7871,Pacific
+Grand Rapids,1162950,42.9634;-85.6681,Eastern
+Buffalo,1155604,42.8864;-78.8784,Eastern

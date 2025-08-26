@@ -1,33 +1,25 @@
 /* Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- * 
+ *
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-
 import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
+import edu.umass.cs.gigapaxos.interfaces.GigapaxosShutdownable;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
-import edu.umass.cs.gigapaxos.interfaces.GigapaxosShutdownable;
 import edu.umass.cs.gigapaxos.paxosutil.PaxosInstanceCreationException;
 import edu.umass.cs.gigapaxos.paxosutil.StringContainer;
 import edu.umass.cs.nio.JSONMessenger;
@@ -37,8 +29,19 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
+import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * @author arun
@@ -50,6 +53,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 
 	private final PaxosManager<NodeIDType> paxosManager;
 	protected static final Logger log = (ReconfigurationConfig.getLogger());
+	private final Logger logger = Logger.getLogger(PaxosReplicaCoordinator.class.getName());
 
 	/**
 	 * @param app
@@ -59,20 +63,42 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 * @param enableNullCheckpoints
 	 */
 	@SuppressWarnings("unchecked")
-	private PaxosReplicaCoordinator(Replicable app, NodeIDType myID,
-			Stringifiable<NodeIDType> unstringer,
-			Messenger<NodeIDType, ?> niot, String paxosLogFolder,
-			boolean enableNullCheckpoints) {
+	private PaxosReplicaCoordinator(Replicable app,
+									NodeIDType myID,
+									Stringifiable<NodeIDType> unstringer,
+									Messenger<NodeIDType, ?> niot,
+									String paxosLogFolder,
+									boolean enableNullCheckpoints,
+									PaxosManager<NodeIDType> paxosManager) {
 		super(app, niot);
 		assert (niot instanceof JSONMessenger);
-		this.paxosManager = new PaxosManager<NodeIDType>(myID, unstringer,
-				(JSONMessenger<NodeIDType>) niot, this, paxosLogFolder,
-				enableNullCheckpoints)
-				.initClientMessenger(new InetSocketAddress(niot.getNodeConfig()
-						.getNodeAddress(myID), niot.getNodeConfig()
-						.getNodePort(myID)), niot);
+		if (paxosManager != null) {
+			this.paxosManager = paxosManager;
+		} else {
+			this.paxosManager = new PaxosManager<NodeIDType>(myID, unstringer,
+					(JSONMessenger<NodeIDType>) niot, this, paxosLogFolder,
+					enableNullCheckpoints)
+					.initClientMessenger(new InetSocketAddress(niot.getNodeConfig()
+							.getNodeAddress(myID), niot.getNodeConfig()
+							.getNodePort(myID)), niot);
+		}
 	}
 
+	public PaxosReplicaCoordinator(Replicable replicableApp,
+								   NodeIDType myID,
+								   Stringifiable<NodeIDType> nodeIdTypeDeserializer,
+								   Messenger<NodeIDType, ?> nioTransport,
+								   PaxosManager<NodeIDType> paxosManager) {
+		this(replicableApp,
+				myID,
+				nodeIdTypeDeserializer,
+				nioTransport,
+				null,
+				true,
+				paxosManager);
+		this.setOutOfOrderLimit(Config
+				.getGlobalInt(ReconfigurationConfig.RC.OUT_OF_ORDER_LIMIT));
+	}
 
 	/**
 	 * @param app
@@ -82,7 +108,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 */
 	public PaxosReplicaCoordinator(Replicable app, NodeIDType myID,
 			Stringifiable<NodeIDType> unstringer, Messenger<NodeIDType, ?> niot) {
-		this(app, myID, unstringer, niot, null, true);
+		this(app, myID, unstringer, niot, null, true, null);
 		this.setOutOfOrderLimit(Config
 				.getGlobalInt(ReconfigurationConfig.RC.OUT_OF_ORDER_LIMIT));
 	}
@@ -111,7 +137,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		this.paxosManager.setOutOfOrderLimit(limit);
 		return this;
 	}
-	
+
 	private static Set<IntegerPacketType> requestTypes = null;
 
 	@Override
@@ -158,18 +184,43 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 */
 	public boolean coordinateRequest(String paxosGroupID, Request request,
 			ExecutedCallback callback) throws RequestParseException {
-		String proposee = this.propose(paxosGroupID, request, callback);
+		// prepare the updated callback that log the coordination duration
+		long startProcessingTime = System.nanoTime();
+		ExecutedCallback loggedCallback = callback;
+        if (callback != null) {
+            loggedCallback = (response, handled) -> {
+                callback.executed(response, handled);
+                long elapsedTime = System.nanoTime() - startProcessingTime;
+                logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
+                        new Object[]{this.paxosManager.getNodeID(),
+                                this.getClass().getSimpleName(),
+                                elapsedTime / 1_000_000.0});
+            };
+        }
+
+		// propose the request with Paxos
+		String proposee = this.propose(paxosGroupID, request, loggedCallback);
+
 		Level level = Level.FINE;
-		log.log(level, "{0} {1} request {2} to {3}:{4}", new Object[] {
+		log.log(level, "{0} {1} request {2} to {3}:{4}", new Object[]{
 				this,
-				(proposee != null ? "paxos-coordinated"
+				(proposee != null
+						? "paxos-coordinated"
 						: "failed to paxos-coordinate"),
 				log.isLoggable(level) ? request.getSummary() : null,
 				proposee,
-				log.isLoggable(level) ? this.getReplicaGroup(paxosGroupID)
-						: null });
-		// System.out.printf(">>> %s:PaxosReplicaCoordinator - coordinate request %s proposee=%s app=%s\n\n",
-		//		messenger.getMyID(), request.getRequestType().toString(), proposee, app.getClass().getSimpleName());
+				log.isLoggable(level)
+						? this.getReplicaGroup(paxosGroupID)
+						: null});
+
+		logger.log(Level.FINER, "{0}:{1} - proposing as {2} for svc={3}",
+				new Object[]{this.paxosManager.getNodeID(),
+						this.getClass().getSimpleName(),
+						this.paxosManager.isPaxosCoordinator(paxosGroupID)
+								? "coordinator"
+								: "non-coordinator",
+						paxosGroupID
+				});
 		return proposee != null;
 	}
 
@@ -178,19 +229,23 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 * case, the caller should consider the operation a success. */
 	@Override
 	public boolean createReplicaGroup(String groupName, int epoch,
-			String state, Set<NodeIDType> nodes) {
-//		assert (state != null);
+			String state, Set<NodeIDType> nodes, String placementMetadata) {
 		// will block for a default timeout if a lower unstopped epoch exits
 		boolean created = this.paxosManager.createPaxosInstanceForcibly(
 				groupName, epoch, nodes, this, state, 0);
 		boolean createdOrExistsOrHigher = (created || this.paxosManager
 				.equalOrHigherVersionExists(groupName, epoch));
-		;
+
 		if (!createdOrExistsOrHigher)
 			throw new PaxosInstanceCreationException((this
 					+ " failed to create " + groupName + ":" + epoch
-					+ " with state [" + state + "]") + "; existing_version=" + 
+					+ " with state [" + state + "]") + "; existing_version=" +
 					this.paxosManager.getVersion(groupName));
+
+		// set the coordinator if it is set in the metadata
+		if (placementMetadata != null && !placementMetadata.isEmpty())
+			handlePlacementMetadata(groupName, placementMetadata);
+
 		return createdOrExistsOrHigher;
 	}
 
@@ -199,6 +254,67 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 			Set<NodeIDType> nodes) {
 		return this.paxosManager.createPaxosInstance(nameStates, nodes);
 	}
+
+	/**
+	 * Parse and handle the provided placement metadata. For now, this method checks
+	 * whether this node is the preferred paxos coordinator as specified in the metadata,
+	 * if so, then this node try to be the coordinator for that paxos group (in the best effort).
+	 * <p>
+	 * TODO: Ideally, the coordinator should be set during replica group creation via
+	 *    PaxosManager.createPaxosInstanceForcibly() method, which for now doesnt support that.
+	 *
+	 * @param groupName the paxos replica group name
+	 * @param placementMetadata json-encoded data of placement metadata
+	 *                             (e.g., preferred coordinator)
+	 */
+	private void handlePlacementMetadata(String groupName, String placementMetadata) {
+		assert groupName != null && !groupName.isEmpty();
+		assert placementMetadata != null && !placementMetadata.isEmpty();
+
+		// attempts to parse the metadata
+		String preferredCoordinatorNodeId = null;
+        try {
+            JSONObject json = new JSONObject(placementMetadata);
+			preferredCoordinatorNodeId = json.getString(
+					AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
+        } catch (JSONException e) {
+			log.log(Level.WARNING,
+					"{0} failed to parse preferred coordinator in the placement metadata: {1}",
+					new Object[] { this, e });
+			return;
+        }
+
+		// Attempts to be the coordinator, if this node is the preferred coordinator
+		// specified in the placement metadata. Here, we need to wait for 30 second,
+		// ensuring other replicas are alive and can respond the PREPARE message.
+		// We also try to send the prepare message twice, increasing our chance to
+		// be the coordinator.
+        // Added by Fadhil on January 31, 2025
+		if (this.getMyID().toString().equals(preferredCoordinatorNodeId)) {
+			Thread electionThread = new Thread(() -> {
+				System.out.println(">>>>>>>>>> [1] Waiting 30s for " + this.getMyID() + " to be coordinator of " + groupName);
+                try {
+                    Thread.sleep(30_000);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+				System.out.println(">>>>>>>>>> [1] Making " + this.getMyID() + " as coordinator for " + groupName);
+                this.paxosManager.tryToBePaxosCoordinator(groupName);
+				System.out.println(">>>>>>>>>> [1] Done making " + this.getMyID() + " as coordinator for " + groupName);
+
+				System.out.println(">>>>>>>>>> [2] Waiting 30s for " + this.getMyID() + " to be coordinator of " + groupName);
+				try {
+					Thread.sleep(30_000);
+				} catch (InterruptedException e) {
+					throw new RuntimeException(e);
+				}
+				System.out.println(">>>>>>>>>> [2] Making " + this.getMyID() + " as coordinator for " + groupName);
+				this.paxosManager.tryToBePaxosCoordinator(groupName);
+				System.out.println(">>>>>>>>>> [2] Done making " + this.getMyID() + " as coordinator for " + groupName);
+			});
+			electionThread.start();
+		}
+    }
 
 	public String toString() {
 		return this.getClass().getSimpleName() + ":" + getMyID();
@@ -239,7 +355,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	 * place. An alternative is to disallow null as a legitimate app state, but
 	 * that means forcing apps to specify a non-null initial state (currently
 	 * not enforced) as initial state needs to be checkpointed for safety.
-	 * 
+	 *
 	 * @param name
 	 * @param epoch
 	 * @return The final state wrapped in StringContainer.
@@ -274,7 +390,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		 * epoch that just got dropped by using the previous epoch final state
 		 * if it is available locally. So it is best to delete that final state
 		 * as well so that the late, zombie epoch creation eventually fails.
-		 * 
+		 *
 		 * Note: Usually deleting lower epochs in addition to the specified
 		 * epoch is harmless. There is at most one lower epoch final state at a
 		 * node anyway. */
@@ -325,4 +441,10 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		if(this.app instanceof GigapaxosShutdownable)
 			((GigapaxosShutdownable)this.app).shutdown();
 	}
+
+	public boolean isPaxosCoordinator(String groupName) {
+		assert groupName != null : "Group name cannot be null";
+		return this.paxosManager.isPaxosCoordinator(groupName);
+	}
+
 }

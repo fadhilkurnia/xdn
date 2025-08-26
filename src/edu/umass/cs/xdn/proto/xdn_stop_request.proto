@@ -1,0 +1,15 @@
+// To generate the class, from the project root directory:
+// protoc --java_out=./src src/edu/umass/cs/xdn/proto/xdn_stop_request.proto
+
+syntax = "proto3";
+
+package xdn;
+
+option java_package = "edu.umass.cs.xdn.proto";
+option java_outer_classname = "XdnStopRequestProto";
+
+message XdnStopRequest {
+  int64 request_id = 1;
+  string service_name = 2;
+  int32 reconfiguration_epoch = 3;
+}

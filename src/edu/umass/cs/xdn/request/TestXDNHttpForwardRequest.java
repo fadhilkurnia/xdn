@@ -4,10 +4,11 @@ import org.junit.Test;
 
 import java.util.Objects;
 
+@Deprecated
 public class TestXDNHttpForwardRequest {
     @Test
     public void TestXDNHttpForwardRequestSerializationDeserialization() {
-        XDNHttpRequest httpRequest = XDNHttpRequest.TestXdnHttpRequest.createDummyTestRequest();
+        XdnJsonHttpRequest httpRequest = XdnJsonHttpRequest.TestXdnHttpRequest.createDummyTestRequest();
         String entryNodeID = "ar0";
         XDNHttpForwardRequest forwardRequest = new XDNHttpForwardRequest(
                 httpRequest, entryNodeID);

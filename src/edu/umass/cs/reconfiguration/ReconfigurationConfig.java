@@ -268,7 +268,7 @@ public class ReconfigurationConfig {
         USE_DISK_MAP_RCDB(true),
 
         /**
-         * This parameter specifies the the number of active replicas for a name
+         * This parameter specifies the number of active replicas for a name
          * at upon creation of the name. This parameter is irrelevant if
          * {@link #REPLICATE_ALL} is true and is irrelevant after name creation
          * as the number of replicas thereafter is controlled by the
@@ -284,6 +284,7 @@ public class ReconfigurationConfig {
          * of replicas thereafter is controlled by the reconfiguration policy.
          */
         REPLICATE_ALL(true),
+
         /**
          *
          */
@@ -445,6 +446,12 @@ public class ReconfigurationConfig {
          * replica group creation. The default empty string indicates no validation is needed.
          */
         INITIAL_STATE_VALIDATOR_CLASS(""),
+
+        /**
+         * Type of state-diff recorder used in the (@link XdnGigapaxosApp}
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_PB_STATEDIFF_RECORDER_TYPE("RSYNC")
 
         ;
 
@@ -726,8 +733,11 @@ public class ReconfigurationConfig {
         Properties config = PaxosConfig.getAsProperties();
 
         Set<String> keys = config.stringPropertyNames();
+        String reconfiguratorServerKeyRegexPattern =
+                String.format("^%s[a-zA-Z0-9\\-_]*$", DEFAULT_RECONFIGURATOR_PREFIX);
         for (String key : keys) {
-            if (key.trim().startsWith(DEFAULT_RECONFIGURATOR_PREFIX)) {
+            if (key.trim().startsWith(DEFAULT_RECONFIGURATOR_PREFIX) &&
+                    key.matches(reconfiguratorServerKeyRegexPattern)) {
                 map.put(key.replaceFirst(DEFAULT_RECONFIGURATOR_PREFIX, ""),
                         Util.getInetSocketAddressFromString(config
                                 .getProperty(key)));

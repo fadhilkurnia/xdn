@@ -1,0 +1,34 @@
+name: hotel-reservation
+services:
+    mongo:
+        container_name: hotel-reservation-db
+        networks:
+            - hotelres-network
+        volumes:
+            - hotelres-data:/data/db
+        environment:
+            - MONGO_INITDB_ROOT_USERNAME=root
+            - MONGO_INITDB_ROOT_PASSWORD=testing123
+        ports:
+            - 27017:27017
+        restart: unless-stopped
+        image: mongo:8.0.5-rc2-noble
+
+    hotel-res:
+        container_name: hotel-reservation-app
+        networks:
+            - hotelres-network
+        ports:
+            - 5000:5000
+        restart: unless-stopped
+        image: hotel-reservation:1
+
+networks:
+    hotelres-network:
+        external: false
+        name: hotelres-network
+
+volumes:
+    hotelres-data:
+        external: true
+        name: hotelres-data

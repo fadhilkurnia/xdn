@@ -1,8 +1,6 @@
 package edu.umass.cs.pram.packets;
 
-import edu.umass.cs.cops.packets.CopsPacketType;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
-import edu.umass.cs.protocoltask.examples.PingPongPacket;
 import edu.umass.cs.utils.IntegerPacketTypeMap;
 
 import java.util.HashMap;

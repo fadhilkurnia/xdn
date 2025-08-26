@@ -783,6 +783,67 @@ public class LargeCheckpointer {
 		}
 	}
 
+	public static class LargeCheckpointerWrappedApp implements Replicable {
+
+		private final Replicable pi;
+		private final LargeCheckpointer lcp;
+
+		private LargeCheckpointerWrappedApp(Replicable pi, LargeCheckpointer lcp) {
+			this.pi = pi;
+			this.lcp = lcp;
+		}
+
+		protected static LargeCheckpointerWrappedApp wrap(Replicable pi, LargeCheckpointer lcp) {
+			return new LargeCheckpointerWrappedApp(pi, lcp);
+		}
+
+		public Replicable getReplicableApp() {
+			return pi;
+		}
+
+		@Override
+		public boolean execute(Request request) {
+			return pi.execute(request);
+		}
+
+		@Override
+		public Request getRequest(String stringified)
+				throws RequestParseException {
+			return pi.getRequest(stringified);
+		}
+
+		@Override
+		public Set<IntegerPacketType> getRequestTypes() {
+			return pi.getRequestTypes();
+		}
+
+		@Override
+		public boolean execute(Request request, boolean doNotReplyToClient) {
+			return pi.execute(request, doNotReplyToClient);
+		}
+
+		@Override
+		public String checkpoint(String name) {
+			String checkpoint = pi.checkpoint(name);
+			try {
+				if (isCheckpointHandle(checkpoint))
+					checkpoint = lcp.stowAwayCheckpoint(name, checkpoint);
+			} catch (JSONException | IOException e) {
+				e.printStackTrace();
+			}
+			return checkpoint;
+		}
+
+		@Override
+		public boolean restore(String name, String state) {
+			return pi.restore(name, state);
+		}
+
+		public String toString() {
+			return pi.toString();
+		}
+	}
+
 	/**
 	 * @param pi
 	 * @param lcp
@@ -790,50 +851,6 @@ public class LargeCheckpointer {
 	 *         created by the application at a system location.
 	 */
 	public static Replicable wrap(final Replicable pi, LargeCheckpointer lcp) {
-		return new Replicable() {
-
-			@Override
-			public boolean execute(Request request) {
-				return pi.execute(request);
-			}
-
-			@Override
-			public Request getRequest(String stringified)
-					throws RequestParseException {
-				return pi.getRequest(stringified);
-			}
-
-			@Override
-			public Set<IntegerPacketType> getRequestTypes() {
-				return pi.getRequestTypes();
-			}
-
-			@Override
-			public boolean execute(Request request, boolean doNotReplyToClient) {
-				return pi.execute(request, doNotReplyToClient);
-			}
-
-			@Override
-			public String checkpoint(String name) {
-				String checkpoint = pi.checkpoint(name);
-				try {
-					if (isCheckpointHandle(checkpoint))
-						checkpoint = lcp.stowAwayCheckpoint(name, checkpoint);
-				} catch (JSONException | IOException e) {
-					e.printStackTrace();
-				}
-				return checkpoint;
-			}
-
-			@Override
-			public boolean restore(String name, String state) {
-				return pi.restore(name, state);
-			}
-
-			public String toString() {
-				return pi.toString();
-			}
-
-		};
+		return LargeCheckpointerWrappedApp.wrap(pi, lcp);
 	}
 }

@@ -9,6 +9,10 @@ set -u
 LC_CTYPE=en_US.UTF-8
 LC_ALL=en_US.UTF-8
 
+# Contains the absolute path of XDN source code (e.g., /users/fadhil/xdn).
+# The variable is populated in main() function.
+XDN_SRC_PATH="";
+
 function do_system_check() {
   echo "The following systems/dependencies are required to run XDN."
   echo " - Linux 5.15 or newer with x86-64 architecture"
@@ -34,7 +38,7 @@ function do_distributed_initialization() {
     esac
   done
 
-  # check if the file exist
+  # check if the specified/default config file exist
   if [ ! -f "$CONFIG" ]; then
     echo "Config file '$CONFIG' can not be found!"
     exit 1
@@ -43,7 +47,7 @@ function do_distributed_initialization() {
   # extract unique IPs from the config file
   local unique_ips=()
   while IFS= read -r line; do
-    if [[ $line =~ ^(active|reconfigurator)\. ]]; then
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
       ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
       if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
         unique_ips+=("$ip")
@@ -79,11 +83,11 @@ function do_distributed_initialization() {
     exit 1
   fi
 
-  # Print out the unique IPs, ssh-key, and username
-  echo " - config file : ${CONFIG}"
-  echo " - ssh key     : ${SSH_KEY}"
-  echo " - username    : ${USERNAME}"
-  echo " - machine IPs :"
+  # Print out the unique IPs/Hosts, ssh-key, and username
+  echo " - config file       : ${CONFIG}"
+  echo " - ssh key           : ${SSH_KEY}"
+  echo " - username          : ${USERNAME}"
+  echo " - machine IPs/Hosts :"
   for ip in "${unique_ips[@]}"; do
     echo "   - $ip"
   done
@@ -140,12 +144,53 @@ function do_start_rc_instance() {
   echo "  - host address  : $HOST:$PORT"
 }
 
+function do_start_dns_ns_instance() {
+  # get config from parameters, if any.
+  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local CONFIG=$DEFAULT_CONFIG
+
+  # Parse options using getopts
+  for ARG in "$@"; do
+    case $ARG in
+    -config=*)
+      CONFIG="${ARG#*=}"
+      ;;
+    esac
+  done
+
+  # get instance name, the last parameter.
+  local INSTANCE_NAME="${@: -1}"
+
+  # Parse config by the given instance name
+  local INSTANCE_HOST_RAW=$(grep "reconfigurator.$INSTANCE_NAME=" "$CONFIG")
+  # Split the result using '=' as the separator
+  IFS='=' read -r LEFT_PART RIGHT_PART <<< "$INSTANCE_HOST_RAW"
+  # Split the result using ':' as the separator
+  IFS=':' read -r INSTANCE_HOST_ADDRESS RIGHT_PART <<< "$RIGHT_PART"
+
+  echo "Target machine for dns installation: $INSTANCE_HOST_ADDRESS"
+
+
+  # TODO: get instance information from config file
+  # TODO: copy the dns source code
+  # TODO: copy the geolocation database to /tmp/geo/geolocation_city_data.mmdb
+  # TODO: compile the source code
+  # TODO: update the Corefile
+  # TODO: possibly edit the resolved configuration
+
+  echo "unimplemented :("
+}
+
 function do_start_instance() {
   local STARTED_INSTANCE_TYPE=$2
   case "$STARTED_INSTANCE_TYPE" in
   "control-plane")
     echo "starting a control plane instance ..."
     do_start_rc_instance "$@"
+    ;;
+  "dns")
+    echo "starting a dns nameserver instance ..."
+    do_start_dns_ns_instance "$@"
     ;;
   "machine")
     echo "starting an active instance ..."
@@ -192,8 +237,10 @@ function install_dependencies() {
   CMD+=('echo "export PATH=$PATH:/usr/local/go/bin" | sudo tee -a /etc/environment')
 
   # install docker
+  CMD_DESC+=("install docker - (0) preparation")
+  CMD+=("echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections")
   CMD_DESC+=("install docker - (1) install certificate and curl")
-  CMD+=("sudo apt-get install -y ca-certificates curl")
+  CMD+=("sudo apt-get install -y -q ca-certificates curl")
   CMD_DESC+=("install docker - (2) install keyrings")
   CMD+=("sudo install -m 0755 -d /etc/apt/keyrings")
   CMD_DESC+=("install docker - (3) get gpg keys")
@@ -203,7 +250,7 @@ function install_dependencies() {
   CMD_DESC+=("install docker - (5) update apt sources")
   CMD+=('echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null')
   CMD_DESC+=("install docker - (6) get docker from the newly registered repo")
-  CMD+=("sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin")
+  CMD+=("sudo apt-get update -y -q && sudo apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin")
 
   # make docker accessible without sudo by the used user
   CMD_DESC+=("install docker - (7) create docker group")
@@ -214,6 +261,29 @@ function install_dependencies() {
   # install java21
   CMD_DESC+=("install java21")
   CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk ant")
+
+  # install python3-pip and tcconfig for WAN latency emulation
+  CMD_DESC+=("install pip")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip")
+  CMD_DESC+=("install tcconfig for WAN latency emulation")
+  CMD+=("sudo pip install -q tcconfig")
+
+  # install rqlite for the geodistributed baseline
+  local rqlite_folder_name="rqlite-v8.36.12-linux-amd64"
+  local rqlite_tar_name="rqlite-v8.36.12-linux-amd64.tar.gz"
+  local rqlite_download_url="https://github.com/rqlite/rqlite/releases/download/v8.36.12/rqlite-v8.36.12-linux-amd64.tar.gz"
+  CMD_DESC+=("download rqlite")
+  CMD+=("wget --quiet --no-clobber $rqlite_download_url && rm -rf $rqlite_folder_name")
+  CMD_DESC+=("extract rqlite")
+  CMD+=("tar xvfz $rqlite_tar_name && rm -rf rqlite && mv $rqlite_folder_name rqlite")
+  CMD_DESC+=("add rqlite to PATH var")
+  CMD+=('echo "export PATH=$PATH:$PWD/rqlite" | sudo tee -a /etc/environment')
+
+  # install node for the durable object baseline
+  CMD_DESC+=("install npm")
+  CMD+=("sudo apt-get install -y npm")
+  CMD_DESC+=("update node version to latest stable")
+  CMD+=("sudo npm install -g n && sudo n stable && hash -r && sudo npm install --save-dev wrangler@4")
 
   for i in "${!CMD_DESC[@]}"; do
     desc=${CMD_DESC[$i]}
@@ -238,20 +308,21 @@ function upload_binaries() {
   local node=$1
   local ssh_key=$2;
   local username=$3;
-  local git_url="https://github.com/fadhilkurnia/gigapaxos.git";
-  local git_branch="fadhil-dist-deploy";
+  local xdn_src_dir=$XDN_SRC_PATH;
 
-  # TODO: implement me, copy from current source instead of pulling from gÏithub
-  echo "Getting the XDN binaries from Github ..."
-  # bin/fuselog
-  # bin/fuselog-apply
+  # copy from current source into the target machine
+  echo "Uploading XDN binaries from $xdn_src_dir/ ..."
+  ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "rm -rf xdn"
+  rsync -Pav -e "ssh -i $ssh_key -q" --exclude=".*/" -q -a $xdn_src_dir/ $username@$node:~/xdn
+
+  # TODO: check that fuselog and fuselog-apply are working
 
   CMD=()
-  CMD+=("rm -rf xdn")
-  CMD+=("git clone $git_url xdn > /dev/null")
-  CMD+=("cd xdn && git checkout $git_branch > /dev/null && ant jar")
-  CMD+=("sudo unlink /usr/local/bin/fuselog 2>&1 > /dev/null && sudo rm -rf /usr/local/bin/fuselog")
-  CMD+=("sudo unlink /usr/local/bin/fuselog-apply 2>&1 > /dev/null && sudo rm -rf /usr/local/bin/fuselog-apply")
+  CMD+=('/$HOME/xdn/bin/build_xdn_cli.sh')
+  CMD+=("sudo rm -rf /usr/local/bin/xdn")
+  CMD+=("sudo rm -rf /usr/local/bin/fuselog")
+  CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
+  CMD+=('sudo ln -s $HOME/xdn/bin/xdn /usr/local/bin/xdn')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuselog')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuselog-apply')
   CMD+=("sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf")
@@ -317,6 +388,11 @@ function main() {
     echo "Invalid program name. Must be 'xdnd'."
     exit 1
   fi
+
+  # Find out the absolute path of XDN source code, assuming
+  # this bash program is./bin/xdnd inside the XDN source code.
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  XDN_SRC_PATH="$(cd $SCRIPT_DIR && cd ../ && pwd)"
 
   # check the number of parameter.
   if [ "$#" -eq 0 ]; then

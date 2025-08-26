@@ -106,7 +106,7 @@ public abstract class AbstractReplicaCoordinator<NodeIDType> implements
 	 * created or one already exists with the same set of nodes. It should
 	 * return false otherwise. */
 	public abstract boolean createReplicaGroup(String serviceName, int epoch,
-			String state, Set<NodeIDType> nodes);
+			String state, Set<NodeIDType> nodes, String placementMetadata);
 
 	/* This method should result in all state corresponding to serviceName being
 	 * deleted. It is meant to be called only after a replica group has been
@@ -526,6 +526,11 @@ public abstract class AbstractReplicaCoordinator<NodeIDType> implements
 							nodes);
 		}
 		return created;
+	}
+
+	public boolean createReplicaGroup(String serviceName, int epoch, String state,
+									  Set<NodeIDType> nodes) {
+		return this.createReplicaGroup(serviceName, epoch, state, nodes, null);
 	}
 
 	/*********************** End of private helper methods ************************/

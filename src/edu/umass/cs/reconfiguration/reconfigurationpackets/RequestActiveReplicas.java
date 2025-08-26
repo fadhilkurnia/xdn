@@ -21,6 +21,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.json.JSONArray;
@@ -44,21 +45,18 @@ import edu.umass.cs.utils.Util;
  */
 public class RequestActiveReplicas extends ClientReconfigurationPacket implements ReplicableRequest {
 
-	/**
-	 *
-	 */
-	public static enum Keys {
+	public enum Keys {
 		/**
 		 * Active replica set.
 		 */
 		ACTIVE_REPLICAS,
 		
 		/**
-		 * 
+		 * Unique Query ID (i.e., Request ID)
 		 */
 		QID,
 		
-	};
+	}
 
 	/**
 	 * Unstringer for InetSocketAddress of sender.
@@ -145,6 +143,10 @@ public class RequestActiveReplicas extends ClientReconfigurationPacket implement
 	 */
 	public Set<InetSocketAddress> getActives() {
 		return this.actives;
+	}
+
+	public void setPlacementEpochNumber(int epochNumber) {
+		this.epochNumber = epochNumber;
 	}
 
 	public static void main(String[] args) {

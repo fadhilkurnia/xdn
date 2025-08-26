@@ -1,0 +1,123 @@
+import os
+import re
+import csv
+import statistics
+import numpy as np
+
+latency_result_dir_path = "./results_lat_geo"
+latency_files = os.listdir(latency_result_dir_path)
+
+target_plot_filename = "./plots/latency_geolocality.pdf"
+target_aggr_filename = "./results/latency_geolocality.csv"
+
+# gather all the parameters
+geolocalities = set()
+approaches = set()
+locality_names = set()
+for filename in latency_files:
+    parts = filename.split('_')
+    if len(parts) < 7:
+        continue
+    assert len(parts) == 7, f"Invalid number of parts: {len(parts)}, {filename}"
+    approaches.add(parts[0])
+    
+    geolocality = float(parts[2][1:])
+    geolocalities.add(geolocality)
+    
+    locality_name = parts[4][1:]
+    locality_names.add(locality_name)
+
+print("Approaches       : ", approaches)
+print("Geolocality      : ", geolocalities)
+print("Locality Names   : ", locality_names)
+
+with open(target_aggr_filename, 'w') as target_aggragate_file:
+    target_aggragate_file.write("approach, geolocality, locality_name, lat_avg_ms, lat_var\n")
+    approach_stats = {}
+    for approach in approaches:
+        approach_stats[approach] = {}
+        for geolocality in geolocalities:
+            approach_stats[approach][geolocality] = []
+            for locality_name in locality_names:
+                pattern = f"{approach}_latency_g{geolocality}_b[0-9]*_s{locality_name}_c[a-zA-Z]*_i[0-9]*.tsv"
+                matching_files = [f for f in latency_files if re.search(pattern, f)]
+                if len(matching_files) == 0:
+                    continue
+                latencies_ms = []
+                for latency_filename in matching_files:
+                    with open(latency_result_dir_path + '/' +latency_filename, 'r') as tsvfile:
+                        tsv_reader = csv.DictReader(tsvfile, delimiter='\t')
+                        for row in tsv_reader:
+                            latencies_ms.append(float(row["ttime"]))
+                avg_latency = statistics.mean(latencies_ms)
+                med_latency = statistics.median(latencies_ms)
+                var_latency = statistics.variance(latencies_ms)
+                min_latency = min(latencies_ms)
+                max_latency = max(latencies_ms)
+                p90_latency = np.percentile(latencies_ms, 90)
+                p95_latency = np.percentile(latencies_ms, 95)
+                p99_latency = np.percentile(latencies_ms, 99)
+
+                print(f">>> {approach:5} g={geolocality} city={locality_name:11}\t: avg_lat={avg_latency:.2f}ms\t variance={var_latency:3.2f} | min={min_latency:6.2f}ms max={max_latency:6.2f}ms | p50={med_latency:6.2f}ms p90={p90_latency:6.2f}ms p95={p95_latency:6.2f}ms p99={p99_latency:6.2f}ms")
+                target_aggragate_file.write(f"{approach}, {geolocality}, {locality_name}, {avg_latency:.2f}, {var_latency:.2f}\n")
+                approach_stats[approach][geolocality].extend(latencies_ms)
+    
+    target_aggragate_file.close()
+    
+    print()
+    print()
+    geolocalities = list(geolocalities)
+    geolocalities.sort(reverse=True)
+    approaches = list(approaches)
+    approaches.sort(reverse=True)
+
+    avg_xdnnr = []
+    avg_xdn   = []
+    avg_gd    = []
+    avg_ed    = []
+    avg_cd    = []
+
+    for geolocality in geolocalities:
+        for approach in approaches:
+            latencies = approach_stats[approach][geolocality]
+            if len(latencies) == 0:
+                continue
+            latencies = np.array(latencies)
+            avg_latency = statistics.mean(latencies)
+            med_latency = statistics.median(latencies)
+            var_latency = statistics.variance(latencies)
+            min_latency = min(latencies)
+            max_latency = max(latencies)
+            p90_latency = np.percentile(latencies, 90)
+            p95_latency = np.percentile(latencies, 95)
+            p99_latency = np.percentile(latencies, 99)
+            print(f'>> Approach={approach:5}\t g={geolocality}\t avg={avg_latency:6.2f}ms var={var_latency:8.2f} | min={min_latency:6.2f}ms max={max_latency:6.2f}ms | p50={med_latency:6.2f}ms p90={p90_latency:6.2f}ms p95={p95_latency:6.2f}ms p99={p99_latency:6.2f}ms')
+
+            if approach == "xdnnr":
+                avg_xdnnr.append(avg_latency)
+            if approach == "xdn":
+                avg_xdn.append(avg_latency)
+            if approach == "gd":
+                avg_gd.append(avg_latency)
+            if approach == "ed":
+                avg_ed.append(avg_latency)
+            if approach == "cd":
+                avg_cd.append(avg_latency)
+        
+        print()
+    
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(5, 3))
+    plt.plot(geolocalities, avg_xdnnr, label="Unreplicated Edge", linestyle='dotted', color='gray')
+    plt.plot(geolocalities, avg_cd,    marker='o', label="Static (us-east-1)")
+    plt.plot(geolocalities, avg_gd,    marker='o', label="Multi-Region")
+    plt.plot(geolocalities, avg_ed,    marker='o', label="Edge Datastore")
+    plt.plot(geolocalities, avg_xdn,   marker='o', label="XDN")
+
+    plt.xlabel("Geo-locality Factor (g)")
+    plt.ylabel("Avg. Latency (ms)")
+    plt.xlim(left=0.0, right=1.0)
+    plt.ylim(bottom=0.0)
+    plt.grid()
+    plt.legend()
+    plt.savefig(target_plot_filename, format="pdf", bbox_inches="tight")

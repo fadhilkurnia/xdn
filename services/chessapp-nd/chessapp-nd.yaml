@@ -1,0 +1,16 @@
+---
+name: chessapp-nd
+components:
+   - app:
+        image: chessapp-nd:1
+        port: 8000
+        stateful: true
+        entry: true
+        environments:
+          - DB_ENGINE: django.db.backends.sqlite3
+          - DB_NAME: /app/data/db.sqlite3
+          - DJANGO_SECRET_KEY: some_secret-key_123 
+          - DEBUG: False
+state: app:/app/data/
+deterministic: false
+consistency: linearizability

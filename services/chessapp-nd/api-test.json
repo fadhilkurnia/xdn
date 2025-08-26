@@ -1,0 +1,40 @@
+{
+  "name": "Chess App API test",
+  "testCases": {
+    "test": {
+      "path": "/api/test",
+      "method": "GET"
+    },
+    "clear": {
+      "path": "/api/secret/clear",
+      "method": "DELETE"
+    },
+    "create": {
+      "path": "/api/room/create",
+      "method": "POST"
+    },
+    "join": {
+      "path": "/api/room/join",
+      "method": "POST",
+      "body": {
+          "roomId": "7030"
+      }
+    },
+    "status": {
+      "path": "/api/player/status?roomId=6255&playerId=7f11fb90-d747-4d1c-a447-2e7b08e99014",
+      "method": "GET"
+    },
+    "rooms": {
+      "path": "/api/room/view",
+      "method": "GET"
+    },
+    "players": {
+      "path": "/api/player/view",
+      "method": "GET"
+    }
+  },
+  "url": "http://chessapp-nd.xdnapp.com:2301",
+  "header": {
+    "Content-Type": "application/json"
+  }
+}

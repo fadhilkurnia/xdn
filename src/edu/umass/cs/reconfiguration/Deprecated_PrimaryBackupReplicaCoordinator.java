@@ -73,6 +73,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     // outstanding request forwarded to primary
     ConcurrentHashMap<Long, XDNRequestAndCallback> outstanding = new ConcurrentHashMap<>();
 
+    @Deprecated
     public Deprecated_PrimaryBackupReplicaCoordinator(
             Replicable app,
             NodeIDType myID,
@@ -87,13 +88,14 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
             throw new RuntimeException(exceptionMessage);
         }
 
-        this.pbManager = new PrimaryBackupManager<>(
-                myID,
-                app,
-                (BackupableApplication) app,
-                unstringer,
-                messenger
-        );
+//        this.pbManager = new PrimaryBackupManager<>(
+//                myID,
+//                app,
+//                (BackupableApplication) app,
+//                unstringer,
+//                messenger
+//        );
+        this.pbManager = null;
 
         // store the backupable application so this coordinator can
         // later capture the statediff after request execution.
@@ -127,10 +129,6 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        System.out.println(">> coordinateRequest " + request.getClass().getName() + " " + request.getServiceName());
-        System.out.println(">> myID:" + getMyID() + " isCoordinator? " +
-                this.paxosManager.isPaxosCoordinator(request.getServiceName()) +
-                " callback: " + callback);
 
         if (request instanceof ReplicableClientRequest rcr) {
             request = rcr.getRequest();
@@ -142,22 +140,22 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
             return true;
         }
 
-        assert request instanceof XDNRequest;
+        assert request instanceof XdnRequest;
         IntegerPacketType requestType = request.getRequestType();
 
         switch (requestType) {
             // XDN_SERVICE_HTTP_REQUEST: Client => Entry Replica
             // XDN_HTTP_FORWARD_REQUEST: Entry Replica => Primary
-            case XDNRequestType.XDN_SERVICE_HTTP_REQUEST:
-            case XDNRequestType.XDN_HTTP_FORWARD_REQUEST:
-                return handleServiceRequest((XDNRequest) request, callback);
+            case XdnRequestType.XDN_SERVICE_HTTP_REQUEST:
+            case XdnRequestType.XDN_HTTP_FORWARD_REQUEST:
+                return handleServiceRequest((XdnRequest) request, callback);
 
             // XDN_HTTP_FORWARD_RESPONSE: Primary => Entry Replica
-            case XDNRequestType.XDN_HTTP_FORWARD_RESPONSE:
+            case XdnRequestType.XDN_HTTP_FORWARD_RESPONSE:
                 return handleForwardedResponse((XDNHttpForwardResponse) request);
 
             // XDN_STATEDIFF_APPLY_REQUEST: Primary => All Replicas, via consensus
-            case XDNRequestType.XDN_STATEDIFF_APPLY_REQUEST:
+            case XdnRequestType.XDN_STATEDIFF_APPLY_REQUEST:
                 throw new IllegalStateException("Statediff apply request can only be handled in" +
                         " App.execute(.)");
 
@@ -166,7 +164,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
         }
     }
 
-    private boolean handleServiceRequest(XDNRequest request, ExecutedCallback callback) {
+    private boolean handleServiceRequest(XdnRequest request, ExecutedCallback callback) {
         String serviceName = request.getServiceName();
         boolean isCurrentPrimary = this.paxosManager.isPaxosCoordinator(serviceName);
         NodeIDType currPrimaryID = this.paxosManager.getPaxosCoordinator(serviceName);
@@ -200,7 +198,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
             return false;
         }
 
-        XDNHttpRequest request = (XDNHttpRequest) rc.request();
+        XdnJsonHttpRequest request = (XdnJsonHttpRequest) rc.request();
         request.setHttpResponse(response.getHttpResponse());
         rc.callback().executed(request, true);
         return true;
@@ -208,7 +206,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
 
     private boolean askClientToContactPrimary(NodeIDType primaryNodeID, Request request,
                                               ExecutedCallback callback) {
-        XDNHttpRequest xdnRequest = XDNHttpRequest.createFromString(request.toString());
+        XdnJsonHttpRequest xdnRequest = XdnJsonHttpRequest.createFromString(request.toString());
         xdnRequest.setHttpResponse(createRedirectResponse(
                 primaryNodeID, request.getServiceName(), xdnRequest.getHttpRequest()));
         callback.executed(xdnRequest, false);
@@ -246,7 +244,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
 
     private boolean sendErrorResponse(Request request, ExecutedCallback callback,
                                       String errorMessage) {
-        XDNHttpRequest xdnRequest = XDNHttpRequest.createFromString(request.toString());
+        XdnJsonHttpRequest xdnRequest = XdnJsonHttpRequest.createFromString(request.toString());
         xdnRequest.setHttpResponse(createErrorResponse(xdnRequest.getHttpRequest(), errorMessage));
         callback.executed(xdnRequest, false);
         return true;
@@ -270,8 +268,6 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     // (2) XDNHttpForwardRequest, which also contains XDNHttpRequest, being forwarded
     //     by entry replica to this coordinator node.
     private boolean executeRequestCoordinateStatediff(Request request, ExecutedCallback callback) {
-        System.out.println(">> " + this.myNodeID + " primaryBackup execution:   " + request.getClass().getSimpleName());
-
         // TODO: possibly change Epoch
         String serviceName = request.getServiceName();
         if (this.currentRole.get(serviceName) == Role.BACKUP) {
@@ -280,13 +276,13 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
             startEpoch(serviceName, newEpoch);
         }
 
-        assert request instanceof XDNHttpRequest ||
+        assert request instanceof XdnJsonHttpRequest ||
                 request instanceof XDNHttpForwardRequest;
 
         boolean isEntryNode = false;
-        XDNHttpRequest primaryRequest = null;
-        if (request instanceof XDNHttpRequest) {
-            primaryRequest = (XDNHttpRequest) request;
+        XdnJsonHttpRequest primaryRequest = null;
+        if (request instanceof XdnJsonHttpRequest) {
+            primaryRequest = (XdnJsonHttpRequest) request;
             isEntryNode = true;
         }
         if (request instanceof XDNHttpForwardRequest forwardRequest) {
@@ -305,9 +301,6 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
                         epoch,
                         statediff);
 
-        System.out.println(">> " + this.myNodeID + " propose ...");
-        System.out.println(" request type " + primaryRequest.getClass().getSimpleName());
-
         Request finalPrimaryRequest = primaryRequest;
         if (isEntryNode) {
             this.paxosManager.propose(
@@ -325,7 +318,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
                     statediffApplyRequest,
                     (statediffRequest, handled) -> {
                         try {
-                            System.out.println(">> " + myNodeID + " sending response back to entry node ...");
+                            // sending request back to entry node
                             myMessenger.send(responseMessagingTask);
                         } catch (IOException | JSONException e) {
                             throw new RuntimeException(e);
@@ -337,7 +330,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
     }
 
     private GenericMessagingTask<NodeIDType, ?> getResponseMessagingTask(
-            Request request, XDNHttpRequest primaryRequest) {
+            Request request, XdnJsonHttpRequest primaryRequest) {
         XDNHttpForwardRequest forwardRequest = (XDNHttpForwardRequest) request;
         XDNHttpForwardResponse response = new XDNHttpForwardResponse(
                 primaryRequest.getRequestID(),
@@ -346,7 +339,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
         );
         String entryNodeIDStr = forwardRequest.getEntryNodeID();
         NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
-        System.out.println(">> " + myNodeID + " sending response back to " + entryNodeID);
+        // sending response back to entry node
         GenericMessagingTask<NodeIDType, ?> responseMessage = new GenericMessagingTask<>(
                 entryNodeID, response);
         return responseMessage;
@@ -356,8 +349,8 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
                                             ExecutedCallback callback) {
 
         // validate that the request is http request
-        assert (request instanceof XDNHttpRequest);
-        XDNHttpRequest httpRequest = (XDNHttpRequest) request;
+        assert (request instanceof XdnJsonHttpRequest);
+        XdnJsonHttpRequest httpRequest = (XdnJsonHttpRequest) request;
 
         // put request and callback into outstanding map
         XDNRequestAndCallback rc = new XDNRequestAndCallback(httpRequest, callback);
@@ -369,7 +362,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
 
         // forward request to the current primary
         System.out.println("current coordinator is " + primaryNodeID);
-        GenericMessagingTask<NodeIDType, XDNRequest> m = new GenericMessagingTask<>(
+        GenericMessagingTask<NodeIDType, XdnRequest> m = new GenericMessagingTask<>(
                 primaryNodeID, forwardRequest);
         try {
             this.messenger.send(m);
@@ -382,7 +375,7 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes) {
+                                      Set<NodeIDType> nodes, String placementMetadata) {
         System.out.println(">> PrimaryBackupCoor - createReplicaGroup | serviceName:" + serviceName
                 + " epoch:" + epoch
                 + " state:" + state

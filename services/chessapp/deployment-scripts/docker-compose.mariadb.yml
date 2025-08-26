@@ -1,0 +1,39 @@
+name: chessapp
+services:
+  app:
+    container_name: chessapp
+    networks:
+      - chessapp-network
+    environment:
+      - DEBUG=False
+      - DJANGO_SECRET_KEY=fallback-secret123
+      - DB_ENGINE=django.db.backends.mysql
+      - DB_USER=johndoe
+      - DB_PASSWORD=testing123
+      - DB_NAME=test_db
+      - DB_HOST=chess-mariadb
+      - DB_PORT=3400
+
+    ports:
+      - 8000:8000
+    restart: unless-stopped
+    image: chessapp:1
+
+  mysql:
+    container_name: chess-mariadb
+    networks:
+      - chessapp-network
+    environment:
+      - MARIADB_USER=johndoe
+      - MARIADB_PASSWORD=testing123
+      - MARIADB_DATABASE=test_db
+      - MARIADB_ROOT_PASSWORD=secret-root-pass
+    ports:
+      - 3400:3306
+    restart: unless-stopped
+    image: mariadb:11.7-noble
+
+networks:
+  chessapp-network:
+    external: false
+    name: chessapp-network 
