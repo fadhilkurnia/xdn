@@ -2,7 +2,7 @@
 # For more information see: 
 # https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-ant
 
-name: XDN test workflow
+name: "XDN test workflow"
 
 on:
   push:
@@ -28,3 +28,9 @@ jobs:
       run: ant test
     - name: 🧪 Running other tests with ant ...
       run: ant xdn-unit-tests-console
+    - name: 📝 Gathering the test result ...
+      uses: actions/upload-artifact@v4            # upload test results
+      if: ${{ !cancelled() }}                     # run this step even if previous step failed
+      with:
+        name: test-results
+        path: 'out/junit5-test-output/*.xml'
