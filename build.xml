@@ -373,6 +373,7 @@
         <pathelement location="${lib.dir}/junit-platform-console-standalone-1.11.3.jar"/>
         <pathelement location="${lib.dir}/junit-4.12.jar"/>
         <pathelement location="${lib.dir}/junit-vintage-engine-5.11.1.jar"/>
+        <pathelement location="${lib.dir}/opentest4j-1.3.0.jar"/>
     </path>
 
     <target name="xdn-compile-tests">
@@ -390,24 +391,26 @@
     </target>
 
     <target name="xdn-unit-tests"
-            description="Run all unit tests inside the test/ directory"
+            description="Run all unit tests inside the './test/' directory"
             depends="xdn-compile-tests">
+        <echo message="Running all the tests, reporting the results into './out/junit5-test-output/' ..."/>
         <!-- prepare the tests output directory -->
-        <mkdir dir="out/test-output"/>
+        <mkdir dir="out/junit5-test-output"/>
         <junitlauncher printSummary="true" haltOnFailure="false">
             <!-- include the JUnit platform related libraries required to run the tests -->
             <classpath refid="junit5.lib.jars"/>
 
-            <!-- the test classes themselves -->
+            <!-- the tested classes themselves -->
             <classpath location="build/classes"/>
             <classpath location="build/test-classes"/>
             <classpath refid="classpath.base"/>
 
-            <testclasses outputdir="out/test-output">
+            <testclasses outputdir="out/junit5-test-output">
                 <fileset dir="build/test-classes">
-                    <include name="edu/umass/cs/causal/dag/DirectedAcyclicGraphTest.class"/>
+                    <include name="**/*Test.class"/>
                 </fileset>
                 <listener type="legacy-plain" sendSysOut="true" />
+                <listener type="legacy-xml" sendSysErr="true" sendSysOut="true"/>
             </testclasses>
         </junitlauncher>
     </target>
@@ -415,7 +418,7 @@
     <target name="xdn-unit-tests-console" depends="xdn-compile-tests"
             description="Run all unit tests inside the test/ directory using the console launcher">
         <java classname="org.junit.platform.console.ConsoleLauncher" fork="true" failOnError="false">
-            <redirector output="output.txt" alwayslog="true"/>
+            <redirector output="out/junit-test-output.txt" alwayslog="true"/>
             <!-- Enable assertion -->
             <assertions>
                 <enable/>
@@ -426,7 +429,8 @@
             <classpath location="build/test-classes"/>
             <arg value="--scan-classpath"/>
             <arg line="--details=verbose"/>
-            <arg line="--reports-dir=build/test-report-v"/>
+            <arg line="--reports-dir=out/junit-test-report"/>
+            <arg line="--report-type=legacy-xml"/>
         </java>
     </target>
 

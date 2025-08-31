@@ -8,6 +8,7 @@ in the "Project Settings" sidebar.
 
 We use `ant` to build and run all of our unit test, use the following command to run all the unit tests:
 ```
+ant jar
 ant xdn-unit-test-console
 ```
 
