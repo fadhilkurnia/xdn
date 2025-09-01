@@ -2,8 +2,8 @@ package edu.umass.cs.xdn.service;
 
 import org.json.JSONException;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
-import org.junit.jupiter.api.Disabled;
 
 import java.util.Objects;
 
@@ -110,7 +110,7 @@ public class ServicePropertyTest {
         }
     }
 
-    @Disabled("Disabled due to ongoing development")
+    @Ignore("Disabled due to ongoing development")
     @Test
     public void ServicePropertyTest_ToJsonStringTwoComponents() {
         throw new RuntimeException("unimplemented");
