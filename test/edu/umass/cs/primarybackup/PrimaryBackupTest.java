@@ -27,13 +27,15 @@ public class PrimaryBackupTest {
         PrimaryBackupTestReplicaSet replicaSet = PrimaryBackupTestReplicaSet.initialize(3);
         Thread.sleep(5000);
 
-        // Ensures we have valid primary node.
-        assertNotNull(replicaSet.getPrimaryNode());
+        try {
+            // Ensures we have valid primary node.
+            assertNotNull(replicaSet.getPrimaryNode());
 
-        // Ensures the primary is one of the node in the cluster.
-        assertTrue(replicaSet.getNodeIds().contains(replicaSet.getPrimaryNode()));
-
-        replicaSet.destroy();
+            // Ensures the primary is one of the node in the cluster.
+            assertTrue(replicaSet.getNodeIds().contains(replicaSet.getPrimaryNode()));
+        } finally {
+            replicaSet.destroy();
+        }
     }
 
     @Test
@@ -42,21 +44,23 @@ public class PrimaryBackupTest {
         PrimaryBackupTestReplicaSet replicaSet = PrimaryBackupTestReplicaSet.initialize(5);
         Thread.sleep(5000);
 
-        // Changes the primary into node4.
-        replicaSet.setPrimaryNode("node4");
-        Thread.sleep(5000);
+        try {
+            // Changes the primary into node4.
+            replicaSet.setPrimaryNode("node4");
+            Thread.sleep(5000);
 
-        // Validates the current primary.
-        assertEquals("node4", replicaSet.getPrimaryNode());
+            // Validates the current primary.
+            assertEquals("node4", replicaSet.getPrimaryNode());
 
-        // Changes the primary into node1.
-        replicaSet.setPrimaryNode("node1");
-        Thread.sleep(5000);
+            // Changes the primary into node1.
+            replicaSet.setPrimaryNode("node1");
+            Thread.sleep(5000);
 
-        // Validates the current primary.
-        assertEquals("node1", replicaSet.getPrimaryNode());
-
-        replicaSet.destroy();
+            // Validates the current primary.
+            assertEquals("node1", replicaSet.getPrimaryNode());
+        } finally {
+            replicaSet.destroy();
+        }
     }
 
 }
