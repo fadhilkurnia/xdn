@@ -230,9 +230,14 @@
 
     <target name="test" description="Runs the default integration test"
             depends="jar, compiletest">
+        <echo message="Running reconfiguration tests, reporting the results into './out/junit4-reconfiguration-test-output' ..."/>
+        <!-- prepare the tests output directory -->
+        <mkdir dir="out/junit4-reconfiguration-test-output"/>
         <junit printsummary="yes" fork="yes" haltonfailure="on" showoutput="yes">
-            <test name="edu.umass.cs.reconfiguration.testing.TESTReconfigurationClient"/>
+            <test name="edu.umass.cs.reconfiguration.testing.TESTReconfigurationClient"
+                  todir="out/junit4-reconfiguration-test-output"/>
             <formatter type="plain" usefile="false"/>
+            <formatter type="xml"/>
             <jvmarg value="-ea"/>
             <jvmarg value="-Djava.util.logging.config.file=logging.properties"/>
             <jvmarg value="-Djavax.net.ssl.trustStorePassword=qwerty"/>
@@ -430,7 +435,6 @@
             <arg value="--scan-classpath"/>
             <arg line="--details=verbose"/>
             <arg line="--reports-dir=out/junit-test-report"/>
-            <arg line="--report-type=legacy-xml"/>
         </java>
     </target>
 
