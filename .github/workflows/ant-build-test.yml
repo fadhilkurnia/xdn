@@ -28,16 +28,11 @@ jobs:
       run: ant test
     - name: 🧪 Running XDN unit tests with ant ...
       run: ant xdn-unit-tests
-    - name: Checking the directory structure ...
-      run: |
-        ls
-        ls out
-        ls out/**/*.xml
+    - name: 🔎 Checking the output directory structure ...
+      run: ls out/**/*.xml
     - name: 📝 Gathering the test result ...
       uses: actions/upload-artifact@v4            # upload test results
       if: ${{ !cancelled() }}                     # run this step even if previous step failed
       with:
         name: test-results
-        path: |
-          'out/junit4-reconfiguration-test-output/*.xml'
-          'out/junit5-test-output/*.xml'
+        path: 'out/**/*.xml'
