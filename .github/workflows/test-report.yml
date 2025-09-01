@@ -1,4 +1,4 @@
-name: 'Test Report'
+name: 'Test report'
 on:
   workflow_run:
     workflows: ['XDN test workflow']         # runs after XDN test workflow

@@ -10,6 +10,11 @@ on:
   pull_request:
     branches: [ "master", "main" ]
 
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
 jobs:
   build:
 
@@ -36,3 +41,10 @@ jobs:
       with:
         name: test-results
         path: 'out/**/*.xml'
+    - name: Reporting the test results ...
+      uses: dorny/test-reporter@v2
+      if: ${{ !cancelled() }}                     # run this step even if previous step failed
+      with:
+        name: 'Unit tests'
+        path: 'out/**/*.xml'
+        reporter: 'java-junit'
