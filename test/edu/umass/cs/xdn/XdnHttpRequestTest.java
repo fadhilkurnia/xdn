@@ -11,6 +11,7 @@ import edu.umass.cs.xdn.request.XdnRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -284,21 +285,25 @@ public class XdnHttpRequestTest {
         assertTrue(isExist);
     }
 
+    @Disabled("Disabled due to the ongoing development")
     @Test
     public void testGetRequestTimestamp() {
         throw new RuntimeException("unimplemented");
     }
 
+    @Disabled("Disabled due to the ongoing development")
     @Test
     public void testBehavioralReadOnlyRequest() {
         throw new RuntimeException("unimplemented");
     }
 
+    @Disabled("Disabled due to the ongoing development")
     @Test
     public void testBehavioralReadModifyWriteRequest() {
         throw new RuntimeException("unimplemented");
     }
 
+    @Disabled("Disabled due to the ongoing development")
     @Test
     public void testBehavioralWriteOnlyRequest() {
         throw new RuntimeException("unimplemented");
