@@ -35,16 +35,17 @@ jobs:
       run: ant xdn-unit-tests
     - name: 🔎 Checking the output directory structure ...
       run: ls out/**/*.xml
-    - name: 📝 Gathering the test result ...
-      uses: actions/upload-artifact@v4            # upload test results
-      if: ${{ !cancelled() }}                     # run this step even if previous step failed
-      with:
-        name: test-results
-        path: 'out/**/*.xml'
-    - name: Reporting the test results ...
+    - name: 📝 Reporting the test results ...
       uses: dorny/test-reporter@v2
       if: ${{ !cancelled() }}                     # run this step even if previous step failed
       with:
         name: 'Unit tests'
         path: 'out/**/*.xml'
         reporter: 'java-junit'
+#    We disable the step below, but this might be needed for checking PR from forked repositories.
+#    - name: 📝 Gathering the test result ...
+#      uses: actions/upload-artifact@v4            # upload test results
+#      if: ${{ !cancelled() }}                     # run this step even if previous step failed
+#      with:
+#        name: test-results
+#        path: 'out/**/*.xml'
