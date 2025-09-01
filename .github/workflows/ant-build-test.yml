@@ -24,13 +24,15 @@ jobs:
         distribution: 'oracle'
     - name: 🏗️ Compiling the source code into a jar archive ...
       run: ant jar
-    - name: 🧪 Running tests with ant ...
+    - name: 🧪 Running reconfiguration tests with ant ...
       run: ant test
-    - name: 🧪 Running other tests with ant ...
-      run: ant xdn-unit-tests-console
+    - name: 🧪 Running XDN unit tests with ant ...
+      run: ant xdn-unit-tests
     - name: 📝 Gathering the test result ...
       uses: actions/upload-artifact@v4            # upload test results
       if: ${{ !cancelled() }}                     # run this step even if previous step failed
       with:
         name: test-results
-        path: 'out/junit5-test-output/*.xml'
+        path: |
+          'out/junit4-reconfiguration-test-output/*.xml'
+          'out/junit5-test-output/*.xml'
