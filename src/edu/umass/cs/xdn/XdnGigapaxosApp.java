@@ -5,7 +5,7 @@ import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
-import edu.umass.cs.primarybackup.packets.*;
+import edu.umass.cs.primarybackup.packets.PrimaryBackupPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.http.HttpActiveReplicaRequest;
 import edu.umass.cs.reconfiguration.interfaces.InitialStateValidator;
@@ -25,7 +25,10 @@ import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import org.json.JSONException;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.StringWriter;
 import java.net.Socket;
 import java.net.StandardProtocolFamily;
 import java.net.URI;
@@ -372,15 +375,31 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             //   The issue is there because the behavior of each request is service specific.
             //   The request can either be constructed in the entry replica, or when a replica
             //   receive forwarded request.
+            // TODO: currently, we are logging warning instead.
             if (httpRequest == null) return null;
             String serviceName = httpRequest.getServiceName();
             Map<Integer, ServiceInstance> currServiceInstance =
                     this.serviceInstances.get(serviceName);
-            if (currServiceInstance == null) return null;
+            if (currServiceInstance == null) {
+                logger.log(Level.WARNING,
+                        "Deserializing http request for unknown service " + serviceName);
+                return httpRequest;
+            }
             Integer currServicePlacementEpoch = this.servicePlacementEpoch.get(serviceName);
-            if (currServicePlacementEpoch == null) return null;
+            if (currServicePlacementEpoch == null) {
+                logger.log(Level.WARNING,
+                        "Deserializing http request for unknown epoch of service " +
+                                serviceName);
+                return httpRequest;
+            }
             ServiceInstance currInstance = currServiceInstance.get(currServicePlacementEpoch);
-            if (currInstance == null) return null;
+            if (currInstance == null) {
+                logger.log(Level.WARNING,
+                        "Deserializing http request for unknown instance of epoch " +
+                                currServicePlacementEpoch + " from service " +
+                                serviceName);
+                return httpRequest;
+            }
             ServiceProperty serviceProperty = currInstance.property;
             httpRequest.setRequestMatchers(serviceProperty.getRequestMatchers());
             return httpRequest;
