@@ -456,8 +456,26 @@ function do_distributed_init_observability() {
   # Install Grafana, k6, and Prometheus locally
   echo "[LOCAL] Installing Grafana, k6, and Prometheus ..."
   if command -v apt-get >/dev/null 2>&1; then
+    # Installing and enabling Grafana
     sudo apt-get update
-    sudo apt-get install -y grafana k6 prometheus
+    sudo apt-get install -y software-properties-common
+    sudo add-apt-repository -y "deb https://packages.grafana.com/oss/deb stable main"
+    wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+    sudo apt-get update
+    sudo apt-get install -y grafana
+    sudo systemctl start grafana-server
+    sudo systemctl enable grafana-server
+
+    # Installing k6
+    sudo gpg -k
+    sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+    echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+    sudo apt-get update
+    sudo apt-get install -y k6
+
+    # Installing and enabling Prometheus
+    sudo apt-get install -y prometheus
+    sudo systemctl enable prometheus
   else
     echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
   fi
@@ -483,6 +501,7 @@ ENDSSH
   done
 
   echo "Distributed observability setup complete."
+  echo "Access Grafana at http://localhost:3000"
   exit 0
 }
 
