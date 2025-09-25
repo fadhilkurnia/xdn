@@ -3,11 +3,12 @@
 ## Project structure
 ```
 xdn/
-├─ bin/                                   // binaries
+├─ bin/                                   // scripts and binaries
 ├─ conf/                                  // configuration
 ├─ docs/
-├─ lib/
-├─ services/
+├─ eval/
+├─ lib/                                   // evaluation scripts and results
+├─ services/                              // example stateful services
 ├─ src/
 │  ├─ edu.umass.cs
 │  │  ├─ reconfigurator/
@@ -22,8 +23,8 @@ xdn/
 ```
 
 ## System requirements
-We developed and tested XDN on rs630 machines in the CloudLab, generally with
-the following system requirements:
+We developed and tested XDN on rs630 machines in the CloudLab@UMassß, generally 
+with the following system requirements:
 - Linux 5.15+ with x86-64 architecture, or MacOS with arm64 architecture.
 - libfuse3, or rsync.
 - Java 21+
@@ -36,7 +37,6 @@ the following system requirements:
     ```
    git pull https://github.com/fadhilkurnia/xdn.git
    cd xdn
-   git checkout consistency-dev
     ```
 2. Compile XDN source code:
     ```
@@ -48,7 +48,7 @@ the following system requirements:
     ```
    Make sure to add XDN's `bin` directory into your `$PATH` so you can access `xdn` from anywhere in your machine. 
 
-## Deployment with existing provider
+## [Temporarily Unavailable] Deployment with existing provider
 We have prepared a ready-to-use XDN provider at `xdnapp.com`. 
 To deploy a stateful service with this existing provider, simply follow the steps below.
 
@@ -93,7 +93,7 @@ To deploy a stateful service with this existing provider, simply follow the step
    xdn service destroy bookcatalog
    ```
 
-## Deployment in single machine
+## Deployment in local machine
 
 1. Start the control plane (i.e., Reconfigurator/RC) and the edge servers (i.e., ActiveReplica/AR), 
    using the default configuration.
@@ -194,3 +194,28 @@ If the machines have different IP address, you need to modify the config file.
 # at machine 10.10.1.5:
 ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.cloudlab.properties start RC1
 ```
+
+## Deployment in a CloudLab cluster
+
+Assuming we have 5 machines with the following role and IP address:
+- `10.10.1.1` for the first active replica.
+- `10.10.1.2` for the second active replica.
+- `10.10.1.3` for the third active replica.
+- `10.10.1.4` for the reconfiguration.
+- `10.10.1.5` for the driver machine where we run all the command.
+
+We are using the `xdnd` binary for most of the command here.
+
+1. Initialize the driver machine: `./bin/xdnd init-driver`.
+2. Initialize all the remote machines: 
+   ```
+   ./bin/xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user
+   ```
+3. Optionally, initialize observability in all machines:
+   ```
+   ./bin/xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user
+   ```
+4. Start xdn instances in all machines:
+   ```
+   gpServer.sh -DgigapaxosConfig=gigapaxos.properties start all
+   ```
