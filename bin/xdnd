@@ -111,6 +111,63 @@ function do_distributed_initialization() {
   # TODO: start the service
 }
 
+function do_start_all() {
+  echo "Starting all gigapaxos servers defined in the config ..."
+
+  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local CONFIG=$DEFAULT_CONFIG
+  local SSH_KEY=""
+  local USERNAME=""
+
+  for ARG in "$@"; do
+    case $ARG in
+    -config=*)
+      CONFIG="${ARG#*=}"
+      ;;
+    -ssh-key=*)
+      SSH_KEY="${ARG#*=}"
+      ;;
+    -username=*)
+      USERNAME="${ARG#*=}"
+      ;;
+    esac
+  done
+
+  if [ ! -f "$CONFIG" ]; then
+    echo "Config file '$CONFIG' can not be found!"
+    exit 1
+  fi
+
+  if [ -z "$SSH_KEY" ]; then
+    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
+    exit 1
+  fi
+
+  if [ -z "$USERNAME" ]; then
+    echo "Please specify the username with '-username=<name>' argument."
+    exit 1
+  fi
+
+  local CONFIG_DIR
+  CONFIG_DIR=$(cd "$(dirname "$CONFIG")" && pwd)
+  local CONFIG_ABS="$CONFIG_DIR/$(basename "$CONFIG")"
+
+  local GPSERVER="$XDN_SRC_PATH/bin/gpServer.sh"
+  if [ ! -x "$GPSERVER" ]; then
+    echo "Unable to find executable gpServer at '$GPSERVER'"
+    exit 1
+  fi
+
+  echo " - config file : ${CONFIG_ABS}"
+  echo " - ssh key     : ${SSH_KEY}"
+  echo " - username    : ${USERNAME}"
+  echo ""
+  echo "Invoking gpServer to start all nodes ..."
+
+  SSH_KEY_PATH="$SSH_KEY" GP_USERNAME="$USERNAME" "$GPSERVER" "-DgigapaxosConfig=$CONFIG_ABS" start all
+  exit $?
+}
+
 function do_start_ar_instance() {
   echo "unimplemented"
 }
@@ -353,6 +410,9 @@ function print_usage() {
   echo " To initialize all the machines, installing required dependencies:"
   echo "   xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
+  echo " To start all gigapaxos servers using gpServer:"
+  echo "   xdnd start-all -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo ""
   echo " To initialize distributed observability:"
   echo "   xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
@@ -559,7 +619,7 @@ function main() {
 
   # parse the second param, i.e., the action.
   local SECOND_PARAM=$1
-  local VALID_ACTIONS=("dist-init" "dist-init-observability" "init-driver" "start" "help" "check")
+  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "init-driver" "start" "help" "check")
   if ! is_in_list "$SECOND_PARAM" "${VALID_ACTIONS[@]}"; then
     echo "Action '$SECOND_PARAM' is not a valid actions."
     echo "Valid actions are: start, check, dist-init, help."
@@ -575,6 +635,9 @@ function main() {
     ;;
   "dist-init-observability")
     do_distributed_init_observability "$@"
+    ;;
+  "start-all")
+    do_start_all "$@"
     ;;
   "init-driver")
     do_init_driver "$@"

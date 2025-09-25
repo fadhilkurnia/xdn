@@ -217,5 +217,5 @@ We are using the `xdnd` binary for most of the command here.
    ```
 4. Start xdn instances in all machines:
    ```
-   gpServer.sh -DgigapaxosConfig=gigapaxos.properties start all
+   ./bin/xdnd start-all -config=gigapaxos.properties -ssh-key=/ssh/key -username=user
    ```
