@@ -353,6 +353,12 @@ function print_usage() {
   echo " To initialize all the machines, installing required dependencies:"
   echo "   xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
+  echo " To initialize distributed observability:"
+  echo "   xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To initialize the driver machine:"
+  echo "   xdnd init-driver"
+  echo ""
   echo " To start a reconfigurator instance:"
   echo "   xdnd start control-plane -config=gigapaxos.properties RC0"
   echo ""
@@ -378,6 +384,135 @@ function is_in_list() {
   return 1
 }
 
+# do_distributed_init_observability sets up observability tools locally and remotely
+# Installs grafana, k6, and prometheus locally, and process-exporter on all remote nodes
+function do_distributed_init_observability() {
+  echo "Initializing distributed observability setup ..."
+
+  # get config from parameters, if any.
+  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local CONFIG=$DEFAULT_CONFIG
+  for ARG in "$@"; do
+    case $ARG in
+    -config=*)
+      CONFIG="${ARG#*=}"
+      ;;
+    esac
+  done
+
+  if [ ! -f "$CONFIG" ]; then
+    echo "Config file '$CONFIG' can not be found!"
+    exit 1
+  fi
+
+  # extract unique IPs from the config file
+  local unique_ips=()
+  while IFS= read -r line; do
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
+      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
+      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
+        unique_ips+=("$ip")
+      fi
+    fi
+  done <"$CONFIG"
+
+  # get the ssh key from args
+  local SSH_KEY=""
+  for ARG in "$@"; do
+    case $ARG in
+    -ssh-key=*)
+      SSH_KEY="${ARG#*=}"
+      ;;
+    esac
+  done
+  if [ -z "$SSH_KEY" ]; then
+    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
+    exit 1
+  fi
+
+  # get the username from args
+  local USERNAME=""
+  for ARG in "$@"; do
+    case $ARG in
+    -username=*)
+      USERNAME="${ARG#*=}"
+      ;;
+    esac
+  done
+  if [ -z "$USERNAME" ]; then
+    echo "Please specify the username with '-username=<name>' argument."
+    exit 1
+  fi
+
+  echo " - config file       : ${CONFIG}"
+  echo " - ssh key           : ${SSH_KEY}"
+  echo " - username          : ${USERNAME}"
+  echo " - machine IPs/Hosts :"
+  for ip in "${unique_ips[@]}"; do
+    echo "   - $ip"
+  done
+  echo ""
+
+  # Install Grafana, k6, and Prometheus locally
+  echo "[LOCAL] Installing Grafana, k6, and Prometheus ..."
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y grafana k6 prometheus
+  else
+    echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
+  fi
+
+  # Install process-exporter on all remote nodes
+  for machine in "${unique_ips[@]}"; do
+    echo "[REMOTE] Installing process-exporter on $machine ..."
+    ssh -o StrictHostKeyChecking=no -i $SSH_KEY $USERNAME@$machine 'bash -s' <<'ENDSSH'
+      set -e
+      if ! command -v wget >/dev/null 2>&1; then
+        sudo apt-get update && sudo apt-get install -y wget
+      fi
+      PROC_EXPORTER_VERSION="0.7.10"
+      PROC_EXPORTER_TAR="process-exporter-${PROC_EXPORTER_VERSION}.linux-amd64.tar.gz"
+      if [ ! -f "/usr/local/bin/process-exporter" ]; then
+        wget -q https://github.com/ncabatoff/process-exporter/releases/download/v${PROC_EXPORTER_VERSION}/${PROC_EXPORTER_TAR}
+        tar xzf ${PROC_EXPORTER_TAR}
+        sudo mv process-exporter-*/process-exporter /usr/local/bin/
+        rm -rf process-exporter-* ${PROC_EXPORTER_TAR}
+      fi
+      echo "process-exporter installed."
+ENDSSH
+  done
+
+  echo "Distributed observability setup complete."
+  exit 0
+}
+
+# Initializes the driver machine with all required dependencies and setup
+function do_init_driver() {
+  echo "Initializing driver machine ..."
+
+  sudo apt update
+  sudo apt install -y golang-go openjdk-21-jdk apache2-utils python3-pip ant screen
+  curl https://sh.rustup.rs -sSf | sh -s -- -y
+  source $HOME/.cargo/env
+  python -m pip install -U pip
+  python -m pip install -U matplotlib
+  python -m pip install -U scikit-learn
+  python -m pip install -U requests
+  python -m pip install -U pandas
+  python -m pip install -U basemap
+
+  ant jar
+  ./bin/build_xdn_cli.sh
+  sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
+  mkdir -p eval/screen_logs
+  sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results
+  cd eval/xdn_latency_proxy_go && go build .
+  cd -
+
+  echo "Dont forget to initialize machines for xdn cluster using 'xdnd dist-init'"
+  exit 0
+}
+
 # main() is the main entrypoint of this shell script that validates the actions
 # (i.e., start, check, dist-launch, help), then handle the action accordingly.
 function main() {
@@ -390,7 +525,7 @@ function main() {
   fi
 
   # Find out the absolute path of XDN source code, assuming
-  # this bash program is./bin/xdnd inside the XDN source code.
+  # this bash program is ./bin/xdnd inside the XDN source code.
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   XDN_SRC_PATH="$(cd $SCRIPT_DIR && cd ../ && pwd)"
 
@@ -405,7 +540,7 @@ function main() {
 
   # parse the second param, i.e., the action.
   local SECOND_PARAM=$1
-  local VALID_ACTIONS=("dist-init" "start" "help" "check")
+  local VALID_ACTIONS=("dist-init" "dist-init-observability" "init-driver" "start" "help" "check")
   if ! is_in_list "$SECOND_PARAM" "${VALID_ACTIONS[@]}"; then
     echo "Action '$SECOND_PARAM' is not a valid actions."
     echo "Valid actions are: start, check, dist-init, help."
@@ -418,6 +553,12 @@ function main() {
   case "$ACTION" in
   "dist-init")
     do_distributed_initialization "$@"
+    ;;
+  "dist-init-observability")
+    do_distributed_init_observability "$@"
+    ;;
+  "init-driver")
+    do_init_driver "$@"
     ;;
   "start")
     echo "starting an instance ..."
