@@ -445,7 +445,7 @@ function is_in_list() {
 }
 
 # do_distributed_init_observability sets up observability tools locally and remotely
-# Installs grafana, k6, and prometheus locally, and process-exporter on all remote nodes
+# Installs grafana, k6, and prometheus locally, and node-exporter on all remote nodes
 function do_distributed_init_observability() {
   echo "Initializing distributed observability setup ..."
 
@@ -540,23 +540,53 @@ function do_distributed_init_observability() {
     echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
   fi
 
-  # Install process-exporter on all remote nodes
+  # Install node-exporter on all remote nodes
   for machine in "${unique_ips[@]}"; do
-    echo "[REMOTE] Installing process-exporter on $machine ..."
+    echo "[REMOTE] Installing node-exporter on $machine ..."
     ssh -o StrictHostKeyChecking=no -i $SSH_KEY $USERNAME@$machine 'bash -s' <<'ENDSSH'
       set -e
       if ! command -v wget >/dev/null 2>&1; then
         sudo apt-get update && sudo apt-get install -y wget
       fi
-      PROC_EXPORTER_VERSION="0.7.10"
-      PROC_EXPORTER_TAR="process-exporter-${PROC_EXPORTER_VERSION}.linux-amd64.tar.gz"
-      if [ ! -f "/usr/local/bin/process-exporter" ]; then
-        wget -q https://github.com/ncabatoff/process-exporter/releases/download/v${PROC_EXPORTER_VERSION}/${PROC_EXPORTER_TAR}
-        tar xzf ${PROC_EXPORTER_TAR}
-        sudo mv process-exporter-*/process-exporter /usr/local/bin/
-        rm -rf process-exporter-* ${PROC_EXPORTER_TAR}
+      NODE_EXPORTER_VERSION="1.8.2"
+      NODE_EXPORTER_DIR="node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64"
+      NODE_EXPORTER_TAR="${NODE_EXPORTER_DIR}.tar.gz"
+      if ! command -v node_exporter >/dev/null 2>&1; then
+        wget -q https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/${NODE_EXPORTER_TAR}
+        tar xzf ${NODE_EXPORTER_TAR}
+        sudo mv ${NODE_EXPORTER_DIR}/node_exporter /usr/local/bin/
+        sudo chmod 755 /usr/local/bin/node_exporter
+        rm -rf ${NODE_EXPORTER_DIR} ${NODE_EXPORTER_TAR}
       fi
-      echo "process-exporter installed."
+      if ! getent group node_exporter >/dev/null 2>&1; then
+        sudo groupadd --system node_exporter
+      fi
+      if ! id -u node_exporter >/dev/null 2>&1; then
+        sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g node_exporter node_exporter
+      fi
+      if [ ! -f /etc/systemd/system/node_exporter.service ]; then
+        sudo tee /etc/systemd/system/node_exporter.service >/dev/null <<'SERVICE'
+[Unit]
+Description=Prometheus Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now node_exporter
+      else
+        sudo systemctl daemon-reload
+        sudo systemctl restart node_exporter
+      fi
+      echo "node-exporter installed."
 ENDSSH
   done
 
