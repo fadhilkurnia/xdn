@@ -574,6 +574,43 @@ DASHCFG
   sudo systemctl restart grafana-server
 }
 
+# provision_k6_prometheus_dashboard imports the official k6 Prometheus dashboard into Grafana
+function provision_k6_prometheus_dashboard() {
+  echo "[LOCAL] Provisioning k6 Prometheus dashboard ..."
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get install -y curl
+  fi
+  sudo mkdir -p /etc/grafana/provisioning/dashboards
+  sudo mkdir -p /var/lib/grafana/dashboards/k6
+  sudo tee /etc/grafana/provisioning/dashboards/k6_prometheus.yaml >/dev/null <<'DASHCFG'
+apiVersion: 1
+providers:
+  - name: k6 Prometheus
+    folder: k6
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/k6
+    inputs:
+      - name: DS_PROMETHEUS
+        type: datasource
+        pluginId: prometheus
+        value: Prometheus
+DASHCFG
+  local dash_tmp
+  dash_tmp=$(mktemp)
+  if ! curl -fsSL https://grafana.com/api/dashboards/19665/revisions/latest/download -o "$dash_tmp"; then
+    echo "[ERROR] Failed to download k6 Prometheus dashboard JSON." >&2
+    exit 1
+  fi
+  sudo mv "$dash_tmp" /var/lib/grafana/dashboards/k6/k6_prometheus.json
+  sudo chown -R grafana:grafana /etc/grafana/provisioning /var/lib/grafana/dashboards
+  sudo chmod -R a+rX /etc/grafana/provisioning /var/lib/grafana/dashboards
+  sudo systemctl restart grafana-server
+}
+
 # install_prometheus installs Prometheus and enables remote write receiver
 function install_prometheus() {
   echo "[LOCAL] Installing Prometheus with remote-write receiver ..."
@@ -695,12 +732,14 @@ function do_distributed_init_observability() {
   done
 
   if command -v apt-get >/dev/null 2>&1; then
-
     # Update Prometheus config with all node-exporter targets
     update_prometheus_scrape_config "${unique_ips[@]}"
 
     # Provision Grafana data source and Node Exporter Full dashboard
     provision_node_exporter_dashboard
+
+    # Provision Grafana dashboard for k6 Prometheus metrics
+    provision_k6_prometheus_dashboard
   fi
 
   echo "Distributed observability setup complete."
