@@ -533,9 +533,22 @@ function do_distributed_init_observability() {
     sudo apt-get update
     sudo apt-get install -y k6
 
-    # Installing and enabling Prometheus
+    # Installing and enabling Prometheus with remote-write receiver
     sudo apt-get install -y prometheus
+    sudo mkdir -p /etc/systemd/system/prometheus.service.d
+    sudo tee /etc/systemd/system/prometheus.service.d/remote-write.conf >/dev/null <<'PROMDROP'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --enable-feature=remote-write-receiver
+PROMDROP
+    sudo systemctl daemon-reload
     sudo systemctl enable prometheus
+    sudo systemctl restart prometheus
   else
     echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
   fi
@@ -589,6 +602,76 @@ SERVICE
       echo "node-exporter installed."
 ENDSSH
   done
+
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "[LOCAL] Updating Prometheus configuration with node-exporter targets ..."
+    local PROM_TMP
+    PROM_TMP=$(mktemp)
+    cat >"$PROM_TMP" <<'PROMHDR'
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets:
+PROMHDR
+    for ip in "${unique_ips[@]}"; do
+      echo "        - '${ip}:9100'" >>"$PROM_TMP"
+    done
+    echo "        - 'localhost:9100'" >>"$PROM_TMP"
+    sudo mv "$PROM_TMP" /etc/prometheus/prometheus.yml
+    sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+    sudo chmod 644 /etc/prometheus/prometheus.yml
+    sudo systemctl restart prometheus
+
+    echo "[LOCAL] Provisioning Grafana data source and Node Exporter Full dashboard ..."
+    if ! command -v curl >/dev/null 2>&1; then
+      sudo apt-get install -y curl
+    fi
+    sudo mkdir -p /etc/grafana/provisioning/datasources
+    sudo mkdir -p /etc/grafana/provisioning/dashboards
+    sudo mkdir -p /var/lib/grafana/dashboards/node_exporter
+    sudo tee /etc/grafana/provisioning/datasources/prometheus.yaml >/dev/null <<'DATASOURCE'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: false
+DATASOURCE
+    sudo tee /etc/grafana/provisioning/dashboards/node_exporter.yaml >/dev/null <<'DASHCFG'
+apiVersion: 1
+providers:
+  - name: Node Exporter Full
+    folder: Node Exporter
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/node_exporter
+    inputs:
+      - name: DS_PROMETHEUS
+        type: datasource
+        pluginId: prometheus
+        value: Prometheus
+DASHCFG
+    local DASH_TMP
+    DASH_TMP=$(mktemp)
+    if ! curl -fsSL https://grafana.com/api/dashboards/1860/revisions/latest/download -o "$DASH_TMP"; then
+      echo "[ERROR] Failed to download Node Exporter Full dashboard JSON." >&2
+      exit 1
+    fi
+    sudo mv "$DASH_TMP" /var/lib/grafana/dashboards/node_exporter/node_exporter_full.json
+    sudo chown -R grafana:grafana /etc/grafana/provisioning /var/lib/grafana/dashboards
+    sudo chmod -R a+rX /etc/grafana/provisioning /var/lib/grafana/dashboards
+    sudo systemctl restart grafana-server
+  fi
 
   echo "Distributed observability setup complete."
   echo "Access Grafana at http://localhost:3000"
