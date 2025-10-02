@@ -564,7 +564,7 @@ public abstract class ReconfigurableNode<NodeIDType> {
 
         System.out.println(">> " + logServerStr + " " + servers + " ready");
         logger.log(Level.INFO, "{0} - Servers {1} ready",
-                new Object[] {ReconfigurableNode.class.getSimpleName(), servers});
+                new Object[]{ReconfigurableNode.class.getSimpleName(), servers});
 
         return rcNodes;
     }

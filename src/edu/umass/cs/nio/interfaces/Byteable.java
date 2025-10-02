@@ -13,9 +13,9 @@ public interface Byteable {
 	 * The recommendation that the first four bytes contain the integer packet
 	 * type is for bring able to write efficient demultiplexers that will not
 	 * attempt to decode an incoming packet unless the type matches one of the
-	 * types they expect to receive. Not following this requirement will
+	 * types they expect to receive. Not following this requirement
 	 * will not break applications but can result in wasted decoding
-	 * attempts if the inital bytes happen to accidentally match the header
+	 * attempts if the initial bytes happen to accidentally match the header
 	 * patterns used by other demultiplexers.
 	 * 
 	 * @return byte[] serialized form of this object. It is recommended that the
