@@ -2,16 +2,12 @@ package edu.umass.cs.pram;
 
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
 import edu.umass.cs.nio.AbstractPacketDemultiplexer;
-import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.pram.packets.PramPacket;
 import edu.umass.cs.pram.packets.PramPacketType;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 
 /**
  * PramPacketDemultiplexer requires AppRequestParser because the WriteAfterPacket
@@ -39,30 +35,13 @@ public class PramPacketDemultiplexer extends AbstractPacketDemultiplexer<PramPac
 
     @Override
     protected PramPacket processHeader(byte[] message, NIOHeader header) {
-        String rawMessage;
-
-        // convert byte[] message into String
-        try {
-            rawMessage = new String(message, NIOHeader.CHARSET);
-        } catch (UnsupportedEncodingException e) {
+        PramPacketType packetType =
+                PramPacket.getQuickPacketTypeFromEncodedPacket(message);
+        if (packetType == null) {
             return null;
         }
 
-        // find the packet type from the message
-        JSONObject object;
-        Integer packetType;
-        try {
-            object = new JSONObject(rawMessage);
-            packetType = JSONPacket.getPacketType(object);
-        } catch (JSONException e) {
-            return null;
-        }
-
-        if (!PramPacketType.intToType.containsKey(packetType)) {
-            return null;
-        }
-
-        return (PramPacket) PramPacket.createFromString(rawMessage, appRequestDeserializer);
+        return PramPacket.createFromBytes(message, appRequestDeserializer);
     }
 
     @Override
