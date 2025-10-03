@@ -82,7 +82,7 @@ import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
  */
 public class HttpActiveReplica {
 
-    private static final Logger log = ReconfigurationConfig.getLogger();
+    private static final Logger logger = Logger.getLogger(HttpActiveReplica.class.getName());
 
     private final static int DEFAULT_HTTP_PORT = 8080;
 
@@ -98,7 +98,6 @@ public class HttpActiveReplica {
 
     private final Channel channel;
     private final String nodeId;
-    private static final Logger logger = Logger.getLogger(HttpActiveReplica.class.getName());
 
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
@@ -170,7 +169,7 @@ public class HttpActiveReplica {
             }
             channel = b.bind(sockAddr).sync().channel();
 
-            log.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
+            logger.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
 
             channel.closeFuture().sync();
         } finally {
@@ -237,7 +236,7 @@ public class HttpActiveReplica {
         if (content.isReadable()) {
             bytes = new byte[content.readableBytes()];
             content.readBytes(bytes);
-            log.log(Level.FINE, "HttpContent: {0}", new Object[]{new String(bytes)});
+            logger.log(Level.FINE, "HttpContent: {0}", new Object[]{new String(bytes)});
         } else {
             return null;
         }
@@ -413,7 +412,7 @@ public class HttpActiveReplica {
                         send100Continue(ctx);
                     }
 
-                    log.log(Level.FINE, "Http server received a request with HttpRequest: {0}", new Object[]{httpRequest});
+                    logger.log(Level.FINE, "Http server received a request with HttpRequest: {0}", new Object[]{httpRequest});
 
                     // converting url query parameters into JSON key value pair
                     Map<String, List<String>> params = (new QueryStringDecoder(httpRequest.uri())).parameters();
@@ -431,7 +430,7 @@ public class HttpActiveReplica {
                     if (json != null && json.length() > 0)
                         try {
                             gRequest = getRequestFromJSONObject(json);
-                            log.log(Level.INFO, "Http server retrieved an HttpActiveReplicaRequest from HttpRequest: {0}", new Object[]{gRequest});
+                            logger.log(Level.INFO, "Http server retrieved an HttpActiveReplicaRequest from HttpRequest: {0}", new Object[]{gRequest});
                             retrieved = true;
                         } catch (Exception e) {
                             // ignore and do nothing if this is a malformed request
@@ -442,7 +441,7 @@ public class HttpActiveReplica {
                 if (msg instanceof HttpContent) {
                     if (!retrieved) {
                         HttpContent httpContent = (HttpContent) msg;
-                        log.log(Level.INFO, "Http server received a request with HttpContent: {0}", new Object[]{httpContent});
+                        logger.log(Level.INFO, "Http server received a request with HttpContent: {0}", new Object[]{httpContent});
                         if (httpContent != null) {
                             json = getJSONObjectFromHttpContent(httpContent);
                             if (json != null && json.length() > 0)
@@ -459,14 +458,14 @@ public class HttpActiveReplica {
 
                     if (msg instanceof LastHttpContent) {
                         if (retrieved) {
-                            log.log(Level.INFO, "About to execute request: {0}", new Object[]{gRequest});
+                            logger.log(Level.INFO, "About to execute request: {0}", new Object[]{gRequest});
                             Object lock = new Object();
                             finished = false;
                             ExecutedCallback callback = new HttpExecutedCallback(buf, lock);
 
                             // execute GigaPaxos request here
                             if (arFunctions != null) {
-                                log.log(Level.FINE, "App {0} executes request: {1}", new Object[]{arFunctions, request});
+                                logger.log(Level.FINE, "App {0} executes request: {1}", new Object[]{arFunctions, request});
                                 boolean handled = arFunctions.handRequestToAppForHttp(
                                         (gRequest.needsCoordination()) ? ReplicableClientRequest.wrap(gRequest) : gRequest,
                                         callback);
