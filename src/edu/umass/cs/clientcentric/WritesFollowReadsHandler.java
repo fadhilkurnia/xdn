@@ -8,7 +8,6 @@ import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.GenericMessagingTask;
-import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
@@ -171,7 +170,7 @@ public class WritesFollowReadsHandler {
                                 /*senderID=*/myNodeID.toString(),
                                 /*timestamp=*/serviceLastTimestamp,
                                 /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
-                GenericMessagingTask<NodeIDType, JSONPacket> m =
+                GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                         new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
                 try {
                     logger.log(Level.INFO,

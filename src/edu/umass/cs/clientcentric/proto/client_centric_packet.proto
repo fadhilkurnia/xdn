@@ -1,0 +1,35 @@
+// protoc --java_out=./src src/edu/umass/cs/clientcentric/proto/client_centric_packet.proto
+syntax = "proto3";
+
+package client_centric;
+
+option java_package = "edu.umass.cs.clientcentric.proto";
+option java_outer_classname = "ClientCentricPacketProto";
+
+// Protobuf definitions for client-centric replication packets.
+message VectorTimestamp {
+  repeated string node_id = 1;
+  repeated int64 counter = 2;
+}
+
+message ClientCentricWriteAfterPacket {
+  int64 packet_id = 1;
+  string sender_node_id = 2;
+  VectorTimestamp timestamp = 3;
+  bytes encoded_request = 4;
+}
+
+message ClientCentricSyncRequestPacket {
+  int64 packet_id = 1;
+  string sender_node_id = 2;
+  string service_name = 3;
+  int64 from_sequence_number = 4;
+}
+
+message ClientCentricSyncResponsePacket {
+  int64 packet_id = 1;
+  string sender_node_id = 2;
+  string service_name = 3;
+  int64 from_sequence_number = 4;
+  repeated bytes encoded_requests = 5;
+}

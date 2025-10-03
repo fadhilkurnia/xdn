@@ -1,62 +1,38 @@
 package edu.umass.cs.clientcentric.packets;
 
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
-import edu.umass.cs.gigapaxos.interfaces.Request;
-import edu.umass.cs.nio.JSONPacket;
-import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
-import org.json.JSONException;
-import org.json.JSONObject;
 
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.nio.ByteBuffer;
 
-// TODO: use Protobuf serialization format.
+public abstract class ClientCentricPacket implements ReplicableRequest {
 
-public abstract class ClientCentricPacket extends JSONPacket implements ReplicableRequest {
-
-    protected ClientCentricPacket(IntegerPacketType t) {
-        super(t);
+    protected ClientCentricPacket() {
     }
 
-    /**
-     * Returns null if the encodedPacket is incorrect.
-     */
-    public static Request createFromString(String encodedPacket,
-                                           AppRequestParser appRequestParser) {
-        JSONObject object;
-        Integer packetType;
-        try {
-            object = new JSONObject(encodedPacket);
-            packetType = JSONPacket.getPacketType(object);
-        } catch (JSONException e) {
+    public static ClientCentricPacketType getQuickPacketTypeFromEncodedPacket(byte[] encodedPacket) {
+        if (encodedPacket == null || encodedPacket.length < Integer.BYTES) {
             return null;
         }
+        int packetType = ByteBuffer.wrap(encodedPacket, 0, Integer.BYTES).getInt();
+        return ClientCentricPacketType.intToType.get(packetType);
+    }
 
-        if (packetType == null) {
-            Logger.getGlobal().log(Level.WARNING,
-                    "Ignoring ClientCentricPacket as the type is null");
-            return null;
-        }
+    public static ClientCentricPacket createFromBytes(byte[] encodedPacket,
+                                                      AppRequestParser appRequestParser) {
+        ClientCentricPacketType packetType =
+                ClientCentricPacket.getQuickPacketTypeFromEncodedPacket(encodedPacket);
+        assert packetType != null : "Invalid encoded ClientCentricPacket";
 
-        ClientCentricPacketType clientCentricPacketType =
-                ClientCentricPacketType.intToType.get(packetType);
-        assert clientCentricPacketType != null :
-                "Unknown corresponding ClientCentricPacketType with type=" + packetType;
-        switch (clientCentricPacketType) {
-            case CLIENT_CENTRIC_WRITE_AFTER_PACKET -> {
-                return ClientCentricWriteAfterPacket.fromJsonObject(object, appRequestParser);
-            }
-            case CLIENT_CENTRIC_SYNC_REQ_PACKET -> {
-                return ClientCentricSyncRequestPacket.fromJSONObject(object);
-            }
-            case CLIENT_CENTRIC_SYNC_RES_PACKET -> {
-                return ClientCentricSyncResponsePacket.fromJSONObject(object);
-            }
-        }
-
-        Logger.getGlobal().log(Level.SEVERE,
-                "Handling unknown ClientCentricPacketType " + clientCentricPacketType);
-        return null;
+        return switch (packetType) {
+            case CLIENT_CENTRIC_WRITE_AFTER_PACKET ->
+                    ClientCentricWriteAfterPacket.createFromBytes(encodedPacket, appRequestParser);
+            case CLIENT_CENTRIC_SYNC_REQ_PACKET ->
+                    ClientCentricSyncRequestPacket.createFromBytes(encodedPacket);
+            case CLIENT_CENTRIC_SYNC_RES_PACKET ->
+                    ClientCentricSyncResponsePacket.createFromBytes(encodedPacket);
+            default -> throw new RuntimeException(
+                    "Unimplemented deserializer for packet type " + packetType);
+        };
     }
 }
