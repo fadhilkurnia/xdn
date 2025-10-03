@@ -1,0 +1,22 @@
+// protoc --java_out=./src src/edu/umass/cs/eventual/proto/lazy_packet.proto
+syntax = "proto3";
+
+package lazy;
+
+option java_package = "edu.umass.cs.eventual.proto";
+option java_outer_classname = "LazyPacketProto";
+
+// Protobuf definition for packets used by the lazy replication subsystem.
+message LazyWriteAfterPacket {
+  // Unique identifier for the packet.
+  int64 packet_id = 1;
+
+  // Identifier for the sender replica.
+  string sender_node_id = 2;
+
+  // Name of the target service/group for the enclosed request.
+  string service_name = 3;
+
+  // Serialized client request payload.
+  bytes encoded_client_request = 4;
+}

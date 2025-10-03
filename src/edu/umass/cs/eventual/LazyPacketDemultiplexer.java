@@ -1,19 +1,13 @@
 package edu.umass.cs.eventual;
 
-import edu.umass.cs.clientcentric.packets.ClientCentricPacket;
-import edu.umass.cs.clientcentric.packets.ClientCentricPacketType;
 import edu.umass.cs.eventual.packets.LazyPacket;
 import edu.umass.cs.eventual.packets.LazyPacketType;
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
 import edu.umass.cs.nio.AbstractPacketDemultiplexer;
-import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 
 public class LazyPacketDemultiplexer extends AbstractPacketDemultiplexer<LazyPacket> {
 
@@ -34,35 +28,17 @@ public class LazyPacketDemultiplexer extends AbstractPacketDemultiplexer<LazyPac
 
     @Override
     protected LazyPacket processHeader(byte[] message, NIOHeader header) {
-        String rawMessage;
-
-        // convert bytes message into String
-        try {
-            rawMessage = new String(message, NIOHeader.CHARSET);
-        } catch (UnsupportedEncodingException e) {
+        LazyPacketType packetType = LazyPacket.getQuickPacketTypeFromEncodedPacket(message);
+        if (packetType == null) {
             return null;
         }
 
-        // find the packet type from the message
-        JSONObject object;
-        Integer packetType;
-        try {
-            object = new JSONObject(rawMessage);
-            packetType = JSONPacket.getPacketType(object);
-        } catch (JSONException e) {
-            return null;
-        }
-
-        if (!LazyPacketType.intToType.containsKey(packetType)) {
-            return null;
-        }
-
-        return LazyPacket.createFromString(rawMessage, this.appRequestParser);
+        return LazyPacket.createFromBytes(message, this.appRequestParser);
     }
 
     @Override
     protected boolean matchesType(Object message) {
-        return message instanceof LazyPacketType;
+        return message instanceof LazyPacket;
     }
 
     @Override
