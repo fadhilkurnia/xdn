@@ -31,3 +31,17 @@ message CausalWriteAckPacket {
   VectorTimestamp confirmed_graph_node_id = 4;
   repeated VectorTimestamp graph_leaf_node_ids = 5;
 }
+
+message CausalReadForwardPacket {
+  uint64 packet_id = 1;
+  string service_name = 2;
+  string sender_node_id = 3;
+  bytes encoded_read_request = 4;
+}
+
+message CausalReadAckPacket {
+  uint64 packet_id = 1;
+  string service_name = 2;
+  string sender_node_id = 3;
+  bytes encoded_read_request = 4;
+}
