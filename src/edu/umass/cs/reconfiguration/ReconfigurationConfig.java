@@ -451,7 +451,13 @@ public class ReconfigurationConfig {
          * Type of state-diff recorder used in the (@link XdnGigapaxosApp}
          * TODO: this should be specific to XDN, and not Gigapaxos config.
          */
-        XDN_PB_STATEDIFF_RECORDER_TYPE("RSYNC")
+        XDN_PB_STATEDIFF_RECORDER_TYPE("RSYNC"),
+
+        /**
+         * Enable reporting demand profile into the Reconfigurators (i.e. Control Plane)
+         * upon executing HTTP request in the HttpActiveReplica.
+         */
+        HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER(false)
 
         ;
 

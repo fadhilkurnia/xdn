@@ -92,6 +92,10 @@ public class HttpActiveReplica {
 
     public final static String XDN_HOST_DOMAIN = "xdnapp.com";
 
+    private static final boolean isDemandProfilerEnabled =
+            Config.getGlobalBoolean(
+                    ReconfigurationConfig.RC.HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER);
+
     private final Channel channel;
     private final String nodeId;
     private static final Logger logger = Logger.getLogger(HttpActiveReplica.class.getName());
@@ -782,11 +786,13 @@ public class HttpActiveReplica {
                         ctx, isKeepAlive, startProcessingTime);
 
                 // Asynchronously sends statistics to the control plane (i.e., RC).
-                InetAddress clientInetAddress = null;
-                if (ctx.channel().remoteAddress() instanceof InetSocketAddress isa) {
-                    clientInetAddress = isa.getAddress();
+                if (isDemandProfilerEnabled) {
+                    InetAddress clientInetAddress = null;
+                    if (ctx.channel().remoteAddress() instanceof InetSocketAddress isa) {
+                        clientInetAddress = isa.getAddress();
+                    }
+                    arFunctions.updateDemandStatsFromHttp(executedRequest, clientInetAddress);
                 }
-                arFunctions.updateDemandStatsFromHttp(executedRequest, clientInetAddress);
             }
         }
     }
