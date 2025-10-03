@@ -27,7 +27,10 @@ import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.MultithreadEventExecutorGroup;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -39,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -80,8 +84,6 @@ public class HttpActiveReplica {
 
     private static final Logger log = ReconfigurationConfig.getLogger();
 
-    private final static int NUM_BOSS_THREADS = 10;
-
     private final static int DEFAULT_HTTP_PORT = 8080;
 
     private final static String DEFAULT_HTTP_ADDR = "0.0.0.0";
@@ -89,9 +91,6 @@ public class HttpActiveReplica {
     private final static String HTTP_ADDR_ENV_KEY = "HTTPADDR";
 
     public final static String XDN_HOST_DOMAIN = "xdnapp.com";
-
-    private final EventLoopGroup bossGroup;
-    private final EventLoopGroup workerGroup;
 
     private final Channel channel;
     private final String nodeId;
@@ -127,18 +126,24 @@ public class HttpActiveReplica {
             sslCtx = null;
         }
 
-        /**
-         *  Configure the netty ServerBootstrap
-         */
-        bossGroup = new NioEventLoopGroup(NUM_BOSS_THREADS);
-        workerGroup = new NioEventLoopGroup();
+        // Initializing boss and worker event loops.
+        // The boss workers are accepting connections, which then will be passed to the child
+        // worker group (i.e., `workerGroup`).
+        EventLoopGroup bossGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup = new NioEventLoopGroup();
+
+        // Dedicated executor group for long-running application execution and coordination.
+        int threads = Math.max(2, Runtime.getRuntime().availableProcessors());
+        DefaultEventExecutorGroup executorGroup = new DefaultEventExecutorGroup(threads);
+
         try {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .handler(new LoggingHandler(LogLevel.INFO))
+                    .childOption(ChannelOption.SO_KEEPALIVE, true)
                     .childHandler(
-                            new HttpActiveReplicaInitializer(nodeId, arf, sslCtx)
+                            new HttpActiveReplicaInitializer(nodeId, arf, executorGroup, sslCtx)
                     );
 
             if (sockAddr == null) {
@@ -171,50 +176,53 @@ public class HttpActiveReplica {
 
     }
 
-    /**
-     * Close server and workers gracefully.
-     */
-    public void close() {
-        this.bossGroup.shutdownGracefully();
-        this.workerGroup.shutdownGracefully();
-    }
-
 
     private static class HttpActiveReplicaInitializer extends
             ChannelInitializer<SocketChannel> {
 
         private final String nodeId;
+        private final ActiveReplicaFunctions arFunctions;
+        private final MultithreadEventExecutorGroup executorGroup;
         private final SslContext sslCtx;
-        final ActiveReplicaFunctions arFunctions;
 
         HttpActiveReplicaInitializer(String nodeId,
                                      final ActiveReplicaFunctions arf,
+                                     final MultithreadEventExecutorGroup executorGroup,
                                      SslContext sslCtx) {
             this.nodeId = nodeId;
             this.arFunctions = arf;
+            this.executorGroup = executorGroup;
             this.sslCtx = sslCtx;
         }
 
         @Override
         protected void initChannel(SocketChannel channel) throws Exception {
-            CorsConfig corsConfig = CorsConfig.withAnyOrigin().build();
-
             ChannelPipeline p = channel.pipeline();
 
             if (sslCtx != null)
                 p.addLast(sslCtx.newHandler(channel.alloc()));
 
-            p.addLast(new HttpRequestDecoder());
+            // avoid stuck connections
+            p.addLast(new ReadTimeoutHandler(30));
 
-            // Uncomment if you don't want to handle HttpChunks.
-            p.addLast(new HttpObjectAggregator(1048576));
+            // (de)serialize bytes to http
+            p.addLast(new HttpServerCodec());
 
-            p.addLast(new HttpResponseEncoder());
+            // aggregate to FullHttpRequest
+            p.addLast(new HttpObjectAggregator(1 << 20));
 
+            // handle CORS
+            CorsConfig corsConfig = CorsConfig.withAnyOrigin().build();
             p.addLast(new CorsHandler(corsConfig));
 
-            p.addLast(new HttpActiveReplicaHandler(nodeId, arFunctions, channel.remoteAddress()));
-
+            // handle http request in separate executor group because execution
+            // and coordination can take a long time
+            p.addLast(executorGroup,
+                    new HttpActiveReplicaHandler(
+                            nodeId,
+                            arFunctions,
+                            executorGroup,
+                            channel.remoteAddress()));
         }
 
     }
@@ -308,12 +316,14 @@ public class HttpActiveReplica {
 
     }
 
+    // TODO: extend SimpleChannelInboundHandler<FullHttpRequest> instead.
     private static class HttpActiveReplicaHandler extends
             SimpleChannelInboundHandler<Object> {
 
         private static String nodeId = null;
-        ActiveReplicaFunctions arFunctions;
-        final InetSocketAddress senderAddr;
+        private final ActiveReplicaFunctions arFunctions;
+        private final ExecutorService offload;
+        private final InetSocketAddress senderAddr;
 
         private HttpRequest request;
         private HttpContent requestContent;
@@ -322,9 +332,13 @@ public class HttpActiveReplica {
          */
         private final StringBuilder buf = new StringBuilder();
 
-        HttpActiveReplicaHandler(String nodeId, ActiveReplicaFunctions arFunctions, InetSocketAddress addr) {
+        HttpActiveReplicaHandler(String nodeId,
+                                 ActiveReplicaFunctions arFunctions,
+                                 ExecutorService offload,
+                                 InetSocketAddress addr) {
             HttpActiveReplicaHandler.nodeId = nodeId;
             this.arFunctions = arFunctions;
+            this.offload = offload;
             this.senderAddr = addr;
         }
 
@@ -334,7 +348,8 @@ public class HttpActiveReplica {
         }
 
         @Override
-        protected void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        protected void channelRead0(ChannelHandlerContext ctx, Object msg)
+                throws Exception {
 
             // redirect handling to xdn, if either of these two conditions are met:
             // (1) the HttpRequest contains non-empty XDN header, or
@@ -365,132 +380,135 @@ public class HttpActiveReplica {
                 }
             }
 
+            // The code below are for older Gigapaxos client. We keep it for backward compatibility,
+            // but we are planning to deprecate that soon.
+            // TODO: deprecate this.
+            {
+                /**
+                 * Request for GigaPaxos to coordinate
+                 */
+                HttpActiveReplicaRequest gRequest = null;
+                /**
+                 * JSONObject to extract keys and values from http request
+                 */
+                JSONObject json = new JSONObject();
 
-            /**
-             * Request for GigaPaxos to coordinate
-             */
-            HttpActiveReplicaRequest gRequest = null;
-            /**
-             * JSONObject to extract keys and values from http request
-             */
-            JSONObject json = new JSONObject();
+                /**
+                 * This boolean is used to indicate whether the request has been retrieved.
+                 * If request info is retrieved from HttpRequest, then don't bother to retrieve it from
+                 * HttpContent. Otherwise, retrieve the info from HttpContent.
+                 * If we still can't retrieve the info, then the request is a Malformed request.
+                 */
+                boolean retrieved = false;
 
-            /**
-             * This boolean is used to indicate whether the request has been retrieved.
-             * If request info is retrieved from HttpRequest, then don't bother to retrieve it from
-             * HttpContent. Otherwise, retrieve the info from HttpContent.
-             * If we still can't retrieve the info, then the request is a Malformed request.
-             */
-            boolean retrieved = false;
+                if (msg instanceof HttpRequest) {
+                    HttpRequest httpRequest = this.request = (HttpRequest) msg;
+                    buf.setLength(0);
 
-            if (msg instanceof HttpRequest) {
-                HttpRequest httpRequest = this.request = (HttpRequest) msg;
-                buf.setLength(0);
+                    if (HttpUtil.is100ContinueExpected(httpRequest)) {
+                        send100Continue(ctx);
+                    }
 
-                if (HttpUtil.is100ContinueExpected(httpRequest)) {
-                    send100Continue(ctx);
-                }
+                    log.log(Level.FINE, "Http server received a request with HttpRequest: {0}", new Object[]{httpRequest});
 
-                log.log(Level.FINE, "Http server received a request with HttpRequest: {0}", new Object[]{httpRequest});
-
-                // converting url query parameters into JSON key value pair
-                Map<String, List<String>> params = (new QueryStringDecoder(httpRequest.uri())).parameters();
-                if (!params.isEmpty()) {
-                    for (Entry<String, List<String>> p : params.entrySet()) {
-                        String key = p.getKey();
-                        List<String> vals = p.getValue();
-                        for (String val : vals) {
-                            // put the key-value pair into json
-                            json.put(key.toUpperCase(), val);
+                    // converting url query parameters into JSON key value pair
+                    Map<String, List<String>> params = (new QueryStringDecoder(httpRequest.uri())).parameters();
+                    if (!params.isEmpty()) {
+                        for (Entry<String, List<String>> p : params.entrySet()) {
+                            String key = p.getKey();
+                            List<String> vals = p.getValue();
+                            for (String val : vals) {
+                                // put the key-value pair into json
+                                json.put(key.toUpperCase(), val);
+                            }
                         }
                     }
+
+                    if (json != null && json.length() > 0)
+                        try {
+                            gRequest = getRequestFromJSONObject(json);
+                            log.log(Level.INFO, "Http server retrieved an HttpActiveReplicaRequest from HttpRequest: {0}", new Object[]{gRequest});
+                            retrieved = true;
+                        } catch (Exception e) {
+                            // ignore and do nothing if this is a malformed request
+                            e.printStackTrace();
+                        }
                 }
 
-                if (json != null && json.length() > 0)
-                    try {
-                        gRequest = getRequestFromJSONObject(json);
-                        log.log(Level.INFO, "Http server retrieved an HttpActiveReplicaRequest from HttpRequest: {0}", new Object[]{gRequest});
-                        retrieved = true;
-                    } catch (Exception e) {
-                        // ignore and do nothing if this is a malformed request
-                        e.printStackTrace();
-                    }
-            }
+                if (msg instanceof HttpContent) {
+                    if (!retrieved) {
+                        HttpContent httpContent = (HttpContent) msg;
+                        log.log(Level.INFO, "Http server received a request with HttpContent: {0}", new Object[]{httpContent});
+                        if (httpContent != null) {
+                            json = getJSONObjectFromHttpContent(httpContent);
+                            if (json != null && json.length() > 0)
+                                try {
+                                    gRequest = getRequestFromJSONObject(json);
+                                    retrieved = true;
+                                } catch (Exception e) {
+                                    // TODO: A malformed request, we can send back the response here
+                                    e.printStackTrace();
+                                }
+                        }
 
-            if (msg instanceof HttpContent) {
-                if (!retrieved) {
-                    HttpContent httpContent = (HttpContent) msg;
-                    log.log(Level.INFO, "Http server received a request with HttpContent: {0}", new Object[]{httpContent});
-                    if (httpContent != null) {
-                        json = getJSONObjectFromHttpContent(httpContent);
-                        if (json != null && json.length() > 0)
-                            try {
-                                gRequest = getRequestFromJSONObject(json);
-                                retrieved = true;
-                            } catch (Exception e) {
-                                // TODO: A malformed request, we can send back the response here
-                                e.printStackTrace();
-                            }
                     }
 
-                }
+                    if (msg instanceof LastHttpContent) {
+                        if (retrieved) {
+                            log.log(Level.INFO, "About to execute request: {0}", new Object[]{gRequest});
+                            Object lock = new Object();
+                            finished = false;
+                            ExecutedCallback callback = new HttpExecutedCallback(buf, lock);
 
-                if (msg instanceof LastHttpContent) {
-                    if (retrieved) {
-                        log.log(Level.INFO, "About to execute request: {0}", new Object[]{gRequest});
-                        Object lock = new Object();
-                        finished = false;
-                        ExecutedCallback callback = new HttpExecutedCallback(buf, lock);
+                            // execute GigaPaxos request here
+                            if (arFunctions != null) {
+                                log.log(Level.FINE, "App {0} executes request: {1}", new Object[]{arFunctions, request});
+                                boolean handled = arFunctions.handRequestToAppForHttp(
+                                        (gRequest.needsCoordination()) ? ReplicableClientRequest.wrap(gRequest) : gRequest,
+                                        callback);
 
-                        // execute GigaPaxos request here
-                        if (arFunctions != null) {
-                            log.log(Level.FINE, "App {0} executes request: {1}", new Object[]{arFunctions, request});
-                            boolean handled = arFunctions.handRequestToAppForHttp(
-                                    (gRequest.needsCoordination()) ? ReplicableClientRequest.wrap(gRequest) : gRequest,
-                                    callback);
+                                synchronized (lock) {
+                                    while (!finished) {
+                                        try {
+                                            lock.wait(100);
+                                        } catch (InterruptedException e) {
 
-                            synchronized (lock) {
-                                while (!finished) {
-                                    try {
-                                        lock.wait(100);
-                                    } catch (InterruptedException e) {
-
+                                        }
                                     }
                                 }
+
+                                /**
+                                 *  If the request has been handled properly, then send demand profile to RC.
+                                 *  This logic follows the design of (@link ActiveReplica}.
+                                 */
+                                if (handled)
+                                    arFunctions.updateDemandStatsFromHttp(gRequest, senderAddr.getAddress());
                             }
 
-                            /**
-                             *  If the request has been handled properly, then send demand profile to RC.
-                             *  This logic follows the design of (@link ActiveReplica}.
-                             */
-                            if (handled)
-                                arFunctions.updateDemandStatsFromHttp(gRequest, senderAddr.getAddress());
                         }
 
-                    }
-
-                    LastHttpContent trailer = (LastHttpContent) msg;
-                    if (!trailer.trailingHeaders().isEmpty()) {
-                        buf.append("\r\n");
-                        for (CharSequence name : trailer.trailingHeaders()
-                                .names()) {
-                            for (CharSequence value : trailer.trailingHeaders()
-                                    .getAll(name)) {
-                                buf.append("TRAILING HEADER: ");
-                                buf.append(name).append(" = ").append(value)
-                                        .append("\r\n");
+                        LastHttpContent trailer = (LastHttpContent) msg;
+                        if (!trailer.trailingHeaders().isEmpty()) {
+                            buf.append("\r\n");
+                            for (CharSequence name : trailer.trailingHeaders()
+                                    .names()) {
+                                for (CharSequence value : trailer.trailingHeaders()
+                                        .getAll(name)) {
+                                    buf.append("TRAILING HEADER: ");
+                                    buf.append(name).append(" = ").append(value)
+                                            .append("\r\n");
+                                }
                             }
+                            buf.append("\r\n");
                         }
-                        buf.append("\r\n");
+                        if (!writeResponse(trailer, ctx)) {
+                            // If keep-alive is off, close the connection once the content is fully written.
+                            ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
+                        }
                     }
-                    if (!writeResponse(trailer, ctx)) {
-                        // If keep-alive is off, close the connection once the content is fully written.
-                        ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
-                    }
+
                 }
-
             }
-
         }
 
         private void handleReceivedXdnRequest(ChannelHandlerContext ctx, Object msg) {
@@ -522,7 +540,10 @@ public class HttpActiveReplica {
                     return;
                 }
 
-                // FIXME: need to cleanly handle coordinator request
+                // FIXME: need to cleanly handle coordinator request. The two coordination requests
+                //  handled here are:
+                //   1. Request to set this node as the primary in PrimaryBackup.
+                //   2. Request to get the protocol role (e.g., primary/backup).
                 if (this.request.headers().get("coordinator-request") != null &&
                         this.request.headers().get("node-id") != null) {
                     String nodeID = this.request.headers().get("node-id");
@@ -553,7 +574,7 @@ public class HttpActiveReplica {
                 // and our callback will not be called, leaving the client hanging
                 // waiting for response.
                 ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(httpRequest);
-                InetSocketAddress clientInetSocketAddress = null;
+                InetSocketAddress clientInetSocketAddress;
                 assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
                         "Expecting Internet socket address from client";
                 clientInetSocketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
@@ -561,6 +582,9 @@ public class HttpActiveReplica {
 
                 // forward http request to XDN App, which eventually will forward it to the service.
                 // Note that response later will be written inside the callback, via ctx.
+                // TODO: the method calling below is a hotspot, we need to use another worker
+                //  `offload` to handle the request execution and coordination. With that, we
+                //  can free up the existing Netty's I/O Channel.ß
                 arFunctions.handRequestToAppForHttp(gpRequest, callback);
             }
         }
