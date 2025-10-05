@@ -21,6 +21,7 @@ import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import io.netty.handler.codec.http.cors.CorsConfig;
+import io.netty.handler.codec.http.cors.CorsConfigBuilder;
 import io.netty.handler.codec.http.cors.CorsHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
@@ -40,7 +41,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -94,28 +98,16 @@ public class HttpActiveReplica {
             Config.getGlobalBoolean(
                     ReconfigurationConfig.RC.HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER);
 
-    private final Channel channel;
-    private final String nodeId;
-
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
 
-    /**
-     * @param arf
-     * @param sockAddr
-     * @param ssl
-     * @throws CertificateException
-     * @throws SSLException
-     * @throws InterruptedException
-     */
     public HttpActiveReplica(String nodeId,
                              ActiveReplicaFunctions arf,
                              InetSocketAddress sockAddr,
                              boolean ssl)
             throws CertificateException, SSLException, InterruptedException {
 
-        this.nodeId = nodeId;
-        assert this.nodeId != null : "Node ID cannot be null";
+        assert nodeId != null : "Node ID cannot be null";
 
         // Configure SSL.
         final SslContext sslCtx;
@@ -134,7 +126,7 @@ public class HttpActiveReplica {
         EventLoopGroup workerGroup = new NioEventLoopGroup();
 
         // Dedicated executor group for long-running application execution and coordination.
-        int threads = Math.max(2, Runtime.getRuntime().availableProcessors());
+        int threads = Math.max(4, Runtime.getRuntime().availableProcessors());
         DefaultEventExecutorGroup executorGroup = new DefaultEventExecutorGroup(threads);
 
         try {
@@ -164,7 +156,7 @@ public class HttpActiveReplica {
             if (Config.getGlobalBoolean(ReconfigurationConfig.RC.ENABLE_ACTIVE_REPLICA_HTTP_PORT_80)) {
                 sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
             }
-            channel = b.bind(sockAddr).sync().channel();
+            Channel channel = b.bind(sockAddr).sync().channel();
 
             logger.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
 
@@ -212,7 +204,7 @@ public class HttpActiveReplica {
             p.addLast(new HttpObjectAggregator(1 << 20));
 
             // handle CORS
-            CorsConfig corsConfig = CorsConfig.withAnyOrigin().build();
+            CorsConfig corsConfig = CorsConfigBuilder.forAnyOrigin().build();
             p.addLast(new CorsHandler(corsConfig));
 
             // handle http request in separate executor group because execution
@@ -252,13 +244,8 @@ public class HttpActiveReplica {
      * {@link HttpActiveReplicaRequest.Keys} NAME, QVAL
      * <p>
      * The other fields can be filled in with default values.
-     *
-     * @param json
-     * @return
-     * @throws HTTPException
-     * @throws JSONException
      */
-    private static HttpActiveReplicaRequest getRequestFromJSONObject(JSONObject json) throws HTTPException, JSONException {
+    private static HttpActiveReplicaRequest getRequestFromJSONObject(JSONObject json) throws JSONException {
         if (!json.has(HttpActiveReplicaRequest.Keys.NAME.toString())) {
             throw new JSONException("missing key NAME");
         }
@@ -270,9 +257,8 @@ public class HttpActiveReplica {
         String qval = json.getString(HttpActiveReplicaRequest.Keys.QVAL.toString());
 
         // needsCoordination: default true
-        boolean coord = json.has(HttpActiveReplicaRequest.Keys.COORD.toString()) ?
-                json.getBoolean(HttpActiveReplicaRequest.Keys.COORD.toString())
-                : true;
+        boolean coord = !json.has(HttpActiveReplicaRequest.Keys.COORD.toString()) ||
+                json.getBoolean(HttpActiveReplicaRequest.Keys.COORD.toString());
 
         int qid = (json.has(HttpActiveReplicaRequest.Keys.QID.toString()) ?
                 json.getInt(HttpActiveReplicaRequest.Keys.QID.toString())
@@ -282,9 +268,8 @@ public class HttpActiveReplica {
                 json.getInt(HttpActiveReplicaRequest.Keys.EPOCH.toString())
                 : 0;
 
-        boolean stop = (json.has(HttpActiveReplicaRequest.Keys.STOP.toString())) ?
-                json.getBoolean(HttpActiveReplicaRequest.Keys.STOP.toString())
-                : false;
+        boolean stop = json.has(HttpActiveReplicaRequest.Keys.STOP.toString()) &&
+                json.getBoolean(HttpActiveReplicaRequest.Keys.STOP.toString());
 
 
         return new HttpActiveReplicaRequest(HttpActiveReplicaPacketType.EXECUTE,
@@ -294,7 +279,7 @@ public class HttpActiveReplica {
     private static class HttpExecutedCallback implements ExecutedCallback {
 
         StringBuilder buf;
-        Object lock;
+        final Object lock;
         // boolean finished;
 
         HttpExecutedCallback(StringBuilder buf, Object lock) {
@@ -512,7 +497,6 @@ public class HttpActiveReplica {
         }
 
         private void handleReceivedXdnRequest(ChannelHandlerContext ctx, Object msg) {
-            long startXdnRequestProcTime = System.nanoTime();
 
             if (msg instanceof HttpRequest) {
                 this.request = (HttpRequest) msg;
@@ -521,8 +505,12 @@ public class HttpActiveReplica {
                 }
             }
 
-            if (msg instanceof HttpContent) {
-                this.requestContent = (HttpContent) msg;
+            ByteBuf bodyRefCopy;
+            if (msg instanceof HttpContent content) {
+                bodyRefCopy = content.content().copy();
+                this.requestContent = new DefaultLastHttpContent(bodyRefCopy);
+            } else {
+                bodyRefCopy = null;
             }
 
             if (msg instanceof LastHttpContent) {
@@ -532,11 +520,11 @@ public class HttpActiveReplica {
                 // return http bad request if service name is not specified
                 String serviceName = XdnHttpRequest.inferServiceName(this.request);
                 if (serviceName == null || serviceName.isEmpty()) {
-                    sendBadRequestResponse(
+                    HttpActiveReplicaHandler.sendBadRequestResponse(
                             "Unspecified service name." +
                                     "This can be cause because of a wrong Host or empty XDN header",
                             ctx,
-                            isKeepAlive);
+                            false);
                     return;
                 }
 
@@ -559,34 +547,102 @@ public class HttpActiveReplica {
                 }
 
                 // instrumenting the request for latency measurement
-                this.request.headers().set("X-S-EXC-TS-" + nodeId, System.nanoTime());
-
+                long startExecTimeNs = System.nanoTime();
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
 
-                // prepare the callback for this http request
-                XdnHttpExecutedCallback callback =
-                        new XdnHttpExecutedCallback(
-                                httpRequest, ctx, arFunctions, startXdnRequestProcTime);
-
-                // create Gigapaxos' request, it is important to explicitly set the clientAddress,
-                // otherwise, down the pipeline, the RequestPacket's equals method will return false
-                // and our callback will not be called, leaving the client hanging
-                // waiting for response.
-                ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(httpRequest);
+                // get the client's inet address
                 InetSocketAddress clientInetSocketAddress;
                 assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
                         "Expecting Internet socket address from client";
                 clientInetSocketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-                gpRequest.setClientAddress(clientInetSocketAddress);
 
-                // forward http request to XDN App, which eventually will forward it to the service.
-                // Note that response later will be written inside the callback, via ctx.
-                // TODO: the method calling below is a hotspot, we need to use another worker
-                //  `offload` to handle the request execution and coordination. With that, we
-                //  can free up the existing Netty's I/O Channel.ß
-                arFunctions.handRequestToAppForHttp(gpRequest, callback);
+                // Submit long-running request coordination and execution off the event loop
+                Future<HttpResponse> execFuture = offload.submit(() ->
+                        executeXdnHttpRequest(httpRequest, clientInetSocketAddress));
+
+                // If channel closes before completion, cancel the task
+                ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
+
+                // When done, switch back to the channel's EventLoop to write the response
+                CompletableFuture.supplyAsync(() -> {
+                            try {
+                                return execFuture.get();
+                            } catch (InterruptedException | ExecutionException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }, offload)
+                        .whenComplete((httpResponse, err) -> {
+                            // release buffer of http request's content
+                            bodyRefCopy.release();
+
+                            // do nothing when the channel is inactive
+                            if (!ctx.channel().isActive()) return;
+
+                            // finally, handle the error or send the response
+                            ctx.executor().execute(() -> {
+                                // Error handling, send string message
+                                if (err != null) {
+                                    System.out.println("Writing error response: " + err.getMessage());
+                                    err.printStackTrace();
+                                    HttpActiveReplicaHandler.sendStringResponse(
+                                            err.getMessage(), ctx, false);
+                                    return;
+                                }
+
+                                // Success handling
+                                long totalExecDuration = System.nanoTime() - startExecTimeNs;
+                                HttpActiveReplicaHandler.writeHttpResponse(
+                                        httpRequest.getRequestID(),
+                                        httpResponse,
+                                        ctx,
+                                        isKeepAlive,
+                                        totalExecDuration);
+
+                            });
+                        });
             }
+        }
+
+        // executeXdnHttpRequest synchronously executes the provided httpRequest.
+        private HttpResponse executeXdnHttpRequest(XdnHttpRequest httpRequest,
+                                                   InetSocketAddress clientInetSocketAddress) {
+            // Create Gigapaxos' request, it is important to explicitly set the clientAddress,
+            // otherwise, down the pipeline, the RequestPacket's equals method will return false
+            // and our callback will not be called, leaving the client hanging
+            // waiting for response.
+            ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(httpRequest);
+            gpRequest.setClientAddress(clientInetSocketAddress);
+
+            // Convert callback-based execution into future so that we can execute it synchronously.
+            CompletableFuture<Request> future = new CompletableFuture<>();
+            this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
+                if (handled) {
+                    future.complete(request);
+                } else {
+                    future.completeExceptionally(new Throwable("Request is failed to be handled"));
+                }
+            });
+
+            // Wait until the future complete,
+            // i.e., the httpRequest is already coordinated and executed.
+            Request executedRequest;
+            try {
+                executedRequest = future.get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+
+            // Validate the executed Http request
+            if (!(executedRequest instanceof XdnHttpRequest xdnRequest)) {
+                String exceptionMessage = "Unexpected executed request (" +
+                        executedRequest.getClass().getSimpleName() +
+                        "), it must be a " + XdnHttpRequest.class.getSimpleName();
+                throw new RuntimeException(exceptionMessage);
+            }
+
+            // Get the response
+            return xdnRequest.getHttpResponse();
         }
 
         // TODO: cleanly handle this
@@ -600,6 +656,22 @@ public class HttpActiveReplica {
                 }
                 sendStringResponse(responseString, context, false);
             });
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
+            cause.printStackTrace();
+            if (ctx.channel().isActive()) {
+                byte[] bytes = ("error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                FullHttpResponse resp = new DefaultFullHttpResponse(
+                        HTTP_1_1, INTERNAL_SERVER_ERROR, Unpooled.wrappedBuffer(bytes));
+                resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+                resp.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bytes.length);
+                ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
+            } else {
+                ctx.close();
+            }
         }
 
         private static void sendBadRequestResponse(String message, ChannelHandlerContext ctx, boolean isKeepAlive) {
@@ -793,12 +865,6 @@ public class HttpActiveReplica {
         }
     }
 
-    /**
-     * @param args
-     * @throws CertificateException
-     * @throws SSLException
-     * @throws InterruptedException
-     */
     public static void main(String[] args) throws CertificateException, SSLException, InterruptedException {
         new HttpActiveReplica("node1", null, new InetSocketAddress(8080), false);
     }

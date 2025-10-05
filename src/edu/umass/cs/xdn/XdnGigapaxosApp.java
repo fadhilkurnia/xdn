@@ -45,8 +45,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -82,7 +82,8 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private final HashMap<String, SocketChannel> fsSocketConnection;
     private final HashMap<String, Boolean> isServiceActive;
-    private final HttpClient serviceClient = HttpClient.newHttpClient();
+    private final BlockingQueue<HttpClient> serviceClientPool;
+    private final int serviceClientPoolSize;
     private static final HttpResponse.BodyHandler<byte[]> BYTE_ARRAY_BODY_HANDLER =
             HttpResponse.BodyHandlers.ofByteArray();
 
@@ -104,6 +105,12 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         this.services = new ConcurrentHashMap<>();
         this.fsSocketConnection = new HashMap<>();
         this.isServiceActive = new HashMap<>();
+
+        this.serviceClientPoolSize = Math.max(4, Runtime.getRuntime().availableProcessors());
+        this.serviceClientPool = new ArrayBlockingQueue<>(serviceClientPoolSize);
+        for (int i = 0; i < serviceClientPoolSize; i++) {
+            this.serviceClientPool.add(HttpClient.newHttpClient());
+        }
 
         // Validate and initialize the stateDiff recorder for Primary Backup.
         // We need to check the Operating System as currently FUSE (i.e., Fuselog)
@@ -1496,41 +1503,49 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         HttpRequest javaNetHttpRequest = xdnRequest.getJavaNetHttpRequest(true, targetPort);
         long endRequestCreationTime = System.nanoTime();
 
-        final long[] pipelineTimes = new long[3];
-        final Throwable[] pipelineError = new Throwable[1];
+        long endRequestResponseTime = endRequestCreationTime;
+        long endConversionTime = endRequestCreationTime;
+        long endResponseStoreTime = endRequestCreationTime;
+        Throwable forwardingError = null;
 
-        CompletableFuture<Void> forwardingPipeline = this.serviceClient
-                .sendAsync(javaNetHttpRequest, BYTE_ARRAY_BODY_HANDLER)
-                .handle((response, throwable) -> {
-                    pipelineTimes[0] = System.nanoTime();
+        HttpClient httpClient = null;
+        try {
+            httpClient = acquireHttpClient();
+            HttpResponse<byte[]> response =
+                    httpClient.send(javaNetHttpRequest, BYTE_ARRAY_BODY_HANDLER);
+            endRequestResponseTime = System.nanoTime();
 
-                    if (throwable != null) {
-                        Throwable cause = throwable instanceof CompletionException
-                                ? throwable.getCause() : throwable;
-                        pipelineError[0] = cause;
-                        Exception exception = (cause instanceof Exception)
-                                ? (Exception) cause
-                                : new RuntimeException(cause);
-                        xdnRequest.setHttpResponse(createNettyHttpErrorResponse(exception));
-                        pipelineTimes[1] = pipelineTimes[0];
-                        pipelineTimes[2] = System.nanoTime();
-                        return null;
-                    }
+            io.netty.handler.codec.http.HttpResponse nettyHttpResponse =
+                    createNettyHttpResponse(response);
+            endConversionTime = System.nanoTime();
+            nettyHttpResponse.headers().set("X-E-EXC-TS-" + myNodeId, System.nanoTime());
+            xdnRequest.setHttpResponse(nettyHttpResponse);
+            endResponseStoreTime = System.nanoTime();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            forwardingError = e;
+        } catch (Exception e) {
+            forwardingError = e;
+        } finally {
+            releaseHttpClient(httpClient);
+        }
 
-                    io.netty.handler.codec.http.HttpResponse nettyHttpResponse =
-                            createNettyHttpResponse(response);
-                    pipelineTimes[1] = System.nanoTime();
-                    nettyHttpResponse.headers().set("X-E-EXC-TS-" + myNodeId, System.nanoTime());
-                    xdnRequest.setHttpResponse(nettyHttpResponse);
-                    pipelineTimes[2] = System.nanoTime();
-                    return null;
-                });
-
-        forwardingPipeline.join();
-
-        long endRequestResponseTime = pipelineTimes[0] == 0 ? endRequestCreationTime : pipelineTimes[0];
-        long endConversionTime = pipelineTimes[1] == 0 ? endRequestResponseTime : pipelineTimes[1];
-        long endResponseStoreTime = pipelineTimes[2] == 0 ? endConversionTime : pipelineTimes[2];
+        if (forwardingError != null) {
+            xdnRequest.setHttpResponse(createNettyHttpErrorResponse(forwardingError instanceof Exception
+                    ? (Exception) forwardingError
+                    : new RuntimeException(forwardingError)));
+            if (endRequestResponseTime == endRequestCreationTime) {
+                endRequestResponseTime = System.nanoTime();
+            }
+            if (!(forwardingError instanceof InterruptedException)) {
+                logger.log(Level.WARNING,
+                        String.format("%s:%s - failed to proxy HTTP request", this.myNodeId,
+                                this.getClass().getSimpleName()), forwardingError);
+            }
+            endConversionTime = endConversionTime == endRequestCreationTime
+                    ? System.nanoTime() : endConversionTime;
+            endResponseStoreTime = System.nanoTime();
+        }
 
         logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms, val={3}ms crt={4}ms " +
                         "exc={5}ms conv={6}ms sto={7}ms)",
@@ -1541,47 +1556,19 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                         (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0,
                         (endConversionTime - endRequestResponseTime) / 1_000_000.0,
                         (endResponseStoreTime - endConversionTime) / 1_000_000.0});
-
-        if (pipelineError[0] instanceof InterruptedException) {
-            Thread.currentThread().interrupt();
-        }
-        if (pipelineError[0] != null && !(pipelineError[0] instanceof InterruptedException)) {
-            logger.log(Level.WARNING,
-                    String.format("%s:%s - failed to proxy HTTP request", this.myNodeId,
-                            this.getClass().getSimpleName()), pipelineError[0]);
-        }
     }
 
-    private boolean forwardHttpRequestToContainerizedService(XdnJsonHttpRequest xdnRequest) {
-        String serviceName = xdnRequest.getServiceName();
-        if (isServiceActive.get(serviceName) != null && !isServiceActive.get(serviceName)) {
-            activate(serviceName);
-            isServiceActive.put(serviceName, true);
+    private HttpClient acquireHttpClient() {
+        HttpClient client = serviceClientPool.poll();
+        return client != null ? client : HttpClient.newHttpClient();
+    }
+
+    private void releaseHttpClient(HttpClient client) {
+        if (client == null) {
+            return;
         }
-
-        try {
-            // create http request
-            HttpRequest httpRequest = convertXDNRequestToHttpRequest(xdnRequest);
-            if (httpRequest == null) {
-                return false;
-            }
-
-            // forward request to the containerized service, and get the http response
-            HttpResponse<byte[]> response = serviceClient.send(httpRequest,
-                    HttpResponse.BodyHandlers.ofByteArray());
-
-            // convert the response into netty's http response
-            io.netty.handler.codec.http.HttpResponse nettyHttpResponse =
-                    createNettyHttpResponse(response);
-
-            // store the response in the xdn request, later to be returned to the end client.
-            // System.out.println(">> " + nodeID + " storing response " + nettyHttpResponse);
-            xdnRequest.setHttpResponse(nettyHttpResponse);
-            return true;
-        } catch (Exception e) {
-            xdnRequest.setHttpResponse(createNettyHttpErrorResponse(e));
-            e.printStackTrace();
-            return true;
+        if (!serviceClientPool.offer(client)) {
+            // pool is full; discard the extra client instance
         }
     }
 
