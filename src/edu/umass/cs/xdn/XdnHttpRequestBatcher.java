@@ -114,8 +114,6 @@ public final class XdnHttpRequestBatcher implements Closeable {
     // BatchingWorker consumes multiple requests from batchingQueue, creates batch entry, and
     // passes the batch of request into ActiveReplica via dispatchBatch.
     private void startBatchingWorker() {
-        // TODO: For safety reason, only batch the Behavioral ReadOnly request, that is only
-        //  GET request. For other kind of requests, batch them into a single-request batch.
         batchingExecutor.execute(() -> {
             List<BatchEntry> buffer = new ArrayList<>(maxBatchSize);
             try {
@@ -125,10 +123,22 @@ public final class XdnHttpRequestBatcher implements Closeable {
                         continue;
                     }
 
+                    // Keep write or unknown requests isolated to avoid unsafe batching.
+                    if (isNotBehavioralReadOnly(first)) {
+                        dispatchBatch(Collections.singletonList(first));
+                        continue;
+                    }
+
                     buffer.add(first);
                     while (buffer.size() < maxBatchSize) {
                         BatchEntry next = batchingQueue.poll();
                         if (next == null) {
+                            break;
+                        }
+                        if (isNotBehavioralReadOnly(next)) {
+                            dispatchBatch(new ArrayList<>(buffer));
+                            buffer.clear();
+                            dispatchBatch(Collections.singletonList(next));
                             break;
                         }
                         buffer.add(next);
@@ -159,6 +169,10 @@ public final class XdnHttpRequestBatcher implements Closeable {
                 }
             }
         });
+    }
+
+    private static boolean isNotBehavioralReadOnly(BatchEntry entry) {
+        return !entry.request.isReadOnlyRequest();
     }
 
     private void startCompletionWorker() {

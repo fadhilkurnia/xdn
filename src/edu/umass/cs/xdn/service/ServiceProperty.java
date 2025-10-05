@@ -264,7 +264,7 @@ public class ServiceProperty {
         return allBehaviors;
     }
 
-    private static List<RequestMatcher> createDefaultMatchers() {
+    public static List<RequestMatcher> createDefaultMatchers() {
         List<RequestMatcher> defaultMatchers = new ArrayList<>();
         defaultMatchers.add(
                 new RequestMatcher(

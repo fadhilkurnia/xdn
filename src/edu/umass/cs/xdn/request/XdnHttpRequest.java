@@ -12,6 +12,7 @@ import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.proto.XdnHttpRequestProto;
 import edu.umass.cs.xdn.service.RequestMatcher;
+import edu.umass.cs.xdn.service.ServiceProperty;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
@@ -55,6 +56,12 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     private List<RequestMatcher> requestMatchers;
 
     public XdnHttpRequest(HttpRequest request, HttpContent content) {
+        this(request, content, null);
+    }
+
+    private XdnHttpRequest(HttpRequest request,
+                           HttpContent content,
+                           List<RequestMatcher> requestMatchers) {
         assert request != null : "HttpRequest must be specified";
         assert content != null : "HttpContent must be specified";
 
@@ -75,6 +82,10 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         this.httpMethodName = this.httpRequest.method().name();
         this.cachedHeaderArray = flattenHeaders(this.httpRequest.headers());
         this.cachedRequestBody = toByteArray(content.content());
+
+        // Use the default request matcher if not specified
+        this.requestMatchers = Objects.requireNonNullElseGet(
+                requestMatchers, ServiceProperty::createDefaultMatchers);
     }
 
     private static String[] flattenHeaders(HttpHeaders headers) {
