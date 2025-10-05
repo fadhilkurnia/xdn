@@ -293,6 +293,10 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         return this.httpRequest;
     }
 
+    public HttpContent getHttpRequestContent() {
+        return httpRequestContent;
+    }
+
     public HttpResponse getHttpResponse() {
         return this.httpResponse;
     }

@@ -21,6 +21,7 @@ import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
 import edu.umass.cs.xdn.utils.Shell;
 import edu.umass.cs.xdn.utils.Utils;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import org.json.JSONException;
@@ -30,12 +31,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.net.Socket;
-import java.net.StandardProtocolFamily;
 import java.net.URI;
+import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SocketChannel;
@@ -45,10 +43,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -82,11 +81,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private final HashMap<String, SocketChannel> fsSocketConnection;
     private final HashMap<String, Boolean> isServiceActive;
-    private final BlockingQueue<HttpClient> serviceClientPool;
-    private final int serviceClientPoolSize;
-    private static final HttpResponse.BodyHandler<byte[]> BYTE_ARRAY_BODY_HANDLER =
-            HttpResponse.BodyHandlers.ofByteArray();
-
+    private final HttpClient httpClient;
     private final String stateDiffRecorderTypeString =
             Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_STATEDIFF_RECORDER_TYPE);
     private RecorderType recorderType;
@@ -105,12 +100,10 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         this.services = new ConcurrentHashMap<>();
         this.fsSocketConnection = new HashMap<>();
         this.isServiceActive = new HashMap<>();
-
-        this.serviceClientPoolSize = Math.max(4, Runtime.getRuntime().availableProcessors());
-        this.serviceClientPool = new ArrayBlockingQueue<>(serviceClientPoolSize);
-        for (int i = 0; i < serviceClientPoolSize; i++) {
-            this.serviceClientPool.add(HttpClient.newHttpClient());
-        }
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .version(HttpClient.Version.HTTP_1_1)
+                .build();
 
         // Validate and initialize the stateDiff recorder for Primary Backup.
         // We need to check the Operating System as currently FUSE (i.e., Fuselog)
@@ -154,6 +147,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         // Set app request type
         this.packetTypes = new HashSet<>();
         this.packetTypes.add(XdnRequestType.XDN_SERVICE_HTTP_REQUEST);
+        this.packetTypes.add(XdnRequestType.XDN_HTTP_REQUEST_BATCH);
         this.packetTypes.add(XdnRequestType.XDN_STOP_REQUEST);
     }
 
@@ -214,6 +208,18 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                             serviceName,
                             xdnHttpRequest.getHttpRequest().uri(),
                             String.valueOf(xdnHttpRequest.getRequestID())});
+            return true;
+        }
+
+        if (request instanceof XdnHttpRequestBatch xdnBatch) {
+            long startTime = System.nanoTime();
+            forwardHttpRequestBatchToContainerizedService(xdnBatch);
+            long elapsedTime = System.nanoTime() - startTime;
+            logger.log(Level.FINE, "{0}:{1} - batch execution within {2}ms, size={3} service={4}",
+                    new Object[]{this.myNodeId, this.getClass().getSimpleName(),
+                            (elapsedTime / 1_000_000.0),
+                            xdnBatch.size(),
+                            serviceName});
             return true;
         }
 
@@ -378,42 +384,16 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
         if (packetType.equals(XdnRequestType.XDN_SERVICE_HTTP_REQUEST)) {
             XdnHttpRequest httpRequest = XdnHttpRequest.createFromString(stringified);
+            return configureHttpRequest(httpRequest);
+        }
 
-            // we need to set the request matcher after creating XdnHttpRequest
-            // TODO: this code will fail if the service name doesnt exist in this replica,
-            //   we need to refactor XdnHttpRequest so that we don't need to set the
-            //   request matcher after each creation.
-            //   The issue is there because the behavior of each request is service specific.
-            //   The request can either be constructed in the entry replica, or when a replica
-            //   receive forwarded request.
-            // TODO: currently, we are logging warning instead.
-            if (httpRequest == null) return null;
-            String serviceName = httpRequest.getServiceName();
-            Map<Integer, ServiceInstance> currServiceInstance =
-                    this.serviceInstances.get(serviceName);
-            if (currServiceInstance == null) {
-                logger.log(Level.WARNING,
-                        "Deserializing http request for unknown service " + serviceName);
-                return httpRequest;
+        if (packetType.equals(XdnRequestType.XDN_HTTP_REQUEST_BATCH)) {
+            XdnHttpRequestBatch batch = XdnHttpRequestBatch.createFromBytes(
+                    stringified.getBytes(StandardCharsets.ISO_8859_1));
+            for (XdnHttpRequest request : batch.getRequestList()) {
+                configureHttpRequest(request);
             }
-            Integer currServicePlacementEpoch = this.servicePlacementEpoch.get(serviceName);
-            if (currServicePlacementEpoch == null) {
-                logger.log(Level.WARNING,
-                        "Deserializing http request for unknown epoch of service " +
-                                serviceName);
-                return httpRequest;
-            }
-            ServiceInstance currInstance = currServiceInstance.get(currServicePlacementEpoch);
-            if (currInstance == null) {
-                logger.log(Level.WARNING,
-                        "Deserializing http request for unknown instance of epoch " +
-                                currServicePlacementEpoch + " from service " +
-                                serviceName);
-                return httpRequest;
-            }
-            ServiceProperty serviceProperty = currInstance.property;
-            httpRequest.setRequestMatchers(serviceProperty.getRequestMatchers());
-            return httpRequest;
+            return batch;
         }
 
         if (packetType.equals(XdnRequestType.XDN_STOP_REQUEST)) {
@@ -422,6 +402,36 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
         throw new RuntimeException("Unknown encoded request or packet format: "
                 + stringified);
+    }
+
+    private XdnHttpRequest configureHttpRequest(XdnHttpRequest httpRequest) {
+        if (httpRequest == null) {
+            return null;
+        }
+
+        String serviceName = httpRequest.getServiceName();
+        Map<Integer, ServiceInstance> currServiceInstance = this.serviceInstances.get(serviceName);
+        if (currServiceInstance == null) {
+            logger.log(Level.WARNING,
+                    "Deserializing http request for unknown service " + serviceName);
+            return httpRequest;
+        }
+        Integer currServicePlacementEpoch = this.servicePlacementEpoch.get(serviceName);
+        if (currServicePlacementEpoch == null) {
+            logger.log(Level.WARNING,
+                    "Deserializing http request for unknown epoch of service " + serviceName);
+            return httpRequest;
+        }
+        ServiceInstance currInstance = currServiceInstance.get(currServicePlacementEpoch);
+        if (currInstance == null) {
+            logger.log(Level.WARNING,
+                    "Deserializing http request for unknown instance of epoch "
+                            + currServicePlacementEpoch + " from service " + serviceName);
+        } else {
+            ServiceProperty serviceProperty = currInstance.property;
+            httpRequest.setRequestMatchers(serviceProperty.getRequestMatchers());
+        }
+        return httpRequest;
     }
 
     @Override
@@ -1500,34 +1510,31 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                             (preExecutionElapsedTime / 1_000_000.0)});
         }
 
-        HttpRequest javaNetHttpRequest = xdnRequest.getJavaNetHttpRequest(true, targetPort);
+        java.net.http.HttpRequest outboundRequest = createOutboundHttpRequest(
+                xdnRequest.getHttpRequest(),
+                xdnRequest.getHttpRequestContent(),
+                targetPort);
         long endRequestCreationTime = System.nanoTime();
 
         long endRequestResponseTime = endRequestCreationTime;
         long endConversionTime = endRequestCreationTime;
         long endResponseStoreTime = endRequestCreationTime;
         Throwable forwardingError = null;
-
-        HttpClient httpClient = null;
         try {
-            httpClient = acquireHttpClient();
-            HttpResponse<byte[]> response =
-                    httpClient.send(javaNetHttpRequest, BYTE_ARRAY_BODY_HANDLER);
+            java.net.http.HttpResponse<byte[]> response =
+                    this.httpClient.send(outboundRequest, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
             endRequestResponseTime = System.nanoTime();
 
-            io.netty.handler.codec.http.HttpResponse nettyHttpResponse =
-                    createNettyHttpResponse(response);
+            FullHttpResponse nettyResponse = toNettyHttpResponse(response);
             endConversionTime = System.nanoTime();
-            nettyHttpResponse.headers().set("X-E-EXC-TS-" + myNodeId, System.nanoTime());
-            xdnRequest.setHttpResponse(nettyHttpResponse);
+            nettyResponse.headers().set("X-E-EXC-TS-" + myNodeId, System.nanoTime());
+            xdnRequest.setHttpResponse(nettyResponse);
             endResponseStoreTime = System.nanoTime();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             forwardingError = e;
-        } catch (Exception e) {
+        } catch (IOException | RuntimeException e) {
             forwardingError = e;
-        } finally {
-            releaseHttpClient(httpClient);
         }
 
         if (forwardingError != null) {
@@ -1558,88 +1565,101 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                         (endResponseStoreTime - endConversionTime) / 1_000_000.0});
     }
 
-    private HttpClient acquireHttpClient() {
-        HttpClient client = serviceClientPool.poll();
-        return client != null ? client : HttpClient.newHttpClient();
+    private void forwardHttpRequestBatchToContainerizedService(XdnHttpRequestBatch batch) {
+        List<XdnHttpRequest> requests = batch.getRequestList();
+        CompletableFuture<?>[] futures = new CompletableFuture<?>[requests.size()];
+        for (int i = 0; i < requests.size(); i++) {
+            XdnHttpRequest httpRequest = requests.get(i);
+            futures[i] = CompletableFuture.runAsync(
+                    () -> forwardHttpRequestToContainerizedService(httpRequest));
+        }
+        CompletableFuture.allOf(futures).join();
     }
 
-    private void releaseHttpClient(HttpClient client) {
-        if (client == null) {
-            return;
+    private java.net.http.HttpRequest createOutboundHttpRequest(HttpRequest originalRequest,
+                                                                HttpContent originalContent,
+                                                                int targetPort) {
+        assert originalRequest != null;
+        String uri = originalRequest.uri();
+        if (uri == null || uri.isEmpty()) {
+            uri = "/";
         }
-        if (!serviceClientPool.offer(client)) {
-            // pool is full; discard the extra client instance
+
+        if (uri.startsWith("http://") || uri.startsWith("https://")) {
+            int startIdx = uri.indexOf("//");
+            int pathIdx = startIdx >= 0 ? uri.indexOf('/', startIdx + 2) : -1;
+            uri = pathIdx >= 0 ? uri.substring(pathIdx) : "/";
         }
-    }
 
-    // convertXDNRequestToHttpRequest converts Netty's HTTP request into Java's HTTP request
-    private HttpRequest convertXDNRequestToHttpRequest(XdnJsonHttpRequest xdnRequest) {
-        try {
-            // preparing url to the containerized service
-            String url = String.format("http://127.0.0.1:%d%s",
-                    this.activeServicePorts.get(xdnRequest.getServiceName()),
-                    xdnRequest.getHttpRequest().uri());
+        byte[] payload = null;
+        if (originalContent != null && originalContent.content() != null
+                && originalContent.content().isReadable()) {
+            ByteBuf buffer = originalContent.content();
+            payload = new byte[buffer.readableBytes()];
+            buffer.getBytes(buffer.readerIndex(), payload);
+        }
 
-            // preparing the HTTP request body, if any
-            // TODO: handle non text body, ie. file or binary data
-            HttpRequest.BodyPublisher bodyPublisher = HttpRequest.BodyPublishers.noBody();
-            if (xdnRequest.getHttpRequestContent() != null &&
-                    xdnRequest.getHttpRequestContent().content() != null) {
-                bodyPublisher = HttpRequest
-                        .BodyPublishers
-                        .ofString(xdnRequest.getHttpRequestContent().content()
-                                .toString(StandardCharsets.UTF_8));
+        URI targetUri = URI.create("http://127.0.0.1:" + targetPort + uri);
+        java.net.http.HttpRequest.Builder builder = java.net.http.HttpRequest.newBuilder(targetUri)
+                .timeout(Duration.ofSeconds(10));
+
+        HttpHeaders originalHeaders = originalRequest.headers();
+        Iterator<Map.Entry<String, String>> iterator = originalHeaders.iteratorAsString();
+        while (iterator.hasNext()) {
+            Map.Entry<String, String> entry = iterator.next();
+            CharSequence name = entry.getKey();
+            if (HttpHeaderNames.HOST.contentEqualsIgnoreCase(name)
+                    || HttpHeaderNames.CONTENT_LENGTH.contentEqualsIgnoreCase(name)
+                    || HttpHeaderNames.TRANSFER_ENCODING.contentEqualsIgnoreCase(name)
+                    || HttpHeaderNames.CONNECTION.contentEqualsIgnoreCase(name)) {
+                continue;
             }
+            builder.header(name.toString(), entry.getValue());
+        }
 
-            // preparing the HTTP request builder
-            HttpRequest.Builder httpReqBuilder = HttpRequest.newBuilder()
-                    .uri(new URI(url))
-                    .method(xdnRequest.getHttpRequest().method().toString(),
-                            bodyPublisher);
+        builder.header(HttpHeaderNames.HOST.toString(), String.format("127.0.0.1:%d", targetPort));
+        builder.header(HttpHeaderNames.CONNECTION.toString(), HttpHeaderValues.KEEP_ALIVE.toString());
 
-            // preparing the HTTP headers, if any.
-            // note that the code need to be run with the following flag:
-            // "-Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host",
-            // otherwise setting those restricted headers here will later trigger
-            // java.lang.IllegalArgumentException, such as: restricted header name: "Host".
-            if (xdnRequest.getHttpRequest().headers() != null) {
-                Iterator<Map.Entry<String, String>> it = xdnRequest.getHttpRequest()
-                        .headers().iteratorAsString();
-                while (it.hasNext()) {
-                    Map.Entry<String, String> entry = it.next();
-                    httpReqBuilder.setHeader(entry.getKey(), entry.getValue());
+        boolean hasBody = payload != null && payload.length > 0;
+        if (hasBody) {
+            builder.header(HttpHeaderNames.CONTENT_LENGTH.toString(), Integer.toString(payload.length));
+        }
+
+        java.net.http.HttpRequest.BodyPublisher publisher = hasBody
+                ? java.net.http.HttpRequest.BodyPublishers.ofByteArray(payload)
+                : java.net.http.HttpRequest.BodyPublishers.noBody();
+
+        builder.method(originalRequest.method().name(), publisher);
+        return builder.build();
+    }
+
+    private FullHttpResponse toNettyHttpResponse(java.net.http.HttpResponse<byte[]> response) {
+        byte[] body = response.body() != null ? response.body() : new byte[0];
+        ByteBuf content = Unpooled.wrappedBuffer(body);
+        HttpResponseStatus status = HttpResponseStatus.valueOf(response.statusCode());
+        DefaultFullHttpResponse nettyResponse = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1,
+                status,
+                content);
+
+        response.headers().map().forEach((name, values) -> {
+            if (name == null || values == null) {
+                return;
+            }
+            for (String value : values) {
+                if (value != null) {
+                    nettyResponse.headers().add(name, value);
                 }
             }
+        });
 
-            return httpReqBuilder.build();
-        } catch (Exception e) {
-            e.printStackTrace();
-            return null;
+        if (!nettyResponse.headers().contains(HttpHeaderNames.CONTENT_LENGTH)) {
+            HttpUtil.setContentLength(nettyResponse, body.length);
         }
-    }
-
-    private io.netty.handler.codec.http.HttpResponse createNettyHttpResponse(
-            HttpResponse<byte[]> httpResponse) {
-        // copy http headers, if any
-        HttpHeaders headers = new DefaultHttpHeaders();
-        for (String headerKey : httpResponse.headers().map().keySet()) {
-            for (String headerVal : httpResponse.headers().allValues(headerKey)) {
-                headers.add(headerKey, headerVal);
-            }
+        if (!nettyResponse.headers().contains(HttpHeaderNames.CONNECTION)) {
+            nettyResponse.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
         }
-
-        // by default, we have an empty header trailing for the response
-        HttpHeaders trailingHeaders = new DefaultHttpHeaders();
-
-        // build the http response
-        io.netty.handler.codec.http.HttpResponse result = new DefaultFullHttpResponse(
-                getNettyHttpVersion(httpResponse.version()),
-                HttpResponseStatus.valueOf(httpResponse.statusCode()),
-                Unpooled.copiedBuffer(httpResponse.body()),
-                headers,
-                trailingHeaders
-        );
-        return result;
+        return nettyResponse;
     }
 
     private io.netty.handler.codec.http.HttpResponse createNettyHttpErrorResponse(Exception e) {
@@ -1654,16 +1674,6 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                 Unpooled.copiedBuffer(sw.toString().getBytes()));
         response.headers().add(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
         return response;
-    }
-
-    private HttpVersion getNettyHttpVersion(HttpClient.Version httpClientVersion) {
-        // TODO: upgrade netty that support HTTP2
-        switch (httpClientVersion) {
-            case HTTP_1_1, HTTP_2 -> {
-                return HttpVersion.HTTP_1_1;
-            }
-        }
-        return HttpVersion.HTTP_1_1;
     }
 
 

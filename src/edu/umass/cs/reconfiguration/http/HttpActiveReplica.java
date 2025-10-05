@@ -7,6 +7,7 @@ import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.XdnHttpRequestBatcher;
 import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.bootstrap.ServerBootstrap;
@@ -101,6 +102,9 @@ public class HttpActiveReplica {
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
 
+    private static final boolean isHttpFrontendBatchEnabled = true;
+    private final edu.umass.cs.xdn.XdnHttpRequestBatcher batcher;
+
     public HttpActiveReplica(String nodeId,
                              ActiveReplicaFunctions arf,
                              InetSocketAddress sockAddr,
@@ -119,6 +123,9 @@ public class HttpActiveReplica {
             sslCtx = null;
         }
 
+        // Initialize request batching
+        batcher = new edu.umass.cs.xdn.XdnHttpRequestBatcher(arf);
+
         // Initializing boss and worker event loops.
         // The boss workers are accepting connections, which then will be passed to the child
         // worker group (i.e., `workerGroup`).
@@ -135,7 +142,8 @@ public class HttpActiveReplica {
                     .channel(NioServerSocketChannel.class)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
                     .childHandler(
-                            new HttpActiveReplicaInitializer(nodeId, arf, executorGroup, sslCtx)
+                            new HttpActiveReplicaInitializer(
+                                    nodeId, arf, executorGroup, batcher, sslCtx)
                     );
 
             if (sockAddr == null) {
@@ -175,15 +183,18 @@ public class HttpActiveReplica {
         private final String nodeId;
         private final ActiveReplicaFunctions arFunctions;
         private final MultithreadEventExecutorGroup executorGroup;
+        private final edu.umass.cs.xdn.XdnHttpRequestBatcher requestBatching;
         private final SslContext sslCtx;
 
         HttpActiveReplicaInitializer(String nodeId,
                                      final ActiveReplicaFunctions arf,
                                      final MultithreadEventExecutorGroup executorGroup,
+                                     final edu.umass.cs.xdn.XdnHttpRequestBatcher requestBatching,
                                      SslContext sslCtx) {
             this.nodeId = nodeId;
             this.arFunctions = arf;
             this.executorGroup = executorGroup;
+            this.requestBatching = requestBatching;
             this.sslCtx = sslCtx;
         }
 
@@ -214,6 +225,7 @@ public class HttpActiveReplica {
                             nodeId,
                             arFunctions,
                             executorGroup,
+                            requestBatching,
                             channel.remoteAddress()));
         }
 
@@ -308,7 +320,8 @@ public class HttpActiveReplica {
         private static String nodeId = null;
         private final ActiveReplicaFunctions arFunctions;
         private final ExecutorService offload;
-        private final InetSocketAddress senderAddr;
+        private final edu.umass.cs.xdn.XdnHttpRequestBatcher requestBatching;
+        private final InetSocketAddress senderAddr; // client's inet address
 
         private HttpRequest request;
         private HttpContent requestContent;
@@ -320,10 +333,12 @@ public class HttpActiveReplica {
         HttpActiveReplicaHandler(String nodeId,
                                  ActiveReplicaFunctions arFunctions,
                                  ExecutorService offload,
+                                 XdnHttpRequestBatcher requestBatching,
                                  InetSocketAddress addr) {
             HttpActiveReplicaHandler.nodeId = nodeId;
             this.arFunctions = arFunctions;
             this.offload = offload;
+            this.requestBatching = requestBatching;
             this.senderAddr = addr;
         }
 
@@ -551,15 +566,15 @@ public class HttpActiveReplica {
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
 
-                // get the client's inet address
-                InetSocketAddress clientInetSocketAddress;
-                assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
-                        "Expecting Internet socket address from client";
-                clientInetSocketAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-
                 // Submit long-running request coordination and execution off the event loop
-                Future<HttpResponse> execFuture = offload.submit(() ->
-                        executeXdnHttpRequest(httpRequest, clientInetSocketAddress));
+                Future<HttpResponse> execFuture;
+                if (isHttpFrontendBatchEnabled) {
+                    execFuture = offload.submit(
+                            () -> executeXdnHttpRequestViaBatching(httpRequest, this.senderAddr));
+                } else {
+                    execFuture = offload.submit(() ->
+                            executeXdnHttpRequest(httpRequest, this.senderAddr));
+                }
 
                 // If channel closes before completion, cancel the task
                 ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
@@ -604,7 +619,8 @@ public class HttpActiveReplica {
             }
         }
 
-        // executeXdnHttpRequest synchronously executes the provided httpRequest.
+        // executeXdnHttpRequest synchronously executes the provided httpRequest. It converts
+        // callback-based mechanism provided by Gigapaxos into blocking future.
         private HttpResponse executeXdnHttpRequest(XdnHttpRequest httpRequest,
                                                    InetSocketAddress clientInetSocketAddress) {
             // Create Gigapaxos' request, it is important to explicitly set the clientAddress,
@@ -643,6 +659,35 @@ public class HttpActiveReplica {
 
             // Get the response
             return xdnRequest.getHttpResponse();
+        }
+
+        private HttpResponse executeXdnHttpRequestViaBatching(
+                XdnHttpRequest httpRequest, InetSocketAddress clientInetSocketAddress) {
+            CompletableFuture<XdnHttpRequest> future = new CompletableFuture<>();
+            requestBatching.submit(
+                    httpRequest,
+                    clientInetSocketAddress,
+                    (completedRequest, error) -> {
+                        // TODO: the batched request should consider the clientInetSocketAddress
+                        if (error != null) {
+                            System.out.println(
+                                    "Error completing execution via batching: " +
+                                            error.getMessage());
+                            error.printStackTrace();
+                            future.completeExceptionally(error);
+                        } else {
+                            future.complete(completedRequest);
+                        }
+                    });
+
+            XdnHttpRequest executedRequest;
+            try {
+                executedRequest = future.get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+
+            return executedRequest.getHttpResponse();
         }
 
         // TODO: cleanly handle this
