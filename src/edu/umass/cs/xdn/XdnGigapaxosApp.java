@@ -1576,9 +1576,9 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         CompletableFuture.allOf(futures).join();
     }
 
-    private java.net.http.HttpRequest createOutboundHttpRequest(HttpRequest originalRequest,
-                                                                HttpContent originalContent,
-                                                                int targetPort) {
+    public static java.net.http.HttpRequest createOutboundHttpRequest(HttpRequest originalRequest,
+                                                                      HttpContent originalContent,
+                                                                      int targetPort) {
         assert originalRequest != null;
         String uri = originalRequest.uri();
         if (uri == null || uri.isEmpty()) {

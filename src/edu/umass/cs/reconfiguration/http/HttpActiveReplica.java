@@ -7,6 +7,7 @@ import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.XdnGigapaxosApp;
 import edu.umass.cs.xdn.XdnHttpRequestBatcher;
 import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
@@ -35,8 +36,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.http.HttpClient;
 import java.security.cert.CertificateException;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +107,14 @@ public class HttpActiveReplica {
 
     private static final boolean isHttpFrontendBatchEnabled = true;
     private final edu.umass.cs.xdn.XdnHttpRequestBatcher batcher;
+
+    // Flags to enable/disable debugging feature, specifically to identify bottleneck.
+    // - isDebugBypassCoordination: directly send request to docker service, require
+    //                              knowing the docker exposed port number,
+    // - isDebugUseDummyResponse: skip execution in docker service.
+    private static final boolean isDebugBypassCoordination = false;
+    private static final boolean isDebugUseDummyResponse = false;
+    private static final HttpClient debugHttpClient = HttpClient.newHttpClient();
 
     public HttpActiveReplica(String nodeId,
                              ActiveReplicaFunctions arf,
@@ -561,6 +572,11 @@ public class HttpActiveReplica {
                     return;
                 }
 
+                if (isDebugUseDummyResponse || isDebugBypassCoordination) {
+                    handleDebugRequests(new XdnHttpRequest(this.request, this.requestContent), ctx);
+                    return;
+                }
+
                 // instrumenting the request for latency measurement
                 long startExecTimeNs = System.nanoTime();
                 XdnHttpRequest httpRequest =
@@ -703,6 +719,58 @@ public class HttpActiveReplica {
             });
         }
 
+        private void handleDebugRequests(XdnHttpRequest httpRequest, ChannelHandlerContext ctx) {
+            boolean isKeepAlive = HttpUtil.isKeepAlive(httpRequest.getHttpRequest());
+
+            // Debug: send dummy response, the goal is to identify whether HttpActiveReplica
+            //  is a bottleneck on receiving the incoming Http requests.
+            if (isDebugUseDummyResponse) {
+                HttpActiveReplicaHandler.writeHttpResponse(
+                        httpRequest.getRequestID(),
+                        new DefaultFullHttpResponse(HTTP_1_1, OK,
+                                Unpooled.wrappedBuffer("OK".getBytes())),
+                        ctx, isKeepAlive, 0L);
+                return;
+            }
+
+            // Debug: forward http request directly to the dockerized service. The goal is to
+            //  identify the "rough" cost of coordination via the Gigapaxos/XDN stack.
+            //  To make this work, please specify the docker's service port in the
+            //  request header with XDN_DBG_SVC_PORT as the header name.
+            if (isDebugBypassCoordination) {
+                int detectedTargetPort = -1;
+
+                String targetPortStr = httpRequest.getHttpRequest().
+                        headers().get("XDN_DBG_SVC_PORT");
+                if (targetPortStr != null) {
+                    detectedTargetPort = Integer.parseInt(targetPortStr);
+                }
+                if (detectedTargetPort == -1) {
+                    throw new IllegalStateException(
+                            "Expecting port in the header with XDN_DBG_SVC_PORT as the key");
+                }
+
+                java.net.http.HttpRequest jdkHttpRequest =
+                        XdnGigapaxosApp.createOutboundHttpRequest(
+                                httpRequest.getHttpRequest(),
+                                httpRequest.getHttpRequestContent(),
+                                detectedTargetPort);
+                try {
+                    java.net.http.HttpResponse<byte[]> response =
+                            debugHttpClient.send(jdkHttpRequest,
+                                    java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+                } catch (IOException | InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+
+                HttpActiveReplicaHandler.writeHttpResponse(
+                        httpRequest.getRequestID(),
+                        new DefaultFullHttpResponse(HTTP_1_1, OK,
+                                Unpooled.wrappedBuffer("OK".getBytes())),
+                        ctx, isKeepAlive, 0L);
+            }
+        }
+
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
@@ -820,13 +888,15 @@ public class HttpActiveReplica {
                 }
             });
 
-            long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0}:{1} - Overall HTTP execution within {2}ms (id: {3})",
-                    new Object[]{
-                            nodeId,
-                            HttpActiveReplica.class.getSimpleName(),
-                            (elapsedTime / 1_000_000.0),
-                            String.valueOf(requestId)});
+            if (startProcessingTime > 0) {
+                long elapsedTime = System.nanoTime() - startProcessingTime;
+                logger.log(Level.FINE, "{0}:{1} - Overall HTTP execution within {2}ms (id: {3})",
+                        new Object[]{
+                                nodeId,
+                                HttpActiveReplica.class.getSimpleName(),
+                                (elapsedTime / 1_000_000.0),
+                                String.valueOf(requestId)});
+            }
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {
