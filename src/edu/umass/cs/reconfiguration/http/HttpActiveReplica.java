@@ -105,7 +105,7 @@ public class HttpActiveReplica {
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
 
-    private static final boolean isHttpFrontendBatchEnabled = true;
+    private static final boolean isHttpFrontendBatchEnabled = false;
     private final XdnHttpRequestBatcher batcher;
 
     // Flags to enable/disable debugging feature, specifically to identify bottleneck.

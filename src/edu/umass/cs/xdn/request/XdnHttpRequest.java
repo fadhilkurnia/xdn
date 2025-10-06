@@ -21,7 +21,6 @@ import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 
 import java.io.ByteArrayOutputStream;
-import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -34,6 +33,9 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     public static final String XDN_HTTP_REQUEST_ID_HEADER = "XDN-Request-ID";
     public static final String XDN_TIMESTAMP_COOKIE_PREFIX = "XDN-CC-TS-";
 
+    public static final List<RequestMatcher> defaultSingletonRequestMatchers =
+            ServiceProperty.createDefaultMatchers();
+
     private static final Logger LOG = Logger.getLogger(XdnHttpRequest.class.getName());
 
     private final long requestId;
@@ -41,12 +43,6 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
     private final HttpRequest httpRequest;
     private final HttpContent httpRequestContent;
-
-    // Below are variables for caching upon creation,
-    // to be used when converting to java.net.http.HttpRequest
-    private final String[] cachedHeaderArray;
-    private final byte[] cachedRequestBody;
-    private final String httpMethodName;
 
     private HttpResponse httpResponse;
     private ByteBuf httpResponseBody;
@@ -85,40 +81,9 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         this.serviceName = inferServiceName(request);
         assert this.serviceName != null : "Failed to infer service name from the given HttpRequest";
 
-        this.httpMethodName = this.httpRequest.method().name();
-        this.cachedHeaderArray = flattenHeaders(this.httpRequest.headers());
-        this.cachedRequestBody = toByteArray(content.content());
-
         // Use the default request matcher if not specified
-        this.requestMatchers = Objects.requireNonNullElseGet(
-                requestMatchers, ServiceProperty::createDefaultMatchers);
-    }
-
-    private static String[] flattenHeaders(HttpHeaders headers) {
-        if (headers == null || headers.isEmpty()) {
-            return null;
-        }
-        List<String> flattened = new ArrayList<>(headers.size() * 2);
-        Iterator<Map.Entry<String, String>> iterator = headers.iteratorAsString();
-        while (iterator.hasNext()) {
-            Map.Entry<String, String> entry = iterator.next();
-            flattened.add(entry.getKey());
-            flattened.add(entry.getValue());
-        }
-        return flattened.isEmpty() ? null : flattened.toArray(new String[0]);
-    }
-
-    private static byte[] toByteArray(ByteBuf content) {
-        if (content == null) {
-            return null;
-        }
-        int readableBytes = content.readableBytes();
-        byte[] data = new byte[readableBytes];
-        if (readableBytes > 0) {
-            content.getBytes(0, data);
-            return data;
-        }
-        return data;
+        this.requestMatchers = (requestMatchers != null && !requestMatchers.isEmpty())
+                ? requestMatchers : defaultSingletonRequestMatchers;
     }
 
     // In general, we infer the HTTP request ID based on these headers:
@@ -325,62 +290,6 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         this.httpResponse = fullHttpResponse;
         this.httpResponseBody = fullHttpResponse.content() != null
                 ? fullHttpResponse.content().copy() : null;
-    }
-
-    public java.net.http.HttpRequest getJavaNetHttpRequest(boolean isUseLocalhost, int targetPort) {
-        if (!isUseLocalhost) {
-            throw new RuntimeException("unimplemented");
-        }
-        URI uri = createLocalhostURI(targetPort);
-        java.net.http.HttpRequest.Builder builder = java.net.http.HttpRequest.newBuilder(uri);
-
-        if (this.cachedHeaderArray != null) {
-            // Preserving restricted headers requires the JVM flag
-            // -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host
-            builder.headers(this.cachedHeaderArray);
-        }
-
-        boolean hasBody = this.cachedRequestBody != null;
-        java.net.http.HttpRequest.BodyPublisher bodyPublisher = hasBody
-                ? java.net.http.HttpRequest.BodyPublishers.ofByteArray(this.cachedRequestBody)
-                : java.net.http.HttpRequest.BodyPublishers.noBody();
-
-        switch (this.httpMethodName) {
-            case "GET": {
-                if (hasBody) {
-                    builder.method(this.httpMethodName, bodyPublisher);
-                } else {
-                    builder.GET();
-                }
-                break;
-            }
-            case "POST": {
-                builder.POST(bodyPublisher);
-                break;
-            }
-            case "PUT": {
-                builder.PUT(bodyPublisher);
-                break;
-            }
-            case "DELETE": {
-                if (hasBody) {
-                    builder.method(this.httpMethodName, bodyPublisher);
-                } else {
-                    builder.DELETE();
-                }
-                break;
-            }
-            default: {
-                builder.method(this.httpMethodName, bodyPublisher);
-            }
-        }
-
-        return builder.build();
-    }
-
-    private URI createLocalhostURI(int targetPort) {
-        String path = this.httpRequest.uri();
-        return URI.create("http://127.0.0.1:" + targetPort + path);
     }
 
     @Override
