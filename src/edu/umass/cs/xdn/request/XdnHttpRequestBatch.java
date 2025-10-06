@@ -1,5 +1,6 @@
 package edu.umass.cs.xdn.request;
 
+import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 
@@ -12,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.logging.Logger;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -42,7 +44,9 @@ import java.util.zip.Inflater;
  *   }
  * </pre>
  */
-public final class XdnHttpRequestBatch extends XdnRequest implements Byteable {
+public final class XdnHttpRequestBatch extends XdnRequest implements ClientRequest, Byteable {
+
+    private static final Logger LOG = Logger.getLogger(XdnHttpRequestBatch.class.getName());
 
     private final long requestId;
     private final String serviceName;
@@ -309,5 +313,28 @@ public final class XdnHttpRequestBatch extends XdnRequest implements Byteable {
         } finally {
             inflater.end();
         }
+    }
+
+    @Override
+    public ClientRequest getResponse() {
+        return this;
+    }
+
+    public static Long parseRequestIdQuickly(String encodedBatch) {
+        if (encodedBatch == null) {
+            return null;
+        }
+        byte[] bytes = encodedBatch.getBytes(StandardCharsets.ISO_8859_1);
+        if (bytes.length < Integer.BYTES + Long.BYTES) {
+            LOG.warning("Encoded batch too short when parsing request id");
+            return null;
+        }
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        int packetType = buffer.getInt();
+        if (packetType != XdnRequestType.XDN_HTTP_REQUEST_BATCH.getInt()) {
+            LOG.warning("Unexpected packet type when parsing batch id: " + packetType);
+            return null;
+        }
+        return buffer.getLong();
     }
 }
