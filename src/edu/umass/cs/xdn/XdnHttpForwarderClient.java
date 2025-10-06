@@ -85,14 +85,14 @@ public final class XdnHttpForwarderClient implements Closeable {
 
         pool.acquire().addListener((Future<Channel> acquireFuture) -> {
             if (!acquireFuture.isSuccess()) {
-                ReferenceCountUtil.release(outbound);
+                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(acquireFuture.cause());
                 return;
             }
 
             Channel channel = acquireFuture.getNow();
             if (channel == null || !channel.isActive()) {
-                ReferenceCountUtil.release(outbound);
+                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(
                         new IllegalStateException("Acquired inactive HTTP channel"));
                 if (channel != null) {
@@ -103,7 +103,7 @@ public final class XdnHttpForwarderClient implements Closeable {
 
             ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
             if (handler == null) {
-                ReferenceCountUtil.release(outbound);
+                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(
                         new IllegalStateException("Missing response handler in pipeline"));
                 releaseQuietly(pool, channel);
@@ -112,7 +112,7 @@ public final class XdnHttpForwarderClient implements Closeable {
 
             RequestContext context = new RequestContext(channel, pool, responseFuture);
             if (!handler.register(context)) {
-                ReferenceCountUtil.release(outbound);
+                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(
                         new IllegalStateException("Another request is already in flight"));
                 releaseQuietly(pool, channel);
@@ -121,8 +121,8 @@ public final class XdnHttpForwarderClient implements Closeable {
 
             ChannelFuture writeFuture = channel.writeAndFlush(outbound);
             writeFuture.addListener((ChannelFutureListener) wf -> {
-                ReferenceCountUtil.release(outbound);
                 if (!wf.isSuccess()) {
+                    ReferenceCountUtil.safeRelease(outbound);
                     handler.fail(wf.cause());
                 }
             });
@@ -247,6 +247,10 @@ public final class XdnHttpForwarderClient implements Closeable {
     private static final class ClientResponseHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
 
         private final AtomicReference<RequestContext> inFlight = new AtomicReference<>();
+
+        ClientResponseHandler() {
+            super(false);
+        }
 
         boolean register(RequestContext context) {
             return inFlight.compareAndSet(null, context);

@@ -31,8 +31,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.net.Socket;
-import java.net.URI;
 import java.net.StandardProtocolFamily;
+import java.net.URI;
 import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -42,12 +42,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -88,6 +87,15 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     // Client to forward HTTP requests into the containerized services.
     private final XdnHttpForwarderClient httpForwarderClient;
+
+    private static final int REQUEST_CACHE_CAPACITY = 4096;
+    private final Map<Long, Request> requestCache = Collections.synchronizedMap(
+            new LinkedHashMap<>(REQUEST_CACHE_CAPACITY, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Long, Request> eldest) {
+                    return size() > REQUEST_CACHE_CAPACITY;
+                }
+            });
 
     private final Logger logger = Logger.getLogger(XdnGigapaxosApp.class.getName());
 
@@ -139,7 +147,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                 this.stateDiffRecorder = new FuselogStateDiffRecorder(myNodeId);
                 break;
             default:
-                String errMessage = "unknown stateDiff recorder " + recorderType.toString();
+                String errMessage = "unknown stateDiff recorder " + recorderType;
                 throw new RuntimeException(errMessage);
         }
 
@@ -199,6 +207,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         if (request instanceof XdnHttpRequest xdnHttpRequest) {
             long startTime = System.nanoTime();
             forwardHttpRequestToContainerizedService(xdnHttpRequest);
+            requestCache.remove(xdnHttpRequest.getRequestID());
             long elapsedTime = System.nanoTime() - startTime;
             logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} (id: {6})",
                     new Object[]{this.myNodeId, this.getClass().getSimpleName(),
@@ -213,6 +222,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         if (request instanceof XdnHttpRequestBatch xdnBatch) {
             long startTime = System.nanoTime();
             forwardHttpRequestBatchToContainerizedService(xdnBatch);
+            requestCache.remove(xdnBatch.getRequestID());
             long elapsedTime = System.nanoTime() - startTime;
             logger.log(Level.FINE, "{0}:{1} - batch execution within {2}ms, size={3} service={4}",
                     new Object[]{this.myNodeId, this.getClass().getSimpleName(),
@@ -382,11 +392,25 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                 "Unknown XDN Request handled by XdnGigapaxosApp. Request: '" + stringified + "'";
 
         if (packetType.equals(XdnRequestType.XDN_SERVICE_HTTP_REQUEST)) {
+            Long cachedId = XdnHttpRequest.parseRequestIdQuickly(stringified);
+            if (cachedId != null) {
+                Request cached = requestCache.get(cachedId);
+                if (cached instanceof XdnHttpRequest) {
+                    return (XdnHttpRequest) cached;
+                }
+            }
             XdnHttpRequest httpRequest = XdnHttpRequest.createFromString(stringified);
             return configureHttpRequest(httpRequest);
         }
 
         if (packetType.equals(XdnRequestType.XDN_HTTP_REQUEST_BATCH)) {
+            Long cachedId = XdnHttpRequestBatch.parseRequestIdQuickly(stringified);
+            if (cachedId != null) {
+                Request cached = requestCache.get(cachedId);
+                if (cached instanceof XdnHttpRequestBatch) {
+                    return (XdnHttpRequestBatch) cached;
+                }
+            }
             XdnHttpRequestBatch batch = XdnHttpRequestBatch.createFromBytes(
                     stringified.getBytes(StandardCharsets.ISO_8859_1));
             for (XdnHttpRequest request : batch.getRequestList()) {
@@ -401,6 +425,17 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
         throw new RuntimeException("Unknown encoded request or packet format: "
                 + stringified);
+    }
+
+    public void cacheRequest(Request request) {
+        if (request == null) {
+            return;
+        }
+        if (request instanceof XdnHttpRequest xdnHttpRequest) {
+            requestCache.put(xdnHttpRequest.getRequestID(), xdnHttpRequest);
+        } else if (request instanceof XdnHttpRequestBatch batch) {
+            requestCache.put(batch.getRequestID(), batch);
+        }
     }
 
     private XdnHttpRequest configureHttpRequest(XdnHttpRequest httpRequest) {
