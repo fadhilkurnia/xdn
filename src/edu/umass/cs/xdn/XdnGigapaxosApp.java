@@ -81,11 +81,13 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private final HashMap<String, SocketChannel> fsSocketConnection;
     private final HashMap<String, Boolean> isServiceActive;
-    private final HttpClient httpClient;
     private final String stateDiffRecorderTypeString =
             Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_STATEDIFF_RECORDER_TYPE);
     private RecorderType recorderType;
     private AbstractStateDiffRecorder stateDiffRecorder;
+
+    // Client to forward HTTP requests into the containerized services.
+    private final XdnHttpForwarderClient httpForwarderClient;
 
     private final Logger logger = Logger.getLogger(XdnGigapaxosApp.class.getName());
 
@@ -100,10 +102,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         this.services = new ConcurrentHashMap<>();
         this.fsSocketConnection = new HashMap<>();
         this.isServiceActive = new HashMap<>();
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .version(HttpClient.Version.HTTP_1_1)
-                .build();
+        this.httpForwarderClient = new XdnHttpForwarderClient();
 
         // Validate and initialize the stateDiff recorder for Primary Backup.
         // We need to check the Operating System as currently FUSE (i.e., Fuselog)
@@ -1510,48 +1509,26 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                             (preExecutionElapsedTime / 1_000_000.0)});
         }
 
-        java.net.http.HttpRequest outboundRequest = createOutboundHttpRequest(
-                xdnRequest.getHttpRequest(),
-                xdnRequest.getHttpRequestContent(),
-                targetPort);
+        FullHttpRequest forwardedHttpRequest = copyHttpRequest(xdnRequest);
         long endRequestCreationTime = System.nanoTime();
 
-        long endRequestResponseTime = endRequestCreationTime;
-        long endConversionTime = endRequestCreationTime;
-        long endResponseStoreTime = endRequestCreationTime;
-        Throwable forwardingError = null;
+        long endRequestResponseTime;
+        long endConversionTime;
+        long endResponseStoreTime;
         try {
-            java.net.http.HttpResponse<byte[]> response =
-                    this.httpClient.send(outboundRequest, java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            // forward request to the underlying containerized service
+            FullHttpResponse httpResponse = httpForwarderClient.execute(
+                    "127.0.0.1", targetPort, forwardedHttpRequest);
             endRequestResponseTime = System.nanoTime();
 
-            FullHttpResponse nettyResponse = toNettyHttpResponse(response);
+            // store the response
+            xdnRequest.setHttpResponse(httpResponse);
             endConversionTime = System.nanoTime();
-            nettyResponse.headers().set("X-E-EXC-TS-" + myNodeId, System.nanoTime());
-            xdnRequest.setHttpResponse(nettyResponse);
             endResponseStoreTime = System.nanoTime();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            forwardingError = e;
-        } catch (IOException | RuntimeException e) {
-            forwardingError = e;
-        }
 
-        if (forwardingError != null) {
-            xdnRequest.setHttpResponse(createNettyHttpErrorResponse(forwardingError instanceof Exception
-                    ? (Exception) forwardingError
-                    : new RuntimeException(forwardingError)));
-            if (endRequestResponseTime == endRequestCreationTime) {
-                endRequestResponseTime = System.nanoTime();
-            }
-            if (!(forwardingError instanceof InterruptedException)) {
-                logger.log(Level.WARNING,
-                        String.format("%s:%s - failed to proxy HTTP request", this.myNodeId,
-                                this.getClass().getSimpleName()), forwardingError);
-            }
-            endConversionTime = endConversionTime == endRequestCreationTime
-                    ? System.nanoTime() : endConversionTime;
-            endResponseStoreTime = System.nanoTime();
+            // TODO: httpResponse.release();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
 
         logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms, val={3}ms crt={4}ms " +
@@ -1574,6 +1551,28 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                     () -> forwardHttpRequestToContainerizedService(httpRequest));
         }
         CompletableFuture.allOf(futures).join();
+    }
+
+    private FullHttpRequest copyHttpRequest(XdnHttpRequest httpRequest) {
+        ByteBuf content = httpRequest.getHttpRequestContent().content();
+        ByteBuf copiedContent = content != null && content.isReadable()
+                ? Unpooled.copiedBuffer(content)
+                : Unpooled.EMPTY_BUFFER;
+
+        DefaultFullHttpRequest copy = new DefaultFullHttpRequest(
+                httpRequest.getHttpRequest().protocolVersion(),
+                httpRequest.getHttpRequest().method(),
+                httpRequest.getHttpRequest().uri(), copiedContent);
+        copy.headers().set(httpRequest.getHttpRequest().headers());
+        if (httpRequest.getHttpRequest() instanceof FullHttpRequest fullHttpRequest) {
+            copy.trailingHeaders().set(fullHttpRequest.trailingHeaders());
+        }
+        if (copiedContent != Unpooled.EMPTY_BUFFER) {
+            HttpUtil.setContentLength(copy, copiedContent.readableBytes());
+        } else {
+            copy.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+        }
+        return copy;
     }
 
     public static java.net.http.HttpRequest createOutboundHttpRequest(HttpRequest originalRequest,
@@ -1633,7 +1632,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return builder.build();
     }
 
-    private FullHttpResponse toNettyHttpResponse(java.net.http.HttpResponse<byte[]> response) {
+    public static FullHttpResponse toNettyHttpResponse(java.net.http.HttpResponse<byte[]> response) {
         byte[] body = response.body() != null ? response.body() : new byte[0];
         ByteBuf content = Unpooled.wrappedBuffer(body);
         HttpResponseStatus status = HttpResponseStatus.valueOf(response.statusCode());

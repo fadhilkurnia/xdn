@@ -106,7 +106,7 @@ public class HttpActiveReplica {
     static boolean finished;
 
     private static final boolean isHttpFrontendBatchEnabled = true;
-    private final edu.umass.cs.xdn.XdnHttpRequestBatcher batcher;
+    private final XdnHttpRequestBatcher batcher;
 
     // Flags to enable/disable debugging feature, specifically to identify bottleneck.
     // - isDebugBypassCoordination: directly send request to docker service, require
@@ -152,6 +152,8 @@ public class HttpActiveReplica {
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    .childOption(ChannelOption.AUTO_READ, true)
+                    .childOption(ChannelOption.TCP_NODELAY, true)
                     .childHandler(
                             new HttpActiveReplicaInitializer(
                                     nodeId, arf, executorGroup, batcher, sslCtx)
@@ -725,10 +727,15 @@ public class HttpActiveReplica {
             // Debug: send dummy response, the goal is to identify whether HttpActiveReplica
             //  is a bottleneck on receiving the incoming Http requests.
             if (isDebugUseDummyResponse) {
+                httpRequest.getHttpRequestContent().content().release();
+                DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HTTP_1_1, OK,
+                        Unpooled.copiedBuffer("DEBUG-OK", CharsetUtil.UTF_8));
+                httpResponse.headers().setInt(
+                        HttpHeaderNames.CONTENT_LENGTH,
+                        httpResponse.content().readableBytes());
                 HttpActiveReplicaHandler.writeHttpResponse(
                         httpRequest.getRequestID(),
-                        new DefaultFullHttpResponse(HTTP_1_1, OK,
-                                Unpooled.wrappedBuffer("OK".getBytes())),
+                        httpResponse,
                         ctx, isKeepAlive, 0L);
                 return;
             }
@@ -755,19 +762,61 @@ public class HttpActiveReplica {
                                 httpRequest.getHttpRequest(),
                                 httpRequest.getHttpRequestContent(),
                                 detectedTargetPort);
+
+                java.net.http.HttpResponse<byte[]> response;
                 try {
-                    java.net.http.HttpResponse<byte[]> response =
-                            debugHttpClient.send(jdkHttpRequest,
-                                    java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+                    response = debugHttpClient.send(jdkHttpRequest,
+                            java.net.http.HttpResponse.BodyHandlers.ofByteArray());
                 } catch (IOException | InterruptedException e) {
                     throw new RuntimeException(e);
                 }
 
-                HttpActiveReplicaHandler.writeHttpResponse(
-                        httpRequest.getRequestID(),
-                        new DefaultFullHttpResponse(HTTP_1_1, OK,
-                                Unpooled.wrappedBuffer("OK".getBytes())),
-                        ctx, isKeepAlive, 0L);
+                // Send and execute possibly long-running request in offload executor.
+                Future<java.net.http.HttpResponse<byte[]>> execFuture = offload.submit(() -> {
+                    try {
+                        return debugHttpClient.send(jdkHttpRequest,
+                                java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+                    } catch (IOException | InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                // If channel closes before completion, cancel the task
+                ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
+
+                // When done, switch back to the channel's EventLoop to write the response
+                CompletableFuture.supplyAsync(() -> {
+                            try {
+                                return execFuture.get();
+                            } catch (InterruptedException | ExecutionException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }, offload)
+                        .whenComplete((httpResponse, err) -> {
+                            // release buffer of http request's content
+                            httpRequest.getHttpRequestContent().content().release();
+
+                            // do nothing when the channel is inactive
+                            if (!ctx.channel().isActive()) return;
+
+                            // finally, handle the error or send the response
+                            ctx.executor().execute(() -> {
+                                // Error handling, send string message
+                                if (err != null) {
+                                    System.out.println("Writing error response: " + err.getMessage());
+                                    err.printStackTrace();
+                                    HttpActiveReplicaHandler.sendStringResponse(
+                                            err.getMessage(), ctx, false);
+                                    return;
+                                }
+
+                                // Success handling
+                                HttpActiveReplicaHandler.writeHttpResponse(
+                                        httpRequest.getRequestID(),
+                                        XdnGigapaxosApp.toNettyHttpResponse(response),
+                                        ctx, isKeepAlive, 0L);
+                            });
+                        });
             }
         }
 

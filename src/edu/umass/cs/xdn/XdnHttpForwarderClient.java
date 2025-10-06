@@ -5,55 +5,54 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.pool.ChannelPoolHandler;
+import io.netty.channel.pool.FixedChannelPool;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.Future;
 
 import java.io.Closeable;
-import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
- * A thin synchronous HTTP client implemented on top of Netty. This client caches the last
- * connected channel so that subsequent requests to the same host/port can reuse the connection.
+ * Lightweight synchronous HTTP client backed by Netty with per-origin connection pooling.
+ * Each origin (host + port) reuses a {@link FixedChannelPool} so requests of the same origin
+ * avoid repeated TCP handshakes.
  *
- * <p>Example usage:
+ * <p>Usage example:</p>
  * <pre>{@code
- * EventLoopGroup group = new NioEventLoopGroup();
- * try (XdnHttpForwarderClient client = new XdnHttpForwarderClient(group)) {
+ * try (XdnHttpForwarderClient client = new XdnHttpForwarderClient()) {
  *     FullHttpRequest request = new DefaultFullHttpRequest(
- *             HttpVersion.HTTP_1_1,
- *             HttpMethod.GET,
- *             "/health");
+ *             HttpVersion.HTTP_1_1, HttpMethod.GET, "/health");
  *     request.headers().set(HttpHeaderNames.HOST, "127.0.0.1");
  *     FullHttpResponse response = client.execute("127.0.0.1", 8080, request);
- *     System.out.println("status = " + response.status());
- *     // The returned response owns a pooled ByteBuf; release it after use to avoid leaks.
+ *     System.out.println(response.status());
  *     response.release();
- * } finally {
- *     group.shutdownGracefully().syncUninterruptibly();
  * }
  * }</pre>
- *
- * TODO: This client is still buggy, it has reference counter error. We still need to fix this
- *  so that we can reuse faster Netty-based Http client, instead of converting Netty request
- *  into OpenJDK request.
  */
-public class XdnHttpForwarderClient implements Closeable {
+public final class XdnHttpForwarderClient implements Closeable {
+
+    private static final Logger LOG = Logger.getLogger(XdnHttpForwarderClient.class.getName());
+
+    private static final int MAX_CONTENT_LENGTH = 16 * 1024 * 1024;
+    private static final int DEFAULT_MAX_POOL_SIZE = 8;
 
     private final EventLoopGroup eventLoopGroup;
     private final boolean manageEventLoopGroup;
-
-    private final Bootstrap bootstrap;
-    private volatile Channel currentChannel;
-    private volatile String currentHost;
-    private volatile int currentPort;
+    private final ConcurrentMap<Origin, FixedChannelPool> pools = new ConcurrentHashMap<>();
 
     /**
-     * Creates a client with its own event loop group.
+     * Creates a client backed by its own event loop group.
      */
     public XdnHttpForwarderClient() {
         this(new NioEventLoopGroup(0), true);
@@ -67,54 +66,66 @@ public class XdnHttpForwarderClient implements Closeable {
     }
 
     private XdnHttpForwarderClient(EventLoopGroup group, boolean manageGroup) {
-        this.eventLoopGroup = Objects.requireNonNull(group);
+        this.eventLoopGroup = Objects.requireNonNull(group, "eventLoopGroup");
         this.manageEventLoopGroup = manageGroup;
-        this.bootstrap = new Bootstrap()
-                .group(this.eventLoopGroup)
-                .channel(NioSocketChannel.class)
-                .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
-                .handler(new ChannelInitializer<>() {
-                    @Override
-                    protected void initChannel(Channel ch) {
-                        ChannelPipeline pipeline = ch.pipeline();
-                        pipeline.addLast(new HttpClientCodec());
-                        pipeline.addLast(new HttpObjectAggregator(1 << 20));
-                        pipeline.addLast(new ClientResponseHandler());
-                    }
-                });
     }
 
     /**
-     * Sends the provided HTTP request synchronously and returns a detached HTTP response.
-     *
-     * @param host    target host
-     * @param port    target port
-     * @param request netty {@link FullHttpRequest}; will not be modified
-     * @return the HTTP response
+     * Sends the given HTTP request and returns a detached response. The caller is responsible for
+     * releasing the returned {@link FullHttpResponse} to avoid leaking pooled buffers.
      */
-    public FullHttpResponse execute(String host, int port, FullHttpRequest request)
-            throws Exception {
+    public FullHttpResponse execute(String host, int port, FullHttpRequest request) throws Exception {
         Objects.requireNonNull(host, "host");
         Objects.requireNonNull(request, "request");
 
-        Channel channel = ensureChannel(host, port);
-        ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
-        if (handler == null) {
-            throw new IllegalStateException("Client pipeline missing response handler");
-        }
-
+        Origin origin = new Origin(host, port);
+        FixedChannelPool pool = poolFor(origin);
         CompletableFuture<FullHttpResponse> responseFuture = new CompletableFuture<>();
-        handler.register(responseFuture);
+        final FullHttpRequest outbound = copyRequest(request);
 
-        FullHttpRequest outbound = request.copy();
-        ChannelFuture writeFuture = channel.writeAndFlush(outbound);
-        writeFuture.addListener(f -> {
-            ReferenceCountUtil.release(outbound);
-            if (!f.isSuccess()) {
-                handler.failResponse(f.cause());
+        pool.acquire().addListener((Future<Channel> acquireFuture) -> {
+            if (!acquireFuture.isSuccess()) {
+                ReferenceCountUtil.release(outbound);
+                responseFuture.completeExceptionally(acquireFuture.cause());
+                return;
             }
+
+            Channel channel = acquireFuture.getNow();
+            if (channel == null || !channel.isActive()) {
+                ReferenceCountUtil.release(outbound);
+                responseFuture.completeExceptionally(
+                        new IllegalStateException("Acquired inactive HTTP channel"));
+                if (channel != null) {
+                    releaseQuietly(pool, channel);
+                }
+                return;
+            }
+
+            ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
+            if (handler == null) {
+                ReferenceCountUtil.release(outbound);
+                responseFuture.completeExceptionally(
+                        new IllegalStateException("Missing response handler in pipeline"));
+                releaseQuietly(pool, channel);
+                return;
+            }
+
+            RequestContext context = new RequestContext(channel, pool, responseFuture);
+            if (!handler.register(context)) {
+                ReferenceCountUtil.release(outbound);
+                responseFuture.completeExceptionally(
+                        new IllegalStateException("Another request is already in flight"));
+                releaseQuietly(pool, channel);
+                return;
+            }
+
+            ChannelFuture writeFuture = channel.writeAndFlush(outbound);
+            writeFuture.addListener((ChannelFutureListener) wf -> {
+                ReferenceCountUtil.release(outbound);
+                if (!wf.isSuccess()) {
+                    handler.fail(wf.cause());
+                }
+            });
         });
 
         try {
@@ -128,123 +139,200 @@ public class XdnHttpForwarderClient implements Closeable {
         }
     }
 
-    private Channel ensureChannel(String host, int port) throws InterruptedException {
-        Channel existing = this.currentChannel;
-        if (isChannelHealthy(existing, host, port)) {
-            return existing;
-        }
+    private FixedChannelPool poolFor(Origin origin) {
+        return pools.computeIfAbsent(origin, this::createPool);
+    }
 
-        synchronized (this) {
-            existing = this.currentChannel;
-            if (!isChannelHealthy(existing, host, port)) {
-                if (existing != null) {
-                    existing.close().syncUninterruptibly();
-                    clearCachedChannel(existing);
+    private FixedChannelPool createPool(Origin origin) {
+        Bootstrap bootstrap = new Bootstrap()
+                .group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
+                .remoteAddress(new InetSocketAddress(origin.host(), origin.port()));
+
+        return new FixedChannelPool(bootstrap, new PoolHandler(), DEFAULT_MAX_POOL_SIZE);
+    }
+
+    private static FullHttpRequest copyRequest(FullHttpRequest request) {
+        ByteBuf content = request.content();
+        ByteBuf copiedContent = content != null && content.isReadable()
+                ? Unpooled.copiedBuffer(content)
+                : Unpooled.EMPTY_BUFFER;
+
+        DefaultFullHttpRequest copy = new DefaultFullHttpRequest(
+                request.protocolVersion(), request.method(), request.uri(), copiedContent);
+        copy.headers().set(request.headers());
+        copy.trailingHeaders().set(request.trailingHeaders());
+        if (copiedContent != Unpooled.EMPTY_BUFFER) {
+            HttpUtil.setContentLength(copy, copiedContent.readableBytes());
+        } else {
+            copy.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+        }
+        return copy;
+    }
+
+    private static FullHttpResponse copyResponse(FullHttpResponse response) {
+        ByteBuf content = response.content();
+        ByteBuf copiedContent = content != null && content.isReadable()
+                ? Unpooled.copiedBuffer(content)
+                : Unpooled.EMPTY_BUFFER;
+
+        DefaultFullHttpResponse copy = new DefaultFullHttpResponse(
+                response.protocolVersion(), response.status(), copiedContent);
+        copy.headers().set(response.headers());
+        copy.trailingHeaders().set(response.trailingHeaders());
+        if (copiedContent != Unpooled.EMPTY_BUFFER) {
+            HttpUtil.setContentLength(copy, copiedContent.readableBytes());
+        } else {
+            copy.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+        }
+        return copy;
+    }
+
+    private static void releaseQuietly(FixedChannelPool pool, Channel channel) {
+        try {
+            pool.release(channel).addListener(f -> {
+                if (!f.isSuccess()) {
+                    LOG.log(Level.WARNING, "Failed to return channel to pool", f.cause());
+                    channel.close();
                 }
-
-                Channel newChannel = bootstrap.connect(host, port).sync().channel();
-                newChannel.closeFuture().addListener(f -> clearCachedChannel(newChannel));
-                this.currentChannel = newChannel;
-                this.currentHost = host;
-                this.currentPort = port;
-                return newChannel;
-            }
-            return existing;
-        }
-    }
-
-    private boolean isChannelHealthy(Channel channel, String host, int port) {
-        if (channel == null) {
-            return false;
-        }
-        if (!channel.isActive() || !channel.isOpen()) {
-            return false;
-        }
-        if (!host.equals(this.currentHost) || port != this.currentPort) {
-            return false;
-        }
-        return channel.pipeline().get(ClientResponseHandler.class) != null;
-    }
-
-    private void clearCachedChannel(Channel channel) {
-        synchronized (this) {
-            if (this.currentChannel == channel) {
-                this.currentChannel = null;
-                this.currentHost = null;
-                this.currentPort = 0;
-            }
+            });
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "Failed to release channel back to pool", t);
+            channel.close();
         }
     }
 
     @Override
-    public void close() throws IOException {
-        synchronized (this) {
-            if (this.currentChannel != null) {
-                this.currentChannel.close().syncUninterruptibly();
-                this.currentChannel = null;
+    public void close() {
+        pools.values().forEach(pool -> {
+            try {
+                pool.close();
+            } catch (RuntimeException e) {
+                LOG.log(Level.WARNING, "Failed to close pool", e);
+            }
+        });
+        pools.clear();
+
+        if (manageEventLoopGroup) {
+            eventLoopGroup.shutdownGracefully().syncUninterruptibly();
+        }
+    }
+
+    private final class PoolHandler implements ChannelPoolHandler {
+        @Override
+        public void channelReleased(Channel ch) {
+            ClientResponseHandler handler = ch.pipeline().get(ClientResponseHandler.class);
+            if (handler != null) {
+                handler.clear();
             }
         }
-        if (manageEventLoopGroup) {
-            this.eventLoopGroup.shutdownGracefully().syncUninterruptibly();
+
+        @Override
+        public void channelAcquired(Channel ch) {
+            // No-op
+        }
+
+        @Override
+        public void channelCreated(Channel ch) {
+            ChannelPipeline pipeline = ch.pipeline();
+            pipeline.addLast(new HttpClientCodec());
+            pipeline.addLast(new HttpObjectAggregator(MAX_CONTENT_LENGTH));
+            pipeline.addLast(new ClientResponseHandler());
         }
     }
 
     private static final class ClientResponseHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
 
-        private final AtomicReference<CompletableFuture<FullHttpResponse>> inFlight =
-                new AtomicReference<>();
+        private final AtomicReference<RequestContext> inFlight = new AtomicReference<>();
 
-        void register(CompletableFuture<FullHttpResponse> future) {
-            if (!inFlight.compareAndSet(null, future)) {
-                future.completeExceptionally(
-                        new IllegalStateException("Another request is already in flight"));
+        boolean register(RequestContext context) {
+            return inFlight.compareAndSet(null, context);
+        }
+
+        void fail(Throwable throwable) {
+            RequestContext context = inFlight.getAndSet(null);
+            if (context != null) {
+                context.fail(throwable);
             }
         }
 
-        void failResponse(Throwable throwable) {
-            CompletableFuture<FullHttpResponse> future = inFlight.getAndSet(null);
-            if (future != null) {
-                future.completeExceptionally(throwable);
-            }
+        void clear() {
+            inFlight.set(null);
         }
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpResponse msg) {
-            CompletableFuture<FullHttpResponse> future = inFlight.getAndSet(null);
-            if (future == null) {
+            RequestContext context = inFlight.getAndSet(null);
+            if (context == null) {
                 ReferenceCountUtil.release(msg);
+                LOG.warning("Received response with no context; dropping");
                 return;
             }
 
-            FullHttpResponse detached = copyResponse(msg);
+            FullHttpResponse copy = copyResponse(msg);
             ReferenceCountUtil.release(msg);
-            future.complete(detached);
+            context.complete(copy);
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext ctx) {
+            fail(new IllegalStateException("Backend channel closed"));
+            ctx.fireChannelInactive();
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            failResponse(cause);
+            fail(cause);
             ctx.close();
         }
+    }
 
-        private FullHttpResponse copyResponse(FullHttpResponse msg) {
-            ByteBuf content = msg.content();
-            ByteBuf copiedContent = content != null && content.isReadable()
-                    ? Unpooled.copiedBuffer(content)
-                    : Unpooled.EMPTY_BUFFER;
+    private static final class RequestContext {
+        private final Channel channel;
+        private final FixedChannelPool pool;
+        private final CompletableFuture<FullHttpResponse> responseFuture;
 
-            DefaultFullHttpResponse response = new DefaultFullHttpResponse(
-                    msg.protocolVersion(),
-                    msg.status(),
-                    copiedContent);
-
-            response.headers().set(msg.headers());
-            response.trailingHeaders().set(msg.trailingHeaders());
-            if (copiedContent != Unpooled.EMPTY_BUFFER
-                    && !response.headers().contains(HttpHeaderNames.CONTENT_LENGTH)) {
-                HttpUtil.setContentLength(response, copiedContent.readableBytes());
-            }
-            return response;
+        private RequestContext(Channel channel,
+                               FixedChannelPool pool,
+                               CompletableFuture<FullHttpResponse> responseFuture) {
+            this.channel = channel;
+            this.pool = pool;
+            this.responseFuture = responseFuture;
         }
+
+        void complete(FullHttpResponse response) {
+            boolean delivered = responseFuture.complete(response);
+            if (!delivered) {
+                ReferenceCountUtil.release(response);
+            }
+            release();
+        }
+
+        void fail(Throwable throwable) {
+            if (!responseFuture.completeExceptionally(throwable)) {
+                LOG.log(Level.WARNING, "Duplicate failure delivery", throwable);
+            }
+            release();
+        }
+
+        private void release() {
+            try {
+                pool.release(channel).addListener(f -> {
+                    if (!f.isSuccess()) {
+                        LOG.log(Level.WARNING, "Failed to release channel", f.cause());
+                        channel.close();
+                    }
+                });
+            } catch (Throwable t) {
+                LOG.log(Level.WARNING, "Exception releasing channel to pool", t);
+                channel.close();
+            }
+        }
+    }
+
+    private record Origin(String host, int port) {
     }
 }
