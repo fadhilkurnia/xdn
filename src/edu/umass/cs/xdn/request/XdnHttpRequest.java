@@ -34,12 +34,14 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     public static final String XDN_HTTP_REQUEST_ID_HEADER = "XDN-Request-ID";
     public static final String XDN_TIMESTAMP_COOKIE_PREFIX = "XDN-CC-TS-";
 
+    private static final Logger LOG = Logger.getLogger(XdnHttpRequest.class.getName());
+
     private final long requestId;
     private final String serviceName;
 
     private final HttpRequest httpRequest;
     private final HttpContent httpRequestContent;
-    
+
     // Below are variables for caching upon creation,
     // to be used when converting to java.net.http.HttpRequest
     private final String[] cachedHeaderArray;
@@ -56,10 +58,11 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     private List<RequestMatcher> requestMatchers;
 
     public XdnHttpRequest(HttpRequest request, HttpContent content) {
-        this(request, content, null);
+        this(null, request, content, null);
     }
 
-    private XdnHttpRequest(HttpRequest request,
+    private XdnHttpRequest(Long providedRequestId,
+                           HttpRequest request,
                            HttpContent content,
                            List<RequestMatcher> requestMatchers) {
         assert request != null : "HttpRequest must be specified";
@@ -68,9 +71,12 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         this.httpRequest = request;
         this.httpRequestContent = content;
 
-        // Infers requestId from httpRequest, otherwise generates random ID.
+        // Get requestId from the provided arg, otherwise infer requestId from httpRequest,
+        // otherwise generates random ID.
         Long inferredRequestId = this.inferRequestId(request);
-        this.requestId = inferredRequestId != null
+        this.requestId = providedRequestId != null
+                ? providedRequestId
+                : inferredRequestId != null
                 ? inferredRequestId
                 : Math.abs(UUID.randomUUID().getLeastSignificantBits());
         this.httpRequest.headers().set(XDN_HTTP_REQUEST_ID_HEADER, this.requestId);
@@ -477,6 +483,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         XdnHttpRequestProto.XdnHttpRequest.Builder protoBuilder =
                 XdnHttpRequestProto.XdnHttpRequest
                         .newBuilder()
+                        .setRequestId(this.requestId)
                         .setProtocolVersion(version)
                         .setRequestMethod(method)
                         .setRequestUri(uri)
@@ -555,7 +562,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
             contentStringBuilder.append("<bytes>");
         }
         String contentString = contentStringBuilder.toString();
-        
+
         return String.format("id=%d %s %s:%s hdr=%s body=%s",
                 this.requestId,
                 this.httpRequest.method(),
@@ -591,6 +598,9 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
                     "Invalid protobuf bytes given: " + e.getMessage());
             return null;
         }
+
+        // Get the requestId
+        long requestId = decodedProto.getRequestId();
 
         // Convert the protocol version
         HttpVersion version = getHttpVersionFromProto(decodedProto.getProtocolVersion());
@@ -647,12 +657,56 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
                     trailingHeaders);
         }
 
-        XdnHttpRequest decodedRequest = new XdnHttpRequest(request, content);
+        XdnHttpRequest decodedRequest = new XdnHttpRequest(requestId, request, content, null);
         if (decodedHttpResponse != null) {
             decodedRequest.setHttpResponse(decodedHttpResponse);
         }
 
         return decodedRequest;
+    }
+
+    /**
+     * Extracts the XDN request id from a serialized HTTP request string without fully
+     * deserializing it into {@link XdnHttpRequest}. Returns {@code null} if the input can not be
+     * parsed.
+     */
+    public static Long parseRequestIdQuickly(String encodedRequest) {
+        Objects.requireNonNull(encodedRequest, "encodedRequest");
+        byte[] raw = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
+        if (raw.length < 4) {
+            LOG.warning("Encoded request too short when parsing request id");
+            return null;
+        }
+
+        int packetType = ByteBuffer.wrap(raw).getInt(0);
+        if (packetType != XdnRequestType.XDN_SERVICE_HTTP_REQUEST.getInt()) {
+            LOG.warning("Unexpected packet type when parsing request id: " + packetType);
+            return null;
+        }
+
+        byte[] protoBytes = Arrays.copyOfRange(raw, 4, raw.length);
+        com.google.protobuf.CodedInputStream cis =
+                com.google.protobuf.CodedInputStream.newInstance(protoBytes);
+
+        try {
+            int tag;
+            while ((tag = cis.readTag()) != 0) {
+                int fieldNumber = tag >>> 3;
+                if (fieldNumber == 1) {
+                    return cis.readInt64();
+                }
+                cis.skipField(tag);
+            }
+        } catch (InvalidProtocolBufferException e) {
+            LOG.log(Level.WARNING, "Failed to parse request id", e);
+            return null;
+        } catch (java.io.IOException e) {
+            LOG.log(Level.WARNING, "IO error while parsing request id", e);
+            return null;
+        }
+
+        LOG.warning("Request id field missing in encoded request");
+        return null;
     }
 
     private static HttpVersion getHttpVersionFromProto(
