@@ -15,15 +15,16 @@ import edu.umass.cs.xdn.service.RequestMatcher;
 import edu.umass.cs.xdn.service.ServiceProperty;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -74,7 +75,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
                 ? providedRequestId
                 : inferredRequestId != null
                 ? inferredRequestId
-                : Math.abs(UUID.randomUUID().getLeastSignificantBits());
+                : ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
         this.httpRequest.headers().set(XDN_HTTP_REQUEST_ID_HEADER, this.requestId);
 
         // Infers service name from httpRequest.
@@ -294,118 +295,25 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
     @Override
     public byte[] toBytes() {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        final int packetType = this.getRequestType().getInt();
 
-        // Serialize the packet type
-        int packetType = this.getRequestType().getInt();
-        byte[] encodedHeader = ByteBuffer.allocate(4).putInt(packetType).array();
+        XdnHttpRequestProto.XdnHttpRequest.Builder builder = XdnHttpRequestProto.XdnHttpRequest
+                .newBuilder()
+                .setRequestId(this.requestId)
+                .setProtocolVersion(getHttpVersionProto(this.httpRequest.protocolVersion()))
+                .setRequestMethod(getHttpMethodProto(this.httpRequest.method()))
+                .setRequestUri(this.httpRequest.uri())
+                .addAllRequestHeaders(getHeaderList(this.httpRequest.headers()))
+                .setRequestBody(extractBodyByteString(this.httpRequestContent.content()));
 
-        // Serialize the protocol version
-        XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion version =
-                this.getHttpVersionProto(this.httpRequest.protocolVersion());
-
-        // Serialize the http method
-        XdnHttpRequestProto.XdnHttpRequest.HttpMethod method;
-        switch (this.httpRequest.method().toString()) {
-            case "GET": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.GET;
-                break;
-            }
-            case "HEAD": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.HEAD;
-                break;
-            }
-            case "POST": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.POST;
-                break;
-            }
-            case "PUT": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.PUT;
-                break;
-            }
-            case "DELETE": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.DELETE;
-                break;
-            }
-            case "CONNECT": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.CONNECT;
-                break;
-            }
-            case "OPTIONS": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.OPTIONS;
-                break;
-            }
-            case "PATCH": {
-                method = XdnHttpRequestProto.XdnHttpRequest.HttpMethod.PATCH;
-                break;
-            }
-            default: {
-                throw new RuntimeException("unsupported http method of "
-                        + this.httpRequest.method());
-            }
-        }
-
-        // Get the request uri
-        String uri = this.httpRequest.uri();
-
-        // Serialize the request content
-        int lenBody = this.httpRequestContent.content().readableBytes();
-        byte[] requestBody = new byte[lenBody];
-        this.httpRequestContent.content().duplicate().readBytes(requestBody);
-        ByteString requestBodyBytes = ByteString.copyFrom(requestBody);
-
-        // Serialize the headers
-        List<XdnHttpRequestProto.XdnHttpRequest.Header> headerList =
-                this.getHeaderList(this.httpRequest.headers());
-
-        // Serialize HttpResponse, if any
-        XdnHttpRequestProto.XdnHttpRequest.Response httpResponseProto = null;
         if (this.httpResponse != null) {
-            // Serialize the response protocol version
-            XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion responseHttpProtocolVersion =
-                    this.getHttpVersionProto(this.httpResponse.protocolVersion());
-
-            // Serialize the response status code
-            int statusCode = this.httpResponse.status().code();
-
-            // Serialize the response headers
-            List<XdnHttpRequestProto.XdnHttpRequest.Header> responseHeaderList =
-                    this.getHeaderList(this.httpResponse.headers());
-
-            // Serialize the response body
-            ByteBuf httpResponseBody = this.httpResponseBody;
-            assert httpResponseBody != null;
-            byte[] responseBody = new byte[httpResponseBody.readableBytes()];
-            httpResponseBody.getBytes(0, responseBody);
-
-            XdnHttpRequestProto.XdnHttpRequest.Response.Builder responseProtoBuilder =
-                    XdnHttpRequestProto.XdnHttpRequest.Response.newBuilder()
-                            .setProtocolVersion(responseHttpProtocolVersion)
-                            .setStatusCode(statusCode)
-                            .addAllHeaders(responseHeaderList)
-                            .setResponseBody(ByteString.copyFrom(responseBody));
-
-            httpResponseProto = responseProtoBuilder.build();
+            builder.setResponse(buildResponseProto());
         }
 
-        // Serialize all the fields above with Protobuf
-        XdnHttpRequestProto.XdnHttpRequest.Builder protoBuilder =
-                XdnHttpRequestProto.XdnHttpRequest
-                        .newBuilder()
-                        .setRequestId(this.requestId)
-                        .setProtocolVersion(version)
-                        .setRequestMethod(method)
-                        .setRequestUri(uri)
-                        .addAllRequestHeaders(headerList)
-                        .setRequestBody(requestBodyBytes);
-        if (httpResponseProto != null) {
-            protoBuilder.setResponse(httpResponseProto);
-        }
-
-        // Serialize the packetType in the header, followed by the protobuf
-        output.writeBytes(encodedHeader);
-        output.writeBytes(protoBuilder.build().toByteArray());
-        return output.toByteArray();
+        byte[] protoBytes = builder.build().toByteArray();
+        byte[] serialized = new byte[Integer.BYTES + protoBytes.length];
+        ByteBuffer.wrap(serialized).putInt(packetType).put(protoBytes);
+        return serialized;
     }
 
     private XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion getHttpVersionProto(
@@ -432,6 +340,42 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
             headerList.add(header);
         }
         return headerList;
+    }
+
+    private static XdnHttpRequestProto.XdnHttpRequest.HttpMethod getHttpMethodProto(HttpMethod httpMethod) {
+        return switch (httpMethod.name()) {
+            case "GET" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.GET;
+            case "HEAD" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.HEAD;
+            case "POST" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.POST;
+            case "PUT" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.PUT;
+            case "DELETE" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.DELETE;
+            case "CONNECT" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.CONNECT;
+            case "OPTIONS" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.OPTIONS;
+            case "PATCH" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.PATCH;
+            default ->
+                    throw new IllegalArgumentException("Unsupported HTTP method: " + httpMethod.name());
+        };
+    }
+
+    private static ByteString extractBodyByteString(ByteBuf buffer) {
+        int readable = buffer.readableBytes();
+        if (readable == 0) {
+            return ByteString.EMPTY;
+        }
+        return ByteString.copyFrom(ByteBufUtil.getBytes(buffer, buffer.readerIndex(), readable, true));
+    }
+
+    private XdnHttpRequestProto.XdnHttpRequest.Response buildResponseProto() {
+        ByteString responseBody = this.httpResponseBody != null
+                ? extractBodyByteString(this.httpResponseBody)
+                : ByteString.EMPTY;
+
+        return XdnHttpRequestProto.XdnHttpRequest.Response.newBuilder()
+                .setProtocolVersion(getHttpVersionProto(this.httpResponse.protocolVersion()))
+                .setStatusCode(this.httpResponse.status().code())
+                .addAllHeaders(getHeaderList(this.httpResponse.headers()))
+                .setResponseBody(responseBody)
+                .build();
     }
 
     public String getLogText() {
@@ -487,90 +431,78 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     }
 
     public static XdnHttpRequest createFromString(String encodedRequest) {
-        assert encodedRequest != null;
-        byte[] encoded = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
+        Objects.requireNonNull(encodedRequest, "encodedRequest");
+        byte[] raw = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
+        if (raw.length < Integer.BYTES) {
+            Logger.getGlobal().log(Level.WARNING, "Invalid encoded request length: " + raw.length);
+            return null;
+        }
 
-        // Decode the packet type
-        assert encoded.length >= 4;
-        ByteBuffer headerBuffer = ByteBuffer.wrap(encoded);
-        int packetType = headerBuffer.getInt(0);
-        assert packetType == XdnRequestType.XDN_SERVICE_HTTP_REQUEST.getInt()
-                : "invalid packet header: " + packetType;
-        encoded = Arrays.copyOfRange(encoded, 4, encoded.length);
+        ByteBuffer header = ByteBuffer.wrap(raw);
+        int packetType = header.getInt();
+        if (packetType != XdnRequestType.XDN_SERVICE_HTTP_REQUEST.getInt()) {
+            Logger.getGlobal().log(Level.WARNING,
+                    "Unexpected packet type " + packetType + " while decoding HTTP request");
+            return null;
+        }
 
-        // Decode the bytes into Proto
-        XdnHttpRequestProto.XdnHttpRequest decodedProto = null;
+        XdnHttpRequestProto.XdnHttpRequest decodedProto;
         try {
-            decodedProto = XdnHttpRequestProto.XdnHttpRequest.parseFrom(encoded);
+            byte[] protoBytes = Arrays.copyOfRange(raw, Integer.BYTES, raw.length);
+            decodedProto = XdnHttpRequestProto.XdnHttpRequest.parseFrom(protoBytes);
         } catch (InvalidProtocolBufferException e) {
             Logger.getGlobal().log(Level.WARNING,
                     "Invalid protobuf bytes given: " + e.getMessage());
             return null;
         }
 
-        // Get the requestId
-        long requestId = decodedProto.getRequestId();
-
-        // Convert the protocol version
-        HttpVersion version = getHttpVersionFromProto(decodedProto.getProtocolVersion());
-
-        // Convert the Http method
-        HttpMethod method = new HttpMethod(decodedProto.getRequestMethod().toString());
-
-        // Get the URI
-        String uri = decodedProto.getRequestUri();
-
-        // Convert the headers
-        HttpHeaders headers = new DefaultHttpHeaders();
-        for (XdnHttpRequestProto.XdnHttpRequest.Header header :
+        HttpHeaders headers = new DefaultHttpHeaders(true);
+        for (XdnHttpRequestProto.XdnHttpRequest.Header headerProto :
                 decodedProto.getRequestHeadersList()) {
-            headers.add(header.getName(), header.getValue());
+            headers.add(headerProto.getName(), headerProto.getValue());
         }
 
-        // Convert the content
-        HttpContent content = new DefaultHttpContent(
-                Unpooled.copiedBuffer(decodedProto.getRequestBody().toByteArray()));
+        ByteString requestBodyBytes = decodedProto.getRequestBody();
+        ByteBuf requestBodyBuf = requestBodyBytes.isEmpty()
+                ? Unpooled.EMPTY_BUFFER
+                : Unpooled.wrappedBuffer(requestBodyBytes.asReadOnlyByteBuffer());
 
-        // Convert the proto into HttpRequest and HttpContent
-        HttpRequest request = new DefaultHttpRequest(version, method, uri, headers);
+        HttpRequest httpRequest = new DefaultHttpRequest(
+                getHttpVersionFromProto(decodedProto.getProtocolVersion()),
+                HttpMethod.valueOf(decodedProto.getRequestMethod().name()),
+                decodedProto.getRequestUri(),
+                headers);
 
-        // Handle response, if any
-        HttpResponse decodedHttpResponse = null;
+        HttpContent httpContent = new DefaultHttpContent(requestBodyBuf);
+
+        HttpResponse httpResponse = null;
         if (decodedProto.hasResponse()) {
-            // Convert the response protocol version
-            HttpVersion responseVersion = getHttpVersionFromProto(
-                    decodedProto.getResponse().getProtocolVersion());
+            XdnHttpRequestProto.XdnHttpRequest.Response responseProto = decodedProto.getResponse();
 
-            // Convert the response code
-            int responseCode = decodedProto.getResponse().getStatusCode();
-            HttpResponseStatus responseStatus = HttpResponseStatus.valueOf(responseCode);
-
-            // Convert the response headers
-            HttpHeaders responseHeaders = new DefaultHttpHeaders();
-            for (XdnHttpRequestProto.XdnHttpRequest.Header responseHeader :
-                    decodedProto.getResponse().getHeadersList()) {
-                responseHeaders.add(responseHeader.getName(), responseHeader.getValue());
+            HttpHeaders responseHeaders = new DefaultHttpHeaders(true);
+            for (XdnHttpRequestProto.XdnHttpRequest.Header headerProto :
+                    responseProto.getHeadersList()) {
+                responseHeaders.add(headerProto.getName(), headerProto.getValue());
             }
 
-            // Convert the body
-            byte[] responseBody = decodedProto.getResponse().getResponseBody().toByteArray();
+            ByteString responseBodyBytes = responseProto.getResponseBody();
+            ByteBuf responseBodyBuf = responseBodyBytes.isEmpty()
+                    ? Unpooled.EMPTY_BUFFER
+                    : Unpooled.wrappedBuffer(responseBodyBytes.asReadOnlyByteBuffer());
 
-            // by default, we have an empty header trailing for the response
-            HttpHeaders trailingHeaders = new DefaultHttpHeaders();
-
-            decodedHttpResponse = new DefaultFullHttpResponse(
-                    responseVersion,
-                    responseStatus,
-                    Unpooled.copiedBuffer(responseBody),
+            httpResponse = new DefaultFullHttpResponse(
+                    getHttpVersionFromProto(responseProto.getProtocolVersion()),
+                    HttpResponseStatus.valueOf(responseProto.getStatusCode()),
+                    responseBodyBuf,
                     responseHeaders,
-                    trailingHeaders);
+                    new DefaultHttpHeaders(true));
         }
 
-        XdnHttpRequest decodedRequest = new XdnHttpRequest(requestId, request, content, null);
-        if (decodedHttpResponse != null) {
-            decodedRequest.setHttpResponse(decodedHttpResponse);
+        XdnHttpRequest decodedRequest = new XdnHttpRequest(decodedProto.getRequestId(), httpRequest,
+                httpContent, null);
+        if (httpResponse != null) {
+            decodedRequest.setHttpResponse(httpResponse);
         }
-
         return decodedRequest;
     }
 
