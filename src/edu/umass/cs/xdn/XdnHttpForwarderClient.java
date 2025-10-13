@@ -175,19 +175,22 @@ public final class XdnHttpForwarderClient implements Closeable {
 
     private static FullHttpResponse copyResponse(FullHttpResponse response) {
         ByteBuf content = response.content();
-        ByteBuf copiedContent = content != null && content.isReadable()
-                ? Unpooled.copiedBuffer(content)
-                : Unpooled.EMPTY_BUFFER;
+        ByteBuf payload = (content == null || !content.isReadable())
+                ? Unpooled.EMPTY_BUFFER
+                : content.copy();
+
+        HttpHeaders headers = response.headers().copy();
+        HttpHeaders trailing = response.trailingHeaders().copy();
 
         DefaultFullHttpResponse copy = new DefaultFullHttpResponse(
-                response.protocolVersion(), response.status(), copiedContent);
-        copy.headers().set(response.headers());
-        copy.trailingHeaders().set(response.trailingHeaders());
-        if (copiedContent != Unpooled.EMPTY_BUFFER) {
-            HttpUtil.setContentLength(copy, copiedContent.readableBytes());
-        } else {
+                response.protocolVersion(), response.status(), payload, headers, trailing);
+
+        if (payload == Unpooled.EMPTY_BUFFER) {
             copy.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+        } else {
+            HttpUtil.setContentLength(copy, payload.readableBytes());
         }
+
         return copy;
     }
 
