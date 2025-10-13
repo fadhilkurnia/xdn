@@ -1,7 +1,10 @@
 package edu.umass.cs.xdn.request;
 
 import com.google.protobuf.ByteString;
+import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.ExtensionRegistryLite;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.WireFormat;
 import edu.umass.cs.clientcentric.VectorTimestamp;
 import edu.umass.cs.clientcentric.interfaces.TimestampedRequest;
 import edu.umass.cs.clientcentric.interfaces.TimestampedResponse;
@@ -21,6 +24,7 @@ import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -38,6 +42,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
             ServiceProperty.createDefaultMatchers();
 
     private static final Logger LOG = Logger.getLogger(XdnHttpRequest.class.getName());
+    private static final ExtensionRegistryLite EMPTY_REGISTRY = ExtensionRegistryLite.getEmptyRegistry();
 
     private final long requestId;
     private final String serviceName;
@@ -285,8 +290,9 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     }
 
     public void setHttpResponse(HttpResponse httpResponse) {
-        assert httpRequest != null;
-        assert httpResponse instanceof FullHttpResponse;
+        assert httpRequest != null : "Expecting non null httpResponse";
+        assert httpResponse instanceof FullHttpResponse :
+                "Expecting FullHttpResponse, but found " + httpResponse.getClass().getSimpleName();
         FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;
         this.httpResponse = fullHttpResponse;
         this.httpResponseBody = fullHttpResponse.content() != null
@@ -431,28 +437,8 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     }
 
     public static XdnHttpRequest createFromString(String encodedRequest) {
-        Objects.requireNonNull(encodedRequest, "encodedRequest");
-        byte[] raw = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
-        if (raw.length < Integer.BYTES) {
-            Logger.getGlobal().log(Level.WARNING, "Invalid encoded request length: " + raw.length);
-            return null;
-        }
-
-        ByteBuffer header = ByteBuffer.wrap(raw);
-        int packetType = header.getInt();
-        if (packetType != XdnRequestType.XDN_SERVICE_HTTP_REQUEST.getInt()) {
-            Logger.getGlobal().log(Level.WARNING,
-                    "Unexpected packet type " + packetType + " while decoding HTTP request");
-            return null;
-        }
-
-        XdnHttpRequestProto.XdnHttpRequest decodedProto;
-        try {
-            byte[] protoBytes = Arrays.copyOfRange(raw, Integer.BYTES, raw.length);
-            decodedProto = XdnHttpRequestProto.XdnHttpRequest.parseFrom(protoBytes);
-        } catch (InvalidProtocolBufferException e) {
-            Logger.getGlobal().log(Level.WARNING,
-                    "Invalid protobuf bytes given: " + e.getMessage());
+        XdnHttpRequestProto.XdnHttpRequest decodedProto = decodeProto(encodedRequest);
+        if (decodedProto == null) {
             return null;
         }
 
@@ -475,28 +461,9 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
 
         HttpContent httpContent = new DefaultHttpContent(requestBodyBuf);
 
-        HttpResponse httpResponse = null;
-        if (decodedProto.hasResponse()) {
-            XdnHttpRequestProto.XdnHttpRequest.Response responseProto = decodedProto.getResponse();
-
-            HttpHeaders responseHeaders = new DefaultHttpHeaders(true);
-            for (XdnHttpRequestProto.XdnHttpRequest.Header headerProto :
-                    responseProto.getHeadersList()) {
-                responseHeaders.add(headerProto.getName(), headerProto.getValue());
-            }
-
-            ByteString responseBodyBytes = responseProto.getResponseBody();
-            ByteBuf responseBodyBuf = responseBodyBytes.isEmpty()
-                    ? Unpooled.EMPTY_BUFFER
-                    : Unpooled.wrappedBuffer(responseBodyBytes.asReadOnlyByteBuffer());
-
-            httpResponse = new DefaultFullHttpResponse(
-                    getHttpVersionFromProto(responseProto.getProtocolVersion()),
-                    HttpResponseStatus.valueOf(responseProto.getStatusCode()),
-                    responseBodyBuf,
-                    responseHeaders,
-                    new DefaultHttpHeaders(true));
-        }
+        HttpResponse httpResponse = decodedProto.hasResponse()
+                ? buildHttpResponse(decodedProto.getResponse())
+                : null;
 
         XdnHttpRequest decodedRequest = new XdnHttpRequest(decodedProto.getRequestId(), httpRequest,
                 httpContent, null);
@@ -504,6 +471,121 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
             decodedRequest.setHttpResponse(httpResponse);
         }
         return decodedRequest;
+    }
+
+    /**
+     * Returns {@code true} if the encoded request contains an embedded HTTP response.
+     */
+    public static boolean doesHasResponse(String encodedRequest) {
+        Objects.requireNonNull(encodedRequest, "encodedRequest");
+        byte[] raw = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
+        if (!isValidPacketType(raw)) {
+            return false;
+        }
+
+        try {
+            CodedInputStream stream = CodedInputStream.newInstance(
+                    raw, Integer.BYTES, raw.length - Integer.BYTES);
+            while (!stream.isAtEnd()) {
+                int tag = stream.readTag();
+                if (tag == 0) {
+                    break;
+                }
+                int fieldNumber = WireFormat.getTagFieldNumber(tag);
+                if (fieldNumber == 7) { // response field
+                    return true;
+                }
+                stream.skipField(tag);
+            }
+        } catch (IOException e) {
+            LOG.log(Level.WARNING, "Failed to inspect encoded request: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Decodes only the HTTP response portion from a serialized request string. Returns
+     * {@code null} if the input is invalid or contains no response.
+     */
+    public static HttpResponse parseHttpResponse(String encodedRequest) {
+        Objects.requireNonNull(encodedRequest, "encodedRequest");
+        byte[] raw = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
+        if (!isValidPacketType(raw)) {
+            return null;
+        }
+
+        try {
+            CodedInputStream stream = CodedInputStream.newInstance(
+                    raw, Integer.BYTES, raw.length - Integer.BYTES);
+            while (!stream.isAtEnd()) {
+                int tag = stream.readTag();
+                if (tag == 0) {
+                    break;
+                }
+                int fieldNumber = WireFormat.getTagFieldNumber(tag);
+                if (fieldNumber == 7) {
+                    XdnHttpRequestProto.XdnHttpRequest.Response responseProto =
+                            stream.readMessage(
+                                    XdnHttpRequestProto.XdnHttpRequest.Response.parser(),
+                                    EMPTY_REGISTRY);
+                    return buildHttpResponse(responseProto);
+                }
+                stream.skipField(tag);
+            }
+        } catch (IOException e) {
+            LOG.log(Level.WARNING, "Failed to parse response from encoded request: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private static XdnHttpRequestProto.XdnHttpRequest decodeProto(String encodedRequest) {
+        Objects.requireNonNull(encodedRequest, "encodedRequest");
+        byte[] raw = encodedRequest.getBytes(StandardCharsets.ISO_8859_1);
+        if (!isValidPacketType(raw)) {
+            return null;
+        }
+
+        try {
+            byte[] protoBytes = Arrays.copyOfRange(raw, Integer.BYTES, raw.length);
+            return XdnHttpRequestProto.XdnHttpRequest.parseFrom(protoBytes);
+        } catch (InvalidProtocolBufferException e) {
+            LOG.log(Level.WARNING, "Invalid protobuf bytes given: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static boolean isValidPacketType(byte[] raw) {
+        if (raw.length < Integer.BYTES) {
+            LOG.warning("Invalid encoded request length: " + raw.length);
+            return false;
+        }
+        int packetType = ByteBuffer.wrap(raw, 0, Integer.BYTES).getInt();
+        if (packetType != XdnRequestType.XDN_SERVICE_HTTP_REQUEST.getInt()) {
+            LOG.warning("Unexpected packet type " + packetType + " while decoding HTTP request");
+            return false;
+        }
+        return true;
+    }
+
+    private static HttpResponse buildHttpResponse(
+            XdnHttpRequestProto.XdnHttpRequest.Response responseProto) {
+        HttpHeaders responseHeaders = new DefaultHttpHeaders(true);
+        for (XdnHttpRequestProto.XdnHttpRequest.Header headerProto :
+                responseProto.getHeadersList()) {
+            responseHeaders.add(headerProto.getName(), headerProto.getValue());
+        }
+
+        ByteString responseBodyBytes = responseProto.getResponseBody();
+        ByteBuf responseBodyBuf = responseBodyBytes.isEmpty()
+                ? Unpooled.EMPTY_BUFFER
+                : Unpooled.wrappedBuffer(responseBodyBytes.asReadOnlyByteBuffer());
+
+        return new DefaultFullHttpResponse(
+                getHttpVersionFromProto(responseProto.getProtocolVersion()),
+                HttpResponseStatus.valueOf(responseProto.getStatusCode()),
+                responseBodyBuf,
+                responseHeaders,
+                new DefaultHttpHeaders(true));
     }
 
     /**
