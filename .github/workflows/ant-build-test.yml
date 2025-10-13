@@ -27,14 +27,16 @@ jobs:
       with:
         java-version: '21'
         distribution: 'oracle'
-    - name: 📦 Set up Docker  # this is required for XdnTestCluster tests
-      uses: step-security/ghaction-setup-docker@v2
-      with:
-        version: '24.0.5'
+    - name: 📦 Set up Docker  # Required for XdnTestCluster tests
+      uses: docker-practice/actions-setup-docker@master
+      timeout-minutes: 12
     - name: 📦 Verify Docker installation
       run: |
+        set -x
         docker version
         docker run --rm hello-world
+    - name: 📦 Set up Rsync  # Required for default PrimaryBackup setup
+      uses: GuillaumeFalourd/setup-rsync@v1.2
     - name: 🏗️ Compiling the source code into a jar archive ...
       run: ant jar
     - name: 🧪 Running reconfiguration tests with ant ...
