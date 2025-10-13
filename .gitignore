@@ -16,3 +16,5 @@ build.number
 conf/gigapaxos.aws.properties
 cookie.txt
 output.txt
+*.jfr
+*.png
