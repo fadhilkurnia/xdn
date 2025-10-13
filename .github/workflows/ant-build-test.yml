@@ -27,6 +27,14 @@ jobs:
       with:
         java-version: '21'
         distribution: 'oracle'
+    - name: 📦 Set up Docker  # this is required for XdnTestCluster tests
+      uses: step-security/ghaction-setup-docker@v2
+      with:
+        version: '24.0.5'
+    - name: 📦 Verify Docker installation
+      run: |
+        docker version
+        docker run --rm hello-world
     - name: 🏗️ Compiling the source code into a jar archive ...
       run: ant jar
     - name: 🧪 Running reconfiguration tests with ant ...
