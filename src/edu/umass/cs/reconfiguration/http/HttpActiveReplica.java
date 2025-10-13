@@ -670,7 +670,8 @@ public class HttpActiveReplica {
             // Validate the executed Http request
             if (!(executedRequest instanceof XdnHttpRequest xdnRequest)) {
                 String exceptionMessage = "Unexpected executed request (" +
-                        executedRequest.getClass().getSimpleName() +
+                        (executedRequest != null
+                                ? executedRequest.getClass().getSimpleName() : "null") +
                         "), it must be a " + XdnHttpRequest.class.getSimpleName();
                 throw new RuntimeException(exceptionMessage);
             }

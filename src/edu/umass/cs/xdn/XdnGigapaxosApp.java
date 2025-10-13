@@ -395,8 +395,15 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             Long cachedId = XdnHttpRequest.parseRequestIdQuickly(stringified);
             if (cachedId != null) {
                 Request cached = requestCache.get(cachedId);
-                if (cached instanceof XdnHttpRequest) {
-                    return (XdnHttpRequest) cached;
+                if (cached instanceof XdnHttpRequest xdnHttpRequest) {
+                    if (xdnHttpRequest.getHttpResponse() == null &&
+                            XdnHttpRequest.doesHasResponse(stringified)) {
+                        HttpResponse parsedResponse = XdnHttpRequest.parseHttpResponse(stringified);
+                        if (parsedResponse != null) {
+                            ((XdnHttpRequest) cached).setHttpResponse(parsedResponse);
+                        }
+                    }
+                    return cached;
                 }
             }
             XdnHttpRequest httpRequest = XdnHttpRequest.createFromString(stringified);
@@ -408,7 +415,8 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             if (cachedId != null) {
                 Request cached = requestCache.get(cachedId);
                 if (cached instanceof XdnHttpRequestBatch) {
-                    return (XdnHttpRequestBatch) cached;
+                    // TODO: handle parsed response quickly.
+                    return cached;
                 }
             }
             XdnHttpRequestBatch batch = XdnHttpRequestBatch.createFromBytes(
