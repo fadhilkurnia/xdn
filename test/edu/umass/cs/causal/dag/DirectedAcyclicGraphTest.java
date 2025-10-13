@@ -1,6 +1,6 @@
 package edu.umass.cs.causal.dag;
 
-import edu.umass.cs.xdn.XdnHttpRequestTest;
+import edu.umass.cs.xdn.request.XdnHttpRequestTest;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

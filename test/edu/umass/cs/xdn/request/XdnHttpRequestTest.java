@@ -1,14 +1,11 @@
-package edu.umass.cs.xdn;
+package edu.umass.cs.xdn.request;
 
 import edu.umass.cs.clientcentric.VectorTimestamp;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
-import edu.umass.cs.xdn.request.XdnJsonHttpRequest;
-import edu.umass.cs.xdn.request.XdnRequest;
-import edu.umass.cs.xdn.request.XdnRequestType;
+import edu.umass.cs.xdn.XdnGigapaxosApp;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import org.junit.jupiter.api.Disabled;
@@ -143,6 +140,43 @@ public class XdnHttpRequestTest {
     @Test
     public void testParseRequestIdQuicklyMalformed() {
         assertNull(XdnHttpRequest.parseRequestIdQuickly("bad"));
+    }
+
+    @Test
+    public void testDoesHasResponseAndParseHttpResponse_True() {
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(32);
+        XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+        HttpResponse response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1,
+                HttpResponseStatus.OK,
+                Unpooled.wrappedBuffer("hello".getBytes(StandardCharsets.UTF_8)));
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
+        response.headers().set(HttpHeaderNames.CONTENT_LENGTH, 5);
+        xdnRequest.setHttpResponse(response);
+
+        String encoded = xdnRequest.toString();
+        assertTrue(XdnHttpRequest.doesHasResponse(encoded));
+
+        HttpResponse decodedResponse = XdnHttpRequest.parseHttpResponse(encoded);
+        assertNotNull(decodedResponse);
+        assertEquals(decodedResponse.getClass().getSimpleName(), DefaultFullHttpResponse.class.getSimpleName());
+        assertEquals(HttpResponseStatus.OK, decodedResponse.status());
+        assertEquals("text/plain", decodedResponse.headers().get(HttpHeaderNames.CONTENT_TYPE));
+        assertEquals("5", decodedResponse.headers().get(HttpHeaderNames.CONTENT_LENGTH));
+        assertEquals("hello", ((DefaultFullHttpResponse) decodedResponse).content().toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void testDoesHasResponseAndParseHttpResponse_False() {
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(16);
+        XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+        String encoded = xdnRequest.toString();
+        assertFalse(XdnHttpRequest.doesHasResponse(encoded));
+        assertNull(XdnHttpRequest.parseHttpResponse(encoded));
     }
 
     @Test

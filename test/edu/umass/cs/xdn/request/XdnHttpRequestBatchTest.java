@@ -1,7 +1,5 @@
-package edu.umass.cs.xdn;
+package edu.umass.cs.xdn.request;
 
-import edu.umass.cs.xdn.request.XdnHttpRequest;
-import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import org.junit.jupiter.api.Test;
