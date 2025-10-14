@@ -21,6 +21,7 @@ public class XdnMultiServiceTest {
         String serviceBeta = "xdnsvcbeta";
 
         try (XdnTestCluster cluster = new XdnTestCluster()) {
+            System.out.println("About to start the cluster ...");
             cluster.start();
         }
 //

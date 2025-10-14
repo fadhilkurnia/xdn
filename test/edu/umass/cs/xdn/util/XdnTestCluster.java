@@ -60,6 +60,7 @@ public class XdnTestCluster implements AutoCloseable {
     private final List<String> createdServices = new ArrayList<>();
 
     public XdnTestCluster() {
+        System.out.println("Initializing XdnTestCluster");
         for (int i = 0; i < ACTIVE_REPLICA_IDS.size(); i++) {
             activeReplicas.put(
                     ACTIVE_REPLICA_IDS.get(i),
