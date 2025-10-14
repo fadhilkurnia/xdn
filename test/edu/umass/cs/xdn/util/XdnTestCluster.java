@@ -86,10 +86,10 @@ public class XdnTestCluster implements AutoCloseable {
            nodes.add(startNode(activeId));
        }
 
-//        System.out.println("Waiting for reconfiguration node ...");
-//        waitForPort(LOOPBACK, getReconfiguratorHttpPort(), PORT_WAIT_TIMEOUT);
-//        System.out.println("Waiting for the first active node ...");
-//        waitForPort(LOOPBACK, getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst()), PORT_WAIT_TIMEOUT);
+       System.out.println("Waiting for reconfiguration node ...");
+       waitForPort(LOOPBACK, getReconfiguratorHttpPort(), PORT_WAIT_TIMEOUT);
+       System.out.println("Waiting for the first active node ...");
+       waitForPort(LOOPBACK, getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst()), PORT_WAIT_TIMEOUT);
     }
 
     /**
