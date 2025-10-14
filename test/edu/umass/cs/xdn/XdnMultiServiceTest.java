@@ -17,11 +17,12 @@ public class XdnMultiServiceTest {
         assertTrue(isDockerAvailable,
                 "Docker is required for this XDN integration test");
 
-//        String serviceAlpha = "xdnsvcalpha";
-//        String serviceBeta = "xdnsvcbeta";
-//
-//        try (XdnTestCluster cluster = new XdnTestCluster()) {
-//            cluster.start();
+        String serviceAlpha = "xdnsvcalpha";
+        String serviceBeta = "xdnsvcbeta";
+
+        try (XdnTestCluster cluster = new XdnTestCluster()) {
+            cluster.start();
+        }
 //
 //            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
 //            cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
