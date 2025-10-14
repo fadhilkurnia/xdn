@@ -51,8 +51,7 @@ jobs:
       run: |
         set -o pipefail
         ant xdn-unit-tests 2>&1
-    - name: 🪲 Display error log on test failure
-      if: failure()
+    - name: 🪲 Display test log
       run: |
         for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do
           [ -f "$each" ] || continue
