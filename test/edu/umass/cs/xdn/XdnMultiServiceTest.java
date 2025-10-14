@@ -24,7 +24,7 @@ public class XdnMultiServiceTest {
 
         try (XdnTestCluster cluster = new XdnTestCluster()) {
             System.out.println("About to start the cluster ...");
-            cluster.start();
+            // cluster.start();
         }
 //
 //            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
