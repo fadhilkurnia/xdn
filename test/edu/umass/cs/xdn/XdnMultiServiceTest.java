@@ -2,18 +2,18 @@ package edu.umass.cs.xdn;
 
 import edu.umass.cs.xdn.util.XdnTestCluster;
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.net.http.HttpResponse;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class XdnMultiServiceTest {
 
     @Test
     public void testTwoPaxosBasedServices() throws Exception {
-        Assumptions.assumeTrue(XdnTestCluster.isDockerAvailable(),
+        assertTrue(XdnTestCluster.isDockerAvailable(),
                 "Docker is required for this XDN integration test");
 
         String serviceAlpha = "xdnsvcalpha";
@@ -58,6 +58,7 @@ public class XdnMultiServiceTest {
     }
 
     @Test
+    @Disabled("Temporary disable for Github Actions debugging")
     public void testTwoPrimaryBackupBasedServices() throws Exception {
         Assumptions.assumeTrue(XdnTestCluster.isDockerAvailable(),
                 "Docker is required for this XDN integration test");
