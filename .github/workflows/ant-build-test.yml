@@ -38,6 +38,10 @@ jobs:
         docker pull fadhilkurnia/xdn-bookcatalog
     - name: 🔄 Set up Rsync  # Required for default PrimaryBackup setup
       uses: GuillaumeFalourd/setup-rsync@v1.2
+    - name: 🔄 Set up Fuse  # Required for PrimaryBackup setup
+      run: |
+        sudo apt-get install -y pkg-config libfuse3-dev
+        sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
     - name: 🏗️ Compiling the source code into a jar archive and prepare binaries ...
       run: |
         ant jar
