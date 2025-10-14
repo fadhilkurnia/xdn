@@ -79,8 +79,8 @@ public class XdnTestCluster implements AutoCloseable {
         System.out.println("Cleaning directory " + XDN_WORK_DIR + " ...");
         cleanDirectory(XDN_WORK_DIR);
 
-//        System.out.println("Starting reconfiguration node ...");
-//        nodes.add(startNode(RECONFIGURATOR_ID));
+       System.out.println("Starting reconfiguration node ...");
+       nodes.add(startNode(RECONFIGURATOR_ID));
 //        for (String activeId : ACTIVE_REPLICA_IDS) {
 //            System.out.println("Starting active node " + activeId + " ...");
 //            nodes.add(startNode(activeId));
