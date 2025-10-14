@@ -48,6 +48,7 @@ jobs:
       if: failure()
       run: |
         for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do echo "============ BEGIN $each ============"; cat $each; echo "============ END $each ============"; done
+        for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.xml; do echo "============ BEGIN $each ============"; cat $each; echo "============ END $each ============"; done
     - name: 🔎 Checking the output directory structure ...
       run: ls out/**/*.xml
     - name: 📝 Reporting the test results ...

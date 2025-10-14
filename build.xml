@@ -415,7 +415,7 @@
                 <fileset dir="build/test-classes">
                     <include name="**/Xdn*Test.class"/>
                 </fileset>
-                <listener type="legacy-plain" sendSysOut="true" />
+                <listener type="legacy-plain" sendSysErr="true" sendSysOut="true" />
                 <listener type="legacy-xml" sendSysErr="true" sendSysOut="true"/>
             </testclasses>
         </junitlauncher>
