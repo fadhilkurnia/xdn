@@ -45,7 +45,7 @@ jobs:
     - name: 🧪 Running XDN unit tests with ant ...
       run: |
         set -o pipefail
-        ant xdn-unit-tests 2>&1 | tee out/junit5-test-output/xdn-unit-tests.log
+        ant xdn-unit-tests 2>&1 | tee -a out/junit5-test-output/xdn-unit-tests.log
     - name: 🪲 Display error log on test failure
       if: failure()
       run: |
