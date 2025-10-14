@@ -251,8 +251,7 @@ public class XdnTestCluster implements AutoCloseable {
         try {
             return Shell.runCommand("docker version", false) == 0;
         } catch (RuntimeException e) {
-            e.printStackTrace();
-            return false;
+            throw new RuntimeException(e);
         }
     }
 

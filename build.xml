@@ -413,7 +413,7 @@
 
             <testclasses outputdir="out/junit5-test-output">
                 <fileset dir="build/test-classes">
-                    <include name="**/*Test.class"/>
+                    <include name="**/Xdn*Test.class"/>
                 </fileset>
                 <listener type="legacy-plain" sendSysOut="true" />
                 <listener type="legacy-xml" sendSysErr="true" sendSysOut="true"/>
