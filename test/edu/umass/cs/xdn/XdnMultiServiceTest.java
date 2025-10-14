@@ -20,6 +20,8 @@ public class XdnMultiServiceTest {
         String serviceAlpha = "xdnsvcalpha";
         String serviceBeta = "xdnsvcbeta";
 
+        System.out.println("test ...");
+
         try (XdnTestCluster cluster = new XdnTestCluster()) {
             System.out.println("About to start the cluster ...");
             cluster.start();
