@@ -20,17 +20,15 @@ public class XdnMultiServiceTest {
         String serviceAlpha = "xdnsvcalpha";
         String serviceBeta = "xdnsvcbeta";
 
-        System.out.println("test ...");
-
         try (XdnTestCluster cluster = new XdnTestCluster()) {
-            System.out.println("About to start the cluster ...");
             cluster.start();
+
+            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
+            cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
+
+            Thread.sleep(1000); // wait for services to be created
         }
-//
-//            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
-//            cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
-//
-//            Thread.sleep(1000); // wait for services to be created
+
 //
 //            HttpResponse<String> alphaResponse =
 //                    cluster.awaitServiceReady(serviceAlpha, XdnTestCluster.SERVICE_READY_TIMEOUT);

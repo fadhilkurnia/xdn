@@ -72,24 +72,17 @@ public class XdnTestCluster implements AutoCloseable {
      * Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster.
      */
     public void start() throws Exception {
-        System.out.println("Preparing config ...");
         configureGigapaxos();
-        System.out.println("Cleaning directory " + GP_DATA_DIR + " ...");
         cleanDirectory(GP_DATA_DIR);
-        System.out.println("Cleaning directory " + XDN_WORK_DIR + " ...");
         cleanDirectory(XDN_WORK_DIR);
 
-       System.out.println("Starting reconfiguration node ...");
-       nodes.add(startNode(RECONFIGURATOR_ID));
-       for (String activeId : ACTIVE_REPLICA_IDS) {
-           System.out.println("Starting active node " + activeId + " ...");
-           nodes.add(startNode(activeId));
-       }
+        nodes.add(startNode(RECONFIGURATOR_ID));
+        for (String activeId : ACTIVE_REPLICA_IDS) {
+            nodes.add(startNode(activeId));
+        }
 
-       System.out.println("Waiting for reconfiguration node ...");
-       waitForPort(LOOPBACK, getReconfiguratorHttpPort(), PORT_WAIT_TIMEOUT);
-       System.out.println("Waiting for the first active node ...");
-       waitForPort(LOOPBACK, getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst()), PORT_WAIT_TIMEOUT);
+        waitForPort(LOOPBACK, getReconfiguratorHttpPort(), PORT_WAIT_TIMEOUT);
+        waitForPort(LOOPBACK, getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst()), PORT_WAIT_TIMEOUT);
     }
 
     /**
@@ -229,7 +222,7 @@ public class XdnTestCluster implements AutoCloseable {
         }
         createdServices.clear();
 
-         // wait for services to be deleted
+        // wait for services to be deleted
         try {
             Thread.sleep(1000);
         } catch (InterruptedException e) {

@@ -38,11 +38,13 @@ jobs:
         docker pull fadhilkurnia/xdn-bookcatalog
     - name: 🔄 Set up Rsync  # Required for default PrimaryBackup setup
       uses: GuillaumeFalourd/setup-rsync@v1.2
-    - name: 🏗️ Compiling the source code into a jar archive ...
+    - name: 🏗️ Compiling the source code into a jar archive and prepare binaries ...
       run: |
         ant jar
         ln -s -- "$(pwd)/bin/fuselog" /usr/local/bin/fuselog
         ln -s -- "$(pwd)/bin/fuselog-apply" /usr/local/bin/fuselog-apply
+        ln -s -- "$(pwd)/bin/xdn" /usr/local/bin/xdn
+        ln -s -- "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
     - name: 🧪 Running reconfiguration tests with ant ...
       run: ant test
     - name: 🧪 Running XDN unit tests with ant ...
