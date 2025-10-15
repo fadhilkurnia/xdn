@@ -163,8 +163,10 @@ public class XdnTestCluster implements AutoCloseable {
      */
     public HttpResponse<String> invokeService(String serviceName) throws IOException, InterruptedException {
         int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst());
+        URI uri = URI.create("http://%s:%d/".formatted(LOOPBACK, httpPort));
+        System.out.println(">>> Sending into " + uri);
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://%s:%d/".formatted(LOOPBACK, httpPort)))
+                .uri(uri)
                 .timeout(REQUEST_TIMEOUT)
                 .header("XDN", serviceName)
                 .GET()
