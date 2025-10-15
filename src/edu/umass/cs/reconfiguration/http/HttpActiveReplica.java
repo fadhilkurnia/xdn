@@ -609,11 +609,15 @@ public class HttpActiveReplica {
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
+                            System.out.println(">>> HttpActiveReplica - response " + httpResponse);
                             // release buffer of http request's content
                             bodyRefCopy.release();
 
                             // do nothing when the channel is inactive
-                            if (!ctx.channel().isActive()) return;
+                            if (!ctx.channel().isActive()) {
+                                System.out.println(">>> HttpActiveReplica - channel is inactive");
+                                return;
+                            }
 
                             // finally, handle the error or send the response
                             ctx.executor().execute(() -> {
@@ -654,7 +658,7 @@ public class HttpActiveReplica {
             // Convert callback-based execution into future so that we can execute it synchronously.
             CompletableFuture<Request> future = new CompletableFuture<>();
             this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
-                System.out.println(">>> HttpActiveReplica response " + handled + " " + request);
+                System.out.println(">>> HttpActiveReplica - callback  response " + handled + " " + request);
                 if (handled) {
                     future.complete(request);
                 } else {
@@ -798,15 +802,11 @@ public class HttpActiveReplica {
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
-                            System.out.println(">>> HttpActiveReplica: response " + httpResponse);
                             // release buffer of http request's content
                             httpRequest.getHttpRequestContent().content().release();
 
                             // do nothing when the channel is inactive
-                            if (!ctx.channel().isActive()) {
-                                System.out.println(">>> HttpActiveReplica - channel is inactive");
-                                return;
-                            }
+                            if (!ctx.channel().isActive()) return;
 
                             // finally, handle the error or send the response
                             ctx.executor().execute(() -> {
