@@ -69,8 +69,8 @@ public class XdnMultiServiceTest {
         try (XdnTestCluster cluster = new XdnTestCluster()) {
             cluster.start();
 
-            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
-            cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
+//            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
+//            cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
 
 //            Thread.sleep(1000); // wait for services to be created
 //

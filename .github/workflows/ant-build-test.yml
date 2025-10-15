@@ -54,7 +54,7 @@ jobs:
     - name: 🧪 Running XDN unit tests with ant ...
       run: |
         set -o pipefail
-        ant xdn-unit-tests 2>&1
+        ant xdn-unit-tests 2>&1 | tee ant-xdn-unit-tests.log
     - name: 🪲 Display test log
       run: |
         for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do
@@ -64,6 +64,8 @@ jobs:
           echo "============ END $each ============"
         done
         echo "============ BEGIN ant stdout ============"
+        cat ant-xdn-unit-tests.log
+        echo "============ END ant stdout ============"
     - name: 🔎 Checking the output directory structure ...
       run: ls out/**/*.xml
     - name: 📝 Reporting the test results ...
