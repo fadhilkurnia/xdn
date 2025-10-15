@@ -640,7 +640,7 @@ public class HttpActiveReplica {
                                     System.out.println("Writing error response: " + err.getMessage());
                                     err.printStackTrace();
                                     HttpActiveReplicaHandler.sendStringResponse(
-                                            err.getMessage(), ctx, false);
+                                            err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
                                     return;
                                 }
 
@@ -842,7 +842,7 @@ public class HttpActiveReplica {
                                     System.out.println("Writing error response: " + err.getMessage());
                                     err.printStackTrace();
                                     HttpActiveReplicaHandler.sendStringResponse(
-                                            err.getMessage(), ctx, false);
+                                            err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
                                     return;
                                 }
 
@@ -901,9 +901,12 @@ public class HttpActiveReplica {
             }
         }
 
-        private static void sendStringResponse(String message, ChannelHandlerContext ctx, boolean isKeepAlive) {
+        private static void sendStringResponse(String message,
+                                               HttpResponseStatus status,
+                                               boolean isKeepAlive,
+                                               ChannelHandlerContext ctx) {
             FullHttpResponse response = new DefaultFullHttpResponse(
-                    HTTP_1_1, OK,
+                    HTTP_1_1, status,
                     Unpooled.copiedBuffer(message, CharsetUtil.UTF_8));
 
             // Add 'Content-Length' header only for a keep-alive connection.
@@ -929,6 +932,11 @@ public class HttpActiveReplica {
             if (!isKeepAlive) {
                 ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
             }
+        }
+
+        @Deprecated
+        private static void sendStringResponse(String message, ChannelHandlerContext ctx, boolean isKeepAlive) {
+            HttpActiveReplicaHandler.sendStringResponse(message, OK, isKeepAlive, ctx);
         }
 
         private static void writeHttpResponse(Long requestId, HttpResponse httpResponse,

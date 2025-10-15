@@ -29,7 +29,7 @@ public class XdnMultiServiceTest {
 
             System.out.println("Waiting for service to be ready ...");
             Shell.runCommand("lsof -i :2300", false);
-            Thread.sleep(1000); // wait for services to be created
+            Thread.sleep(2000); // wait for services to be created
 
             System.out.println("Checking service connectivity");
             HttpResponse<String> alphaResponse =
