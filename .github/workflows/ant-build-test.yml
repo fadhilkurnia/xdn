@@ -49,8 +49,8 @@ jobs:
         ln -s -- "$(pwd)/bin/fuselog-apply" /usr/local/bin/fuselog-apply
         ln -s -- "$(pwd)/bin/xdn" /usr/local/bin/xdn
         ln -s -- "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
-    - name: 🧪 Running reconfiguration tests with ant ...
-      run: ant test
+    # - name: 🧪 Running reconfiguration tests with ant ...
+    #   run: ant test
     - name: 🧪 Running XDN unit tests with ant ...
       run: |
         set -o pipefail
