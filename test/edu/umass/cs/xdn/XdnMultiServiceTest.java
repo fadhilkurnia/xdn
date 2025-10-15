@@ -1,7 +1,6 @@
 package edu.umass.cs.xdn;
 
 import edu.umass.cs.xdn.util.XdnTestCluster;
-import edu.umass.cs.xdn.utils.Shell;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -27,8 +26,6 @@ public class XdnMultiServiceTest {
             cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
             cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
 
-            System.out.println("Waiting for service to be ready ...");
-            Shell.runCommand("lsof -i :2300", false);
             Thread.sleep(2000); // wait for services to be created
 
             System.out.println("Checking service connectivity");
