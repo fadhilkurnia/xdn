@@ -26,7 +26,8 @@ public class XdnMultiServiceTest {
             cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
             cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
 
-            Thread.sleep(1000); // wait for services to be created
+            System.out.println("Waiting for service to be ready ...");
+            Thread.sleep(3000); // wait for services to be created
 
             HttpResponse<String> alphaResponse =
                     cluster.awaitServiceReady(serviceAlpha, XdnTestCluster.SERVICE_READY_TIMEOUT);
