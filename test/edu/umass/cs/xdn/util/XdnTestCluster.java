@@ -77,7 +77,7 @@ public class XdnTestCluster implements AutoCloseable {
      * Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster.
      */
     public void start() throws Exception {
-        configureLogging();
+        // configureLogging();
         configureGigapaxos();
         cleanDirectory(GP_DATA_DIR);
         cleanDirectory(XDN_WORK_DIR);
