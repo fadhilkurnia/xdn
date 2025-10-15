@@ -27,37 +27,35 @@ public class XdnMultiServiceTest {
             cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
 
             Thread.sleep(1000); // wait for services to be created
-        }
 
-//
-//            HttpResponse<String> alphaResponse =
-//                    cluster.awaitServiceReady(serviceAlpha, XdnTestCluster.SERVICE_READY_TIMEOUT);
-//            HttpResponse<String> betaResponse =
-//                    cluster.awaitServiceReady(serviceBeta, XdnTestCluster.SERVICE_READY_TIMEOUT);
-//
-//            // both xdn-bookcatalog services should return HTTP 308 (i.e., redirect) with non-empty body
-//            assertEquals(308, alphaResponse.statusCode(),
-//                    "Service alpha did not return HTTP 308");
-//            assertFalse(alphaResponse.body().isEmpty(),
-//                    "Service alpha returned empty body");
-//            assertEquals(308, betaResponse.statusCode(),
-//                    "Service beta did not return HTTP 308");
-//            assertFalse(betaResponse.body().isEmpty(),
-//                    "Service beta returned empty body");
-//
-//            HttpResponse<String> alphaApiResponse =
-//                    cluster.sendGetRequest(serviceAlpha, "/api/books");
-//            HttpResponse<String> betaApiResponse =
-//                    cluster.sendGetRequest(serviceBeta, "/api/books");
-//            assertEquals(200, alphaApiResponse.statusCode(),
-//                    "Service alpha did not return HTTP 200");
-//            assertEquals("[]", alphaApiResponse.body(),
-//                    "Service alpha did not return empty book list");
-//            assertEquals(200, betaApiResponse.statusCode(),
-//                    "Service beta did not return HTTP 200");
-//            assertEquals("[]", betaApiResponse.body(),
-//                    "Service beta did not return empty book list");
-//        }
+            HttpResponse<String> alphaResponse =
+                    cluster.awaitServiceReady(serviceAlpha, XdnTestCluster.SERVICE_READY_TIMEOUT);
+            HttpResponse<String> betaResponse =
+                    cluster.awaitServiceReady(serviceBeta, XdnTestCluster.SERVICE_READY_TIMEOUT);
+
+            // both xdn-bookcatalog services should return HTTP 308 (i.e., redirect) with non-empty body
+            assertEquals(308, alphaResponse.statusCode(),
+                    "Service alpha did not return HTTP 308");
+            assertFalse(alphaResponse.body().isEmpty(),
+                    "Service alpha returned empty body");
+            assertEquals(308, betaResponse.statusCode(),
+                    "Service beta did not return HTTP 308");
+            assertFalse(betaResponse.body().isEmpty(),
+                    "Service beta returned empty body");
+
+            HttpResponse<String> alphaApiResponse =
+                    cluster.sendGetRequest(serviceAlpha, "/api/books");
+            HttpResponse<String> betaApiResponse =
+                    cluster.sendGetRequest(serviceBeta, "/api/books");
+            assertEquals(200, alphaApiResponse.statusCode(),
+                    "Service alpha did not return HTTP 200");
+            assertEquals("[]", alphaApiResponse.body(),
+                    "Service alpha did not return empty book list");
+            assertEquals(200, betaApiResponse.statusCode(),
+                    "Service beta did not return HTTP 200");
+            assertEquals("[]", betaApiResponse.body(),
+                    "Service beta did not return empty book list");
+        }
     }
 
     @Test
