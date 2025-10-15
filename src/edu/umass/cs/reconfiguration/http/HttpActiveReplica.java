@@ -623,9 +623,13 @@ public class HttpActiveReplica {
                             // release buffer of http request's content
                             bodyRefCopy.release();
 
-                            // do nothing when the channel is inactive
+                            // Check channel state
                             if (!ctx.channel().isActive()) {
-                                System.out.println(">>> HttpActiveReplica - channel is inactive");
+                                System.out.println(">>> HttpActiveReplica - channel is inactive, cannot send response");
+                                if (err != null) {
+                                    System.out.println(">>> HttpActiveReplica - original error: " + err.getMessage());
+                                    err.printStackTrace();
+                                }
                                 return;
                             }
 
@@ -667,22 +671,35 @@ public class HttpActiveReplica {
 
             // Convert callback-based execution into future so that we can execute it synchronously.
             CompletableFuture<Request> future = new CompletableFuture<>();
+            System.out.println(">>> HttpActiveReplica - executing request via arFunctions");
             this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
-                System.out.println(">>> HttpActiveReplica - callback  response " + handled + " " + request);
+                System.out.println(">>> HttpActiveReplica - callback response handled=" + handled + " request=" + request);
                 if (handled) {
-                    future.complete(request);
+                    if (request == null) {
+                        future.completeExceptionally(new RuntimeException("Request was handled but returned null"));
+                    } else {
+                        future.complete(request);
+                    }
                 } else {
-                    future.completeExceptionally(new Throwable("Request is failed to be handled"));
+                    future.completeExceptionally(new RuntimeException("Request was not handled"));
                 }
             });
 
-            // Wait until the future complete,
+            // Wait until the future complete with timeout,
             // i.e., the httpRequest is already coordinated and executed.
             Request executedRequest;
             try {
-                executedRequest = future.get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
+                executedRequest = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                if (executedRequest == null) {
+                    throw new RuntimeException("Executed request is null after future completion");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Request execution was interrupted", e);
+            } catch (java.util.concurrent.TimeoutException e) {
+                throw new RuntimeException("Request execution timed out after 5s", e);
+            } catch (ExecutionException e) {
+                throw new RuntimeException("Request execution failed: " + e.getCause().getMessage(), e);
             }
 
             // Validate the executed Http request
