@@ -77,7 +77,7 @@ public class XdnTestCluster implements AutoCloseable {
      * Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster.
      */
     public void start() throws Exception {
-        // configureLogging();
+        configureLogging();
         configureGigapaxos();
         cleanDirectory(GP_DATA_DIR);
         cleanDirectory(XDN_WORK_DIR);
@@ -262,7 +262,12 @@ public class XdnTestCluster implements AutoCloseable {
             if (loggingConfigured) {
                 return;
             }
-
+            Path loggingDir = Paths.get("output").toAbsolutePath();
+            try {
+                Files.createDirectories(loggingDir);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
             Path loggingConfig = Paths.get("conf", "logging.properties").toAbsolutePath();
             if (Files.exists(loggingConfig)) {
                 System.setProperty("java.util.logging.config.file", loggingConfig.toString());

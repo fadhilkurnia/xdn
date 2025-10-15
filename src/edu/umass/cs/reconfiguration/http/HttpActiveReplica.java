@@ -798,11 +798,15 @@ public class HttpActiveReplica {
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
+                            System.out.println(">>> HttpActiveReplica: response " + httpResponse);
                             // release buffer of http request's content
                             httpRequest.getHttpRequestContent().content().release();
 
                             // do nothing when the channel is inactive
-                            if (!ctx.channel().isActive()) return;
+                            if (!ctx.channel().isActive()) {
+                                System.out.println(">>> HttpActiveReplica - channel is inactive");
+                                return;
+                            }
 
                             // finally, handle the error or send the response
                             ctx.executor().execute(() -> {
