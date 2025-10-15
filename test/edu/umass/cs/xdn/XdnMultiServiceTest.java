@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn;
 
 import edu.umass.cs.xdn.util.XdnTestCluster;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.http.HttpResponse;
@@ -8,6 +9,13 @@ import java.net.http.HttpResponse;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class XdnMultiServiceTest {
+
+    @BeforeEach
+    void setup() throws InterruptedException {
+        // Introduce a 1-second delay before each test, ensuring previous test's cluster is
+        // cleaned up before starting a new one.
+        Thread.sleep(1000);
+    }
 
     @Test
     public void testTwoPaxosBasedServices() throws Exception {
