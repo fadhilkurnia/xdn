@@ -603,14 +603,22 @@ public class HttpActiveReplica {
                 // When done, switch back to the channel's EventLoop to write the response
                 CompletableFuture.supplyAsync(() -> {
                             try {
-                                var response = execFuture.get();
+                                // Add timeout to prevent indefinite blocking
+                                var response = execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
                                 System.out.println(">>> HttpActiveReplica - async get " + response);
                                 return response;
-                            } catch (InterruptedException | ExecutionException e) {
-                                throw new RuntimeException(e);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt(); // Restore interrupt status
+                                throw new RuntimeException("Request execution interrupted", e);
+                            } catch (java.util.concurrent.TimeoutException e) {
+                                execFuture.cancel(true); // Cancel the future if it times out
+                                throw new RuntimeException("Request execution timed out after 10s", e);
+                            } catch (ExecutionException e) {
+                                throw new RuntimeException("Request execution failed", e);
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
+                            System.out.println(">>> HttpActiveReplica - whenComplete starting");
                             System.out.println(">>> HttpActiveReplica - response " + httpResponse);
                             // release buffer of http request's content
                             bodyRefCopy.release();
