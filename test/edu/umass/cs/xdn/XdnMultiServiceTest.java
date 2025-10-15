@@ -28,11 +28,7 @@ public class XdnMultiServiceTest {
             cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
 
             System.out.println("Waiting for service to be ready ...");
-            Shell.runCommand("docker ps", false);
             Shell.runCommand("lsof -i :2300", false);
-            Shell.runCommand("lsof -i :2301", false);
-            Shell.runCommand("lsof -i :2302", false);
-            Shell.runCommand("curl -v --insecure http://127.0.0.1:2300/ -H 'XDN: xdnsvcalpha'", false);
             Thread.sleep(1000); // wait for services to be created
 
             System.out.println("Checking service connectivity");

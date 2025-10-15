@@ -603,7 +603,9 @@ public class HttpActiveReplica {
                 // When done, switch back to the channel's EventLoop to write the response
                 CompletableFuture.supplyAsync(() -> {
                             try {
-                                return execFuture.get();
+                                var response = execFuture.get();
+                                System.out.println(">>> HttpActiveReplica - async get " + response);
+                                return response;
                             } catch (InterruptedException | ExecutionException e) {
                                 throw new RuntimeException(e);
                             }
