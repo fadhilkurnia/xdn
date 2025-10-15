@@ -2,6 +2,7 @@ package edu.umass.cs.xdn.util;
 
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.reconfiguration.ReconfigurableNode;
+import edu.umass.cs.reconfiguration.http.HttpActiveReplica;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.reconfigurationutils.DefaultNodeConfig;
 import edu.umass.cs.utils.Config;
@@ -17,6 +18,7 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +30,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
+import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 /**
@@ -57,6 +62,7 @@ public class XdnTestCluster implements AutoCloseable {
             RECONFIGURATOR_ID, new InetSocketAddress(LOOPBACK, RECONFIGURATOR_BASE_PORT));
     private final List<ReconfigurableNode<String>> nodes = new ArrayList<>();
     private final List<String> createdServices = new ArrayList<>();
+    private static volatile boolean loggingConfigured = false;
 
     public XdnTestCluster() {
         System.out.println("Initializing XdnTestCluster");
@@ -71,6 +77,7 @@ public class XdnTestCluster implements AutoCloseable {
      * Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster.
      */
     public void start() throws Exception {
+        configureLogging();
         configureGigapaxos();
         cleanDirectory(GP_DATA_DIR);
         cleanDirectory(XDN_WORK_DIR);
@@ -245,6 +252,38 @@ public class XdnTestCluster implements AutoCloseable {
 
         cleanDirectory(GP_DATA_DIR);
         cleanDirectory(XDN_WORK_DIR);
+    }
+
+    private static void configureLogging() {
+        if (loggingConfigured) {
+            return;
+        }
+        synchronized (XdnTestCluster.class) {
+            if (loggingConfigured) {
+                return;
+            }
+
+            Path loggingConfig = Paths.get("conf", "logging.properties").toAbsolutePath();
+            if (Files.exists(loggingConfig)) {
+                System.setProperty("java.util.logging.config.file", loggingConfig.toString());
+                try (InputStream in = Files.newInputStream(loggingConfig)) {
+                    LogManager.getLogManager().readConfiguration(in);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to load logging configuration from " + loggingConfig, e);
+                }
+            }
+
+            Logger rootLogger = Logger.getLogger("");
+            if (rootLogger.getLevel() == null || rootLogger.getLevel().intValue() > Level.FINE.intValue()) {
+                rootLogger.setLevel(Level.FINE);
+            }
+            for (var handler : rootLogger.getHandlers()) {
+                handler.setLevel(Level.FINE);
+            }
+
+            Logger.getLogger(HttpActiveReplica.class.getName()).setLevel(Level.FINE);
+            loggingConfigured = true;
+        }
     }
 
     public static boolean isDockerAvailable() {
