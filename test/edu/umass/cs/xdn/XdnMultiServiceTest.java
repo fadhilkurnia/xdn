@@ -29,9 +29,9 @@ public class XdnMultiServiceTest {
 
             System.out.println("Waiting for service to be ready ...");
             Shell.runCommand("docker ps", false);
-            Shell.runCommand("lsof -i :2300");
-            Shell.runCommand("lsof -i :2301");
-            Shell.runCommand("lsof -i :2302");
+            Shell.runCommand("lsof -i :2300", false);
+            Shell.runCommand("lsof -i :2301", false);
+            Shell.runCommand("lsof -i :2302", false);
             Thread.sleep(3000); // wait for services to be created
 
             HttpResponse<String> alphaResponse =
