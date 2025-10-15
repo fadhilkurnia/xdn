@@ -1038,7 +1038,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private int createDockerNetwork(String networkName) {
         String createNetCmd = String.format("docker network create %s",
                 networkName);
-        int exitCode = runShellCommand(createNetCmd, false);
+        int exitCode = runShellCommand(createNetCmd, true);
         if (exitCode != 0 && exitCode != 1) {
             // 1 is the exit code of creating already exist network
             System.err.println("Error: failed to create network");
