@@ -149,8 +149,6 @@ public class XdnTestCluster implements AutoCloseable {
                     return response;
                 }
                 lastError = new IllegalStateException("Unexpected HTTP status " + response.statusCode());
-            } catch (ConnectException e) {
-                lastError = e;
             } catch (IOException e) {
                 lastError = e;
             }
@@ -164,7 +162,7 @@ public class XdnTestCluster implements AutoCloseable {
      * Invokes the service through the ActiveReplica HTTP frontend.
      */
     public HttpResponse<String> invokeService(String serviceName) throws IOException, InterruptedException {
-        int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.get(0));
+        int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst());
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://%s:%d/".formatted(LOOPBACK, httpPort)))
                 .timeout(REQUEST_TIMEOUT)

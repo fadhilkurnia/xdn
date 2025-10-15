@@ -34,6 +34,7 @@ public class XdnMultiServiceTest {
             Shell.runCommand("lsof -i :2302", false);
             Thread.sleep(3000); // wait for services to be created
 
+            System.out.println("Checking service connectivity");
             HttpResponse<String> alphaResponse =
                     cluster.awaitServiceReady(serviceAlpha, XdnTestCluster.SERVICE_READY_TIMEOUT);
             HttpResponse<String> betaResponse =
