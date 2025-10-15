@@ -654,6 +654,7 @@ public class HttpActiveReplica {
             // Convert callback-based execution into future so that we can execute it synchronously.
             CompletableFuture<Request> future = new CompletableFuture<>();
             this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
+                System.out.println(">>> HttpActiveReplica response " + handled + " " + request);
                 if (handled) {
                     future.complete(request);
                 } else {
