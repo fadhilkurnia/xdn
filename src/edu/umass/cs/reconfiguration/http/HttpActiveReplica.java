@@ -614,12 +614,12 @@ public class HttpActiveReplica {
                                 execFuture.cancel(true); // Cancel the future if it times out
                                 throw new RuntimeException("Request execution timed out after 10s", e);
                             } catch (ExecutionException e) {
-                                throw new RuntimeException("Request execution failed", e);
+                                throw new RuntimeException("Request execution failed: " + e.getCause().getMessage(), e);
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
                             System.out.println(">>> HttpActiveReplica - whenComplete starting");
-                            System.out.println(">>> HttpActiveReplica - response " + httpResponse);
+                            System.out.println(">>> HttpActiveReplica - response " + httpResponse + " err: " + err);
                             // release buffer of http request's content
                             bodyRefCopy.release();
 
@@ -891,7 +891,8 @@ public class HttpActiveReplica {
 
             ChannelFuture cf = ctx.writeAndFlush(response);
             if (!cf.isSuccess()) {
-                System.out.println("write failed: " + cf.cause());
+                System.out.printf("%s:%s - sendBadRequestResponse, write failed: %s\n",
+                        nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause());
             }
 
             // If keep-alive is off, close the connection once the content is fully written.
@@ -920,6 +921,8 @@ public class HttpActiveReplica {
             ChannelFuture cf = ctx.writeAndFlush(response);
             if (!cf.isSuccess()) {
                 System.out.println("write failed: " + cf.cause());
+                System.out.printf("%s:%s - sendStringResponse, write failed: %s, string:%s\n",
+                        nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause(), message);
             }
 
             // If keep-alive is off, close the connection once the content is fully written.
