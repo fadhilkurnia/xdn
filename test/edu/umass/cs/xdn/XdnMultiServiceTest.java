@@ -75,7 +75,7 @@ public class XdnMultiServiceTest {
         String serviceBeta = "svc2";
 
         try (XdnTestCluster cluster = new XdnTestCluster()) {
-            cluster.start();
+//            cluster.start();
 
 //            cluster.launchService(serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
 //            cluster.launchService(serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
