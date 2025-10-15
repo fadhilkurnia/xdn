@@ -32,8 +32,8 @@ public class XdnMultiServiceTest {
             Shell.runCommand("lsof -i :2300", false);
             Shell.runCommand("lsof -i :2301", false);
             Shell.runCommand("lsof -i :2302", false);
-            Shell.runCommand("curl -v http://127.0.0.1:2300/ -H 'XDN: xdnsvcalpha'", false);
-            Thread.sleep(3000); // wait for services to be created
+            Shell.runCommand("curl -v --insecure --no-url-filter http://127.0.0.1:2300/ -H \"XDN: xdnsvcalpha\"", false);
+            Thread.sleep(1000); // wait for services to be created
 
             System.out.println("Checking service connectivity");
             HttpResponse<String> alphaResponse =
