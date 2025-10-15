@@ -275,7 +275,8 @@ public class XdnTestCluster implements AutoCloseable {
                 "ENABLE_ACTIVE_REPLICA_HTTP=true",
                 "ENABLE_RECONFIGURATOR_HTTP=true",
                 "REPLICA_COORDINATOR_CLASS=edu.umass.cs.xdn.XdnReplicaCoordinator",
-                "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator"
+                "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
+                "XDN_PB_STATEDIFF_RECORDER_TYPE=RSYNC"
         });
     }
 
