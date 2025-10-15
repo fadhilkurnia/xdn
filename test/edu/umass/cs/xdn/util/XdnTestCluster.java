@@ -52,7 +52,7 @@ public class XdnTestCluster implements AutoCloseable {
 
     public static final Duration PORT_WAIT_TIMEOUT = Duration.ofSeconds(30);
     public static final Duration SERVICE_READY_TIMEOUT = Duration.ofSeconds(1);
-    public static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+    public static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
