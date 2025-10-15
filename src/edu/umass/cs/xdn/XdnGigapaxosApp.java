@@ -1559,6 +1559,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         long endConversionTime;
         long endResponseStoreTime;
         try {
+            System.out.println("Executing request " + forwardedHttpRequest);
             // forward request to the underlying containerized service
             FullHttpResponse httpResponse = httpForwarderClient.execute(
                     "127.0.0.1", targetPort, forwardedHttpRequest);
@@ -1568,6 +1569,8 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             xdnRequest.setHttpResponse(httpResponse);
             endConversionTime = System.nanoTime();
             endResponseStoreTime = System.nanoTime();
+
+            System.out.println("receiving response " + httpResponse);
 
             // TODO: httpResponse.release();
         } catch (Exception e) {

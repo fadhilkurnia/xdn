@@ -901,6 +901,8 @@ public class HttpActiveReplica {
                                               boolean isKeepAlive, long startProcessingTime) {
             assert requestId != null;
             if (httpResponse == null) {
+                System.out.printf("%s:%s - ignoring empty HTTP response (id: %d)%n",
+                        nodeId, HttpActiveReplica.class.getSimpleName(), requestId);
                 logger.log(Level.WARNING,
                         String.format("%s:%s - ignoring empty HTTP response (id: %d)",
                                 nodeId, HttpActiveReplica.class.getSimpleName(), requestId));
