@@ -56,7 +56,10 @@ jobs:
         set -o pipefail
         ant xdn-unit-tests 2>&1 | tee ant-xdn-unit-tests.log
     - name: 🪲 Display test log
+      if: always()  # Run even if tests fail
       run: |
+        echo "Displaying test output files..."
+        find out/junit5-test-output -type f -name "*.txt" -ls
         for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do
           [ -f "$each" ] || continue
           echo "============ BEGIN $each ============"
