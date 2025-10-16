@@ -364,8 +364,6 @@ public class HttpActiveReplica {
         protected void channelRead0(ChannelHandlerContext ctx, Object msg)
                 throws Exception {
 
-            System.out.println(">>. receiving request ...");
-
             // redirect handling to xdn, if either of these two conditions are met:
             // (1) the HttpRequest contains non-empty XDN header, or
             // (2) the HttpRequest contains Host header ending in "xdnapp.com".

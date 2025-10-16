@@ -8,7 +8,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Counter, Trend } from 'k6/metrics';
 
-const BASE_URL = 'http://10.10.1.1:8080/api/books';
+const BASE_URL = 'http://10.10.1.1:2300/api/books';
 const HEADERS = { 'XDN': 'bookcatalog' };
 
 export const errorRate = new Rate('errors');           // Tracks percentage of errors
@@ -18,7 +18,8 @@ export const responseTime = new Trend('response_time'); // Tracks response time 
 
 export let options = {
   stages: [
-    { target: 30000, duration: '30m' },
+    { target: 10000, duration: '30m' },
+    { target: 10000, duration: '1m' },
   ],
   thresholds: {
     http_req_duration: ['p(95)<1000'], // 95% of requests should be below 1s
