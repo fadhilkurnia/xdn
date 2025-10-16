@@ -66,17 +66,43 @@ jobs:
     - name: 🧪 Running XDN unit tests with ant ...
       run: |
         set -o pipefail
-        # Enable more verbose JUnit output
+        # Enable more verbose JUnit output and debugging
         export JUNIT_REPORT_STACK=true
-        # Set system properties for debugging
+        export JUNIT_PLATFORM_CONSOLE_DEBUG=true
+        
+        # Enhanced system properties for debugging
         export ANT_OPTS="-Dlog4j.configuration=conf/log4j.properties \
                         -Djava.util.logging.config.file=conf/logging.properties \
                         -Djunit.jupiter.execution.parallel.enabled=false \
                         -Djunit.platform.reporting.open.xml.enabled=true \
                         -Djunit.platform.output.capture.stdout=true \
-                        -Djunit.platform.output.capture.stderr=true"
-        # Run tests with verbose output and system output capture
-        ant -Ddebug=true -v xdn-unit-tests 2>&1 | tee ant-xdn-unit-tests.log
+                        -Djunit.platform.output.capture.stderr=true \
+                        -Djunit.jupiter.displayname.generator.default=org.junit.jupiter.api.DisplayNameGenerator\$ReplaceUnderscores \
+                        -Djunit.platform.launcher.interceptors.enabled=true \
+                        -Djunit.platform.testexecution.listener.default.enabled=true"
+
+        # Run tests with maximum verbosity
+        java -jar lib/junit-platform-console-standalone-1.11.3.jar \
+          --scan-class-path \
+          --class-path build/test-classes:build/classes:lib/* \
+          --details verbose \
+          --reports-dir out/junit5-test-output \
+          --select-class edu.umass.cs.xdn.XdnMultiServiceTest \
+          2>&1 | tee junit-test-output.log
+        
+        echo "=== Test execution completed ==="
+        
+        # Check if test reports were generated
+        echo "=== Test Report Files ==="
+        ls -l out/junit5-test-output/
+        
+        # Display test results if they exist
+        for report in out/junit5-test-output/TEST-*.xml; do
+          if [ -f "$report" ]; then
+            echo "=== Content of $report ==="
+            cat "$report"
+          fi
+        done
 
         # Print JVM info and system properties for debugging
         java -XshowSettings:properties -version
