@@ -65,7 +65,6 @@ public class XdnTestCluster implements AutoCloseable {
     private static volatile boolean loggingConfigured = false;
 
     public XdnTestCluster() {
-        System.out.println("Initializing XdnTestCluster");
         for (int i = 0; i < ACTIVE_REPLICA_IDS.size(); i++) {
             activeReplicas.put(
                     ACTIVE_REPLICA_IDS.get(i),
@@ -77,7 +76,8 @@ public class XdnTestCluster implements AutoCloseable {
      * Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster.
      */
     public void start() throws Exception {
-        // configureLogging();
+        // TODO: enable logging for better debugging in Github action runners.
+        //   configureLogging();
         configureGigapaxos();
         cleanDirectory(GP_DATA_DIR);
         cleanDirectory(XDN_WORK_DIR);
@@ -170,7 +170,6 @@ public class XdnTestCluster implements AutoCloseable {
     public HttpResponse<String> invokeService(String serviceName) throws IOException, InterruptedException {
         int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst());
         URI uri = URI.create("http://%s:%d/".formatted(LOOPBACK, httpPort));
-        System.out.println(">>> Sending into " + uri);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(uri)
                 .timeout(REQUEST_TIMEOUT)

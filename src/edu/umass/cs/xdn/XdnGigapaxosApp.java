@@ -1570,8 +1570,6 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             endConversionTime = System.nanoTime();
             endResponseStoreTime = System.nanoTime();
 
-            System.out.println("receiving response " + httpResponse);
-
             // TODO: httpResponse.release();
         } catch (Exception e) {
             throw new RuntimeException(e);

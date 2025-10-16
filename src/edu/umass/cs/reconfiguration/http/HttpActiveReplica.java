@@ -604,9 +604,7 @@ public class HttpActiveReplica {
                 CompletableFuture.supplyAsync(() -> {
                             try {
                                 // Add timeout to prevent indefinite blocking
-                                var response = execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
-                                System.out.println(">>> HttpActiveReplica - async get " + response);
-                                return response;
+                                return execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
                             } catch (InterruptedException e) {
                                 Thread.currentThread().interrupt(); // Restore interrupt status
                                 throw new RuntimeException("Request execution interrupted", e);
@@ -618,14 +616,11 @@ public class HttpActiveReplica {
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
-                            System.out.println(">>> HttpActiveReplica - whenComplete starting");
-                            System.out.println(">>> HttpActiveReplica - response " + httpResponse + " err: " + err);
                             // release buffer of http request's content
                             bodyRefCopy.release();
 
-                            // Check channel state
+                            // Check channel state, do nothing if the channel is inactive (e.g., closed by client)
                             if (!ctx.channel().isActive()) {
-                                System.out.println(">>> HttpActiveReplica - channel is inactive, cannot send response");
                                 if (err != null) {
                                     System.out.println(">>> HttpActiveReplica - original error: " + err.getMessage());
                                     err.printStackTrace();
@@ -671,9 +666,7 @@ public class HttpActiveReplica {
 
             // Convert callback-based execution into future so that we can execute it synchronously.
             CompletableFuture<Request> future = new CompletableFuture<>();
-            System.out.println(">>> HttpActiveReplica - executing request via arFunctions");
             this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
-                System.out.println(">>> HttpActiveReplica - callback response handled=" + handled + " request=" + request);
                 if (handled) {
                     if (request == null) {
                         future.completeExceptionally(new RuntimeException("Request was handled but returned null"));
@@ -712,6 +705,7 @@ public class HttpActiveReplica {
             }
 
             // Get the response
+            // TODO: use Netty response instead of JDK.
             return xdnRequest.getHttpResponse();
         }
 
