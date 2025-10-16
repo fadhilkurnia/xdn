@@ -83,12 +83,17 @@ jobs:
 
         # Run tests with maximum verbosity
         java -jar lib/junit-platform-console-standalone-1.11.3.jar \
-          --scan-class-path \
           --class-path build/test-classes:build/classes:lib/* \
           --details verbose \
           --reports-dir out/junit5-test-output \
           --select-class edu.umass.cs.xdn.XdnMultiServiceTest \
+          --include-classname ".*" \
+          --config junit.jupiter.execution.parallel.enabled=false \
+          --config junit.jupiter.execution.parallel.mode.default=same_thread \
           2>&1 | tee junit-test-output.log
+          
+        JUNIT_EXIT_CODE=$?
+        echo "JUnit exit code: $JUNIT_EXIT_CODE"
         
         echo "=== Test execution completed ==="
         
@@ -136,7 +141,7 @@ jobs:
         done
         
         echo "=== Build and Test Log ==="
-        cat ant-xdn-unit-tests.log
+        cat junit-test-output.log
         
         echo "=== System Logs ==="
         dmesg | tail -n 100 || true
