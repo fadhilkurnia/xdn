@@ -58,28 +58,63 @@ jobs:
         ln -s -- "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
     # - name: 🧪 Running reconfiguration tests with ant ...
     #   run: ant test
+    - name: 🔧 Setup JUnit dependencies
+      run: |
+        # Download JUnit Platform Console standalone jar
+        wget https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.11.3/junit-platform-console-standalone-1.11.3.jar -P lib/
+
     - name: 🧪 Running XDN unit tests with ant ...
       run: |
         set -o pipefail
         # Enable more verbose JUnit output
         export JUNIT_REPORT_STACK=true
-        # Run with debug logging enabled
-        ANT_OPTS="-Dlog4j.configuration=conf/log4j.properties -Djava.util.logging.config.file=conf/logging.properties" \
+        # Set system properties for debugging
+        export ANT_OPTS="-Dlog4j.configuration=conf/log4j.properties \
+                        -Djava.util.logging.config.file=conf/logging.properties \
+                        -Djunit.jupiter.execution.parallel.enabled=false \
+                        -Djunit.platform.reporting.open.xml.enabled=true \
+                        -Djunit.platform.output.capture.stdout=true \
+                        -Djunit.platform.output.capture.stderr=true"
+        # Run tests with verbose output and system output capture
         ant -Ddebug=true -v xdn-unit-tests 2>&1 | tee ant-xdn-unit-tests.log
-    - name: 🪲 Display test log
+
+        # Print JVM info and system properties for debugging
+        java -XshowSettings:properties -version
+    - name: 🪲 Display test log and debug info
       if: always()  # Run even if tests fail
       run: |
-        echo "Displaying test output files..."
-        find out/junit5-test-output -type f -name "*.txt" -ls
+        echo "=== System Information ==="
+        uname -a
+        free -h
+        df -h
+        mount | grep fuse || true
+        
+        echo "=== Java Environment ==="
+        java -version
+        echo $JAVA_HOME
+        echo $ANT_OPTS
+        
+        echo "=== Directory Structure ==="
+        ls -R lib/
+        ls -R out/
+        
+        echo "=== Test Output Files ==="
+        find out/junit5-test-output -type f -ls
+        
+        echo "=== Test Results ==="
         for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do
           [ -f "$each" ] || continue
           echo "============ BEGIN $each ============"
           cat "$each"
           echo "============ END $each ============"
         done
-        echo "============ BEGIN ant stdout ============"
+        
+        echo "=== Build and Test Log ==="
         cat ant-xdn-unit-tests.log
-        echo "============ END ant stdout ============"
+        
+        echo "=== System Logs ==="
+        dmesg | tail -n 100 || true
+        journalctl -n 100 || true
     - name: 🔎 Checking the output directory structure ...
       run: ls out/**/*.xml
     - name: 📝 Reporting the test results ...
