@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const BASE_URL = 'http://10.10.1.1:2300/';
-const HEADERS = { 'XDN': 'bookcatalog' };
+const HEADERS = { 'XDN': 'svc' };
 
 export let options = {
   stages: [

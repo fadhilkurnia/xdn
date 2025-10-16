@@ -10,14 +10,14 @@ import { Rate, Counter, Trend } from 'k6/metrics';
 
 const BASE_URL = 'http://10.10.1.1:2300/api/books';
 const SERVICES = [
-    'bookcatalog1',
-    'bookcatalog2',
-    'bookcatalog3',
-    'bookcatalog4',
-    'bookcatalog5',
-    'bookcatalog6',
-    'bookcatalog7',
-    'bookcatalog8'
+    'sv1',
+    'sv2',
+    'sv3',
+    'sv4',
+    'sv5',
+    'sv6',
+    'sv7',
+    'sv8'
 ];
 
 // Create metrics for each service

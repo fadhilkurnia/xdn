@@ -547,7 +547,6 @@ public class HttpActiveReplica {
 
                 // return http bad request if service name is not specified
                 String serviceName = XdnHttpRequest.inferServiceName(this.request);
-                System.out.println(">> handling request for service name " + serviceName + " ...");
                 if (serviceName == null || serviceName.isEmpty()) {
                     HttpActiveReplicaHandler.sendBadRequestResponse(
                             "Unspecified service name." +
