@@ -1,18 +1,19 @@
 package edu.umass.cs.clientcentric.packets;
 
+import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.CodedOutputStream;
+import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
 
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
+public class ClientCentricSyncResponsePacket extends ClientCentricPacket implements Byteable {
 
     private final long packetId;
     private final String senderId;
@@ -23,14 +24,12 @@ public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
     public ClientCentricSyncResponsePacket(String senderId, String serviceName,
                                            long fromSequenceNumber,
                                            List<byte[]> encodedRequests) {
-        this(System.currentTimeMillis(), senderId, serviceName,
-                fromSequenceNumber, encodedRequests);
+        this(System.currentTimeMillis(), senderId, serviceName, fromSequenceNumber, encodedRequests);
     }
 
     private ClientCentricSyncResponsePacket(long packetId, String senderId, String serviceName,
                                             long fromSequenceNumber,
                                             List<byte[]> encodedRequests) {
-        super(ClientCentricPacketType.CLIENT_CENTRIC_SYNC_RES_PACKET);
         assert senderId != null && !senderId.isEmpty() : "Invalid sender id";
         assert serviceName != null && !serviceName.isEmpty() : "Invalid service name";
         assert fromSequenceNumber >= 0 : "Invalid sequence number, must be >= 0";
@@ -38,7 +37,9 @@ public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
         this.senderId = senderId;
         this.serviceName = serviceName;
         this.fromSequenceNumber = fromSequenceNumber;
-        this.encodedRequests = encodedRequests;
+        this.encodedRequests = encodedRequests == null
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(encodedRequests));
     }
 
     @Override
@@ -54,23 +55,6 @@ public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
     @Override
     public long getRequestID() {
         return this.packetId;
-    }
-
-    @Override
-    protected JSONObject toJSONObjectImpl() throws JSONException {
-        JSONObject object = new JSONObject();
-        object.put("id", this.packetId);
-        object.put("sn", this.serviceName);
-        object.put("sid", this.senderId);
-        object.put("seq", this.fromSequenceNumber);
-        JSONArray requestsJsonArr = new JSONArray();
-        // FIXME: these are inefficient because we are converting byte[] to String,
-        //  which later will be serialized and converted again into byte[].
-        for (byte[] req : this.encodedRequests) {
-            requestsJsonArr.put(new String(req, StandardCharsets.ISO_8859_1));
-        }
-        object.put("req", requestsJsonArr);
-        return object;
     }
 
     public String getSenderId() {
@@ -90,36 +74,83 @@ public class ClientCentricSyncResponsePacket extends ClientCentricPacket {
         return true;
     }
 
-    public static ClientCentricSyncResponsePacket fromJSONObject(JSONObject object) {
-        assert object != null : "The provided json object can not be null";
-        assert object.has("req") : "Unknown requests from the encoded packet";
-        assert object.has("id") : "Unknown ID from the encoded packet";
-        assert object.has("sn") : "Unknown service name from the encoded packet";
-        assert object.has("sid") : "Unknown sender ID from the encoded packet";
-        assert object.has("seq") : "Unknown Sequence Number from the encoded packet";
+    @Override
+    public byte[] toBytes() {
+        int payloadSize = CodedOutputStream.computeInt64Size(1, this.packetId)
+                + CodedOutputStream.computeStringSize(2, this.senderId)
+                + CodedOutputStream.computeStringSize(3, this.serviceName)
+                + CodedOutputStream.computeInt64Size(4, this.fromSequenceNumber);
+        for (byte[] req : this.encodedRequests) {
+            payloadSize += CodedOutputStream.computeByteArraySize(5, req);
+        }
 
+        byte[] serialized = new byte[Integer.BYTES + payloadSize];
+        ByteBuffer.wrap(serialized, 0, Integer.BYTES)
+                .putInt(this.getRequestType().getInt());
+
+        CodedOutputStream output = CodedOutputStream.newInstance(serialized,
+                Integer.BYTES, payloadSize);
         try {
-            long packetId = object.getLong("id");
-            String serviceName = object.getString("sn");
-            String senderId = object.getString("sid");
-            long fromSeqNum = object.getLong("seq");
-            JSONArray requestJsonArr = object.getJSONArray("req");
-            List<byte[]> encodedRequests = new ArrayList<>();
-            for (int i = 0; i < requestJsonArr.length(); ++i) {
-                String raw = requestJsonArr.getString(i);
-                encodedRequests.add(raw.getBytes(StandardCharsets.ISO_8859_1));
+            output.writeInt64(1, this.packetId);
+            output.writeString(2, this.senderId);
+            output.writeString(3, this.serviceName);
+            output.writeInt64(4, this.fromSequenceNumber);
+            for (byte[] req : this.encodedRequests) {
+                output.writeByteArray(5, req);
             }
+            output.flush();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to serialize ClientCentricSyncResponsePacket", e);
+        }
 
-            assert !serviceName.equalsIgnoreCase("AR1");
-            assert !serviceName.equalsIgnoreCase("AR2");
+        return serialized;
+    }
 
-            return new ClientCentricSyncResponsePacket(packetId, senderId, serviceName,
-                    fromSeqNum, encodedRequests);
-        } catch (JSONException e) {
-            System.out.println("receiving an invalid encoded client-centric-sync-resp packet, exception: " + e);
+    public static ClientCentricSyncResponsePacket createFromBytes(byte[] encodedPacket) {
+        assert encodedPacket != null && encodedPacket.length >= Integer.BYTES
+                : "Encoded packet cannot be empty";
+
+        int packetType = ByteBuffer.wrap(encodedPacket, 0, Integer.BYTES).getInt();
+        if (packetType != ClientCentricPacketType.CLIENT_CENTRIC_SYNC_RES_PACKET.getInt()) {
             Logger.getGlobal().log(Level.SEVERE,
-                    "receiving an invalid encoded client-centric-sync-resp packet");
+                    "Receiving an invalid encoded ClientCentricSyncResponsePacket: unexpected type "
+                            + packetType);
             return null;
         }
+
+        long packetId = 0;
+        String senderId = null;
+        String serviceName = null;
+        Long fromSequenceNumber = null;
+        List<byte[]> requests = new ArrayList<>();
+
+        CodedInputStream input = CodedInputStream.newInstance(
+                encodedPacket, Integer.BYTES, encodedPacket.length - Integer.BYTES);
+        try {
+            int tag;
+            while ((tag = input.readTag()) != 0) {
+                switch (tag) {
+                    case 8 -> packetId = input.readInt64();
+                    case 18 -> senderId = input.readStringRequireUtf8();
+                    case 26 -> serviceName = input.readStringRequireUtf8();
+                    case 32 -> fromSequenceNumber = input.readInt64();
+                    case 42 -> requests.add(input.readByteArray());
+                    default -> input.skipField(tag);
+                }
+            }
+        } catch (IOException e) {
+            Logger.getGlobal().log(Level.SEVERE,
+                    "Receiving an invalid encoded ClientCentricSyncResponsePacket: " + e.getMessage());
+            return null;
+        }
+
+        if (senderId == null || serviceName == null || fromSequenceNumber == null) {
+            Logger.getGlobal().log(Level.SEVERE,
+                    "Receiving an invalid encoded ClientCentricSyncResponsePacket: missing fields");
+            return null;
+        }
+
+        return new ClientCentricSyncResponsePacket(packetId, senderId, serviceName,
+                fromSequenceNumber, requests);
     }
 }

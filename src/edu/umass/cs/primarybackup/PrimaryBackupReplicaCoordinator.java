@@ -117,11 +117,12 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
         ExecutedCallback chainedCallback = callback;
 
         logger.log(Level.FINE,
-                String.format("%s:%s - coordinating request %s %s",
+                String.format("%s:%s - coordinating request %s %s %s",
                         getMyID(), PrimaryBackupReplicaCoordinator.class.getSimpleName(),
                         request.getClass().getSimpleName(),
                         request instanceof ReplicableClientRequest rcr
-                                ? rcr.getRequest().getClass().getSimpleName() : "null"));
+                                ? rcr.getRequest().getClass().getSimpleName() : "null",
+                        request.getServiceName()));
 
         // if packet comes from client (i.e., ReplicableClientRequest), wrap the
         // containing request with RequestPacket, and re-chain the callback.

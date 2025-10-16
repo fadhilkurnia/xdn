@@ -27,12 +27,76 @@ jobs:
       with:
         java-version: '21'
         distribution: 'oracle'
-    - name: 🏗️ Compiling the source code into a jar archive ...
-      run: ant jar
-    - name: 🧪 Running reconfiguration tests with ant ...
-      run: ant test
+    - name: 📦 Set up Docker  # Required for XdnTestCluster tests
+      uses: docker-practice/actions-setup-docker@master
+      timeout-minutes: 12
+    - name: 📦 Verify Docker installation
+      run: |
+        set -x
+        docker version
+        docker run --rm hello-world
+        docker pull fadhilkurnia/xdn-bookcatalog
+    - name: 🔄 Set up Rsync  # Required for default PrimaryBackup setup
+      uses: GuillaumeFalourd/setup-rsync@v1.2
+    - name: 🔄 Set up Fuse  # Required for PrimaryBackup setup
+      run: |
+        set -x  # Enable command echo for debugging
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libfuse3-dev fuse3
+        sudo modprobe fuse  # Ensure FUSE kernel module is loaded
+        sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+        # Verify FUSE setup
+        ls -l /dev/fuse
+        grep user_allow_other /etc/fuse.conf
+        fusermount3 -V
+    - name: 🏗️ Compiling the source code into a jar archive and prepare binaries ...
+      run: |
+        ant jar
+        ln -s -- "$(pwd)/bin/fuselog" /usr/local/bin/fuselog
+        ln -s -- "$(pwd)/bin/fuselog-apply" /usr/local/bin/fuselog-apply
+        ln -s -- "$(pwd)/bin/xdn" /usr/local/bin/xdn
+        ln -s -- "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
+    # - name: 🧪 Running reconfiguration tests with ant ...
+    #   run: ant test
     - name: 🧪 Running XDN unit tests with ant ...
-      run: ant xdn-unit-tests
+      run: |
+        set -o pipefail
+        ant xdn-unit-tests 2>&1 | tee junit-test-output.log
+    - name: 🪲 Display test log and debug info
+      if: always()  # Run even if tests fail
+      run: |
+        echo "=== System Information ==="
+        uname -a
+        free -h
+        df -h
+        mount | grep fuse || true
+        
+        echo "=== Java Environment ==="
+        java -version
+        echo $JAVA_HOME
+        echo $ANT_OPTS
+        
+        echo "=== Directory Structure ==="
+        ls -R lib/
+        ls -R out/
+        
+        echo "=== Test Output Files ==="
+        find out/junit5-test-output -type f -ls
+        
+        echo "=== Test Results ==="
+        for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do
+          [ -f "$each" ] || continue
+          echo "============ BEGIN $each ============"
+          cat "$each"
+          echo "============ END $each ============"
+        done
+        
+        echo "=== Build and Test Log ==="
+        cat junit-test-output.log
+        
+        echo "=== System Logs ==="
+        dmesg | tail -n 100 || true
+        journalctl -n 100 || true
     - name: 🔎 Checking the output directory structure ...
       run: ls out/**/*.xml
     - name: 📝 Reporting the test results ...

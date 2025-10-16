@@ -189,7 +189,6 @@ public class HttpReconfigurator {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
-                    .handler(new LoggingHandler(LogLevel.INFO))
                     .childHandler(
                             new HTTPReconfiguratorInitializer(sslCtx, rcf));
 

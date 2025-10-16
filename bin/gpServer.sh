@@ -5,6 +5,11 @@ APP_ARGS_KEY="appArgs"
 APP_RESOURCES_KEY="appResourcePath"
 DEBUG_KEY="debug"
 
+# set ssh key path with envvar SSH_KEY_PATH if needed
+# example: export SSH_KEY_PATH=/path/to/ssh/key
+SSH_KEY_PATH_DEFAULT=""
+SSH_KEY_PATH="${SSH_KEY_PATH:-$SSH_KEY_PATH_DEFAULT}"
+
 # Usage notes printing
 if [[ -z "$@" || -z `echo "$@"|grep \
 "[ ]*\(start\|stop\|restart\|clear\|forceclear\) "` ]];
@@ -305,16 +310,31 @@ function trim_file_list {
 get_file_list "$@"
 trim_file_list "$conf_transferrables"
 
+# prepare ssh args if `SSH_KEY_PATH` envvar is set
+SSH_KEY_PATH_ARG=""
+RSYNC_SSH_KEY_PATH_ARG=""
+if [[ ! -z $SSH_KEY_PATH ]]; then
+  SSH_KEY_PATH_ARG="-i $SSH_KEY_PATH"
+  RSYNC_SSH_KEY_PATH_ARG="-e 'ssh -x -i $SSH_KEY_PATH -o StrictHostKeyChecking=no'"
+fi
+
 # disabling warnings to prevent manual override; can supply ssh keys
 # here if needed, but they must be the same on the local host and on
 # the first host that continues the installation.
-SSH="ssh -x -o StrictHostKeyChecking=no"
+SSH="ssh $SSH_KEY_PATH_ARG -x -o StrictHostKeyChecking=no"
 
 RSYNC_PATH="mkdir -p $INSTALL_PATH $INSTALL_PATH/$CONF"
-RSYNC="rsync --force -aL "
+RSYNC="rsync --force -aL $RSYNC_SSH_KEY_PATH_ARG "
 
-username=`grep "USERNAME=" $GP_PROPERTIES|grep -v "^[ \t]*#"|\
+# get username from (1) environment variable GP_USERNAME, (2) from
+# gigapaxos properties file, or (3) from whoami
+if [[ ! -z $GP_USERNAME ]]; then
+  username=$GP_USERNAME
+fi
+if [[ -z $username ]]; then
+  username=`grep "USERNAME=" $GP_PROPERTIES|grep -v "^[ \t]*#"|\
   sed s/"^[ \t]*USERNAME="//g`
+fi
 if [[ -z $username ]]; then
   username=`whoami`
 fi

@@ -16,6 +16,7 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -190,12 +191,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         // ForwardedRequestPacket: entry replica -> primary
         if (packet instanceof ForwardedRequestPacket forwardedRequestPacket) {
-            return handleForwardedRequestPacket(forwardedRequestPacket, callback);
+            return handleForwardedRequestPacket(forwardedRequestPacket);
         }
 
         // ResponsePacket: primary -> entry replica
         if (packet instanceof ResponsePacket responsePacket) {
-            return handleResponsePacket(responsePacket, callback);
+            return handleResponsePacket(responsePacket);
         }
 
         // ChangePrimaryPacket: client -> entry replica
@@ -292,19 +293,30 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         appRequest.getClass().getSimpleName(),
                         packet.getEncodedServiceRequest().length));
 
+        PrimaryEpoch<NodeIDType> currentEpoch = this.currentPrimaryEpoch.get(serviceName);
+        if (currentEpoch == null) {
+            logger.log(Level.WARNING,
+                    String.format(
+                            "%s:%s - unknown current primary epoch for %s",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            packet.getServiceName()));
+            return false;
+        }
+
         // execute the app request, and capture the stateDiff
-        PrimaryEpoch<NodeIDType> currentEpoch = null;
-        boolean isExecuteSuccess = false;
-        String stateDiff = null;
-        synchronized (this) {
-            currentEpoch = this.currentPrimaryEpoch.get(serviceName);
-            if (currentEpoch == null) {
-                throw new RuntimeException("Unknown current primary epoch for " + serviceName);
-            }
+        boolean isExecuteSuccess;
+        String stateDiff;
+        synchronized (currentEpoch) {
             long startTime = System.nanoTime();
             isExecuteSuccess = replicableApp.execute(appRequest);
             if (!isExecuteSuccess) {
-                throw new RuntimeException("Failed to execute request for " + serviceName);
+                logger.log(Level.WARNING,
+                        String.format(
+                                "%s:%s - failed to execute request for %s id=%d",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                packet.getServiceName(),
+                                packet.getRequestID()));
+                return false;
             }
             long endTime = System.nanoTime();
             long elapsedTime = endTime - startTime;
@@ -325,6 +337,28 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                             myNodeID, PrimaryBackupManager.class.getSimpleName(),
                             elapsedTimeMs,
                             stateDiff.length()));
+        }
+
+        // put response if request is ClientRequest
+        if (appRequest instanceof ClientRequest) {
+            ClientRequest responsePacket = ((ClientRequest) appRequest).getResponse();
+            if (responsePacket == null) {
+                logger.log(Level.WARNING,
+                        String.format(
+                                "%s:%s - expecting non-null response for client request (svc=%s)",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                packet.getServiceName()));
+                return false;
+            }
+
+            packet.setResponse(responsePacket);
+            logger.log(Level.FINER,
+                    String.format(
+                            "%s:%s - primary set response id=%d name=%s pbEpoch=%s",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            packet.getRequestID(),
+                            packet.getServiceName(),
+                            currentEpoch));
         }
 
         // propose the stateDiff
@@ -366,19 +400,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     callback.executed(packet, handled);
                 });
 
-        // put response if request is ClientRequest
-        if (appRequest instanceof ClientRequest) {
-            ClientRequest responsePacket = ((ClientRequest) appRequest).getResponse();
-            packet.setResponse(responsePacket);
-            logger.log(Level.FINER,
-                    String.format(
-                            "%s:%s - primary set response id=%d name=%s pbEpoch=%s",
-                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                            packet.getRequestID(),
-                            packet.getServiceName(),
-                            currentEpoch));
-        }
-
         return true;
     }
 
@@ -389,8 +410,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         // get the current primary for the serviceName
         String serviceName = packet.getServiceName();
-        NodeIDType currentPrimaryIDStr = currentPrimary.get(serviceName);
-        if (currentPrimaryIDStr == null) {
+        NodeIDType currentPrimaryIdStr = currentPrimary.get(serviceName);
+        if (currentPrimaryIdStr == null) {
             throw new RuntimeException("Unknown primary ID");
             // TODO: potential fix would be to ask the current Paxos' coordinator to be the Primary
         }
@@ -399,7 +420,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 String.format(
                         "%s:%s - backup forwarding request to primary at %s reqSize=%d bytes",
                         myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                        currentPrimaryIDStr,
+                        currentPrimaryIdStr,
                         packet.getEncodedServiceRequest().length));
 
         // store the request and callback, so later we can send the response back to client
@@ -414,7 +435,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 packet.toString().getBytes(StandardCharsets.ISO_8859_1));
         GenericMessagingTask<NodeIDType, PrimaryBackupPacket> m =
                 new GenericMessagingTask<>(
-                        currentPrimaryIDStr, forwardPacket);
+                        currentPrimaryIdStr, forwardPacket);
 
         // send the forwarded request to the primary
         try {
@@ -431,7 +452,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     }
 
     private boolean handleForwardedRequestPacket(
-            ForwardedRequestPacket forwardedRequestPacket, ExecutedCallback callback) {
+            ForwardedRequestPacket forwardedRequestPacket) {
 
         String groupName = forwardedRequestPacket.getServiceName();
         Role curentRole = null;
@@ -453,22 +474,25 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             RequestPacket rp = RequestPacket.createFromString(encodedRequestString);
             this.executeRequestCoordinateStateDiff(rp, (executedRequest, handled) -> {
                 // Forwarded request is executed, forwarding response back to the entry replica
+                assert handled : "Unhandled request";
+                assert executedRequest instanceof RequestPacket :
+                        "Unexpected executedRequest of type "
+                                + executedRequest.getClass().getSimpleName();
 
-                if (executedRequest instanceof ClientRequest requestWithResponse) {
-                    ResponsePacket resp = new ResponsePacket(
-                            executedRequest.getServiceName(),
-                            rp.getRequestID(),
-                            requestWithResponse.getResponse().toString().
-                                    getBytes(StandardCharsets.ISO_8859_1));
-                    String entryNodeIDStr = forwardedRequestPacket.getEntryNodeId();
-                    NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
-                    GenericMessagingTask<NodeIDType, ResponsePacket> m =
-                            new GenericMessagingTask<>(entryNodeID, resp);
-                    try {
-                        messenger.send(m);
-                    } catch (IOException | JSONException e) {
-                        throw new RuntimeException(e);
-                    }
+                ClientRequest requestWithResponse = (ClientRequest) executedRequest;
+                ResponsePacket resp = new ResponsePacket(
+                        executedRequest.getServiceName(),
+                        rp.getRequestID(),
+                        requestWithResponse.getResponse().toString().
+                                getBytes(StandardCharsets.ISO_8859_1));
+                String entryNodeIDStr = forwardedRequestPacket.getEntryNodeId();
+                NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
+                GenericMessagingTask<NodeIDType, ResponsePacket> m =
+                        new GenericMessagingTask<>(entryNodeID, resp);
+                try {
+                    messenger.send(m);
+                } catch (IOException | JSONException e) {
+                    throw new RuntimeException(e);
                 }
 
                 // callback.executed(request, handled);
@@ -486,30 +510,55 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         throw new RuntimeException(exceptionMsg);
     }
 
-    private boolean handleResponsePacket(ResponsePacket responsePacket, ExecutedCallback callback) {
+    private boolean handleResponsePacket(ResponsePacket responsePacket) {
+        Request appRequest;
+        byte[] encodedResponse = responsePacket.getEncodedResponse();
+        String encodedResponseStr = new String(encodedResponse, StandardCharsets.ISO_8859_1);
         try {
-            byte[] encodedResponse = responsePacket.getEncodedResponse();
-            Request appRequest = this.replicableApp.getRequest(
-                    new String(encodedResponse, StandardCharsets.ISO_8859_1));
-
-            if (appRequest instanceof ClientRequest appRequestWithResponse) {
-                Long executedRequestID = responsePacket.getRequestID();
-                RequestAndCallback rc = forwardedRequests.get(executedRequestID);
-                if (rc == null) {
-                    logger.log(Level.SEVERE,
-                            String.format(
-                                    "%s:%s - unknown callback for RequestPacket-%d (%s)",
-                                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                                    executedRequestID,
-                                    this.getAllForwardedRequestIDs()));
-                    return true;
-                }
-
-                rc.requestPacket().setResponse(appRequestWithResponse);
-                rc.callback().executed(rc.requestPacket(), true);
+            // Deserialize the response.
+            appRequest = this.replicableApp.getRequest(encodedResponseStr);
+            if (appRequest == null) {
+                logger.log(Level.WARNING,
+                        String.format(
+                                "%s:%s - receiving ResponsePacket with malformed response",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName()));
+                return false;
             }
         } catch (RequestParseException e) {
             throw new RuntimeException(e);
+        }
+
+        // TODO: re-architecture me.
+        //   This is a quick hack for XDN to avoid request cache in XdnGigapaxosApp.
+        //   The `this.replicableApp.getRequest(encodedResponseStr)` above uses cache and returns
+        //   the original request *without* the response contained in the encodedResponseStr.
+        //   That is why we need to specifically *force* to deserialize the encodedResponse here.
+        //   Potential fixes:
+        //    - update the cache in getRequest() of XdnGigapaxosApp to consider the request.
+        if (appRequest instanceof XdnHttpRequestBatch) {
+            appRequest = XdnHttpRequestBatch.createFromBytes(encodedResponse);
+        }
+
+        if (appRequest instanceof ClientRequest appRequestWithResponse) {
+            Long executedRequestID = responsePacket.getRequestID();
+            RequestAndCallback rc = forwardedRequests.get(executedRequestID);
+            if (rc == null) {
+                logger.log(Level.WARNING,
+                        String.format(
+                                "%s:%s - unknown callback for RequestPacket-%d (%s)",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                executedRequestID,
+                                this.getAllForwardedRequestIDs()));
+                return false;
+            }
+            rc.requestPacket().setResponse(appRequestWithResponse);
+            rc.callback().executed(rc.requestPacket(), true);
+        } else {
+            logger.log(Level.WARNING,
+                    String.format(
+                            "%s:%s - unexpected non ClientRequest inside ResponsePacket",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName()));
+            return false;
         }
         return true;
     }
@@ -524,7 +573,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         String groupName = packet.getServiceName();
         Role myCurrentRole = null;
-        PrimaryEpoch curEpoch = null;
+        PrimaryEpoch<?> curEpoch = null;
         synchronized (this) {
             myCurrentRole = this.currentRole.get(groupName);
             curEpoch = this.currentPrimaryEpoch.get(groupName);
@@ -534,7 +583,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     String.format(
                             "%s:%s - unknown role for service name '%s'",
                             myNodeID, PrimaryBackupManager.class.getSimpleName(), groupName));
-            return true;
+            return false;
         }
         if (myCurrentRole.equals(Role.PRIMARY)) {
             logger.log(Level.FINER,
@@ -867,6 +916,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         processOutstandingRequests();
                     }
             );
+        } else {
+            PrimaryEpoch<NodeIDType> zero = new PrimaryEpoch<>(paxosCoordinatorID, 0);
+            currentRole.put(groupName, Role.BACKUP);
+            currentPrimary.put(groupName, paxosCoordinatorID);
+            currentPrimaryEpoch.put(groupName, zero);
         }
 
         // FIXME: as a temporary measure, we wait until StartEpochPacket is being agreed upon.

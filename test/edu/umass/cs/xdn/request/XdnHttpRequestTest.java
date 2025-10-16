@@ -1,14 +1,11 @@
-package edu.umass.cs.xdn;
+package edu.umass.cs.xdn.request;
 
 import edu.umass.cs.clientcentric.VectorTimestamp;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
-import edu.umass.cs.xdn.request.XdnJsonHttpRequest;
-import edu.umass.cs.xdn.request.XdnRequest;
-import edu.umass.cs.xdn.request.XdnRequestType;
+import edu.umass.cs.xdn.XdnGigapaxosApp;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import org.junit.jupiter.api.Disabled;
@@ -35,8 +32,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testHttpRequestId_InferHeaderETag() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
 
         String specifiedId = "specified-etag-id";
         request.headers().add(HttpHeaderNames.ETAG, specifiedId);
@@ -50,8 +47,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testHttpRequestId_InferHeaderXRequestId() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
 
         String specifiedId = "specified-request-id";
         request.headers().add("X-Request-ID", specifiedId);
@@ -65,8 +62,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testHttpRequestId_InferHeaderXdnRequestId() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
 
         String specifiedId = "specified-request-id";
         long expectedInferredId = Objects.hashCode(specifiedId);
@@ -80,8 +77,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testHttpRequestServiceName_InferHeaderXdn() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(16);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(16);
 
         String specifiedServiceName = "dummyServiceName";
         request.headers().remove("XDN");
@@ -93,8 +90,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testHttpRequestServiceName_InferHeaderHost() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(16);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(16);
 
         String specifiedServiceName = "dummyServiceName1";
         String hostName = String.format("%s.xdn.io", specifiedServiceName);
@@ -115,8 +112,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testRequestSerialization() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
 
         XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
         String encodedRequest = httpRequest.toString();
@@ -128,9 +125,64 @@ public class XdnHttpRequestTest {
     }
 
     @Test
+    public void testParseRequestIdQuickly() {
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
+
+        XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+        String encoded = httpRequest.toString();
+
+        Long quickId = XdnHttpRequest.parseRequestIdQuickly(encoded);
+        assertNotNull(quickId);
+        assertEquals(httpRequest.getRequestID(), quickId);
+    }
+
+    @Test
+    public void testParseRequestIdQuicklyMalformed() {
+        assertNull(XdnHttpRequest.parseRequestIdQuickly("bad"));
+    }
+
+    @Test
+    public void testDoesHasResponseAndParseHttpResponse_True() {
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(32);
+        XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+        HttpResponse response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1,
+                HttpResponseStatus.OK,
+                Unpooled.wrappedBuffer("hello".getBytes(StandardCharsets.UTF_8)));
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain");
+        response.headers().set(HttpHeaderNames.CONTENT_LENGTH, 5);
+        xdnRequest.setHttpResponse(response);
+
+        String encoded = xdnRequest.toString();
+        assertTrue(XdnHttpRequest.doesHasResponse(encoded));
+
+        HttpResponse decodedResponse = XdnHttpRequest.parseHttpResponse(encoded);
+        assertNotNull(decodedResponse);
+        assertEquals(decodedResponse.getClass().getSimpleName(), DefaultFullHttpResponse.class.getSimpleName());
+        assertEquals(HttpResponseStatus.OK, decodedResponse.status());
+        assertEquals("text/plain", decodedResponse.headers().get(HttpHeaderNames.CONTENT_TYPE));
+        assertEquals("5", decodedResponse.headers().get(HttpHeaderNames.CONTENT_LENGTH));
+        assertEquals("hello", ((DefaultFullHttpResponse) decodedResponse).content().toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void testDoesHasResponseAndParseHttpResponse_False() {
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(16);
+        XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+        String encoded = xdnRequest.toString();
+        assertFalse(XdnHttpRequest.doesHasResponse(encoded));
+        assertNull(XdnHttpRequest.parseHttpResponse(encoded));
+    }
+
+    @Test
     public void testRequestSerializationDeserialization() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
 
         XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
         String encoded = httpRequest.toString();
@@ -144,8 +196,8 @@ public class XdnHttpRequestTest {
     @Test
     public void testRequestSerializationDeserialization_AppRequestParser()
             throws RequestParseException {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
 
         // serialize the request
         XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
@@ -169,8 +221,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testBenchmarkAgainstJsonEncoding_Serialization() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(1024);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(1024);
 
         final int repetitions = 1000000;
         XdnHttpRequest protobufHttpRequest = new XdnHttpRequest(request, content);
@@ -206,8 +258,8 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testBenchmarkAgainstJsonEncoding_Deserialization() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(1024);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(1024);
 
         final int repetitions = 1000000;
         XdnHttpRequest protobufHttpRequest = new XdnHttpRequest(request, content);
@@ -248,9 +300,9 @@ public class XdnHttpRequestTest {
 
     @Test
     public void testSetResponseTimestamp() {
-        HttpRequest request = this.helpCreateDummyHttpRequest();
-        HttpContent content = this.helpCreateDummyHttpContent(256);
-        HttpResponse response = this.helpCreateDummyHttpResponse(128);
+        HttpRequest request = helpCreateDummyHttpRequest();
+        HttpContent content = helpCreateDummyHttpContent(256);
+        HttpResponse response = this.helpCreateDummyHttpResponse();
         XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
         httpRequest.setHttpResponse(response);
 
@@ -334,8 +386,8 @@ public class XdnHttpRequestTest {
                 Unpooled.copiedBuffer(randomHttpBody.getBytes(StandardCharsets.UTF_8)));
     }
 
-    private HttpResponse helpCreateDummyHttpResponse(int contentLength) {
-        String randomHttpBody = this.helpCreateRandomString(contentLength);
+    private HttpResponse helpCreateDummyHttpResponse() {
+        String randomHttpBody = helpCreateRandomString(128);
         return new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
                 HttpResponseStatus.OK,

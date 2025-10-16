@@ -5,10 +5,7 @@ import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.examples.AppRequest;
-import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.ReadOnlyRequest;
-import org.json.JSONException;
-import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -17,7 +14,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.*;
 
 @RunWith(JUnit4.class)
@@ -55,7 +51,7 @@ public class PramReadPacketTest {
     private static class DummyReadOnlyAppRequestParser implements AppRequestParser {
 
         @Override
-        public Request getRequest(String stringified) throws RequestParseException {
+        public Request getRequest(String stringified) {
             return new DummyReadOnlyAppRequest();
         }
 
@@ -79,31 +75,20 @@ public class PramReadPacketTest {
         ClientRequest dummyRequest = new DummyReadOnlyAppRequest();
         PramReadPacket packet = new PramReadPacket(dummyRequest);
         assertNotNull(packet.toString());
-        assertThat(packet.toString(), containsString(dummyRequest.toString()));
-        assertThat(packet.toString(),
-                containsString(String.valueOf(AppRequest.PacketType.DEFAULT_APP_REQUEST.getInt())));
-        System.out.println(packet.toString());
-    }
-
-    @Test
-    public void testFromJsonObject() throws JSONException {
-        JSONObject object = new JSONObject();
-        object.put("id", 123);
-        object.put("type", PramPacketType.PRAM_READ_PACKET.getInt());
-        object.put("req", (new DummyReadOnlyAppRequest()).toString());
-        PramReadPacket packet = PramReadPacket.fromJsonObject(object, new DummyReadOnlyAppRequestParser());
-        assertNotNull(packet);
-        System.out.println(packet.toString());
+        assertTrue(packet.toBytes().length > 0);
     }
 
     @Test
     public void testSerializationDeserialization() {
         ClientRequest dummyRequest = new DummyReadOnlyAppRequest();
         PramReadPacket sourcePacket = new PramReadPacket(dummyRequest);
-        Request resultingPacket =
-                PramPacket.createFromString(sourcePacket.toString(), new DummyReadOnlyAppRequestParser());
-        assertTrue(resultingPacket instanceof PramReadPacket);
-        assertEquals(sourcePacket.toString(), resultingPacket.toString());
+        PramPacket decoded = PramPacket.createFromBytes(
+                sourcePacket.toBytes(), new DummyReadOnlyAppRequestParser());
+        assertTrue(decoded instanceof PramReadPacket);
+        PramReadPacket resultingPacket = (PramReadPacket) decoded;
+        assertEquals(sourcePacket.getRequestID(), resultingPacket.getRequestID());
+        assertEquals(sourcePacket.getClientReadRequest().getRequestType(),
+                resultingPacket.getClientReadRequest().getRequestType());
     }
 
 }

@@ -4,14 +4,10 @@ import edu.umass.cs.clientcentric.packets.ClientCentricPacket;
 import edu.umass.cs.clientcentric.packets.ClientCentricPacketType;
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
 import edu.umass.cs.nio.AbstractPacketDemultiplexer;
-import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 
 public class ClientCentricPacketDemultiplexer
         extends AbstractPacketDemultiplexer<ClientCentricPacket> {
@@ -33,36 +29,18 @@ public class ClientCentricPacketDemultiplexer
 
     @Override
     protected ClientCentricPacket processHeader(byte[] message, NIOHeader header) {
-        String rawMessage;
-
-        // convert bytes message into String
-        try {
-            rawMessage = new String(message, NIOHeader.CHARSET);
-        } catch (UnsupportedEncodingException e) {
+        ClientCentricPacketType packetType =
+                ClientCentricPacket.getQuickPacketTypeFromEncodedPacket(message);
+        if (packetType == null) {
             return null;
         }
 
-        // find the packet type from the message
-        JSONObject object;
-        Integer packetType;
-        try {
-            object = new JSONObject(rawMessage);
-            packetType = JSONPacket.getPacketType(object);
-        } catch (JSONException e) {
-            return null;
-        }
-
-        if (!ClientCentricPacketType.intToType.containsKey(packetType)) {
-            return null;
-        }
-
-        return (ClientCentricPacket) ClientCentricPacket
-                .createFromString(rawMessage, this.appRequestParser);
+        return ClientCentricPacket.createFromBytes(message, this.appRequestParser);
     }
 
     @Override
     protected boolean matchesType(Object message) {
-        return message instanceof ClientCentricPacketType;
+        return message instanceof ClientCentricPacket;
     }
 
     @Override

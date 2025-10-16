@@ -28,6 +28,14 @@ public abstract class CausalPacket implements ReplicableRequest {
             return CausalWriteAckPacket.createFromBytes(encodedPacket);
         }
 
+        if (packetType.equals(CausalPacketType.CAUSAL_READ_FORWARD_PACKET)) {
+            return CausalReadForwardPacket.createFromBytes(encodedPacket, appRequestParser);
+        }
+
+        if (packetType.equals(CausalPacketType.CAUSAL_READ_ACK_PACKET)) {
+            return CausalReadAckPacket.createFromBytes(encodedPacket, appRequestParser);
+        }
+
         throw new RuntimeException("Unimplemented deserializer handler for packet type of " +
                 packetType);
     }

@@ -111,6 +111,63 @@ function do_distributed_initialization() {
   # TODO: start the service
 }
 
+function do_start_all() {
+  echo "Starting all gigapaxos servers defined in the config ..."
+
+  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local CONFIG=$DEFAULT_CONFIG
+  local SSH_KEY=""
+  local USERNAME=""
+
+  for ARG in "$@"; do
+    case $ARG in
+    -config=*)
+      CONFIG="${ARG#*=}"
+      ;;
+    -ssh-key=*)
+      SSH_KEY="${ARG#*=}"
+      ;;
+    -username=*)
+      USERNAME="${ARG#*=}"
+      ;;
+    esac
+  done
+
+  if [ ! -f "$CONFIG" ]; then
+    echo "Config file '$CONFIG' can not be found!"
+    exit 1
+  fi
+
+  if [ -z "$SSH_KEY" ]; then
+    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
+    exit 1
+  fi
+
+  if [ -z "$USERNAME" ]; then
+    echo "Please specify the username with '-username=<name>' argument."
+    exit 1
+  fi
+
+  local CONFIG_DIR
+  CONFIG_DIR=$(cd "$(dirname "$CONFIG")" && pwd)
+  local CONFIG_ABS="$CONFIG_DIR/$(basename "$CONFIG")"
+
+  local GPSERVER="$XDN_SRC_PATH/bin/gpServer.sh"
+  if [ ! -x "$GPSERVER" ]; then
+    echo "Unable to find executable gpServer at '$GPSERVER'"
+    exit 1
+  fi
+
+  echo " - config file : ${CONFIG_ABS}"
+  echo " - ssh key     : ${SSH_KEY}"
+  echo " - username    : ${USERNAME}"
+  echo ""
+  echo "Invoking gpServer to start all nodes ..."
+
+  SSH_KEY_PATH="$SSH_KEY" GP_USERNAME="$USERNAME" "$GPSERVER" "-DgigapaxosConfig=$CONFIG_ABS" start all
+  exit $?
+}
+
 function do_start_ar_instance() {
   echo "unimplemented"
 }
@@ -353,6 +410,15 @@ function print_usage() {
   echo " To initialize all the machines, installing required dependencies:"
   echo "   xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
+  echo " To start all gigapaxos servers using gpServer:"
+  echo "   xdnd start-all -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To initialize distributed observability:"
+  echo "   xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To initialize the driver machine:"
+  echo "   xdnd init-driver"
+  echo ""
   echo " To start a reconfigurator instance:"
   echo "   xdnd start control-plane -config=gigapaxos.properties RC0"
   echo ""
@@ -378,6 +444,336 @@ function is_in_list() {
   return 1
 }
 
+# install_node_exporter_on_remote ensures each remote node has node-exporter managed via systemd
+function install_node_exporter_on_remote() {
+  local node=$1
+  local ssh_key=$2
+  local username=$3
+
+  echo "[REMOTE] Installing node-exporter on $node ..."
+  ssh -o StrictHostKeyChecking=no -i "$ssh_key" "$username@$node" 'bash -s' <<'ENDSSH'
+    set -e
+    if ! command -v wget >/dev/null 2>&1; then
+      sudo apt-get update && sudo apt-get install -y wget
+    fi
+    NODE_EXPORTER_VERSION="1.8.2"
+    NODE_EXPORTER_DIR="node_exporter-${NODE_EXPORTER_VERSION}.linux-amd64"
+    NODE_EXPORTER_TAR="${NODE_EXPORTER_DIR}.tar.gz"
+    if ! command -v node_exporter >/dev/null 2>&1; then
+      wget -q https://github.com/prometheus/node_exporter/releases/download/v${NODE_EXPORTER_VERSION}/${NODE_EXPORTER_TAR}
+      tar xzf ${NODE_EXPORTER_TAR}
+      sudo mv ${NODE_EXPORTER_DIR}/node_exporter /usr/local/bin/
+      sudo chmod 755 /usr/local/bin/node_exporter
+      rm -rf ${NODE_EXPORTER_DIR} ${NODE_EXPORTER_TAR}
+    fi
+    if ! getent group node_exporter >/dev/null 2>&1; then
+      sudo groupadd --system node_exporter
+    fi
+    if ! id -u node_exporter >/dev/null 2>&1; then
+      sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g node_exporter node_exporter
+    fi
+    if [ ! -f /etc/systemd/system/node_exporter.service ]; then
+      sudo tee /etc/systemd/system/node_exporter.service >/dev/null <<'SERVICE'
+[Unit]
+Description=Prometheus Node Exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now node_exporter
+    else
+      sudo systemctl daemon-reload
+      sudo systemctl restart node_exporter
+    fi
+    echo "node-exporter installed."
+ENDSSH
+}
+
+# update_prometheus_scrape_config ensures local Prometheus scrapes all node exporters
+function update_prometheus_scrape_config() {
+  local nodes=("$@")
+  local prom_tmp
+
+  echo "[LOCAL] Updating Prometheus configuration with node-exporter targets ..."
+  prom_tmp=$(mktemp)
+  cat >"$prom_tmp" <<'PROMHDR'
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets:
+PROMHDR
+  for ip in "${nodes[@]}"; do
+    echo "        - '${ip}:9100'" >>"$prom_tmp"
+  done
+  echo "        - 'localhost:9100'" >>"$prom_tmp"
+  sudo mv "$prom_tmp" /etc/prometheus/prometheus.yml
+  sudo chown prometheus:prometheus /etc/prometheus/prometheus.yml
+  sudo chmod 644 /etc/prometheus/prometheus.yml
+  sudo systemctl restart prometheus
+}
+
+# provision_node_exporter_dashboard configures Grafana to use Prometheus and import the Node Exporter dashboard
+function provision_node_exporter_dashboard() {
+  echo "[LOCAL] Provisioning Grafana data source and Node Exporter Full dashboard ..."
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get install -y curl
+  fi
+  sudo mkdir -p /etc/grafana/provisioning/datasources
+  sudo mkdir -p /etc/grafana/provisioning/dashboards
+  sudo mkdir -p /var/lib/grafana/dashboards/node_exporter
+  sudo tee /etc/grafana/provisioning/datasources/prometheus.yaml >/dev/null <<'DATASOURCE'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: false
+DATASOURCE
+  sudo tee /etc/grafana/provisioning/dashboards/node_exporter.yaml >/dev/null <<'DASHCFG'
+apiVersion: 1
+providers:
+  - name: Node Exporter Full
+    folder: Node Exporter
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/node_exporter
+    inputs:
+      - name: DS_PROMETHEUS
+        type: datasource
+        pluginId: prometheus
+        value: Prometheus
+DASHCFG
+  local dash_tmp
+  dash_tmp=$(mktemp)
+  if ! curl -fsSL https://grafana.com/api/dashboards/1860/revisions/latest/download -o "$dash_tmp"; then
+    echo "[ERROR] Failed to download Node Exporter Full dashboard JSON." >&2
+    exit 1
+  fi
+  sudo mv "$dash_tmp" /var/lib/grafana/dashboards/node_exporter/node_exporter_full.json
+  sudo chown -R grafana:grafana /etc/grafana/provisioning /var/lib/grafana/dashboards
+  sudo chmod -R a+rX /etc/grafana/provisioning /var/lib/grafana/dashboards
+  sudo systemctl restart grafana-server
+}
+
+# provision_k6_prometheus_dashboard imports the official k6 Prometheus dashboard into Grafana
+function provision_k6_prometheus_dashboard() {
+  echo "[LOCAL] Provisioning k6 Prometheus dashboard ..."
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get install -y curl
+  fi
+  sudo mkdir -p /etc/grafana/provisioning/dashboards
+  sudo mkdir -p /var/lib/grafana/dashboards/k6
+  sudo tee /etc/grafana/provisioning/dashboards/k6_prometheus.yaml >/dev/null <<'DASHCFG'
+apiVersion: 1
+providers:
+  - name: k6 Prometheus
+    folder: k6
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/k6
+    inputs:
+      - name: DS_PROMETHEUS
+        type: datasource
+        pluginId: prometheus
+        value: Prometheus
+DASHCFG
+  local dash_tmp
+  dash_tmp=$(mktemp)
+  if ! curl -fsSL https://grafana.com/api/dashboards/19665/revisions/latest/download -o "$dash_tmp"; then
+    echo "[ERROR] Failed to download k6 Prometheus dashboard JSON." >&2
+    exit 1
+  fi
+  sudo mv "$dash_tmp" /var/lib/grafana/dashboards/k6/k6_prometheus.json
+  sudo chown -R grafana:grafana /etc/grafana/provisioning /var/lib/grafana/dashboards
+  sudo chmod -R a+rX /etc/grafana/provisioning /var/lib/grafana/dashboards
+  sudo systemctl restart grafana-server
+}
+
+# install_prometheus installs Prometheus and enables remote write receiver
+function install_prometheus() {
+  echo "[LOCAL] Installing Prometheus with remote-write receiver ..."
+  sudo apt-get install -y prometheus
+  sudo mkdir -p /etc/systemd/system/prometheus.service.d
+  sudo tee /etc/systemd/system/prometheus.service.d/remote-write.conf >/dev/null <<'PROMDROP'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --enable-feature=remote-write-receiver
+PROMDROP
+  sudo systemctl daemon-reload
+  sudo systemctl enable prometheus
+  sudo systemctl restart prometheus
+}
+
+# do_distributed_init_observability sets up observability tools locally and remotely
+# Installs grafana, k6, and prometheus locally, and node-exporter on all remote nodes
+function do_distributed_init_observability() {
+  echo "Initializing distributed observability setup ..."
+
+  # get config from parameters, if any.
+  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local CONFIG=$DEFAULT_CONFIG
+  for ARG in "$@"; do
+    case $ARG in
+    -config=*)
+      CONFIG="${ARG#*=}"
+      ;;
+    esac
+  done
+
+  if [ ! -f "$CONFIG" ]; then
+    echo "Config file '$CONFIG' can not be found!"
+    exit 1
+  fi
+
+  # extract unique IPs from the config file
+  local unique_ips=()
+  while IFS= read -r line; do
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
+      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
+      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
+        unique_ips+=("$ip")
+      fi
+    fi
+  done <"$CONFIG"
+
+  # get the ssh key from args
+  local SSH_KEY=""
+  for ARG in "$@"; do
+    case $ARG in
+    -ssh-key=*)
+      SSH_KEY="${ARG#*=}"
+      ;;
+    esac
+  done
+  if [ -z "$SSH_KEY" ]; then
+    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
+    exit 1
+  fi
+
+  # get the username from args
+  local USERNAME=""
+  for ARG in "$@"; do
+    case $ARG in
+    -username=*)
+      USERNAME="${ARG#*=}"
+      ;;
+    esac
+  done
+  if [ -z "$USERNAME" ]; then
+    echo "Please specify the username with '-username=<name>' argument."
+    exit 1
+  fi
+
+  echo " - config file       : ${CONFIG}"
+  echo " - ssh key           : ${SSH_KEY}"
+  echo " - username          : ${USERNAME}"
+  echo " - machine IPs/Hosts :"
+  for ip in "${unique_ips[@]}"; do
+    echo "   - $ip"
+  done
+  echo ""
+
+  # Install Grafana, k6, and Prometheus locally
+  echo "[LOCAL] Installing Grafana, k6, and Prometheus ..."
+  if command -v apt-get >/dev/null 2>&1; then
+    # Installing and enabling Grafana
+    sudo apt-get update
+    sudo apt-get install -y software-properties-common
+    sudo add-apt-repository -y "deb https://packages.grafana.com/oss/deb stable main"
+    wget -q -O - https://packages.grafana.com/gpg.key | sudo apt-key add -
+    sudo apt-get update
+    sudo apt-get install -y grafana
+    sudo systemctl start grafana-server
+    sudo systemctl enable grafana-server
+
+    # Installing k6
+    sudo gpg -k
+    sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+    echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+    sudo apt-get update
+    sudo apt-get install -y k6
+
+    # Installing Prometheus with remote-write receiver
+    install_prometheus
+  else
+    echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
+  fi
+
+  # Install node-exporter on all remote nodes
+  for machine in "${unique_ips[@]}"; do
+    install_node_exporter_on_remote "$machine" "$SSH_KEY" "$USERNAME"
+  done
+
+  if command -v apt-get >/dev/null 2>&1; then
+    # Update Prometheus config with all node-exporter targets
+    update_prometheus_scrape_config "${unique_ips[@]}"
+
+    # Provision Grafana data source and Node Exporter Full dashboard
+    provision_node_exporter_dashboard
+
+    # Provision Grafana dashboard for k6 Prometheus metrics
+    provision_k6_prometheus_dashboard
+  fi
+
+  echo "Distributed observability setup complete."
+  echo "Access Grafana at http://localhost:3000"
+  exit 0
+}
+
+# Initializes the driver machine with all required dependencies and setup
+function do_init_driver() {
+  echo "Initializing driver machine ..."
+
+  sudo apt update
+  sudo apt install -y golang-go openjdk-21-jdk apache2-utils python3-pip ant screen
+  curl https://sh.rustup.rs -sSf | sh -s -- -y
+  source $HOME/.cargo/env
+  python -m pip install -U pip
+  python -m pip install -U matplotlib
+  python -m pip install -U scikit-learn
+  python -m pip install -U requests
+  python -m pip install -U pandas
+  python -m pip install -U basemap
+
+  ant jar
+  ./bin/build_xdn_cli.sh
+  sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
+  mkdir -p eval/screen_logs
+  sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results
+  cd eval/xdn_latency_proxy_go && go build .
+  cd -
+
+  echo "Dont forget to initialize machines for xdn cluster using 'xdnd dist-init'"
+  exit 0
+}
+
 # main() is the main entrypoint of this shell script that validates the actions
 # (i.e., start, check, dist-launch, help), then handle the action accordingly.
 function main() {
@@ -390,7 +786,7 @@ function main() {
   fi
 
   # Find out the absolute path of XDN source code, assuming
-  # this bash program is./bin/xdnd inside the XDN source code.
+  # this bash program is ./bin/xdnd inside the XDN source code.
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   XDN_SRC_PATH="$(cd $SCRIPT_DIR && cd ../ && pwd)"
 
@@ -405,7 +801,7 @@ function main() {
 
   # parse the second param, i.e., the action.
   local SECOND_PARAM=$1
-  local VALID_ACTIONS=("dist-init" "start" "help" "check")
+  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "init-driver" "start" "help" "check")
   if ! is_in_list "$SECOND_PARAM" "${VALID_ACTIONS[@]}"; then
     echo "Action '$SECOND_PARAM' is not a valid actions."
     echo "Valid actions are: start, check, dist-init, help."
@@ -418,6 +814,15 @@ function main() {
   case "$ACTION" in
   "dist-init")
     do_distributed_initialization "$@"
+    ;;
+  "dist-init-observability")
+    do_distributed_init_observability "$@"
+    ;;
+  "start-all")
+    do_start_all "$@"
+    ;;
+  "init-driver")
+    do_init_driver "$@"
     ;;
   "start")
     echo "starting an instance ..."

@@ -1,46 +1,31 @@
 package edu.umass.cs.eventual.packets;
 
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
-import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
-import org.json.JSONException;
-import org.json.JSONObject;
 
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.nio.ByteBuffer;
 
-public abstract class LazyPacket extends JSONPacket implements ReplicableRequest {
+public abstract class LazyPacket implements ReplicableRequest {
 
-    protected LazyPacket(LazyPacketType t) {
-        super(t);
+    // returns null if the encodedPacket is not from a valid LazyPacket
+    public static LazyPacketType getQuickPacketTypeFromEncodedPacket(byte[] encodedPacket) {
+        if (encodedPacket.length < 4) return null;
+        ByteBuffer headerBuffer = ByteBuffer.wrap(encodedPacket);
+        int packetType = headerBuffer.getInt(0);
+        return LazyPacketType.intToType.get(packetType);
     }
 
-    public static LazyPacket createFromString(String encodedPacket,
-                                              AppRequestParser appRequestParser) {
-        JSONObject object;
-        Integer packetType;
-        try {
-            object = new JSONObject(encodedPacket);
-            packetType = JSONPacket.getPacketType(object);
-        } catch (JSONException e) {
-            return null;
+    public static LazyPacket createFromBytes(byte[] encodedPacket,
+                                             AppRequestParser appRequestParser) {
+        LazyPacketType packetType = LazyPacket.getQuickPacketTypeFromEncodedPacket(encodedPacket);
+        assert packetType != null : "Invalid encoded LazyPacket";
+
+
+        if (packetType.equals(LazyPacketType.LAZY_WRITE_AFTER)) {
+            return LazyWriteAfterPacket.createFromBytes(encodedPacket, appRequestParser);
         }
 
-        if (packetType == null) {
-            Logger.getGlobal().log(Level.WARNING,
-                    "Ignoring LazyPacket as the type is null");
-            return null;
-        }
-
-        LazyPacketType lazyPacketType = LazyPacketType.intToType.get(packetType);
-        assert lazyPacketType != null :
-                "Unknown corresponding LazyPacketType with type=" + packetType;
-        if (lazyPacketType == LazyPacketType.LAZY_WRITE_AFTER) {
-            return LazyWriteAfterPacket.fromJsonObject(object, appRequestParser);
-        }
-
-        Logger.getGlobal().log(Level.SEVERE,
-                "Handling unknown LazyPacketType " + lazyPacketType);
-        return null;
+        throw new RuntimeException("Unimplemented deserializer handler for packet type of " +
+                packetType);
     }
 }

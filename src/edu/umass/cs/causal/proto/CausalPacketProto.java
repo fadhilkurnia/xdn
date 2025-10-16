@@ -4057,6 +4057,1614 @@ public final class CausalPacketProto {
 
   }
 
+  public interface CausalReadForwardPacketOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:causal.CausalReadForwardPacket)
+      com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <code>uint64 packet_id = 1;</code>
+     * @return The packetId.
+     */
+    long getPacketId();
+
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The serviceName.
+     */
+    java.lang.String getServiceName();
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The bytes for serviceName.
+     */
+    com.google.protobuf.ByteString
+        getServiceNameBytes();
+
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The senderNodeId.
+     */
+    java.lang.String getSenderNodeId();
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The bytes for senderNodeId.
+     */
+    com.google.protobuf.ByteString
+        getSenderNodeIdBytes();
+
+    /**
+     * <code>bytes encoded_read_request = 4;</code>
+     * @return The encodedReadRequest.
+     */
+    com.google.protobuf.ByteString getEncodedReadRequest();
+  }
+  /**
+   * Protobuf type {@code causal.CausalReadForwardPacket}
+   */
+  public static final class CausalReadForwardPacket extends
+      com.google.protobuf.GeneratedMessage implements
+      // @@protoc_insertion_point(message_implements:causal.CausalReadForwardPacket)
+      CausalReadForwardPacketOrBuilder {
+  private static final long serialVersionUID = 0L;
+    static {
+      com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+        com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 28,
+        /* patch= */ 2,
+        /* suffix= */ "",
+        CausalReadForwardPacket.class.getName());
+    }
+    // Use CausalReadForwardPacket.newBuilder() to construct.
+    private CausalReadForwardPacket(com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+      super(builder);
+    }
+    private CausalReadForwardPacket() {
+      serviceName_ = "";
+      senderNodeId_ = "";
+      encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+    }
+
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadForwardPacket_descriptor;
+    }
+
+    @java.lang.Override
+    protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadForwardPacket_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.class, edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.Builder.class);
+    }
+
+    public static final int PACKET_ID_FIELD_NUMBER = 1;
+    private long packetId_ = 0L;
+    /**
+     * <code>uint64 packet_id = 1;</code>
+     * @return The packetId.
+     */
+    @java.lang.Override
+    public long getPacketId() {
+      return packetId_;
+    }
+
+    public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+    @SuppressWarnings("serial")
+    private volatile java.lang.Object serviceName_ = "";
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The serviceName.
+     */
+    @java.lang.Override
+    public java.lang.String getServiceName() {
+      java.lang.Object ref = serviceName_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        serviceName_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The bytes for serviceName.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getServiceNameBytes() {
+      java.lang.Object ref = serviceName_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        serviceName_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
+    public static final int SENDER_NODE_ID_FIELD_NUMBER = 3;
+    @SuppressWarnings("serial")
+    private volatile java.lang.Object senderNodeId_ = "";
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The senderNodeId.
+     */
+    @java.lang.Override
+    public java.lang.String getSenderNodeId() {
+      java.lang.Object ref = senderNodeId_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        senderNodeId_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The bytes for senderNodeId.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getSenderNodeIdBytes() {
+      java.lang.Object ref = senderNodeId_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        senderNodeId_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
+    public static final int ENCODED_READ_REQUEST_FIELD_NUMBER = 4;
+    private com.google.protobuf.ByteString encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>bytes encoded_read_request = 4;</code>
+     * @return The encodedReadRequest.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getEncodedReadRequest() {
+      return encodedReadRequest_;
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      if (packetId_ != 0L) {
+        output.writeUInt64(1, packetId_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(serviceName_)) {
+        com.google.protobuf.GeneratedMessage.writeString(output, 2, serviceName_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(senderNodeId_)) {
+        com.google.protobuf.GeneratedMessage.writeString(output, 3, senderNodeId_);
+      }
+      if (!encodedReadRequest_.isEmpty()) {
+        output.writeBytes(4, encodedReadRequest_);
+      }
+      getUnknownFields().writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      if (packetId_ != 0L) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeUInt64Size(1, packetId_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(serviceName_)) {
+        size += com.google.protobuf.GeneratedMessage.computeStringSize(2, serviceName_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(senderNodeId_)) {
+        size += com.google.protobuf.GeneratedMessage.computeStringSize(3, senderNodeId_);
+      }
+      if (!encodedReadRequest_.isEmpty()) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeBytesSize(4, encodedReadRequest_);
+      }
+      size += getUnknownFields().getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket)) {
+        return super.equals(obj);
+      }
+      edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket other = (edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket) obj;
+
+      if (getPacketId()
+          != other.getPacketId()) return false;
+      if (!getServiceName()
+          .equals(other.getServiceName())) return false;
+      if (!getSenderNodeId()
+          .equals(other.getSenderNodeId())) return false;
+      if (!getEncodedReadRequest()
+          .equals(other.getEncodedReadRequest())) return false;
+      if (!getUnknownFields().equals(other.getUnknownFields())) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      hash = (37 * hash) + PACKET_ID_FIELD_NUMBER;
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+          getPacketId());
+      hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
+      hash = (53 * hash) + getServiceName().hashCode();
+      hash = (37 * hash) + SENDER_NODE_ID_FIELD_NUMBER;
+      hash = (53 * hash) + getSenderNodeId().hashCode();
+      hash = (37 * hash) + ENCODED_READ_REQUEST_FIELD_NUMBER;
+      hash = (53 * hash) + getEncodedReadRequest().hashCode();
+      hash = (29 * hash) + getUnknownFields().hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        java.nio.ByteBuffer data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        java.nio.ByteBuffer data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code causal.CausalReadForwardPacket}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessage.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:causal.CausalReadForwardPacket)
+        edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacketOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadForwardPacket_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadForwardPacket_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.class, edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.Builder.class);
+      }
+
+      // Construct using edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.newBuilder()
+      private Builder() {
+
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        super(parent);
+
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        bitField0_ = 0;
+        packetId_ = 0L;
+        serviceName_ = "";
+        senderNodeId_ = "";
+        encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+        return this;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadForwardPacket_descriptor;
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket getDefaultInstanceForType() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket build() {
+        edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket buildPartial() {
+        edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket result = new edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket(this);
+        if (bitField0_ != 0) { buildPartial0(result); }
+        onBuilt();
+        return result;
+      }
+
+      private void buildPartial0(edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket result) {
+        int from_bitField0_ = bitField0_;
+        if (((from_bitField0_ & 0x00000001) != 0)) {
+          result.packetId_ = packetId_;
+        }
+        if (((from_bitField0_ & 0x00000002) != 0)) {
+          result.serviceName_ = serviceName_;
+        }
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          result.senderNodeId_ = senderNodeId_;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.encodedReadRequest_ = encodedReadRequest_;
+        }
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket) {
+          return mergeFrom((edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket other) {
+        if (other == edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket.getDefaultInstance()) return this;
+        if (other.getPacketId() != 0L) {
+          setPacketId(other.getPacketId());
+        }
+        if (!other.getServiceName().isEmpty()) {
+          serviceName_ = other.serviceName_;
+          bitField0_ |= 0x00000002;
+          onChanged();
+        }
+        if (!other.getSenderNodeId().isEmpty()) {
+          senderNodeId_ = other.senderNodeId_;
+          bitField0_ |= 0x00000004;
+          onChanged();
+        }
+        if (other.getEncodedReadRequest() != com.google.protobuf.ByteString.EMPTY) {
+          setEncodedReadRequest(other.getEncodedReadRequest());
+        }
+        this.mergeUnknownFields(other.getUnknownFields());
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        if (extensionRegistry == null) {
+          throw new java.lang.NullPointerException();
+        }
+        try {
+          boolean done = false;
+          while (!done) {
+            int tag = input.readTag();
+            switch (tag) {
+              case 0:
+                done = true;
+                break;
+              case 8: {
+                packetId_ = input.readUInt64();
+                bitField0_ |= 0x00000001;
+                break;
+              } // case 8
+              case 18: {
+                serviceName_ = input.readStringRequireUtf8();
+                bitField0_ |= 0x00000002;
+                break;
+              } // case 18
+              case 26: {
+                senderNodeId_ = input.readStringRequireUtf8();
+                bitField0_ |= 0x00000004;
+                break;
+              } // case 26
+              case 34: {
+                encodedReadRequest_ = input.readBytes();
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 34
+              default: {
+                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                  done = true; // was an endgroup tag
+                }
+                break;
+              } // default:
+            } // switch (tag)
+          } // while (!done)
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.unwrapIOException();
+        } finally {
+          onChanged();
+        } // finally
+        return this;
+      }
+      private int bitField0_;
+
+      private long packetId_ ;
+      /**
+       * <code>uint64 packet_id = 1;</code>
+       * @return The packetId.
+       */
+      @java.lang.Override
+      public long getPacketId() {
+        return packetId_;
+      }
+      /**
+       * <code>uint64 packet_id = 1;</code>
+       * @param value The packetId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setPacketId(long value) {
+
+        packetId_ = value;
+        bitField0_ |= 0x00000001;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>uint64 packet_id = 1;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearPacketId() {
+        bitField0_ = (bitField0_ & ~0x00000001);
+        packetId_ = 0L;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object serviceName_ = "";
+      /**
+       * <code>string service_name = 2;</code>
+       * @return The serviceName.
+       */
+      public java.lang.String getServiceName() {
+        java.lang.Object ref = serviceName_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          serviceName_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @return The bytes for serviceName.
+       */
+      public com.google.protobuf.ByteString
+          getServiceNameBytes() {
+        java.lang.Object ref = serviceName_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          serviceName_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @param value The serviceName to set.
+       * @return This builder for chaining.
+       */
+      public Builder setServiceName(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        serviceName_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearServiceName() {
+        serviceName_ = getDefaultInstance().getServiceName();
+        bitField0_ = (bitField0_ & ~0x00000002);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @param value The bytes for serviceName to set.
+       * @return This builder for chaining.
+       */
+      public Builder setServiceNameBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        serviceName_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object senderNodeId_ = "";
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @return The senderNodeId.
+       */
+      public java.lang.String getSenderNodeId() {
+        java.lang.Object ref = senderNodeId_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          senderNodeId_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @return The bytes for senderNodeId.
+       */
+      public com.google.protobuf.ByteString
+          getSenderNodeIdBytes() {
+        java.lang.Object ref = senderNodeId_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          senderNodeId_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @param value The senderNodeId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setSenderNodeId(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        senderNodeId_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearSenderNodeId() {
+        senderNodeId_ = getDefaultInstance().getSenderNodeId();
+        bitField0_ = (bitField0_ & ~0x00000004);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @param value The bytes for senderNodeId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setSenderNodeIdBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        senderNodeId_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.ByteString encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>bytes encoded_read_request = 4;</code>
+       * @return The encodedReadRequest.
+       */
+      @java.lang.Override
+      public com.google.protobuf.ByteString getEncodedReadRequest() {
+        return encodedReadRequest_;
+      }
+      /**
+       * <code>bytes encoded_read_request = 4;</code>
+       * @param value The encodedReadRequest to set.
+       * @return This builder for chaining.
+       */
+      public Builder setEncodedReadRequest(com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        encodedReadRequest_ = value;
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>bytes encoded_read_request = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearEncodedReadRequest() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        encodedReadRequest_ = getDefaultInstance().getEncodedReadRequest();
+        onChanged();
+        return this;
+      }
+
+      // @@protoc_insertion_point(builder_scope:causal.CausalReadForwardPacket)
+    }
+
+    // @@protoc_insertion_point(class_scope:causal.CausalReadForwardPacket)
+    private static final edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket();
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final com.google.protobuf.Parser<CausalReadForwardPacket>
+        PARSER = new com.google.protobuf.AbstractParser<CausalReadForwardPacket>() {
+      @java.lang.Override
+      public CausalReadForwardPacket parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        Builder builder = newBuilder();
+        try {
+          builder.mergeFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.setUnfinishedMessage(builder.buildPartial());
+        } catch (com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
+        } catch (java.io.IOException e) {
+          throw new com.google.protobuf.InvalidProtocolBufferException(e)
+              .setUnfinishedMessage(builder.buildPartial());
+        }
+        return builder.buildPartial();
+      }
+    };
+
+    public static com.google.protobuf.Parser<CausalReadForwardPacket> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<CausalReadForwardPacket> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadForwardPacket getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
+  public interface CausalReadAckPacketOrBuilder extends
+      // @@protoc_insertion_point(interface_extends:causal.CausalReadAckPacket)
+      com.google.protobuf.MessageOrBuilder {
+
+    /**
+     * <code>uint64 packet_id = 1;</code>
+     * @return The packetId.
+     */
+    long getPacketId();
+
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The serviceName.
+     */
+    java.lang.String getServiceName();
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The bytes for serviceName.
+     */
+    com.google.protobuf.ByteString
+        getServiceNameBytes();
+
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The senderNodeId.
+     */
+    java.lang.String getSenderNodeId();
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The bytes for senderNodeId.
+     */
+    com.google.protobuf.ByteString
+        getSenderNodeIdBytes();
+
+    /**
+     * <code>bytes encoded_read_request = 4;</code>
+     * @return The encodedReadRequest.
+     */
+    com.google.protobuf.ByteString getEncodedReadRequest();
+  }
+  /**
+   * Protobuf type {@code causal.CausalReadAckPacket}
+   */
+  public static final class CausalReadAckPacket extends
+      com.google.protobuf.GeneratedMessage implements
+      // @@protoc_insertion_point(message_implements:causal.CausalReadAckPacket)
+      CausalReadAckPacketOrBuilder {
+  private static final long serialVersionUID = 0L;
+    static {
+      com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+        com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 28,
+        /* patch= */ 2,
+        /* suffix= */ "",
+        CausalReadAckPacket.class.getName());
+    }
+    // Use CausalReadAckPacket.newBuilder() to construct.
+    private CausalReadAckPacket(com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+      super(builder);
+    }
+    private CausalReadAckPacket() {
+      serviceName_ = "";
+      senderNodeId_ = "";
+      encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+    }
+
+    public static final com.google.protobuf.Descriptors.Descriptor
+        getDescriptor() {
+      return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadAckPacket_descriptor;
+    }
+
+    @java.lang.Override
+    protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+        internalGetFieldAccessorTable() {
+      return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadAckPacket_fieldAccessorTable
+          .ensureFieldAccessorsInitialized(
+              edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.class, edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.Builder.class);
+    }
+
+    public static final int PACKET_ID_FIELD_NUMBER = 1;
+    private long packetId_ = 0L;
+    /**
+     * <code>uint64 packet_id = 1;</code>
+     * @return The packetId.
+     */
+    @java.lang.Override
+    public long getPacketId() {
+      return packetId_;
+    }
+
+    public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+    @SuppressWarnings("serial")
+    private volatile java.lang.Object serviceName_ = "";
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The serviceName.
+     */
+    @java.lang.Override
+    public java.lang.String getServiceName() {
+      java.lang.Object ref = serviceName_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        serviceName_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string service_name = 2;</code>
+     * @return The bytes for serviceName.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getServiceNameBytes() {
+      java.lang.Object ref = serviceName_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        serviceName_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
+    public static final int SENDER_NODE_ID_FIELD_NUMBER = 3;
+    @SuppressWarnings("serial")
+    private volatile java.lang.Object senderNodeId_ = "";
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The senderNodeId.
+     */
+    @java.lang.Override
+    public java.lang.String getSenderNodeId() {
+      java.lang.Object ref = senderNodeId_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        senderNodeId_ = s;
+        return s;
+      }
+    }
+    /**
+     * <code>string sender_node_id = 3;</code>
+     * @return The bytes for senderNodeId.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getSenderNodeIdBytes() {
+      java.lang.Object ref = senderNodeId_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        senderNodeId_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
+    public static final int ENCODED_READ_REQUEST_FIELD_NUMBER = 4;
+    private com.google.protobuf.ByteString encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+    /**
+     * <code>bytes encoded_read_request = 4;</code>
+     * @return The encodedReadRequest.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString getEncodedReadRequest() {
+      return encodedReadRequest_;
+    }
+
+    private byte memoizedIsInitialized = -1;
+    @java.lang.Override
+    public final boolean isInitialized() {
+      byte isInitialized = memoizedIsInitialized;
+      if (isInitialized == 1) return true;
+      if (isInitialized == 0) return false;
+
+      memoizedIsInitialized = 1;
+      return true;
+    }
+
+    @java.lang.Override
+    public void writeTo(com.google.protobuf.CodedOutputStream output)
+                        throws java.io.IOException {
+      if (packetId_ != 0L) {
+        output.writeUInt64(1, packetId_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(serviceName_)) {
+        com.google.protobuf.GeneratedMessage.writeString(output, 2, serviceName_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(senderNodeId_)) {
+        com.google.protobuf.GeneratedMessage.writeString(output, 3, senderNodeId_);
+      }
+      if (!encodedReadRequest_.isEmpty()) {
+        output.writeBytes(4, encodedReadRequest_);
+      }
+      getUnknownFields().writeTo(output);
+    }
+
+    @java.lang.Override
+    public int getSerializedSize() {
+      int size = memoizedSize;
+      if (size != -1) return size;
+
+      size = 0;
+      if (packetId_ != 0L) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeUInt64Size(1, packetId_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(serviceName_)) {
+        size += com.google.protobuf.GeneratedMessage.computeStringSize(2, serviceName_);
+      }
+      if (!com.google.protobuf.GeneratedMessage.isStringEmpty(senderNodeId_)) {
+        size += com.google.protobuf.GeneratedMessage.computeStringSize(3, senderNodeId_);
+      }
+      if (!encodedReadRequest_.isEmpty()) {
+        size += com.google.protobuf.CodedOutputStream
+          .computeBytesSize(4, encodedReadRequest_);
+      }
+      size += getUnknownFields().getSerializedSize();
+      memoizedSize = size;
+      return size;
+    }
+
+    @java.lang.Override
+    public boolean equals(final java.lang.Object obj) {
+      if (obj == this) {
+       return true;
+      }
+      if (!(obj instanceof edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket)) {
+        return super.equals(obj);
+      }
+      edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket other = (edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket) obj;
+
+      if (getPacketId()
+          != other.getPacketId()) return false;
+      if (!getServiceName()
+          .equals(other.getServiceName())) return false;
+      if (!getSenderNodeId()
+          .equals(other.getSenderNodeId())) return false;
+      if (!getEncodedReadRequest()
+          .equals(other.getEncodedReadRequest())) return false;
+      if (!getUnknownFields().equals(other.getUnknownFields())) return false;
+      return true;
+    }
+
+    @java.lang.Override
+    public int hashCode() {
+      if (memoizedHashCode != 0) {
+        return memoizedHashCode;
+      }
+      int hash = 41;
+      hash = (19 * hash) + getDescriptor().hashCode();
+      hash = (37 * hash) + PACKET_ID_FIELD_NUMBER;
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+          getPacketId());
+      hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
+      hash = (53 * hash) + getServiceName().hashCode();
+      hash = (37 * hash) + SENDER_NODE_ID_FIELD_NUMBER;
+      hash = (53 * hash) + getSenderNodeId().hashCode();
+      hash = (37 * hash) + ENCODED_READ_REQUEST_FIELD_NUMBER;
+      hash = (53 * hash) + getEncodedReadRequest().hashCode();
+      hash = (29 * hash) + getUnknownFields().hashCode();
+      memoizedHashCode = hash;
+      return hash;
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        java.nio.ByteBuffer data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        java.nio.ByteBuffer data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        com.google.protobuf.ByteString data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        com.google.protobuf.ByteString data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(byte[] data)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        byte[] data,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws com.google.protobuf.InvalidProtocolBufferException {
+      return PARSER.parseFrom(data, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseDelimitedFrom(java.io.InputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input);
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseDelimitedFrom(
+        java.io.InputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        com.google.protobuf.CodedInputStream input)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input);
+    }
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket parseFrom(
+        com.google.protobuf.CodedInputStream input,
+        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage
+          .parseWithIOException(PARSER, input, extensionRegistry);
+    }
+
+    @java.lang.Override
+    public Builder newBuilderForType() { return newBuilder(); }
+    public static Builder newBuilder() {
+      return DEFAULT_INSTANCE.toBuilder();
+    }
+    public static Builder newBuilder(edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket prototype) {
+      return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+    }
+    @java.lang.Override
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE
+          ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(
+        com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      Builder builder = new Builder(parent);
+      return builder;
+    }
+    /**
+     * Protobuf type {@code causal.CausalReadAckPacket}
+     */
+    public static final class Builder extends
+        com.google.protobuf.GeneratedMessage.Builder<Builder> implements
+        // @@protoc_insertion_point(builder_implements:causal.CausalReadAckPacket)
+        edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacketOrBuilder {
+      public static final com.google.protobuf.Descriptors.Descriptor
+          getDescriptor() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadAckPacket_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadAckPacket_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.class, edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.Builder.class);
+      }
+
+      // Construct using edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.newBuilder()
+      private Builder() {
+
+      }
+
+      private Builder(
+          com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        super(parent);
+
+      }
+      @java.lang.Override
+      public Builder clear() {
+        super.clear();
+        bitField0_ = 0;
+        packetId_ = 0L;
+        serviceName_ = "";
+        senderNodeId_ = "";
+        encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+        return this;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Descriptors.Descriptor
+          getDescriptorForType() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.internal_static_causal_CausalReadAckPacket_descriptor;
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket getDefaultInstanceForType() {
+        return edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.getDefaultInstance();
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket build() {
+        edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket result = buildPartial();
+        if (!result.isInitialized()) {
+          throw newUninitializedMessageException(result);
+        }
+        return result;
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket buildPartial() {
+        edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket result = new edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket(this);
+        if (bitField0_ != 0) { buildPartial0(result); }
+        onBuilt();
+        return result;
+      }
+
+      private void buildPartial0(edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket result) {
+        int from_bitField0_ = bitField0_;
+        if (((from_bitField0_ & 0x00000001) != 0)) {
+          result.packetId_ = packetId_;
+        }
+        if (((from_bitField0_ & 0x00000002) != 0)) {
+          result.serviceName_ = serviceName_;
+        }
+        if (((from_bitField0_ & 0x00000004) != 0)) {
+          result.senderNodeId_ = senderNodeId_;
+        }
+        if (((from_bitField0_ & 0x00000008) != 0)) {
+          result.encodedReadRequest_ = encodedReadRequest_;
+        }
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(com.google.protobuf.Message other) {
+        if (other instanceof edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket) {
+          return mergeFrom((edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket)other);
+        } else {
+          super.mergeFrom(other);
+          return this;
+        }
+      }
+
+      public Builder mergeFrom(edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket other) {
+        if (other == edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket.getDefaultInstance()) return this;
+        if (other.getPacketId() != 0L) {
+          setPacketId(other.getPacketId());
+        }
+        if (!other.getServiceName().isEmpty()) {
+          serviceName_ = other.serviceName_;
+          bitField0_ |= 0x00000002;
+          onChanged();
+        }
+        if (!other.getSenderNodeId().isEmpty()) {
+          senderNodeId_ = other.senderNodeId_;
+          bitField0_ |= 0x00000004;
+          onChanged();
+        }
+        if (other.getEncodedReadRequest() != com.google.protobuf.ByteString.EMPTY) {
+          setEncodedReadRequest(other.getEncodedReadRequest());
+        }
+        this.mergeUnknownFields(other.getUnknownFields());
+        onChanged();
+        return this;
+      }
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        return true;
+      }
+
+      @java.lang.Override
+      public Builder mergeFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        if (extensionRegistry == null) {
+          throw new java.lang.NullPointerException();
+        }
+        try {
+          boolean done = false;
+          while (!done) {
+            int tag = input.readTag();
+            switch (tag) {
+              case 0:
+                done = true;
+                break;
+              case 8: {
+                packetId_ = input.readUInt64();
+                bitField0_ |= 0x00000001;
+                break;
+              } // case 8
+              case 18: {
+                serviceName_ = input.readStringRequireUtf8();
+                bitField0_ |= 0x00000002;
+                break;
+              } // case 18
+              case 26: {
+                senderNodeId_ = input.readStringRequireUtf8();
+                bitField0_ |= 0x00000004;
+                break;
+              } // case 26
+              case 34: {
+                encodedReadRequest_ = input.readBytes();
+                bitField0_ |= 0x00000008;
+                break;
+              } // case 34
+              default: {
+                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                  done = true; // was an endgroup tag
+                }
+                break;
+              } // default:
+            } // switch (tag)
+          } // while (!done)
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.unwrapIOException();
+        } finally {
+          onChanged();
+        } // finally
+        return this;
+      }
+      private int bitField0_;
+
+      private long packetId_ ;
+      /**
+       * <code>uint64 packet_id = 1;</code>
+       * @return The packetId.
+       */
+      @java.lang.Override
+      public long getPacketId() {
+        return packetId_;
+      }
+      /**
+       * <code>uint64 packet_id = 1;</code>
+       * @param value The packetId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setPacketId(long value) {
+
+        packetId_ = value;
+        bitField0_ |= 0x00000001;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>uint64 packet_id = 1;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearPacketId() {
+        bitField0_ = (bitField0_ & ~0x00000001);
+        packetId_ = 0L;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object serviceName_ = "";
+      /**
+       * <code>string service_name = 2;</code>
+       * @return The serviceName.
+       */
+      public java.lang.String getServiceName() {
+        java.lang.Object ref = serviceName_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          serviceName_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @return The bytes for serviceName.
+       */
+      public com.google.protobuf.ByteString
+          getServiceNameBytes() {
+        java.lang.Object ref = serviceName_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          serviceName_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @param value The serviceName to set.
+       * @return This builder for chaining.
+       */
+      public Builder setServiceName(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        serviceName_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearServiceName() {
+        serviceName_ = getDefaultInstance().getServiceName();
+        bitField0_ = (bitField0_ & ~0x00000002);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string service_name = 2;</code>
+       * @param value The bytes for serviceName to set.
+       * @return This builder for chaining.
+       */
+      public Builder setServiceNameBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        serviceName_ = value;
+        bitField0_ |= 0x00000002;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object senderNodeId_ = "";
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @return The senderNodeId.
+       */
+      public java.lang.String getSenderNodeId() {
+        java.lang.Object ref = senderNodeId_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          senderNodeId_ = s;
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @return The bytes for senderNodeId.
+       */
+      public com.google.protobuf.ByteString
+          getSenderNodeIdBytes() {
+        java.lang.Object ref = senderNodeId_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          senderNodeId_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @param value The senderNodeId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setSenderNodeId(
+          java.lang.String value) {
+        if (value == null) { throw new NullPointerException(); }
+        senderNodeId_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearSenderNodeId() {
+        senderNodeId_ = getDefaultInstance().getSenderNodeId();
+        bitField0_ = (bitField0_ & ~0x00000004);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>string sender_node_id = 3;</code>
+       * @param value The bytes for senderNodeId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setSenderNodeIdBytes(
+          com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        checkByteStringIsUtf8(value);
+        senderNodeId_ = value;
+        bitField0_ |= 0x00000004;
+        onChanged();
+        return this;
+      }
+
+      private com.google.protobuf.ByteString encodedReadRequest_ = com.google.protobuf.ByteString.EMPTY;
+      /**
+       * <code>bytes encoded_read_request = 4;</code>
+       * @return The encodedReadRequest.
+       */
+      @java.lang.Override
+      public com.google.protobuf.ByteString getEncodedReadRequest() {
+        return encodedReadRequest_;
+      }
+      /**
+       * <code>bytes encoded_read_request = 4;</code>
+       * @param value The encodedReadRequest to set.
+       * @return This builder for chaining.
+       */
+      public Builder setEncodedReadRequest(com.google.protobuf.ByteString value) {
+        if (value == null) { throw new NullPointerException(); }
+        encodedReadRequest_ = value;
+        bitField0_ |= 0x00000008;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>bytes encoded_read_request = 4;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearEncodedReadRequest() {
+        bitField0_ = (bitField0_ & ~0x00000008);
+        encodedReadRequest_ = getDefaultInstance().getEncodedReadRequest();
+        onChanged();
+        return this;
+      }
+
+      // @@protoc_insertion_point(builder_scope:causal.CausalReadAckPacket)
+    }
+
+    // @@protoc_insertion_point(class_scope:causal.CausalReadAckPacket)
+    private static final edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket DEFAULT_INSTANCE;
+    static {
+      DEFAULT_INSTANCE = new edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket();
+    }
+
+    public static edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket getDefaultInstance() {
+      return DEFAULT_INSTANCE;
+    }
+
+    private static final com.google.protobuf.Parser<CausalReadAckPacket>
+        PARSER = new com.google.protobuf.AbstractParser<CausalReadAckPacket>() {
+      @java.lang.Override
+      public CausalReadAckPacket parsePartialFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        Builder builder = newBuilder();
+        try {
+          builder.mergeFrom(input, extensionRegistry);
+        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+          throw e.setUnfinishedMessage(builder.buildPartial());
+        } catch (com.google.protobuf.UninitializedMessageException e) {
+          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
+        } catch (java.io.IOException e) {
+          throw new com.google.protobuf.InvalidProtocolBufferException(e)
+              .setUnfinishedMessage(builder.buildPartial());
+        }
+        return builder.buildPartial();
+      }
+    };
+
+    public static com.google.protobuf.Parser<CausalReadAckPacket> parser() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public com.google.protobuf.Parser<CausalReadAckPacket> getParserForType() {
+      return PARSER;
+    }
+
+    @java.lang.Override
+    public edu.umass.cs.causal.proto.CausalPacketProto.CausalReadAckPacket getDefaultInstanceForType() {
+      return DEFAULT_INSTANCE;
+    }
+
+  }
+
   private static final com.google.protobuf.Descriptors.Descriptor
     internal_static_causal_VectorTimestamp_descriptor;
   private static final 
@@ -4077,6 +5685,16 @@ public final class CausalPacketProto {
   private static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_causal_CausalWriteAckPacket_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_causal_CausalReadForwardPacket_descriptor;
+  private static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_causal_CausalReadForwardPacket_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_causal_CausalReadAckPacket_descriptor;
+  private static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_causal_CausalReadAckPacket_fieldAccessorTable;
 
   public static com.google.protobuf.Descriptors.FileDescriptor
       getDescriptor() {
@@ -4101,7 +5719,13 @@ public final class CausalPacketProto {
       "ender_node_id\030\003 \001(\t\0228\n\027confirmed_graph_n" +
       "ode_id\030\004 \001(\0132\027.causal.VectorTimestamp\0224\n" +
       "\023graph_leaf_node_ids\030\005 \003(\0132\027.causal.Vect" +
-      "orTimestampB.\n\031edu.umass.cs.causal.proto" +
+      "orTimestamp\"x\n\027CausalReadForwardPacket\022\021" +
+      "\n\tpacket_id\030\001 \001(\004\022\024\n\014service_name\030\002 \001(\t\022" +
+      "\026\n\016sender_node_id\030\003 \001(\t\022\034\n\024encoded_read_" +
+      "request\030\004 \001(\014\"t\n\023CausalReadAckPacket\022\021\n\t" +
+      "packet_id\030\001 \001(\004\022\024\n\014service_name\030\002 \001(\t\022\026\n" +
+      "\016sender_node_id\030\003 \001(\t\022\034\n\024encoded_read_re" +
+      "quest\030\004 \001(\014B.\n\031edu.umass.cs.causal.proto" +
       "B\021CausalPacketProtob\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
@@ -4132,6 +5756,18 @@ public final class CausalPacketProto {
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_causal_CausalWriteAckPacket_descriptor,
         new java.lang.String[] { "PacketId", "ServiceName", "SenderNodeId", "ConfirmedGraphNodeId", "GraphLeafNodeIds", });
+    internal_static_causal_CausalReadForwardPacket_descriptor =
+      getDescriptor().getMessageTypes().get(3);
+    internal_static_causal_CausalReadForwardPacket_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_causal_CausalReadForwardPacket_descriptor,
+        new java.lang.String[] { "PacketId", "ServiceName", "SenderNodeId", "EncodedReadRequest", });
+    internal_static_causal_CausalReadAckPacket_descriptor =
+      getDescriptor().getMessageTypes().get(4);
+    internal_static_causal_CausalReadAckPacket_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_causal_CausalReadAckPacket_descriptor,
+        new java.lang.String[] { "PacketId", "ServiceName", "SenderNodeId", "EncodedReadRequest", });
     descriptor.resolveAllFeaturesImmutable();
   }
 

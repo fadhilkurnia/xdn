@@ -48,6 +48,7 @@ import java.util.logging.Logger;
 public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
     private final String myNodeID;
+    private final XdnGigapaxosApp xdnGigapaxosApp;
 
     // list of all coordination managers supported in XDN
     private final AbstractReplicaCoordinator<NodeIDType> primaryBackupCoordinator;
@@ -83,6 +84,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                 "XdnReplicaCoordinator must use String as the NodeIDType";
 
         this.myNodeID = myID.toString();
+        this.xdnGigapaxosApp = (XdnGigapaxosApp) app;
 
         try {
             if (!XdnGigapaxosApp.checkSystemRequirements())
@@ -208,6 +210,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             xdnHttpRequest.setRequestMatchers(serviceRequestMatchers);
             xdnHttpRequest.getBehaviors(); // populate cached behaviors
         }
+
+        // cache the request in XdnGigapaxosApp, avoiding expensive deserialization
+        xdnGigapaxosApp.cacheRequest(gpRequest.getRequest());
 
         // prepare updated callback that logs the elapsed time
         ReplicableClientRequest finalGpRequest = gpRequest;
