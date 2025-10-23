@@ -23,7 +23,7 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
-import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
+import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
@@ -178,8 +178,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         }
 
         // one edge case, handling XdnGetProtocolRoleRequest
-        if (request instanceof XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest) {
-            this.handleXdnGetProtocolRoleRequest(xdnGetProtocolRoleRequest, callback);
+        if (request instanceof XdnGetReplicaInfoRequest xdnGetReplicaInfoRequest) {
+            this.handleXdnGetProtocolRoleRequest(xdnGetReplicaInfoRequest, callback);
             return true;
         }
 
@@ -261,12 +261,14 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         return true;
     }
 
-    private void handleXdnGetProtocolRoleRequest(XdnGetProtocolRoleRequest request,
+    private void handleXdnGetProtocolRoleRequest(XdnGetReplicaInfoRequest request,
                                                  ExecutedCallback callback) {
         String serviceName = request.getServiceName();
         assert serviceName != null : "Unknown service name";
         ServiceProperty currServiceProperty = this.serviceProperties.get(serviceName);
         if (currServiceProperty == null) {
+            request.setHttpErrorCode(404);
+            request.setErrorMessage("Unknown service '" + serviceName + "'");
             callback.executed(request, true);
             return;
         }
@@ -291,6 +293,18 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pbCoordinator) {
             boolean isPrimary = pbCoordinator.isPrimary(serviceName);
             roleName = isPrimary ? "primary" : "backup";
+        }
+
+        if (xdnGigapaxosApp != null) {
+            List<String> containerIds = xdnGigapaxosApp.getContainerIds(serviceName);
+            List<String> createdAtInfo = xdnGigapaxosApp.getContainerCreatedAtInfo(serviceName);
+            List<String> containerStatus = xdnGigapaxosApp.getContainerStatus(serviceName);
+
+            request.setContainerMetadata(
+                containerIds,
+                createdAtInfo,
+                containerStatus
+            );
         }
 
         request.setResponse(

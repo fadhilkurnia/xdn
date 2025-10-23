@@ -9,7 +9,7 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnGigapaxosApp;
 import edu.umass.cs.xdn.XdnHttpRequestBatcher;
-import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
+import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -567,10 +567,24 @@ public class HttpActiveReplica {
                     handleCoordinatorRequest(p, ctx);
                     return;
                 }
-                if (this.request.headers().get("XdnGetProtocolRoleRequest") != null) {
-                    XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest =
-                            new XdnGetProtocolRoleRequest(serviceName);
-                    handleCoordinatorRequest(xdnGetProtocolRoleRequest, ctx);
+
+                // Check if this is a request to get replica info
+                // GET /api/v2/services/{name}/replica/info
+                String uri = this.request.uri();
+                if (this.request.method() == HttpMethod.GET &&
+                        uri.matches("/api/v2/services/[^/]+/replica/info")) {
+                    // Extract service name from URI path
+                    String[] parts = uri.split("/");
+                    if (parts.length >= 5) {
+                        String serviceNameFromPath = parts[4];
+                        XdnGetReplicaInfoRequest xdnGetReplicaInfoRequest =
+                                new XdnGetReplicaInfoRequest(serviceNameFromPath);
+                        handleCoordinatorRequest(xdnGetReplicaInfoRequest, ctx);
+                        return;
+                    }
+                    // If we can't extract service name, send bad request
+                    HttpActiveReplicaHandler.sendBadRequestResponse(
+                            "Invalid service name in URI path", ctx, false);
                     return;
                 }
 
@@ -735,17 +749,36 @@ public class HttpActiveReplica {
             return executedRequest.getHttpResponse();
         }
 
-        // TODO: cleanly handle this
         private void handleCoordinatorRequest(Request p, ChannelHandlerContext context) {
-            assert p instanceof ChangePrimaryPacket || p instanceof XdnGetProtocolRoleRequest :
+            assert p instanceof ChangePrimaryPacket || p instanceof XdnGetReplicaInfoRequest :
                     "Unexpected packet type of " + p.getClass().getSimpleName();
-            arFunctions.handRequestToAppForHttp(p, (request, handled) -> {
-                String responseString = "OK\n";
-                if (request instanceof XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest) {
-                    responseString = xdnGetProtocolRoleRequest.getJsonResponse();
-                }
-                sendStringResponse(responseString, context, false);
-            });
+
+            if (p instanceof XdnGetReplicaInfoRequest) {
+                arFunctions.handRequestToAppForHttp(p, (requestWithResponse, handled) -> {
+                    assert requestWithResponse instanceof XdnGetReplicaInfoRequest;
+                    assert handled : "Unhandled XdnGetReplicaInfoRequest";
+                    XdnGetReplicaInfoRequest resp = (XdnGetReplicaInfoRequest) requestWithResponse;
+                    if (resp.getErrorMessage() != null) {
+                        int errCode = resp.getHttpErrorCode() == null
+                                ? 500 : resp.getHttpErrorCode();
+                        sendStringResponse(resp.getErrorMessage(),
+                                HttpResponseStatus.valueOf(errCode),
+                                false,
+                                context);
+                        return;
+                    }
+                    String responseString =
+                            ((XdnGetReplicaInfoRequest) requestWithResponse).getJsonResponse();
+                    sendStringResponse(responseString, OK, true, context);
+                });
+            }
+
+            // TODO: cleanly handle this in Reconfigurator, instead of ActiveReplica
+            if (p instanceof ChangePrimaryPacket) {
+                arFunctions.handRequestToAppForHttp(p, (request, handled) -> {
+                    sendStringResponse("OK\n", context, false);
+                });
+            }
         }
 
         private void handleDebugRequests(XdnHttpRequest httpRequest, ChannelHandlerContext ctx) {
@@ -852,9 +885,12 @@ public class HttpActiveReplica {
             System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
             cause.printStackTrace();
             if (ctx.channel().isActive()) {
-                byte[] bytes = ("error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                byte[] bytes = ("Error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                boolean isUnknownServiceNameError =
+                        cause.getMessage().contains("Unknown coordinator for name=");
                 FullHttpResponse resp = new DefaultFullHttpResponse(
-                        HTTP_1_1, INTERNAL_SERVER_ERROR, Unpooled.wrappedBuffer(bytes));
+                        HTTP_1_1, isUnknownServiceNameError ? NOT_FOUND : INTERNAL_SERVER_ERROR,
+                        Unpooled.wrappedBuffer(bytes));
                 resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
                 resp.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bytes.length);
                 ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
