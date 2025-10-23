@@ -31,6 +31,7 @@ import org.json.JSONException;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.StringWriter;
 import java.net.InetAddress;
 import java.net.Socket;
@@ -46,6 +47,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1365,6 +1368,144 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Retrieves docker container IDs for all components in the service by inspecting each known container name.
+     */
+    public List<String> getContainerIds(String serviceName) {
+        ServiceInstance service = services.get(serviceName);
+        if (service == null) {
+            return null;
+        }
+
+        List<String> containerIds = new ArrayList<>(service.containerNames.size());
+        for (String containerName : service.containerNames) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "container", "inspect", "--format", "{{.Id}}", containerName);
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                String output;
+                try (InputStream inputStream = process.getInputStream()) {
+                    output = new String(inputStream.readAllBytes(), StandardCharsets.ISO_8859_1).trim();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0 && !output.isEmpty()) {
+                    containerIds.add(output);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        return containerIds;
+    }
+
+    /**
+     * Get human readable uptime duration for all components in the service.
+     *
+     * @param serviceName Name of the service to get container uptimes for
+     * @return List of container uptime durations (e.g. "5 minutes ago", "3 days ago"), or null if service not found
+     */
+    public List<String> getContainerCreatedAtInfo(String serviceName) {
+        ServiceInstance service = services.get(serviceName);
+        if (service == null) {
+            return null;
+        }
+
+        List<String> createdAtInfo = new ArrayList<>(service.containerNames.size());
+        for (String containerName : service.containerNames) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "container", "inspect", "--format", "{{.State.StartedAt}}", containerName);
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                String output;
+                try (InputStream inputStream = process.getInputStream()) {
+                    output = new String(inputStream.readAllBytes(), StandardCharsets.ISO_8859_1).trim();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0 && !output.isEmpty()) {
+                    // Parse the ISO 8601 timestamp and convert to human readable format
+                    try {
+                        Instant startedAt = Instant.parse(output);
+                        Duration duration = Duration.between(startedAt, Instant.now());
+
+                        // Format duration in human readable form
+                        String humanReadable;
+                        if (duration.toDays() > 365) {
+                            long years = duration.toDays() / 365;
+                            humanReadable = years + (years == 1 ? " year" : " years") + " ago";
+                        } else if (duration.toDays() > 30) {
+                            long months = duration.toDays() / 30;
+                            humanReadable = months + (months == 1 ? " month" : " months") + " ago";
+                        } else if (duration.toDays() > 0) {
+                            long days = duration.toDays();
+                            humanReadable = days + (days == 1 ? " day" : " days") + " ago";
+                        } else if (duration.toHours() > 0) {
+                            long hours = duration.toHours();
+                            humanReadable = hours + (hours == 1 ? " hour" : " hours") + " ago";
+                        } else if (duration.toMinutes() > 0) {
+                            long minutes = duration.toMinutes();
+                            humanReadable = minutes + (minutes == 1 ? " minute" : " minutes") + " ago";
+                        } else {
+                            long seconds = duration.getSeconds();
+                            humanReadable = seconds + (seconds == 1 ? " second" : " seconds") + " ago";
+                        }
+                        createdAtInfo.add(humanReadable);
+                    } catch (DateTimeParseException e) {
+                        // If parsing fails, just add the original timestamp
+                        createdAtInfo.add(output);
+                    }
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        return createdAtInfo;
+    }
+
+    /**
+     * Get container status for all components in the service.
+     *
+     * @param serviceName Name of the service to get container status for
+     * @return List of container status strings (e.g. "running", "exited", "created"), or null if service not found
+     */
+    public List<String> getContainerStatus(String serviceName) {
+        ServiceInstance service = services.get(serviceName);
+        if (service == null) {
+            return null;
+        }
+
+        List<String> statusInfo = new ArrayList<>(service.containerNames.size());
+        for (String containerName : service.containerNames) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "container", "inspect", "--format", "{{.State.Status}}", containerName);
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                String output;
+                try (InputStream inputStream = process.getInputStream()) {
+                    output = new String(inputStream.readAllBytes(), StandardCharsets.ISO_8859_1).trim();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0 && !output.isEmpty()) {
+                    statusInfo.add(output);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        return statusInfo;
     }
 
     /**********************************************************************************************
