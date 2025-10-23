@@ -196,10 +196,14 @@ public class XdnTestCluster implements AutoCloseable {
     /**
      * Issues a HTTP GET request to the provided endpoint and waits synchronously for the response.
      */
-    public HttpResponse<String> sendGetRequest(String serviceName, String endpoint, Duration timeout)
+    public HttpResponse<String> sendGetRequest(String serviceName, int replicaIdx,
+                                               String endpoint, Duration timeout)
             throws IOException, InterruptedException {
+        assert replicaIdx >= 0 && replicaIdx < ACTIVE_REPLICA_IDS.size()
+                : String.format("Invalid replicaIdx=%d, which is not between 0 and %d",
+                replicaIdx, ACTIVE_REPLICA_IDS.size() - 1);
         Duration effectiveTimeout = timeout != null ? timeout : REQUEST_TIMEOUT;
-        int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.get(0));
+        int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.get(replicaIdx));
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://%s:%d%s".formatted(LOOPBACK, httpPort, endpoint)))
                 .timeout(effectiveTimeout)
@@ -214,7 +218,15 @@ public class XdnTestCluster implements AutoCloseable {
      */
     public HttpResponse<String> sendGetRequest(String serviceName, String endpoint)
             throws IOException, InterruptedException {
-        return sendGetRequest(serviceName, endpoint, REQUEST_TIMEOUT);
+        return sendGetRequest(serviceName, 0, endpoint, REQUEST_TIMEOUT);
+    }
+
+    /**
+     * Issues a HTTP GET request with the default timeout to specific replica index
+     */
+    public HttpResponse<String> sendGetRequest(String serviceName, int replicaIdx, String endpoint)
+            throws IOException, InterruptedException {
+        return sendGetRequest(serviceName, replicaIdx, endpoint, REQUEST_TIMEOUT);
     }
 
     /**
