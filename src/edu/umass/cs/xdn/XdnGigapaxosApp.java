@@ -1508,6 +1508,10 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return statusInfo;
     }
 
+    public ServiceInstance getServiceInstance(String serviceName) {
+        return services.get(serviceName);
+    }
+
     /**********************************************************************************************
      *             Begin implementation methods for BackupableApplication interface               *
      *********************************************************************************************/

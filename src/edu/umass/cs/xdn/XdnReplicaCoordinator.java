@@ -28,6 +28,7 @@ import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.RequestMatcher;
+import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
@@ -300,10 +301,45 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             List<String> createdAtInfo = xdnGigapaxosApp.getContainerCreatedAtInfo(serviceName);
             List<String> containerStatus = xdnGigapaxosApp.getContainerStatus(serviceName);
 
+            ServiceInstance instance = xdnGigapaxosApp.getServiceInstance(serviceName);
+            boolean isDeterministic = false;
+            String entryComponent = null;
+            String stateDirectory = null;
+            String statefulComponent = null;
+            List<String> componentNames = null;
+            List<String> imageNames = null;
+            if (instance != null) {
+                isDeterministic = instance.property.isDeterministic();
+                stateDirectory = instance.stateDirectory;
+                componentNames = new ArrayList<>();
+                imageNames = new ArrayList<>();
+                for (var c : instance.property.getComponents()) {
+                    var componentName = c.getComponentName() != null
+                            ? c.getComponentName() : c.getImageName();
+                    componentNames.add(componentName);
+                    imageNames.add(c.getImageName());
+                    if (c.isEntryComponent()) {
+                        entryComponent = componentName;
+                    }
+                    if (c.isStateful()) {
+                        statefulComponent = componentName;
+                    }
+                }
+            }
+
+            Integer epoch = xdnGigapaxosApp.getEpoch(serviceName);
+
             request.setContainerMetadata(
-                containerIds,
-                createdAtInfo,
-                containerStatus
+                    epoch,
+                    isDeterministic,
+                    entryComponent,
+                    stateDirectory,
+                    statefulComponent,
+                    componentNames,
+                    imageNames,
+                    containerIds,
+                    createdAtInfo,
+                    containerStatus
             );
         }
 
