@@ -15,11 +15,14 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.PramReplicaCoordinator;
 import edu.umass.cs.primarybackup.PrimaryBackupManager;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
+import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.PaxosReplicaCoordinator;
 import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.SetCoordinatorNodeRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
@@ -184,6 +187,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             return true;
         }
 
+        if (request instanceof SetCoordinatorNodeRequest<?> setCoordinatorNodeRequest) {
+            this.handleSetCoordinatorNodeRequest(setCoordinatorNodeRequest, callback);
+            return true;
+        }
+
         // prepare gigapaxos' request
         ReplicableClientRequest gpRequest = null;
         if (request instanceof ReplicableClientRequest rcr) {
@@ -228,6 +236,58 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
         // asynchronously coordinate the request
         return coordinator.coordinateRequest(gpRequest, loggedCallback);
+    }
+
+    private void handleSetCoordinatorNodeRequest(
+            SetCoordinatorNodeRequest<?> setCoordinatorNodeRequest, ExecutedCallback callback) {
+        String serviceName = setCoordinatorNodeRequest.getServiceName();
+        if (serviceName == null || serviceName.isEmpty()) {
+            setCoordinatorNodeRequest.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);
+            setCoordinatorNodeRequest.setResponseMessage("Unknown serviceName");
+            callback.executed(setCoordinatorNodeRequest, true);
+            return;
+        }
+
+        var coordinator = this.serviceCoordinator.get(serviceName);
+        if (coordinator == null) {
+            setCoordinatorNodeRequest.setFailed(ClientReconfigurationPacket.ResponseCodes.ACTIVE_REPLICA_EXCEPTION);
+            setCoordinatorNodeRequest.setResponseMessage("Unknown coordinator for " + serviceName);
+            callback.executed(setCoordinatorNodeRequest, true);
+            return;
+        }
+
+        if (coordinator instanceof PaxosReplicaCoordinator<NodeIDType> pc &&
+                setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
+            if (!pc.isPaxosCoordinator(serviceName)) {
+                pc.tryToBeCoordinator(serviceName);
+            }
+            setCoordinatorNodeRequest.setResponseMessage("OK");
+            callback.executed(setCoordinatorNodeRequest, true);
+            return;
+        }
+
+        if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pb &&
+                setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
+            ChangePrimaryPacket cpPacket = new ChangePrimaryPacket(serviceName, myNodeID);
+            try {
+                if (pb.isPrimary(serviceName)) {
+                    setCoordinatorNodeRequest.setResponseMessage("OK");
+                    callback.executed(setCoordinatorNodeRequest, true);
+                } else {
+                    primaryBackupCoordinator.coordinateRequest(cpPacket, (response, handled) -> {
+                        assert handled : "Unhandled ChangePrimaryPacket";
+                        setCoordinatorNodeRequest.setResponseMessage("OK");
+                        callback.executed(setCoordinatorNodeRequest, true);
+                    });
+                }
+            } catch (IOException | RequestParseException e) {
+                throw new RuntimeException(e);
+            }
+            return;
+        }
+
+        setCoordinatorNodeRequest.setResponseMessage("OK");
+        callback.executed(setCoordinatorNodeRequest, true);
     }
 
     private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {

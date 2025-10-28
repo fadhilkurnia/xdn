@@ -56,7 +56,13 @@ public class ReconfiguratorProtocolTask<NodeIDType> implements
 			ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,
 	
 			// hello request for active replica to update its InetSocketAddress if it's behind NAT
-			ReconfigurationPacket.PacketType.HELLO_REQUEST
+			ReconfigurationPacket.PacketType.HELLO_REQUEST,
+
+			// reconfigurator -> active: change coordinator node
+			ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_REQUEST,
+
+			// active -> reconfigurator: response of SET_COORDINATOR_NODE_REQUEST
+			ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_RESPONSE
 	};
 	private static final ReconfigurationPacket.PacketType[] types = ReconfigurationPacket
 			.concatenate(localTypes, WaitAckStopEpoch.types,

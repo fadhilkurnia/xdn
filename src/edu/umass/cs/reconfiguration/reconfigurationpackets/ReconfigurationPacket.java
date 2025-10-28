@@ -147,6 +147,10 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 		// but with more metadata returned.
 		GET_REPLICA_PLACEMENT_REQUEST(245),
 
+		// change the coordinator (i.e., leader in Paxos or primary in PrimaryBackup)
+		SET_COORDINATOR_NODE_REQUEST(246),
+		SET_COORDINATOR_NODE_RESPONSE(247),
+
 		NO_TYPE (999),
 
 		;
@@ -233,6 +237,8 @@ public abstract class ReconfigurationPacket<NodeIDType> extends
 
 		typeMap.put(PacketType.SET_REPLICA_PLACEMENT_REQUEST, SetReplicaPlacementRequest.class);
 		typeMap.put(PacketType.GET_REPLICA_PLACEMENT_REQUEST, GetReplicaPlacementRequest.class);
+		typeMap.put(PacketType.SET_COORDINATOR_NODE_REQUEST, SetCoordinatorNodeRequest.class);
+		typeMap.put(PacketType.SET_COORDINATOR_NODE_RESPONSE, SetCoordinatorNodeResponse.class);
 
 		for (ReconfigurationPacket.PacketType type : ReconfigurationPacket.PacketType.intToType
 				.values()) {
