@@ -53,12 +53,14 @@ import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
  * documentation pages.
  * <p>
  *         TODO: implement better API with prefix of /api/services
- *          - GET 		/api/v2/services
- *          - GET 		/api/v2/services/{name}
- *          - POST 		/api/v2/services/{name}
- *          - GET 		/api/v2/services/{name}/placement
- *          - POST 		/api/v2/services/{name}/placement
- *          - DELETE 	/api/v2/services/{name}
+ *          - GET 		/api/v2/services                        [Unimplemented] list all services.
+ *          - POST 		/api/v2/services/{name}                 [Unimplemented] Create a new launched service
+ *          - GET 		/api/v2/services/{name}                 [Unimplemented] Get a launched service
+ *          - DELETE 	/api/v2/services/{name}                 [Unimplemented] Destroy a new launched service
+ *          - GET 		/api/v2/services/{name}/placement       Get the current placement
+ *          - PUT 	    /api/v2/services/{name}/placement       Update the replica placement, including coordinator
+ *          - GET 		/api/v2/services/{name}/coordinator     [Unimplemented] Get the current coordinator
+ *          - PUT 		/api/v2/services/{name}/coordinator     [Unimplemented] Change the coordinator
  *          because currently everything is handled with GET request :(
  */
 public class HttpReconfigurator {
@@ -155,6 +157,7 @@ public class HttpReconfigurator {
     private final Channel channel;
 
     private final String rcf;
+    private final String rcNodeId;
 
     /**
      * @param rcf
@@ -169,6 +172,7 @@ public class HttpReconfigurator {
             throws CertificateException, SSLException, InterruptedException {
 
         this.rcf = rcf == null ? "" : rcf.toString();
+        this.rcNodeId = this.rcf.substring(3);
 
         // Configure SSL.
         final SslContext sslCtx;
@@ -188,7 +192,7 @@ public class HttpReconfigurator {
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .childHandler(
-                            new HTTPReconfiguratorInitializer(sslCtx, rcf));
+                            new HttpReconfiguratorInitializer(sslCtx, rcf, rcNodeId));
 
             // Note that we always use the DEFAULT_HTTP_ADDR (0.0.0.0) if the loop-back address
             // (e.g., 127.0.0.1 or localhost) is used so that we can listen incoming Http requests
@@ -258,16 +262,19 @@ public class HttpReconfigurator {
             }
     }
 
-    static class HTTPReconfiguratorInitializer extends
+    static class HttpReconfiguratorInitializer extends
             ChannelInitializer<SocketChannel> {
 
         private final SslContext sslCtx;
-        final ReconfiguratorFunctions rcFunctions;
+        private final ReconfiguratorFunctions rcFunctions;
+        private final String rcNodeId;
 
-        HTTPReconfiguratorInitializer(SslContext sslCtx,
-                                      final ReconfiguratorFunctions rcFunctions) {
+        HttpReconfiguratorInitializer(SslContext sslCtx,
+                                      final ReconfiguratorFunctions rcFunctions,
+                                      String rcNodeId) {
             this.sslCtx = sslCtx;
             this.rcFunctions = rcFunctions;
+            this.rcNodeId = rcNodeId;
         }
 
         @Override
@@ -283,7 +290,7 @@ public class HttpReconfigurator {
 
             p.addLast(new HttpResponseEncoder());
 
-            p.addLast(new HTTPReconfiguratorHandler(rcFunctions));
+            p.addLast(new HttpReconfiguratorHandler(rcFunctions, rcNodeId));
 
         }
     }
@@ -409,8 +416,10 @@ public class HttpReconfigurator {
         throw new RuntimeException("Unimplemented");
     }
 
-    static class HTTPReconfiguratorHandler extends
+    static class HttpReconfiguratorHandler extends
             SimpleChannelInboundHandler<Object> {
+
+        private final String rcNodeId;
 
         private HttpRequest request;
         /**
@@ -419,8 +428,9 @@ public class HttpReconfigurator {
         private final StringBuilder buf = new StringBuilder();
         final ReconfiguratorFunctions rcFunctions;
 
-        public HTTPReconfiguratorHandler(ReconfiguratorFunctions rcFunctions) {
+        public HttpReconfiguratorHandler(ReconfiguratorFunctions rcFunctions, String rcNodeId) {
             this.rcFunctions = rcFunctions;
+            this.rcNodeId = rcNodeId;
         }
 
         @Override
@@ -525,26 +535,49 @@ public class HttpReconfigurator {
             HttpContent httpContent = (HttpContent) msg;
             assert this.rcFunctions != null : "Reconfigurator packets handler must be initialized";
 
-            // parse the sender
+            // Parses the sender
             assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
                     "Invalid request sender";
             InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
 
             // Parses and handles SetReplicaPlacementRequest
+            //  PUT /api/v2/services/{serviceName}/placement
             Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/placement$");
             Matcher matcher = pattern.matcher(httpRequest.uri());
-            if (httpRequest.method().equals(HttpMethod.POST) && matcher.matches()) {
+            if ((httpRequest.method().equals(HttpMethod.POST) ||
+                    httpRequest.method().equals(HttpMethod.PUT))
+                    && matcher.matches()) {
                 parseAndHandleHttpSetReplicaPlacementRequest(
                         ctx, senderAddress, httpRequest, httpContent);
                 return;
             }
 
             // Parses and handles GetReplicaPlacementRequest
+            //  GET /api/v2/services/{serviceName}/placement
             if (httpRequest.method().equals(HttpMethod.GET) && matcher.matches()) {
                 parseAndHandleHttpGetReplicaPlacementRequest(
                         ctx, senderAddress, httpRequest, httpContent);
                 return;
             }
+
+            // Parses and handles SetCoordinatorNodeRequest (for Paxos and PrimaryBackup)
+            //  PUT /api/v2/services/{serviceName}/coordinator
+            Pattern scnrPattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/coordinator$");
+            Matcher scnrMatcher = scnrPattern.matcher(httpRequest.uri());
+            if (httpRequest.method().equals(HttpMethod.PUT) && scnrMatcher.matches()) {
+                parseAndHandleHttpSetCoordinatorNodeRequest(
+                        ctx, senderAddress, httpRequest, httpContent);
+                return;
+            }
+
+            // TODO: Parses and handles CreateServiceRequest
+            //  POST /api/v2/services/{serviceName}
+
+            // TODO: Parses and handles GetServiceInfoRequest
+            //  GET /api/v2/services/{serviceName}
+
+            // TODO: Parses and handles DestroyServiceRequest
+            //  DELETE /api/v2/services/{serviceName}
 
             // TODO: handle other kind of reconfigurator requests
 
@@ -644,13 +677,55 @@ public class HttpReconfigurator {
             return new GetReplicaPlacementRequest(sender, serviceName);
         }
 
+        private void parseAndHandleHttpSetCoordinatorNodeRequest(ChannelHandlerContext ctx,
+                                                                 InetSocketAddress senderAddress,
+                                                                 HttpRequest httpRequest,
+                                                                 HttpContent httpContent) {
+            // Example of the expected payload: {"newCoordinatorNodeId": "AR0"}
+            String[] uriComponents = httpRequest.uri().split("/");
+            assert uriComponents.length == 6 : "Invalid uri for set coordinator node request";
+            String serviceName = uriComponents[4];
+
+            String contentBody = httpContent.content().toString(StandardCharsets.ISO_8859_1);
+            final String newCoordinatorNodeId;
+            try {
+                JSONObject contentJson = new JSONObject(contentBody);
+                newCoordinatorNodeId = contentJson.getString("newCoordinatorNodeId");
+            } catch (JSONException e) {
+                this.writeBadRequestResponse(
+                        ctx, "Invalid format for set coordinator node request, " +
+                                "expecting `newCoordinatorNodeId` inside the json payload.");
+                return;
+            }
+
+            if (newCoordinatorNodeId == null || newCoordinatorNodeId.trim().isEmpty()) {
+                this.writeBadRequestResponse(
+                        ctx, "Invalid format for set coordinator node request, " +
+                                "expecting `newCoordinatorNodeId` inside the json payload.");
+                return;
+            }
+
+            SetCoordinatorNodeRequest<String> request = new SetCoordinatorNodeRequest<>(
+                    senderAddress, serviceName, rcNodeId, newCoordinatorNodeId);
+            this.rcFunctions.sendRequest(request, response -> {
+                assert response instanceof ClientReconfigurationPacket :
+                        "Unexpected response type from Reconfigurator: " +
+                                response.getClass().getSimpleName();
+                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+                this.writeResponse(crp, ctx);
+                return null;
+            });
+        }
+
         private void writeBadRequestResponse(ChannelHandlerContext ctx, String errMessage) {
             HttpResponse httpResponse = new DefaultFullHttpResponse(
                     HTTP_1_1,
                     BAD_REQUEST,
                     Unpooled.copiedBuffer(errMessage.getBytes(StandardCharsets.UTF_8)));
             httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, errMessage.length());
             ctx.write(httpResponse);
+            ctx.flush();
         }
 
         private void writeResponse(ClientReconfigurationPacket response,

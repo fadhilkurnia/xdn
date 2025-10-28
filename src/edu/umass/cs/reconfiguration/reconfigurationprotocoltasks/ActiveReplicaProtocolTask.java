@@ -48,7 +48,8 @@ public class ActiveReplicaProtocolTask<NodeIDType> implements
             ReconfigurationPacket.PacketType.REQUEST_EPOCH_FINAL_STATE,
             ReconfigurationPacket.PacketType.DROP_EPOCH_FINAL_STATE,
             ReconfigurationPacket.PacketType.ECHO_REQUEST,
-            ReconfigurationPacket.PacketType.HELLO_REQUEST
+            ReconfigurationPacket.PacketType.HELLO_REQUEST,
+            ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_REQUEST
     };
     private static final ReconfigurationPacket.PacketType[] types = ReconfigurationPacket.concatenate(defaultTypes,
             WaitEpochFinalState.types);

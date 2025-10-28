@@ -447,4 +447,8 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		return this.paxosManager.isPaxosCoordinator(groupName);
 	}
 
+	public void tryToBeCoordinator(String groupName) {
+		this.paxosManager.tryToBePaxosCoordinator(groupName);
+	}
+
 }

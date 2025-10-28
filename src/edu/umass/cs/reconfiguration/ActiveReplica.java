@@ -30,8 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import edu.umass.cs.pram.packets.PramPacket;
-import edu.umass.cs.pram.packets.PramPacketType;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -71,23 +70,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorCallback;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.AckDropEpochFinalState;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.AckStartEpoch;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.AckStopEpoch;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ActiveReplicaError;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.BasicReconfigurationPacket;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DefaultAppRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DemandReport;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.DropEpochFinalState;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.EchoRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.EpochFinalState;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.HelloRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket.PacketType;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.RequestEpochFinalState;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.StartEpoch;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.StopEpoch;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.ActiveReplicaProtocolTask;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.WaitEpochFinalState;
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
@@ -1154,6 +1137,28 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 		// else
 		return null;
 	}
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleSetCoordinatorNodeRequest(
+            SetCoordinatorNodeRequest<NodeIDType> event,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
+        SetCoordinatorNodeRequest<NodeIDType> request = (SetCoordinatorNodeRequest<NodeIDType>) event;
+        try {
+            this.appCoordinator.coordinateRequest(request, (requestWithResponse, handled) -> {
+                assert requestWithResponse instanceof ClientReconfigurationPacket;
+                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) requestWithResponse;
+                SetCoordinatorNodeResponse<NodeIDType> response =
+                        new SetCoordinatorNodeResponse<>(
+                                request.getCrpKey(), getMyID(), request.getServiceName(),
+                                request.getEpochNumber(), crp.isFailed() ? 500 : 200, crp.getResponseMessage());
+                GenericMessagingTask<NodeIDType, ?> mtask = new GenericMessagingTask<NodeIDType, Object>(
+                        (request.getInitiatorNodeId()), response);
+                this.send(mtask);
+            });
+        } catch (IOException | RequestParseException e) {
+            throw new RuntimeException(e);
+        }
+        return null;
+    }
 
 	// drop any pending task (only WaitEpochFinalState possible) upon dropEpoch
 	private void garbageCollectPendingTasks(

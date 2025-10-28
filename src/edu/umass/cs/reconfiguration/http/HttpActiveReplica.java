@@ -55,6 +55,12 @@ import java.util.logging.Logger;
 import static io.netty.handler.codec.http.HttpResponseStatus.*;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
+// Implemented endpoint:
+// - GET    /api/v2/services/{serviceName}/replica/info                 // get the replica metadata
+// - any    with `XDN`, `coordinator-request`, and `node-id` header     // change this node to be primary in primary backup
+//          this will be deprecated and moved into PUT /api/v2/services/{serviceName}/coordinator endpoint
+//          in the reconfigurator.
+
 /**
  * An HTTP front-end for an active replica that supports interaction
  * between a http client and this front-end.
@@ -949,7 +955,7 @@ public class HttpActiveReplica {
             }
 
             ChannelFuture cf = ctx.writeAndFlush(response);
-            if (!cf.isSuccess()) {
+            if (!cf.isSuccess() && cf.cause() != null) {
                 System.out.println("write failed: " + cf.cause());
                 System.out.printf("%s:%s - sendStringResponse, write failed: %s, string:%s\n",
                         nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause(), message);

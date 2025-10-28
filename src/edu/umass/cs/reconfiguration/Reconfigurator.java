@@ -1117,7 +1117,6 @@ public class Reconfigurator<NodeIDType> implements
             request.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);
             request.setResponseMessage("Failed to get record for " + serviceName);
             callback.processResponse(request.makeResponse());
-            callback.processResponse(request.makeResponse());
             return null;
         }
 
@@ -1189,6 +1188,7 @@ public class Reconfigurator<NodeIDType> implements
 
         // Reconfiguration is handled, and will eventually be executed.
         // Sends success response back to client.
+        // TODO: wait until reconfiguration is done, then send the response.
         request.setResponseMessage("Replica placement request is processed");
         callback.processResponse(request.makeResponse());
         return null;
@@ -1235,6 +1235,106 @@ public class Reconfigurator<NodeIDType> implements
         // TODO: add service/name metadata in the reconfiguration record.
 
         callback.processResponse(request.makeResponse());
+        return null;
+    }
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleSetCoordinatorNodeRequest(
+            SetCoordinatorNodeRequest<NodeIDType> request,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
+        throw new RuntimeException(
+                "Unexpected: receiving SetCoordinatorNodeRequest without callback");
+    }
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleSetCoordinatorNodeRequest(
+            SetCoordinatorNodeRequest<NodeIDType> request,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
+            Callback<Request, ReconfiguratorRequest> callback) {
+        // get service metadata based on the provided name
+        String serviceName = request.getServiceName();
+        ReconfigurationRecord<NodeIDType> record = this.DB.getReconfigurationRecord(serviceName);
+        if (record == null) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);
+            request.setResponseMessage("Failed to get record for " + serviceName);
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // get the node ID of the new coordinator
+        String newCoordinatorNodeIdStr = request.getNewCoordinatorNodeId();
+        if (newCoordinatorNodeIdStr == null) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST);
+            request.setResponseMessage("Expecting valid NodeID for the new coordinator");
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // validate that the NodeID of the new coordinator is valid
+        Map<String, InetSocketAddress> allActives =
+                this.consistentNodeConfig.getAllActiveReplicas();
+        Set<String> allValidNodeIds = allActives.keySet();
+        if (!allValidNodeIds.contains(newCoordinatorNodeIdStr)) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST);
+            request.setResponseMessage(
+                    "Unknown NodeID:" + newCoordinatorNodeIdStr + " for the coordinator");
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // validate that the NodeID is parseable
+        Stringifiable<NodeIDType> unstringer = this.getUnstringer();
+        NodeIDType newCoordinatorNodeId;
+        try {
+            newCoordinatorNodeId = unstringer.valueOf(newCoordinatorNodeIdStr);
+        } catch (Exception e) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST);
+            request.setResponseMessage("Invalid NodeID format for coordinator: "
+                    + newCoordinatorNodeIdStr);
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // validate that the NodeID of the new coordinator is part of current placement
+        Set<NodeIDType> activeReplicas = record.getActiveReplicas();
+        if (activeReplicas == null || !activeReplicas.contains(newCoordinatorNodeId)) {
+            request.setFailed(ClientReconfigurationPacket.ResponseCodes.GENERIC_EXCEPTION);
+            request.setResponseMessage("The to-be coordinator " + newCoordinatorNodeIdStr
+                    + " is not an active replica for " + serviceName);
+            callback.processResponse(request.makeResponse());
+            return null;
+        }
+
+        // register callback, used once we get response from the active
+        if (callback != null && callback != this.defaultCallback) {
+            this.callbacksCRP.put(getCRPKey(request), callback);
+        }
+
+        // TODO: create internal SetCoordinatorInternalRequest,
+        //  which is different than the SetCoordinatorNodeRequest.
+        request.setCrpKey(getCRPKey(request));
+
+        try {
+            this.messenger.send(new GenericMessagingTask<>(newCoordinatorNodeId, request));
+        } catch (IOException | JSONException e) {
+            throw new RuntimeException(e);
+        }
+        return null;
+    }
+
+    public GenericMessagingTask<NodeIDType, ?>[] handleSetCoordinatorNodeResponse(
+            SetCoordinatorNodeResponse<NodeIDType> response,
+            ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
+        var clientCallback = this.callbacksCRP.get(response.getKey());
+        if (clientCallback != null) {
+            assert clientCallback instanceof RequestCallbackFuture<ReconfiguratorRequest>;
+            RequestCallbackFuture<ReconfiguratorRequest> rcf = (RequestCallbackFuture<ReconfiguratorRequest>) clientCallback;
+            assert rcf.getRequest() instanceof SetCoordinatorNodeRequest;
+            var originalRequest = (SetCoordinatorNodeRequest<?>) rcf.getRequest();
+            originalRequest.setResponseMessage(response.getResponseMessage());
+            if (response.getHttpErrorCode() == 500) {
+                originalRequest.setFailed();
+            }
+            clientCallback.processResponse(originalRequest);
+        }
         return null;
     }
 
@@ -1985,7 +2085,7 @@ public class Reconfigurator<NodeIDType> implements
      *
      * @param name The service name
      * @return pair of Node ID set and optional metadata if reconfiguration is needed,
-     *          otherwise null is returned.
+     * otherwise null is returned.
      */
     private NodeIdsMetadataPair<NodeIDType> shouldReconfigure2(String name) {
         // returns null if no current actives
@@ -3907,7 +4007,6 @@ public class Reconfigurator<NodeIDType> implements
                         callbackFuture = new RequestCallbackFuture<ReconfiguratorRequest>(
                                 packet, callback));
         return callbackFuture;
-
     }
 
     /**
