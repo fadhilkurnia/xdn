@@ -1,5 +1,7 @@
 package edu.umass.cs.xdn.recorder;
 
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.utils.Shell;
 
 import java.io.File;
@@ -11,7 +13,6 @@ import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SocketChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -35,7 +36,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     private static final String FUSELOG_BIN_PATH = "/usr/local/bin/fuselog";
     private static final String FUSELOG_APPLY_BIN_PATH = "/usr/local/bin/fuselog-apply";
 
-    private static final String defaultWorkingBasePath = "/tmp/xdn/state/fuselog/";
+    // the default working base directory is /tmp/xdn/state/fuselog/
+    private static final String workingBasePath =
+            Config.getGlobalString(
+                    ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR);
 
     private final String baseMountDirPath;
     private final String baseSocketDirPath;
@@ -56,7 +60,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     private final Logger logger = Logger.getLogger(FuselogStateDiffRecorder.class.getSimpleName());
 
     public FuselogStateDiffRecorder(String nodeID) {
-        super(nodeID, defaultWorkingBasePath + nodeID + "/");
+        super(nodeID, workingBasePath + nodeID + "/");
         logger.log(Level.FINE, String.format("%s:%s - initializing FUSE stateDiff recorder",
                 nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
 
@@ -86,7 +90,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
         // create socket dir, if not exist
         // e.g., /tmp/xdn/state/fuselog/node1/sock/
-        this.baseSocketDirPath = defaultWorkingBasePath + nodeID + "/sock/";
+        this.baseSocketDirPath = workingBasePath + nodeID + "/sock/";
         try {
             Files.createDirectories(Paths.get(this.baseSocketDirPath));
         } catch (IOException e) {
@@ -96,7 +100,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
         // create diff dir, if not exist
         // e.g., /tmp/xdn/state/fuselog/node1/diff/
-        this.baseDiffDirPath = defaultWorkingBasePath + nodeID + "/diff/";
+        this.baseDiffDirPath = workingBasePath + nodeID + "/diff/";
         try {
             Files.createDirectories(Paths.get(this.baseDiffDirPath));
         } catch (IOException e) {
