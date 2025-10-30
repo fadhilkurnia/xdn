@@ -728,7 +728,6 @@ public class HttpActiveReplica {
             }
 
             // Get the response
-            // TODO: use Netty response instead of JDK.
             return xdnRequest.getHttpResponse();
         }
 

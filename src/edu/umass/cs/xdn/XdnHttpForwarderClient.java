@@ -58,13 +58,6 @@ public final class XdnHttpForwarderClient implements Closeable {
         this(new NioEventLoopGroup(0), true);
     }
 
-    /**
-     * Creates a client backed by the supplied event loop group.
-     */
-    public XdnHttpForwarderClient(EventLoopGroup eventLoopGroup) {
-        this(eventLoopGroup, false);
-    }
-
     private XdnHttpForwarderClient(EventLoopGroup group, boolean manageGroup) {
         this.eventLoopGroup = Objects.requireNonNull(group, "eventLoopGroup");
         this.manageEventLoopGroup = manageGroup;
@@ -81,18 +74,20 @@ public final class XdnHttpForwarderClient implements Closeable {
         Origin origin = new Origin(host, port);
         FixedChannelPool pool = poolFor(origin);
         CompletableFuture<FullHttpResponse> responseFuture = new CompletableFuture<>();
-        final FullHttpRequest outbound = copyRequest(request);
+
+        // Instead of copying the request, we bump up the reference count
+        // and release it in the finally part, at the end of this method.
+        ReferenceCountUtil.retain(request);
+        final FullHttpRequest outbound = request;
 
         pool.acquire().addListener((Future<Channel> acquireFuture) -> {
             if (!acquireFuture.isSuccess()) {
-                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(acquireFuture.cause());
                 return;
             }
 
             Channel channel = acquireFuture.getNow();
             if (channel == null || !channel.isActive()) {
-                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(
                         new IllegalStateException("Acquired inactive HTTP channel"));
                 if (channel != null) {
@@ -103,7 +98,6 @@ public final class XdnHttpForwarderClient implements Closeable {
 
             ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
             if (handler == null) {
-                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(
                         new IllegalStateException("Missing response handler in pipeline"));
                 releaseQuietly(pool, channel);
@@ -112,7 +106,6 @@ public final class XdnHttpForwarderClient implements Closeable {
 
             RequestContext context = new RequestContext(channel, pool, responseFuture);
             if (!handler.register(context)) {
-                ReferenceCountUtil.safeRelease(outbound);
                 responseFuture.completeExceptionally(
                         new IllegalStateException("Another request is already in flight"));
                 releaseQuietly(pool, channel);
@@ -122,7 +115,6 @@ public final class XdnHttpForwarderClient implements Closeable {
             ChannelFuture writeFuture = channel.writeAndFlush(outbound);
             writeFuture.addListener((ChannelFutureListener) wf -> {
                 if (!wf.isSuccess()) {
-                    ReferenceCountUtil.safeRelease(outbound);
                     handler.fail(wf.cause());
                 }
             });
@@ -136,6 +128,8 @@ public final class XdnHttpForwarderClient implements Closeable {
                 throw (Exception) cause;
             }
             throw new RuntimeException(cause);
+        } finally {
+            ReferenceCountUtil.release(request);
         }
     }
 
@@ -224,7 +218,7 @@ public final class XdnHttpForwarderClient implements Closeable {
         }
     }
 
-    private final class PoolHandler implements ChannelPoolHandler {
+    private static final class PoolHandler implements ChannelPoolHandler {
         @Override
         public void channelReleased(Channel ch) {
             ClientResponseHandler handler = ch.pipeline().get(ClientResponseHandler.class);
@@ -252,6 +246,8 @@ public final class XdnHttpForwarderClient implements Closeable {
         private final AtomicReference<RequestContext> inFlight = new AtomicReference<>();
 
         ClientResponseHandler() {
+            // We use autoRelease==false, enabling this Client's user to
+            // manage the reference counted FullHttpResponse.
             super(false);
         }
 
@@ -278,10 +274,7 @@ public final class XdnHttpForwarderClient implements Closeable {
                 LOG.warning("Received response with no context; dropping");
                 return;
             }
-
-            FullHttpResponse copy = copyResponse(msg);
-            ReferenceCountUtil.release(msg);
-            context.complete(copy);
+            context.complete(msg);
         }
 
         @Override
@@ -297,48 +290,38 @@ public final class XdnHttpForwarderClient implements Closeable {
         }
     }
 
-    private static final class RequestContext {
-        private final Channel channel;
-        private final FixedChannelPool pool;
-        private final CompletableFuture<FullHttpResponse> responseFuture;
-
-        private RequestContext(Channel channel,
-                               FixedChannelPool pool,
-                               CompletableFuture<FullHttpResponse> responseFuture) {
-            this.channel = channel;
-            this.pool = pool;
-            this.responseFuture = responseFuture;
-        }
+    private record RequestContext(Channel channel, FixedChannelPool pool,
+                                  CompletableFuture<FullHttpResponse> responseFuture) {
 
         void complete(FullHttpResponse response) {
-            boolean delivered = responseFuture.complete(response);
-            if (!delivered) {
-                ReferenceCountUtil.release(response);
+                boolean delivered = responseFuture.complete(response);
+                if (!delivered) {
+                    ReferenceCountUtil.release(response);
+                }
+                release();
             }
-            release();
-        }
 
-        void fail(Throwable throwable) {
-            if (!responseFuture.completeExceptionally(throwable)) {
-                LOG.log(Level.WARNING, "Duplicate failure delivery", throwable);
+            void fail(Throwable throwable) {
+                if (!responseFuture.completeExceptionally(throwable)) {
+                    LOG.log(Level.WARNING, "Duplicate failure delivery", throwable);
+                }
+                release();
             }
-            release();
-        }
 
-        private void release() {
-            try {
-                pool.release(channel).addListener(f -> {
-                    if (!f.isSuccess()) {
-                        LOG.log(Level.WARNING, "Failed to release channel", f.cause());
-                        channel.close();
-                    }
-                });
-            } catch (Throwable t) {
-                LOG.log(Level.WARNING, "Exception releasing channel to pool", t);
-                channel.close();
+            private void release() {
+                try {
+                    pool.release(channel).addListener(f -> {
+                        if (!f.isSuccess()) {
+                            LOG.log(Level.WARNING, "Failed to release channel", f.cause());
+                            channel.close();
+                        }
+                    });
+                } catch (Throwable t) {
+                    LOG.log(Level.WARNING, "Exception releasing channel to pool", t);
+                    channel.close();
+                }
             }
         }
-    }
 
     private record Origin(String host, int port) {
     }

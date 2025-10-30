@@ -6,9 +6,7 @@ import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.gigapaxos.paxosutil.LargeCheckpointer;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
-import edu.umass.cs.primarybackup.packets.PrimaryBackupPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
-import edu.umass.cs.reconfiguration.http.HttpActiveReplicaRequest;
 import edu.umass.cs.reconfiguration.interfaces.InitialStateValidator;
 import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
@@ -26,18 +24,11 @@ import edu.umass.cs.xdn.utils.Utils;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
+import io.netty.util.ReferenceCountUtil;
 import org.json.JSONException;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.StringWriter;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.net.StandardProtocolFamily;
-import java.net.URI;
-import java.net.UnixDomainSocketAddress;
+import java.io.*;
+import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SocketChannel;
@@ -99,8 +90,12 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private AbstractStateDiffRecorder stateDiffRecorder;
 
     // Client to forward HTTP requests into the containerized services.
+    // It is specifically designed with Netty, matching HttpActiveReplica, to avoid
+    // unnecessary request conversion (e.g., Netty request to OpenJDK request).
     private final XdnHttpForwarderClient httpForwarderClient;
 
+    // HTTP request cache to prevent deserializing an already deserialized request
+    // upon coordination. This is useful for the entry replica.
     private static final int REQUEST_CACHE_CAPACITY = 4096;
     private final Map<Long, Request> requestCache = Collections.synchronizedMap(
             new LinkedHashMap<>(REQUEST_CACHE_CAPACITY, 0.75f, true) {
@@ -112,6 +107,10 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     // LargeCheckpointer for reconfiguration final state
     private final LargeCheckpointer largeCheckpointer;
+
+    // Backdoor HTTP header used to emulate NoOp execution by directly returning dummy response.
+    // This is used mainly for measuring the coordination, not execution, overhead.
+    private static final String DBG_HDR_NO_OP_EXECUTION = "___DNO";
 
     private final Logger logger = Logger.getLogger(XdnGigapaxosApp.class.getName());
 
@@ -210,9 +209,37 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         long startExecuteTimeNs = System.nanoTime();
         String serviceName = request.getServiceName();
 
-        if (request instanceof XdnHttpRequest xdnHttpRequest) {
+        // Prepare XdnHttpRequest
+        boolean isXdnHttpReq = request instanceof XdnHttpRequest;
+        XdnHttpRequest xdnHttpRequest = null;
+        if (isXdnHttpReq) {
+            xdnHttpRequest = (XdnHttpRequest) request;
+        }
+
+        // Debug: skip execution and return dummy response to emulate NoOp.
+        if (isXdnHttpReq && xdnHttpRequest.getHttpRequest()
+                .headers().contains(DBG_HDR_NO_OP_EXECUTION)) {
+            ByteBuf content = Unpooled.copiedBuffer("NoOp".getBytes());
+            FullHttpResponse dummyResponse = new DefaultFullHttpResponse(
+                    HttpVersion.HTTP_1_1,
+                    HttpResponseStatus.OK,
+                    content);
+            dummyResponse.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+            xdnHttpRequest.setHttpResponse(dummyResponse);
+            return true;
+        }
+
+        // The actual HTTP request execution.
+        if (isXdnHttpReq) {
             long preFwdTimeNs = System.nanoTime();
             forwardHttpRequestToContainerizedService(xdnHttpRequest);
+            assert xdnHttpRequest.getHttpResponse() != null
+                    : "Obtained null response after request execution";
+            assert ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()) == 1
+                    : String.format(
+                    "Unexpected refCnt of response after execution (%d!=1)",
+                    ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()));
+            releaseHttpResponseOnNonEntryReplica(xdnHttpRequest);
             long endFwdTimeNs = System.nanoTime();
 
             requestCache.remove(xdnHttpRequest.getRequestID());
@@ -258,6 +285,27 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         String exceptionMessage = String.format("%s:XdnGigapaxosApp executing unknown request %s",
                 this.myNodeId, request.getClass().getSimpleName());
         throw new RuntimeException(exceptionMessage);
+    }
+
+    //  Releasing buffer for httpResponse is tricky because
+    //  the release depends on the replica's role. If the replica
+    //  is the entry replica, then HttpActiveReplica is responsible
+    //  to release the response after writing it for the end client.
+    //  However, if the replica is not the entry replica, then we can
+    //  immediately release the response here as it will be discarded.
+    //  .
+    //  Our approach is to have a flag inside XdnHttpRequest (i.e., isCreatedFromString)
+    //  that indicates whether it is created in HttpActiveReplica (and
+    //  is in the entry replica) or it is created by XdnGigapaxosApp.getRequest()
+    //  in a non-entry replica.
+    //  .
+    //  Another complexity is regarding the requests in our cache.
+    private void releaseHttpResponseOnNonEntryReplica(XdnHttpRequest xdnHttpRequest) {
+        if (xdnHttpRequest == null) return;
+        if (xdnHttpRequest.getHttpResponse() == null) return;
+        if (xdnHttpRequest.isCreatedFromString()) {
+            ReferenceCountUtil.release(xdnHttpRequest.getHttpResponse());
+        }
     }
 
     private void activate(String serviceName) {
@@ -1918,7 +1966,25 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return true;
     }
 
+    /**
+     * Forwards the HttpRequest and HttpRequestContent inside xdnRequest into the
+     * containerized service. When there is no error, xdnRequest contains the response
+     * from the service.
+     * NOTE: It is the responsibility of the caller of this method to release the buffer
+     * <pre>{@code
+     *   forwardHttpRequestToContainerizedService(xdnRequest);
+     *   ...
+     *   ReferenceCountUtil.release(xdnRequest.getHttpResponse());
+     * }</pre>
+     *
+     * @param xdnRequest non-null XdnHttpRequest that contains valid HttpRequest.
+     */
     private void forwardHttpRequestToContainerizedService(XdnHttpRequest xdnRequest) {
+        Objects.requireNonNull(xdnRequest, "xdnRequest");
+        Objects.requireNonNull(xdnRequest.getHttpRequest(), "xdnRequest.httpRequest");
+        Objects.requireNonNull(xdnRequest.getHttpRequestContent(), "xdnRequest.httpRequestContent");
+        assert xdnRequest.getHttpResponse() == null;
+
         long startTime = System.nanoTime();
         String serviceName = xdnRequest.getServiceName();
         assert serviceName != null;
@@ -1952,8 +2018,6 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             xdnRequest.setHttpResponse(httpResponse);
             endConversionTime = System.nanoTime();
             endResponseStoreTime = System.nanoTime();
-
-            // TODO: httpResponse.release();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
