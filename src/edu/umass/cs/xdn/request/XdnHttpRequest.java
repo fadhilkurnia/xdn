@@ -53,6 +53,12 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     private HttpResponse httpResponse;
     private ByteBuf httpResponseBody;
 
+    // A helper flag that is true iff this instance is created via createFromString().
+    // The flag is particularly useful to decide whether to release the reference-counted
+    // httpResponse. In XDN, the instance is created via createFromString() in non entry-replica
+    // node, and thus we can discard and release the httpResponse immediately.
+    private final boolean isCreatedFromString;
+
     // The set for BehavioralRequest interface that requires returning
     // the behaviors of this HttpRequest. Note that requestMatcher must
     // be set to know the behaviors of this HttpRequest.
@@ -60,13 +66,14 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
     private List<RequestMatcher> requestMatchers;
 
     public XdnHttpRequest(HttpRequest request, HttpContent content) {
-        this(null, request, content, null);
+        this(null, request, content, null, false);
     }
 
     private XdnHttpRequest(Long providedRequestId,
                            HttpRequest request,
                            HttpContent content,
-                           List<RequestMatcher> requestMatchers) {
+                           List<RequestMatcher> requestMatchers,
+                           boolean isCreatedFromString) {
         assert request != null : "HttpRequest must be specified";
         assert content != null : "HttpContent must be specified";
 
@@ -90,6 +97,8 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
         // Use the default request matcher if not specified
         this.requestMatchers = (requestMatchers != null && !requestMatchers.isEmpty())
                 ? requestMatchers : defaultSingletonRequestMatchers;
+
+        this.isCreatedFromString = isCreatedFromString;
     }
 
     // In general, we infer the HTTP request ID based on these headers:
@@ -295,8 +304,7 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
                 "Expecting FullHttpResponse, but found " + httpResponse.getClass().getSimpleName();
         FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;
         this.httpResponse = fullHttpResponse;
-        this.httpResponseBody = fullHttpResponse.content() != null
-                ? fullHttpResponse.content().copy() : null;
+        this.httpResponseBody = fullHttpResponse.content();
     }
 
     @Override
@@ -465,8 +473,12 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
                 ? buildHttpResponse(decodedProto.getResponse())
                 : null;
 
-        XdnHttpRequest decodedRequest = new XdnHttpRequest(decodedProto.getRequestId(), httpRequest,
-                httpContent, null);
+        XdnHttpRequest decodedRequest = new XdnHttpRequest(
+                decodedProto.getRequestId(),
+                httpRequest,
+                httpContent,
+                null,
+                true);
         if (httpResponse != null) {
             decodedRequest.setHttpResponse(httpResponse);
         }
@@ -639,5 +651,9 @@ public class XdnHttpRequest extends XdnRequest implements ClientRequest,
             return HttpVersion.HTTP_1_0;
         }
         return HttpVersion.HTTP_1_1;
+    }
+
+    public boolean isCreatedFromString() {
+        return isCreatedFromString;
     }
 }
