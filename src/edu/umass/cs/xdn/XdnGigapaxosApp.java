@@ -207,37 +207,28 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean execute(Request request) {
+        long startExecuteTimeNs = System.nanoTime();
         String serviceName = request.getServiceName();
 
-        if (request instanceof HttpActiveReplicaRequest) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive " +
-                    "HttpActiveReplicaRequest");
-        }
-
-        if (request instanceof PrimaryBackupPacket) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive PrimaryBackupPacket");
-        }
-
-        if (request instanceof XDNStatediffApplyRequest) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive " +
-                    "XDNStatediffApplyRequest");
-        }
-
-        if (request instanceof XdnJsonHttpRequest) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive XdnJsonHttpRequest");
-        }
-
         if (request instanceof XdnHttpRequest xdnHttpRequest) {
-            long startTime = System.nanoTime();
+            long preFwdTimeNs = System.nanoTime();
             forwardHttpRequestToContainerizedService(xdnHttpRequest);
+            long endFwdTimeNs = System.nanoTime();
+
             requestCache.remove(xdnHttpRequest.getRequestID());
-            long elapsedTime = System.nanoTime() - startTime;
-            logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} (id: {6})",
-                    new Object[]{this.myNodeId, this.getClass().getSimpleName(),
-                            (elapsedTime / 1_000_000.0),
+            long endRmCacheTimeNs = System.nanoTime();
+
+            long endTime = System.nanoTime();
+            logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} " +
+                            "(fwd={6}ms rmc={7}ms) [id: {8}]",
+                    new Object[]{this.myNodeId.toLowerCase(),
+                            this.getClass().getSimpleName(),
+                            (endTime - startExecuteTimeNs) / 1_000_000.0,
                             xdnHttpRequest.getHttpRequest().method(),
                             serviceName,
                             xdnHttpRequest.getHttpRequest().uri(),
+                            (endFwdTimeNs - preFwdTimeNs) / 1_000_000.0,
+                            (endRmCacheTimeNs - endFwdTimeNs) / 1_000_000.0,
                             String.valueOf(xdnHttpRequest.getRequestID())});
             return true;
         }
@@ -1967,7 +1958,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             throw new RuntimeException(e);
         }
 
-        logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms, val={3}ms crt={4}ms " +
+        logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms (val={3}ms crt={4}ms " +
                         "exc={5}ms conv={6}ms sto={7}ms)",
                 new Object[]{this.myNodeId, this.getClass().getSimpleName(),
                         (endResponseStoreTime - startTime) / 1_000_000.0,

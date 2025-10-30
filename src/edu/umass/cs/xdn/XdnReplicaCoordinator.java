@@ -171,7 +171,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        long startProcessingTime = System.nanoTime();
+        long startCoordinationTimeNs = System.nanoTime();
 
         // gets service name and its coordinator
         var serviceName = request.getServiceName();
@@ -180,6 +180,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             // returns 404 not found back to client
             return createNotFoundResponse(request, callback);
         }
+        long endGetCoordinatorTimeNs = System.nanoTime();
 
         // one edge case, handling XdnGetProtocolRoleRequest
         if (request instanceof XdnGetReplicaInfoRequest xdnGetReplicaInfoRequest) {
@@ -199,6 +200,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         } else {
             gpRequest = ReplicableClientRequest.wrap(request);
         }
+        long endRequestPrepTimeNs = System.nanoTime();
+
         // TODO: validate what client address to set here. We need to explicitly set the
         //  client's address because down the pipeline that is being used for equals() method.
         if (gpRequest.getClientAddress() == null) {
@@ -219,19 +222,30 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             xdnHttpRequest.setRequestMatchers(serviceRequestMatchers);
             xdnHttpRequest.getBehaviors(); // populate cached behaviors
         }
+        long endPrepReqMatcherTimeNs = System.nanoTime();
 
         // cache the request in XdnGigapaxosApp, avoiding expensive deserialization
         xdnGigapaxosApp.cacheRequest(gpRequest.getRequest());
+        long endReqCacheTimeNs = System.nanoTime();
 
         // prepare updated callback that logs the elapsed time
         ReplicableClientRequest finalGpRequest = gpRequest;
         ExecutedCallback loggedCallback = (response, handled) -> {
-            callback.executed(response, handled);
-            long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms (id: {3})",
-                    new Object[]{this.myNodeID, this.getClass().getSimpleName(),
-                            elapsedTime / 1_000_000.0,
+            long endTimeNs = System.nanoTime();
+            logger.log(Level.FINE,
+                    "{0}:{1} - request coordination within {2}ms " +
+                            "(gcor={3}ms prp={4}ms mtc={5}ms cch={6}ms cor={7}ms) [id: {8}]",
+                    new Object[]{
+                            this.myNodeID.toLowerCase(),
+                            this.getClass().getSimpleName(),
+                            (endTimeNs - startCoordinationTimeNs) / 1_000_000.0,
+                            (endGetCoordinatorTimeNs - startCoordinationTimeNs) / 1_000_000.0,
+                            (endRequestPrepTimeNs - endGetCoordinatorTimeNs) / 1_000_000.0,
+                            (endPrepReqMatcherTimeNs - endRequestPrepTimeNs) / 1_000_000.0,
+                            (endReqCacheTimeNs - endPrepReqMatcherTimeNs) / 1_000_000.0,
+                            (endTimeNs - endReqCacheTimeNs) / 1_000_000.0,
                             String.valueOf(finalGpRequest.getRequestID())});
+            callback.executed(response, handled);
         };
 
         // asynchronously coordinate the request
