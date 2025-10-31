@@ -311,6 +311,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     private void releaseHttpResponsesOnNonEntryReplica(XdnHttpRequestBatch batch) {
         if (batch == null) return;
+        if (!batch.isCreatedFromBytes()) return;
         for (var requestWithResponse : batch.getRequestList()) {
             if (requestWithResponse.getHttpResponse() == null) {
                 continue;
