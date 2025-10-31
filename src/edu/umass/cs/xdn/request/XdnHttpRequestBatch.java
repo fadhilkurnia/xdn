@@ -52,22 +52,21 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
     private final String serviceName;
     private final XdnHttpRequest[] requests;
 
+    // A helper flag that is true iff this instance is created via createFromBytes().
+    // The flag is particularly useful to decide whether to release the reference-counted
+    // httpResponses. In XDN, the XdnHttpRequestBatch instance is created via createFromBytes()
+    // in non entry-replica node, and thus we can discard and release the httpResponses immediately.
+    private final boolean isCreatedFromBytes;
+
     public XdnHttpRequestBatch(List<XdnHttpRequest> requests) {
-        this(generateRequestId(), null, requests.toArray(new XdnHttpRequest[0]), true);
-    }
-
-    public XdnHttpRequestBatch(XdnHttpRequest... requests) {
-        this(generateRequestId(), null, requests, true);
-    }
-
-    private XdnHttpRequestBatch(long requestId, String serviceName, XdnHttpRequest[] requests) {
-        this(requestId, serviceName, requests, false);
+        this(generateRequestId(), null, requests.toArray(new XdnHttpRequest[0]), true, false);
     }
 
     private XdnHttpRequestBatch(long requestId,
                                 String serviceName,
                                 XdnHttpRequest[] requests,
-                                boolean defensiveCopy) {
+                                boolean defensiveCopy,
+                                boolean isCreatedFromBytes) {
         Objects.requireNonNull(requests, "requests");
         if (requests.length == 0) {
             throw new IllegalArgumentException("Batch must contain at least one request");
@@ -84,6 +83,8 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
         this.requestId = requestId;
         this.serviceName = serviceName != null ? serviceName : resolvedService;
         assert this.serviceName != null : "Service name is expected";
+
+        this.isCreatedFromBytes = isCreatedFromBytes;
     }
 
     private static long generateRequestId() {
@@ -241,7 +242,7 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
             decoded[i] = decodeRequest(requestBytes, serviceName);
         }
 
-        return new XdnHttpRequestBatch(requestId, serviceName, decoded);
+        return new XdnHttpRequestBatch(requestId, serviceName, decoded, true, true);
     }
 
     private static XdnHttpRequest decodeRequest(byte[] requestBytes, String expectedService) {
@@ -254,26 +255,6 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
             throw new IllegalArgumentException("Mismatched service name in batched request");
         }
         return request;
-    }
-
-    /**
-     * Returns a textual summary that is useful for logging/debugging without disturbing the
-     * serialization expected by {@link #toBytes()}.
-     */
-    public String getLogText() {
-        StringBuilder sb = new StringBuilder("batch service=")
-                .append(this.serviceName)
-                .append(" size=")
-                .append(this.requests.length)
-                .append(" requests=[");
-        for (int i = 0; i < this.requests.length; i++) {
-            if (i > 0) {
-                sb.append("; ");
-            }
-            sb.append(this.requests[i].getLogText());
-        }
-        sb.append(']');
-        return sb.toString();
     }
 
     @Override
@@ -336,5 +317,9 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
             return null;
         }
         return buffer.getLong();
+    }
+
+    public boolean isCreatedFromBytes() {
+        return isCreatedFromBytes;
     }
 }

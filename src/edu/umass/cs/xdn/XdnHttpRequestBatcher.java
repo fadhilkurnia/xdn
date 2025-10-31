@@ -123,13 +123,17 @@ public final class XdnHttpRequestBatcher implements Closeable {
                         continue;
                     }
 
-                    // Keep write or unknown requests isolated to avoid unsafe batching.
+                    // Keep write-only, read-modify-write, or unknown request type isolated
+                    // to avoid unsafe batching. For now, we only batch read-only requests.
                     if (isNotBehavioralReadOnly(first)) {
                         dispatchBatch(Collections.singletonList(first));
                         continue;
                     }
 
+                    // Put multiple read-only requests for the same service name into a batch,
+                    // otherwise, issue a batch with single request only.
                     buffer.add(first);
+                    String batchServiceName = first.request.getServiceName();
                     while (buffer.size() < maxBatchSize) {
                         BatchEntry next = batchingQueue.poll();
                         if (next == null) {
@@ -140,6 +144,14 @@ public final class XdnHttpRequestBatcher implements Closeable {
                             buffer.clear();
                             dispatchBatch(Collections.singletonList(next));
                             break;
+                        }
+                        String nextServiceName = next.request.getServiceName();
+                        if (!Objects.equals(batchServiceName, nextServiceName)) {
+                            dispatchBatch(new ArrayList<>(buffer));
+                            buffer.clear();
+                            buffer.add(next);
+                            batchServiceName = nextServiceName;
+                            continue;
                         }
                         buffer.add(next);
                     }
@@ -329,7 +341,6 @@ public final class XdnHttpRequestBatcher implements Closeable {
                         String.format("Mismatch request-%d ID in the batch %d != %d",
                                 i, clientReqId, serverRespId);
             }
-
 
             // Get the batch of response, pair each with the request.
             for (int i = 0; i < executedXdnHttpRequestBatch.size(); i++) {
