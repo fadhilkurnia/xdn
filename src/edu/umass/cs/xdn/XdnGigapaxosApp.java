@@ -263,6 +263,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         if (request instanceof XdnHttpRequestBatch xdnBatch) {
             long startTime = System.nanoTime();
             forwardHttpRequestBatchToContainerizedService(xdnBatch);
+            releaseHttpResponsesOnNonEntryReplica(xdnBatch);
             requestCache.remove(xdnBatch.getRequestID());
             long elapsedTime = System.nanoTime() - startTime;
             logger.log(Level.FINE, "{0}:{1} - batch execution within {2}ms, size={3} service={4}",
@@ -305,6 +306,16 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         if (xdnHttpRequest.getHttpResponse() == null) return;
         if (xdnHttpRequest.isCreatedFromString()) {
             ReferenceCountUtil.release(xdnHttpRequest.getHttpResponse());
+        }
+    }
+
+    private void releaseHttpResponsesOnNonEntryReplica(XdnHttpRequestBatch batch) {
+        if (batch == null) return;
+        for (var requestWithResponse : batch.getRequestList()) {
+            if (requestWithResponse.getHttpResponse() == null) {
+                continue;
+            }
+            ReferenceCountUtil.release(requestWithResponse.getHttpResponse());
         }
     }
 
