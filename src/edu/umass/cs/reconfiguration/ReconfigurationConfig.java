@@ -461,6 +461,11 @@ public class ReconfigurationConfig {
         XDN_FUSELOG_BASE_DIR("/tmp/xdn/state/fuselog/"),
 
         /**
+         * A flag to enable/disable batching in HttpActiveReplica.
+         */
+        HTTP_AR_FRONTEND_BATCH_ENABLED(false),
+
+        /**
          * Enable reporting demand profile into the Reconfigurators (i.e. Control Plane)
          * upon executing HTTP request in the HttpActiveReplica.
          */

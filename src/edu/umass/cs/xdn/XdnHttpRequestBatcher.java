@@ -39,7 +39,7 @@ import java.util.logging.Logger;
  */
 public final class XdnHttpRequestBatcher implements Closeable {
 
-    public static final int DEFAULT_MAX_BATCH_SIZE = 256;
+    public static final int DEFAULT_MAX_BATCH_SIZE = 2048;
     public static final Duration DEFAULT_MAX_BATCH_DELAY = Duration.ofMillis(2);
 
     private static final Logger LOG = Logger.getLogger(XdnHttpRequestBatcher.class.getName());

@@ -375,7 +375,6 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     @Override
     public String checkpoint(String name) {
         // TODO: implement me
-        System.out.println(">> XDNGigapaxosApp:" + this.myNodeId + " - checkpoint ... name=" + name);
         return "dummyXDNServiceCheckpoint";
     }
 
