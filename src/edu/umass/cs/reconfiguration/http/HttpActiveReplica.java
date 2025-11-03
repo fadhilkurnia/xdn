@@ -46,10 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -645,7 +642,7 @@ public class HttpActiveReplica {
                             // Check channel state, do nothing if the channel is inactive
                             // (e.g., closed by client).
                             if (!ctx.channel().isActive()) {
-                                if (err != null) {
+                                if (err != null && !(err instanceof CancellationException)) {
                                     System.out.println(">>> HttpActiveReplica - original error: " +
                                             err.getMessage());
                                     err.printStackTrace();

@@ -1570,14 +1570,23 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public String captureStatediff(String serviceName) {
+        long startCaptureTimeNs = System.nanoTime();
         int currentPlacementEpoch = this.getEpoch(serviceName);
         String stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
-        return XDN_STATE_DIFF_PREFIX + stateDiff;
+        String finalStateDiff = XDN_STATE_DIFF_PREFIX + stateDiff;
+        long endCaptureTimeNs = System.nanoTime();
+
+        logger.log(Level.FINE, "{0}:{1} - capture stateDiff within {2}ms, size={3}bytes service={4}",
+                new Object[]{this.myNodeId, this.getClass().getSimpleName(),
+                        (endCaptureTimeNs - startCaptureTimeNs) / 1_000_000.0,
+                        finalStateDiff.length(),
+                        serviceName});
+
+        return finalStateDiff;
     }
 
     @Override
     public boolean applyStatediff(String serviceName, String statediff) {
-
         ServiceInstance service = services.get(serviceName);
         if (service == null) {
             throw new RuntimeException("unknown service " + serviceName);
@@ -1604,6 +1613,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             String restartCommand = String.format("docker container restart %s", service.statefulContainer);
             int exitCode = runShellCommand(restartCommand, true);
             if (exitCode != 0) {
+                System.err.println("Fail to restart the container with exit code " + exitCode);
                 return false;
             }
         }
@@ -2049,8 +2059,12 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         CompletableFuture<?>[] futures = new CompletableFuture<?>[requests.size()];
         for (int i = 0; i < requests.size(); i++) {
             XdnHttpRequest httpRequest = requests.get(i);
-            futures[i] = CompletableFuture.runAsync(
-                    () -> forwardHttpRequestToContainerizedService(httpRequest));
+            futures[i] = CompletableFuture.runAsync(() -> {
+                forwardHttpRequestToContainerizedService(httpRequest);
+                // TODO: explain why we need to bump-up the reference-count here
+                //   instead of releasing it.
+                ReferenceCountUtil.retain(httpRequest.getHttpResponse());
+            });
         }
         CompletableFuture.allOf(futures).join();
     }
