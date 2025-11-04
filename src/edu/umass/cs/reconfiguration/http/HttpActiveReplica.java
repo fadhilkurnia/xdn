@@ -40,6 +40,7 @@ import org.json.JSONObject;
 import javax.net.ssl.SSLException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketException;
 import java.nio.channels.ClosedChannelException;
 import java.security.cert.CertificateException;
 import java.util.List;
@@ -976,8 +977,11 @@ public class HttpActiveReplica {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
-            cause.printStackTrace();
+            if (!(cause instanceof SocketException) ||
+                    cause.getMessage().contains("Connection reset")) {
+                System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
+                cause.printStackTrace();
+            }
             if (ctx.channel().isActive()) {
                 byte[] bytes = ("Error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
                 boolean isUnknownServiceNameError =
@@ -1086,33 +1090,42 @@ public class HttpActiveReplica {
             long preResponseWriteTsNs = System.nanoTime();
             ChannelFuture cf = ctx.writeAndFlush(httpResponse);
             cf.addListener((ChannelFutureListener) channelFuture -> {
-                if (!channelFuture.isSuccess()) {
-                    if (channelFuture.cause() instanceof ClosedChannelException) {
-                        // do nothing if end-client is the one who close the connection.
-                        return;
+                try {
+                    if (!channelFuture.isSuccess()) {
+                        if (channelFuture.cause() instanceof ClosedChannelException) {
+                            // do nothing if end-client is the one who close the connection.
+                            return;
+                        }
+                        logger.log(Level.WARNING,
+                                "Writing response failed: " + channelFuture.cause());
                     }
-                    logger.log(Level.WARNING,
-                            "Writing response failed: " + channelFuture.cause());
-                }
 
-                if (startProcessingTime > 0) {
-                    long now = System.nanoTime();
-                    long writeDuration = now - preResponseWriteTsNs;
-                    long elapsedOverallTime = now - startProcessingTime;
-                    logger.log(Level.FINE,
-                            "{0}:{1} - Overall HTTP execution within {2}ms (wrt={3}ms) [id: {4}]",
-                            new Object[]{
-                                    nodeId.toLowerCase(),
-                                    HttpActiveReplica.class.getSimpleName(),
-                                    (elapsedOverallTime / 1_000_000.0),
-                                    (writeDuration / 1_000_000.0),
-                                    String.valueOf(requestId)});
-                }
+                    if (startProcessingTime > 0) {
+                        long now = System.nanoTime();
+                        long writeDuration = now - preResponseWriteTsNs;
+                        long elapsedOverallTime = now - startProcessingTime;
+                        logger.log(Level.FINE,
+                                "{0}:{1} - Overall HTTP execution within {2}ms (wrt={3}ms) [id: {4}]",
+                                new Object[]{
+                                        nodeId.toLowerCase(),
+                                        HttpActiveReplica.class.getSimpleName(),
+                                        (elapsedOverallTime / 1_000_000.0),
+                                        (writeDuration / 1_000_000.0),
+                                        String.valueOf(requestId)});
+                    }
 
-                // If keep-alive is off, close the connection once the content is fully written.
-                if (!isKeepAlive) {
-                    ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
-                            .addListener(ChannelFutureListener.CLOSE);
+                    // If keep-alive is off, close the connection once the content is fully written.
+                    if (!isKeepAlive) {
+                        ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
+                                .addListener(ChannelFutureListener.CLOSE);
+                    }
+                } finally {
+                    // We should release the reference-counted httpResponse here.
+                    // It is allocated in the XdnGigapaxosApp after forwarding the request
+                    // into the containerized service.
+                    // However, because this handler is a SimpleChannelInboundHandler, this
+                    // handler already automatically release the httpResponse for us because
+                    // of the ctx.writeAndFlush(..) above.
                 }
             });
         }

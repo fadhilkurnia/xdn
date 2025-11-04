@@ -316,6 +316,10 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             if (requestWithResponse.getHttpResponse() == null) {
                 continue;
             }
+            assert ReferenceCountUtil.refCnt(requestWithResponse.getHttpResponse()) == 1
+                    : String.format(
+                    "Unexpected refCnt of response after execution (%d!=1)",
+                    ReferenceCountUtil.refCnt(requestWithResponse.getHttpResponse()));
             ReferenceCountUtil.release(requestWithResponse.getHttpResponse());
         }
     }
@@ -2061,9 +2065,14 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             XdnHttpRequest httpRequest = requests.get(i);
             futures[i] = CompletableFuture.runAsync(() -> {
                 forwardHttpRequestToContainerizedService(httpRequest);
-                // TODO: explain why we need to bump-up the reference-count here
-                //   instead of releasing it.
-                ReferenceCountUtil.retain(httpRequest.getHttpResponse());
+                assert httpRequest.getHttpResponse() != null
+                        : "Obtained null response after request execution";
+                assert ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()) == 1
+                        : String.format(
+                        "Unexpected refCnt of response after execution (%d!=1)",
+                        ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()));
+                // NOTE: we are not releasing the reference-counter response here because
+                //       it will be released in the HttpActiveReplica.
             });
         }
         CompletableFuture.allOf(futures).join();
