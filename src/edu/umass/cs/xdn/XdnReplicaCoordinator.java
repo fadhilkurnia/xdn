@@ -249,7 +249,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         };
 
         // asynchronously coordinate the request
-        return coordinator.coordinateRequest(gpRequest, loggedCallback);
+        boolean isCoordinated = coordinator.coordinateRequest(gpRequest, loggedCallback);
+        if (!isCoordinated) {
+            logger.log(Level.FINE,
+                    "{0}:{1} - fail coordinating request with {2}",
+                    new Object[]{
+                            this.myNodeID.toLowerCase(),
+                            this.getClass().getSimpleName(),
+                            coordinator.getClass().getSimpleName()});
+        }
+        return isCoordinated;
     }
 
     private void handleSetCoordinatorNodeRequest(
