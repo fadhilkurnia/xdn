@@ -115,7 +115,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         // Validate and initialize the stateDiff recorder for Primary Backup.
         // We need to check the Operating System as currently FUSE (i.e., Fuselog)
         // is only supported on Linux.
-        if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.RSYNC.toString())) {
+       if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.RSYNC.toString())) {
             recorderType = RecorderType.RSYNC;
         } else if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.FUSELOG.toString())) {
             recorderType = RecorderType.FUSELOG;
