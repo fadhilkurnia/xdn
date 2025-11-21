@@ -5,6 +5,7 @@ import edu.umass.cs.xdn.utils.Shell;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
@@ -326,17 +327,31 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 	    for (String key : backupReplicas.keySet()) {
 		final String replicaKey = key;
 		futures.add(executor.submit(() -> {
-		    int exitCode = Shell.runCommand(String.format("""
-			rsync -avz --delete --human-readable \
-			%s \
-			--include='mnt/' --include='%s' --include='%s***' \
-			--exclude='*' \
-			%s %s@%s:%s""",
-			sshOption,
-			mntDir, mntDir, currentReplica,
-			username, ipAddresses.get(replicaKey).getHostAddress(),
-			backupReplicas.get(key)
-		    ), true);
+		    String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
+
+		    int exitCode = 0;
+		    if (hostAddr.equals("127.0.0.1")) {
+			exitCode = Shell.runCommand(String.format("""
+			    rsync -avz --delete --human-readable \
+			    --include='mnt/' --include='%s' --include='%s***' \
+			    --exclude='*' \
+			    %s %s""",
+			    mntDir, mntDir, currentReplica,
+			    backupReplicas.get(key)
+			), true);
+		    } else {
+			exitCode = Shell.runCommand(String.format("""
+			    rsync -avz --delete --human-readable \
+			    %s \
+			    --include='mnt/' --include='%s' --include='%s***' \
+			    --exclude='*' \
+			    %s %s@%s:%s""",
+			    sshOption,
+			    mntDir, mntDir, currentReplica,
+			    username, hostAddr,
+			    backupReplicas.get(key)
+			), true);
+		    }
 
 		    if (exitCode != 0) {
 			System.out.println(String.format(
