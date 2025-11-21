@@ -269,8 +269,8 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 	// Copy data to other replicas
 	Boolean allSyncSuccess = false;
 	String sshOption = sshKey != null && !sshKey.trim().isEmpty()
-	? String.format("-e \"ssh -i %s\"", sshKey)
-	: "";
+	    ? String.format("-e \"ssh -i %s\"", sshKey)
+	    : "";
 	int count = 0;
 	while (!allSyncSuccess) {
 	    if (++count > 10) {
@@ -282,17 +282,31 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 	    allSyncSuccess = true;
 
 	    for (String key : backupReplicas.keySet()) {
-		int exitCode = Shell.runCommand(String.format("""
-		    rsync -avz --delete --human-readable \
-		    %s \
-		    --include='mnt/' --include='%s' --include='%s***' \
-		    --exclude='*' \
-		    %s %s@%s:%s""",
-		    sshOption,
-		    mntDir, mntDir, currentReplica,
-		    username, ipAddresses.get(key).getHostAddress(),
-		    backupReplicas.get(key)
-		), true);
+		String hostAddr = ipAddresses.get(key).getHostAddress();
+
+		int exitCode = 0;
+		if (hostAddr.equals("127.0.0.1")) {
+		    exitCode = Shell.runCommand(String.format("""
+			rsync -avz --delete --human-readable \
+			--include='mnt/' --include='%s' --include='%s***' \
+			--exclude='*' \
+			%s %s""",
+			mntDir, mntDir, currentReplica,
+			backupReplicas.get(key)
+		    ), true);
+		} else {
+		    exitCode = Shell.runCommand(String.format("""
+			rsync -avz --delete --human-readable \
+			%s \
+			--include='mnt/' --include='%s' --include='%s***' \
+			--exclude='*' \
+			%s %s@%s:%s""",
+			sshOption,
+			mntDir, mntDir, currentReplica,
+			username, hostAddr,
+			backupReplicas.get(key)
+		    ), true);
+		}
 
 		if (exitCode != 0) {
 		    System.out.println(String.format(

@@ -334,7 +334,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
 	int exitCode = Shell.runCommandThread(cmd, false, null);
 	try (SocketChannel client = serverChannel.accept()) {
-	    logger.log(Level.FINE,
+	    logger.log(Level.INFO,
 		    String.format("%s:%s - fuselog-apply client connected!",
 			    this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName()));
 	    byte[] base64Bytes = Base64.getDecoder().decode(encodedState);
@@ -345,7 +345,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 	    }
 
 	    client.shutdownOutput();
-	    logger.log(Level.FINE,
+	    logger.log(Level.INFO,
 		    String.format("%s:%s - stateDiff successfully sent to fuserust-apply. Closing connection.",
 			    this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName()));
 	} catch (IOException e) {
@@ -412,17 +412,31 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 	    for (String key : backupReplicas.keySet()) {
 		final String replicaKey = key;
 		futures.add(executor.submit(() -> {
-		    int exitCode = Shell.runCommand(String.format("""
-			rsync -avz --delete --human-readable \
-			%s \
-			--include='mnt/' --include='%s' --include='%s***' \
-			--exclude='*' \
-			%s %s@%s:%s""",
-			sshOption,
-			mntDir, mntDir, currentReplica,
-			username, ipAddresses.get(replicaKey).getHostAddress(),
-			backupReplicas.get(key)
-		    ), true);
+		    String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
+		    int exitCode = 0;
+
+		    if (hostAddr.equals("127.0.0.1")) {
+			exitCode = Shell.runCommand(String.format("""
+			    rsync -avz --delete --human-readable \
+			    --include='mnt/' --include='%s' --include='%s***' \
+			    --exclude='*' \
+			    %s %s""",
+			    mntDir, mntDir, currentReplica,
+			    backupReplicas.get(key)
+			), true);
+		    } else {
+			exitCode = Shell.runCommand(String.format("""
+			    rsync -avz --delete --human-readable \
+			    %s \
+			    --include='mnt/' --include='%s' --include='%s***' \
+			    --exclude='*' \
+			    %s %s@%s:%s""",
+			    sshOption,
+			    mntDir, mntDir, currentReplica,
+			    username, hostAddr,
+			    backupReplicas.get(key)
+			), true);
+		    }
 
 		    if (exitCode != 0) {
 			System.out.println(String.format(

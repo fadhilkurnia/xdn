@@ -824,6 +824,20 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 	    }
 	}
 
+	// create docker network, via command line
+	int exitCode = createDockerNetwork(service.networkName);
+	if (exitCode != 0) {
+	    return false;
+	}
+
+	// TODO: prepare statediff directory, if required
+        String stateDirMountSource = stateDiffRecorder.getTargetDirectory(
+                serviceName, initialPlacementEpoch);
+        String stateDirMountTarget = service.property.getStatefulComponentDirectory();
+
+        stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+        stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+
 	// actually start the service, run each component as container, in the same order as they
         // are specified in the declared service property.
         int idx = 0;
