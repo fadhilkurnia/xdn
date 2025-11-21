@@ -17,6 +17,7 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
+import edu.umass.cs.xdn.service.ServiceProperty;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -215,6 +216,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         if (packet instanceof StartEpochPacket startEpochPacket) {
             return executeStartEpochPacket(startEpochPacket);
         }
+
+	// InitBackupPacket: primary -> replica
+	// only executed by XDNGigapaxosApp (backup)
+	if (packet instanceof InitBackupPacket initBackupPacket) {
+	    return executeInitBackupPacket(initBackupPacket);
+	}
 
         String exceptionMsg = String.format("unknown primary backup packet '%s'",
                 packet.getClass().getSimpleName());
@@ -794,6 +801,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         System.out.printf(">> %s PrimaryBackupManager - createPrimaryBackupInstance | " +
                         "groupName: %s, placementEpoch: %d, initialState: %s, nodes: %s\n",
                 myNodeID, groupName, placementEpoch, initialState, nodes.toString());
+
+	if (initialState.startsWith(ServiceProperty.XDN_INITIAL_STATE_PREFIX) 
+	    | initialState.startsWith(ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX)) {
+	    initialState = String.format("nondeter:create:%s", initialState);
+	}
 
         boolean created = this.paxosManager.createPaxosInstanceForcibly(
                 groupName, placementEpoch, nodes, this.paxosMiddlewareApp, initialState, 0);

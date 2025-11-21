@@ -6,11 +6,13 @@ import edu.umass.cs.xdn.utils.Utils;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
+import java.util.Map;
 
 public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
 
@@ -210,5 +212,20 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
         int code = Shell.runCommand("rm -rf " + targetMountDir);
         assert code == 0;
         return true;
+    }
+
+
+    /**********************************************************************************************
+     *                        Non-Deterministic Initialization Methods                            *
+     *********************************************************************************************/
+    @Override
+    public String getDefaultBasePath() {
+        return ZipStateDiffRecorder.defaultWorkingBasePath;
+    }
+
+    @Override
+    public void initContainerSync(String myNodeId, String serviceName, Map<String, InetAddress> ipAddresses, int placementEpoch, String sshKey) {
+        System.out.println("Multi-file initialization is not supported on Zip.");
+        return;
     }
 }
