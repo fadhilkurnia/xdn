@@ -45,6 +45,10 @@ public abstract class PrimaryBackupPacket implements ReplicableRequest {
             return ApplyStateDiffPacket.createFromBytes(encodedPacket);
         }
 
+        if (packetType.equals(PrimaryBackupPacketType.PB_INIT_BACKUP_PACKET)) {
+            return InitBackupPacket.createFromBytes(encodedPacket);
+        }
+
         if (packetType.equals(PrimaryBackupPacketType.PB_CHANGE_PRIMARY_PACKET)) {
             throw new RuntimeException("Unimplemented :(");
         }

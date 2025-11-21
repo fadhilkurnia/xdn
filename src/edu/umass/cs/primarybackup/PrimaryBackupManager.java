@@ -5,8 +5,10 @@ import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.*;
 import edu.umass.cs.gigapaxos.paxosutil.PaxosInstanceCreationException;
 import edu.umass.cs.nio.GenericMessagingTask;
+import edu.umass.cs.nio.JSONMessenger;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
+import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.primarybackup.packets.*;
@@ -16,12 +18,14 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.XdnGigapaxosApp;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn.service.ServiceProperty;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -765,6 +769,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 "myEpoch=%s primaryEpoch=%s", currentEpoch, newPrimaryEpoch));
     }
 
+    // executeInitBackupPacket is being called by execute() in the PaxosMiddlewareApp
+    private boolean executeInitBackupPacket(InitBackupPacket packet) {
+        String serviceName = packet.getServiceName();
+        return this.replicableApp.restore(serviceName, "nondeter:start:backup");
+    }
+
     // executeGetCheckpoint is being called by checkpoint() in the PaxosMiddlewareApp
     private String executeGetCheckpoint(String groupName) {
         return this.replicableApp.checkpoint(groupName);
@@ -832,12 +842,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         //   - if preferred coordinator is not specified: detect paxos leader -> set primary
 
         if (placementMetadata != null) {
-            boolean isInitSuccess = this.initializePrimaryEpoch(groupName, placementMetadata);
+            boolean isInitSuccess = this.initializePrimaryEpoch(groupName, nodes, placementMetadata, placementEpoch);
             assert isInitSuccess;
             return true;
         }
 
-        boolean isInitializationSuccess = initializePrimaryEpoch(groupName);
+        boolean isInitializationSuccess = initializePrimaryEpoch(groupName, nodes, placementEpoch);
         if (!isInitializationSuccess) {
             System.out.printf("Failed to initialize replica group for %s\n", groupName);
             return false;
@@ -846,7 +856,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         return true;
     }
 
-    private boolean initializePrimaryEpoch(String groupName, String placementMetadata) {
+    private boolean initializePrimaryEpoch(String groupName, Set<NodeIDType> nodes, String placementMetadata, int placementEpoch) {
         assert groupName != null && !groupName.isEmpty();
         assert placementMetadata != null && !placementMetadata.isEmpty();
 
@@ -870,19 +880,46 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         // specified in the placement metadata.
         if (this.myNodeID.toString().equals(preferredCoordinatorNodeId)) {
 
+	    // Try to be coordinator
+	    int count = 0;
+	    while (!this.paxosManager.getPaxosCoordinator(groupName).equals(this.myNodeID)) {
+		if (++count > 10) {
+		    throw new RuntimeException(String.format(
+			"%s:PrimaryBackupManager.initializePrimaryEpoch() - unable to become paxos coordinator for %s:%d after %d tries.",
+			this.myNodeID, groupName, placementEpoch, count
+		    ));
+		};
+
+		this.paxosManager.tryToBePaxosCoordinator(groupName);
+		try {
+		    Thread.sleep(3000);
+		} catch (InterruptedException e) {
+		    throw new RuntimeException(e);
+		}
+	    }
             // FIXME: we need to wait for other replicas (majority) to active first,
             //  before we can propose something.
+	    /*
             try {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
+	    */
+
+	    // Get IP Addresses of all nodes for rsync (non-deterministic initialization)
+	    Map<String, InetAddress> ipAddresses = new HashMap<>();
+	    NodeConfig<NodeIDType> initNodeConfig = this.messenger.getNodeConfig();
+	    nodes.forEach(node -> ipAddresses.put(
+		String.valueOf(node).toLowerCase(),
+		initNodeConfig.getNodeAddress(node)
+	    ));
 
             // System.out.printf(">> %s Initializing primary epoch for %s\n", myNodeID, groupName);
-            PrimaryEpoch<NodeIDType> zero = new PrimaryEpoch<>(myNodeID, 0);
+            PrimaryEpoch<NodeIDType> epoch = new PrimaryEpoch<>(myNodeID, placementEpoch);
             this.currentRole.put(groupName, Role.PRIMARY_CANDIDATE);
-            this.currentPrimaryEpoch.put(groupName, zero);
-            StartEpochPacket startPacket = new StartEpochPacket(groupName, zero);
+            this.currentPrimaryEpoch.put(groupName, epoch);
+            StartEpochPacket startPacket = new StartEpochPacket(groupName, epoch);
             this.paxosManager.propose(
                     groupName,
                     startPacket,
@@ -891,8 +928,37 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 myNodeID, groupName);
                         currentRole.put(groupName, Role.PRIMARY);
                         currentPrimary.put(groupName, this.myNodeID);
-                        currentPrimaryEpoch.put(groupName, zero);
+                        currentPrimaryEpoch.put(groupName, epoch);
                         processOutstandingRequests();
+
+			PrimaryBackupMiddlewareApp middleware;
+			XdnGigapaxosApp xdnApp;
+
+			if (!(this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp))
+			    return;
+
+			middleware = (PrimaryBackupMiddlewareApp) this.paxosMiddlewareApp;
+
+			if (!(middleware.getReplicableApp() instanceof XdnGigapaxosApp))
+			    return;
+
+			String sshKey = PaxosConfig.getAsProperties().getProperty("SSH_KEY_PATH", "");
+			System.out.println(">> Handling non-deterministic service initialization");
+			xdnApp = (XdnGigapaxosApp) middleware.getReplicableApp();
+
+			xdnApp.restore(groupName, "nondeter:start:");
+			xdnApp.nonDeterministicInitialization(groupName, ipAddresses, sshKey);
+
+			while (!this.paxosManager.getPaxosCoordinator(groupName).equals(this.myNodeID)) {
+			    System.out.printf(">> %s PRIMARY re-electing itself due to coordinator issues %s:%d\n",
+				myNodeID, groupName, placementEpoch);
+			    this.paxosManager.tryToBePaxosCoordinator(groupName);
+			    try {
+				Thread.sleep(3000);
+			    } catch (InterruptedException e) {
+				throw new RuntimeException(e);
+			    }
+			}
                     }
             );
 
@@ -903,7 +969,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         return true;
     }
 
-    private boolean initializePrimaryEpoch(String groupName) {
+    private boolean initializePrimaryEpoch(String groupName, Set<NodeIDType> nodes, int placementEpoch) {
         this.currentRole.put(groupName, Role.BACKUP);
         NodeIDType paxosCoordinatorID = this.paxosManager.getPaxosCoordinator(groupName);
         if (paxosCoordinatorID == null) {
@@ -911,11 +977,22 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         }
 
         if (paxosCoordinatorID.equals(myNodeID)) {
+	    if (!(this.messenger instanceof JSONMessenger)) {
+		throw new RuntimeException("PrimaryBackupManager.messenger is not an instance of JSONMessenger.");
+	    }
+
+	    Map<String, InetAddress> ipAddresses = new HashMap<>();
+	    NodeConfig<NodeIDType> initNodeConfig = this.messenger.getNodeConfig();
+	    nodes.forEach(node -> ipAddresses.put(
+		String.valueOf(node).toLowerCase(),
+		initNodeConfig.getNodeAddress(node)
+	    ));
+
             System.out.printf(">> %s Initializing primary epoch for %s\n", myNodeID, groupName);
-            PrimaryEpoch<NodeIDType> zero = new PrimaryEpoch<>(myNodeID, 0);
+            PrimaryEpoch<NodeIDType> epoch = new PrimaryEpoch<>(myNodeID, placementEpoch);
             this.currentRole.put(groupName, Role.PRIMARY_CANDIDATE);
-            this.currentPrimaryEpoch.put(groupName, zero);
-            StartEpochPacket startPacket = new StartEpochPacket(groupName, zero);
+            this.currentPrimaryEpoch.put(groupName, epoch);
+            StartEpochPacket startPacket = new StartEpochPacket(groupName, epoch);
             this.paxosManager.propose(
                     groupName,
                     startPacket,
@@ -924,15 +1001,45 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 myNodeID, groupName);
                         currentRole.put(groupName, Role.PRIMARY);
                         currentPrimary.put(groupName, paxosCoordinatorID);
-                        currentPrimaryEpoch.put(groupName, zero);
+                        currentPrimaryEpoch.put(groupName, epoch);
                         processOutstandingRequests();
+
+			PrimaryBackupMiddlewareApp middleware;
+			XdnGigapaxosApp xdnApp;
+
+			if (!(this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp))
+			return;
+
+			middleware = (PrimaryBackupMiddlewareApp) this.paxosMiddlewareApp;
+
+			if (!(middleware.getReplicableApp() instanceof XdnGigapaxosApp))
+			return;
+
+			String sshKey = PaxosConfig.getAsProperties().getProperty("SSH_KEY_PATH", "");
+			System.out.println(">> Handling non-deterministic service initialization");
+			xdnApp = (XdnGigapaxosApp) middleware.getReplicableApp();
+
+			xdnApp.restore(groupName, "nondeter:start:");
+			xdnApp.nonDeterministicInitialization(groupName, ipAddresses, sshKey);
+
+			System.out.println("\n>>> non-deterministic service initialization complete\n");
+			while (!this.paxosManager.getPaxosCoordinator(groupName).equals(this.myNodeID)) {
+			    System.out.printf(">> %s PRIMARY re-electing itself due to coordinator issues %s:%d\n",
+				myNodeID, groupName, placementEpoch);
+			    this.paxosManager.tryToBePaxosCoordinator(groupName);
+			    try {
+				Thread.sleep(3000);
+			    } catch (InterruptedException e) {
+				throw new RuntimeException(e);
+			    }
+			}
                     }
             );
         } else {
-            PrimaryEpoch<NodeIDType> zero = new PrimaryEpoch<>(paxosCoordinatorID, 0);
+            PrimaryEpoch<NodeIDType> epoch = new PrimaryEpoch<>(paxosCoordinatorID, placementEpoch);
             currentRole.put(groupName, Role.BACKUP);
             currentPrimary.put(groupName, paxosCoordinatorID);
-            currentPrimaryEpoch.put(groupName, zero);
+            currentPrimaryEpoch.put(groupName, epoch);
         }
 
         // FIXME: as a temporary measure, we wait until StartEpochPacket is being agreed upon.

@@ -24,7 +24,10 @@ public enum PrimaryBackupPacketType implements IntegerPacketType {
     PB_CHANGE_PRIMARY_PACKET(35404),
 
     // Primary -> All Replicas
-    PB_STATE_DIFF_PACKET(35405);
+    PB_STATE_DIFF_PACKET(35405),
+
+    // Primary -> All Replicas
+    PB_INIT_BACKUP_PACKET(35406);
 
     private static final Map<Integer, PrimaryBackupPacketType> numbers = new HashMap<>();
 
