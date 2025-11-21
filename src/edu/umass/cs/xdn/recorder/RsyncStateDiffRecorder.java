@@ -5,11 +5,17 @@ import edu.umass.cs.xdn.utils.Utils;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.Base64;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.stream.Collectors;
+
 
 public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
@@ -213,5 +219,94 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         int retCode = Shell.runCommand("rm -rf " + targetDir);
         assert retCode == 0;
         return true;
+    }
+
+
+    /**********************************************************************************************
+     *                        Non-Deterministic Initialization Methods                            *
+     *********************************************************************************************/
+    @Override
+    public String getDefaultBasePath() {
+        return RsyncStateDiffRecorder.defaultWorkingBasePath;
+    }
+
+    @Override
+    public void initContainerSync(String myNodeId, String serviceName, Map<String, InetAddress> ipAddresses, int placementEpoch, String sshKey) {
+	Set<String> backupNodes = ipAddresses.keySet().stream()
+	.filter(node -> !node.equals(myNodeId.toString()))
+	.map(String::toLowerCase)
+	.collect(Collectors.toSet());
+
+	String currentReplica = String.format("%s%s/", this.defaultWorkingBasePath, myNodeId);
+
+	Map<String, String> backupReplicas = new HashMap<>();
+	backupNodes.forEach(node -> backupReplicas.put(node, String.format("%s%s/", this.defaultWorkingBasePath, node)));
+
+	String mntDir = String.format("mnt/%s/", serviceName);
+	String snpDir = String.format("snp/%s/", serviceName);
+
+	String username = Shell.runCommandWithOutput("whoami").stdout.trim();
+
+	while (true) {
+	    int exitCode = Shell.runCommand(String.format(
+		"rsync -avz --delete --human-readable %s/%s %s/%s",
+		currentReplica, mntDir, currentReplica, snpDir
+	    ), true);
+
+	    if (exitCode != 0) {
+		System.out.println(String.format("Failed to sync /mnt/ to /snp/ in %s", currentReplica));
+	    } else {
+		break;
+	    }
+
+	    try {
+		Thread.sleep(3000);
+	    } catch (InterruptedException e) {
+		e.printStackTrace();
+	    }
+	}
+
+	// Copy data to other replicas
+	Boolean allSyncSuccess = false;
+	String sshOption = sshKey != null && !sshKey.trim().isEmpty()
+	? String.format("-e \"ssh -i %s\"", sshKey)
+	: "";
+	int count = 0;
+	while (!allSyncSuccess) {
+	    if (++count > 10) {
+		throw new RuntimeException(String.format(
+		    "%s failed to rsync files for %s:%d during non-deterministic init after %d tries", 
+		    this.getClass().getSimpleName(), serviceName, placementEpoch, count));
+	    }
+
+	    allSyncSuccess = true;
+
+	    for (String key : backupReplicas.keySet()) {
+		int exitCode = Shell.runCommand(String.format("""
+		    rsync -avz --delete --human-readable \
+		    %s \
+		    --include='mnt/' --include='%s' --include='%s***' \
+		    --exclude='*' \
+		    %s %s@%s:%s""",
+		    sshOption,
+		    mntDir, mntDir, currentReplica,
+		    username, ipAddresses.get(key).getHostAddress(),
+		    backupReplicas.get(key)
+		), true);
+
+		if (exitCode != 0) {
+		    System.out.println(String.format(
+			"Failed to sync %s to %s", currentReplica, backupReplicas.get(key)
+		    ));
+		    allSyncSuccess = false;
+		}
+	    }
+
+	    try {
+		Thread.sleep(3000);
+	    } catch (InterruptedException e) {
+		e.printStackTrace();
+	    }
+	}
     }
 }

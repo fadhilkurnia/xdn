@@ -25,33 +25,48 @@ public class ZipFiles {
      * @param zipDirName the target archived file location.
      */
     public static void zipDirectory(File dir, String zipDirName) {
-        try {
-            List<String> files = populateFilesList(dir);
-            // now zip files one by one
-            // create ZipOutputStream to write to the zip file
-            FileOutputStream fos = new FileOutputStream(zipDirName);
-            ZipOutputStream zos = new ZipOutputStream(fos);
-            for (String filePath : files) {
-                // for ZipEntry we need to keep only relative file path,
-                // so we used substring on absolute path
-                ZipEntry ze = new ZipEntry(
-                        filePath.substring(dir.getAbsolutePath().length() + 1, filePath.length()));
-                zos.putNextEntry(ze);
-                //read the file and write to ZipOutputStream
-                FileInputStream fis = new FileInputStream(filePath);
-                byte[] buffer = new byte[1024];
-                int len;
-                while ((len = fis.read(buffer)) > 0) {
-                    zos.write(buffer, 0, len);
-                }
-                zos.closeEntry();
-                fis.close();
-            }
-            zos.close();
-            fos.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+	try {
+	    List<String> files = populateFilesList(dir);
+	    // now zip files one by one
+	    // create ZipOutputStream to write to the zip file
+	    FileOutputStream fos = new FileOutputStream(zipDirName);
+	    ZipOutputStream zos = new ZipOutputStream(fos);
+
+	    for (String filePath : files) {
+		File file = new File(filePath);
+		if (filePath.equals(dir.getAbsolutePath())) {
+		    continue;
+		}
+
+		if (!file.exists()) {
+		    continue;
+		}
+
+		if (file.isDirectory()) {
+		    String entryName = filePath.substring(dir.getAbsolutePath().length() + 1) + File.separator;
+		    zos.putNextEntry(new ZipEntry(entryName));
+		    zos.closeEntry();  // Empty directory, just create the entry
+		} else {
+		    String entryName = filePath.substring(dir.getAbsolutePath().length() + 1);
+
+		    zos.putNextEntry(new ZipEntry(entryName));
+		    FileInputStream fis = new FileInputStream(filePath);
+		    byte[] buffer = new byte[1024];
+		    int len;
+
+		    while ((len = fis.read(buffer)) > 0) {
+			zos.write(buffer, 0, len);
+		    }
+
+		    zos.closeEntry();
+		    fis.close();
+		}
+	    }
+	    zos.close();
+	    fos.close();
+	} catch (IOException e) {
+	    e.printStackTrace();
+	}
     }
 
     /**

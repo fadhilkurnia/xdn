@@ -1,5 +1,8 @@
 package edu.umass.cs.xdn.recorder;
 
+import java.net.InetAddress;
+import java.util.Map;
+
 public abstract class AbstractStateDiffRecorder {
 
     protected final String nodeID;
@@ -23,4 +26,6 @@ public abstract class AbstractStateDiffRecorder {
 
     abstract public boolean removeServiceRecorder(String serviceName, int placementEpoch);
 
+    abstract public String getDefaultBasePath();
+    abstract public void initContainerSync(String myNodeId, String serviceName, Map<String, InetAddress> ipAddresses, int placementEpoch, String sshKey);
 }

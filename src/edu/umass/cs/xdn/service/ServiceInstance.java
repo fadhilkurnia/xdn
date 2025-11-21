@@ -8,7 +8,12 @@ public class ServiceInstance {
     public final String networkName;
 
     /** port in which this service receives HTTP request forwarded by XDN */
-    public final int allocatedHttpPort;
+    public int allocatedHttpPort;
+
+    /* Initialization Status
+     * Needed as indicator if non-deterministic initialization was successful or not
+     */
+    public Boolean initializationSucceed;
 
     /** containerNames contains list of container names for each component in the service */
     public final List<String> containerNames;
@@ -18,13 +23,12 @@ public class ServiceInstance {
     public final String entryContainer;
     public final String statefulContainer;
 
-    public ServiceInstance(ServiceProperty property, String serviceName, String networkName,
-                           int allocatedHttpPort, List<String> containerNames) {
+    public ServiceInstance(ServiceProperty property, String serviceName, String networkName, List<String> containerNames) {
         this.property = property;
         this.serviceName = serviceName;
         this.networkName = networkName;
-        this.allocatedHttpPort = allocatedHttpPort;
         this.containerNames = containerNames;
+	this.initializationSucceed = false;
 
         assert property.getComponents().size() == containerNames.size() :
                 "container names must be provided for all service component";
@@ -72,6 +76,10 @@ public class ServiceInstance {
             idx++;
         }
         this.statefulContainer = finalStatefulContainer;
+    }
 
+    public ServiceInstance(ServiceProperty property, String serviceName, String networkName, int allocatedHttpPort, List<String> containerNames) {
+	this(property, serviceName, networkName, containerNames);
+	this.allocatedHttpPort = allocatedHttpPort;
     }
 }
