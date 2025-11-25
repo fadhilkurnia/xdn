@@ -415,10 +415,9 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
 	// Case-7: handle start Fuselog in backup (non-deterministic init)
 	if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
-	    System.out.println("Running preInitialization() in backup");
+	    System.out.println("Running postInitialization() in backup");
 	    int placementEpoch = 0;
 
-	    //return this.stateDiffRecorder.preInitialization(name, placementEpoch);
 	    return this.stateDiffRecorder.postInitialization(name, placementEpoch);
 	}
 

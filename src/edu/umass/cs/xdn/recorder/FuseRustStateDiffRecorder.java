@@ -11,6 +11,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.ServerSocketChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -242,6 +243,11 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
 	// update the socket metadata
 	this.serviceFsSocket.get(serviceName).get(placementEpoch).setCaptureSocket(captureChannel);
+
+	// Run fuserust-apply in background
+	String applySocketFile = this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
+	String applyCmd = String.format("%s %s --applySocket=%s", FUSERUST_APPLY_BIN_PATH, targetDir, applySocketFile);
+	Shell.runCommandThread(applyCmd, false, null);
         return true;
     }
 
@@ -322,6 +328,36 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
                         encodedState));
 
 	String applySocketFile = this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
+	try (SocketChannel channel = SocketChannel.open(UnixDomainSocketAddress.of(Path.of(applySocketFile)))) {
+	    logger.log(Level.INFO,
+		    String.format("%s:%s - connecting to %s",
+			    this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), applySocketFile));
+
+	    byte[] base64Bytes = Base64.getDecoder().decode(encodedState);
+	    ByteBuffer buffer = ByteBuffer.wrap(base64Bytes);
+	    while (buffer.hasRemaining()) {
+		channel.write(buffer);
+	    }
+
+	    channel.shutdownOutput();
+
+	    ByteBuffer responseBuffer = ByteBuffer.allocate(1024);
+	    StringBuilder response = new StringBuilder();
+
+	    while (channel.read(responseBuffer) != -1) {
+		responseBuffer.flip();
+		response.append(StandardCharsets.UTF_8.decode(responseBuffer).toString());
+		responseBuffer.clear();
+	    }
+
+	    logger.log(Level.INFO,
+		    String.format("%s:%s - fuserust-apply responded with: %s",
+			    this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), response.toString()));
+	} catch (IOException e) {
+	    throw new RuntimeException("Fuserust error: " + e);
+        }
+
+	/*
 	String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
 	Map<Integer, SocketPair> epochToChannelMap = this.serviceFsSocket.get(serviceName);
 	assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
@@ -353,6 +389,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 	}
 
 	assert exitCode == 0 : "failed to apply stateDiff with exit code " + exitCode;
+	*/
 	return true;
     }
 
