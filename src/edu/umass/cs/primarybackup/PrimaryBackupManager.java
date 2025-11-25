@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
@@ -959,6 +960,23 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 				throw new RuntimeException(e);
 			    }
 			}
+
+			// Start fuselog-apply in backup instances
+			Set<NodeIDType> backupNodes = nodes.stream()
+			.filter(node -> !node.equals(myNodeID))
+			.collect(Collectors.toSet());
+
+			InitBackupPacket initPacket = new InitBackupPacket(groupName);
+			GenericMessagingTask<NodeIDType, InitBackupPacket> m = new GenericMessagingTask<>(backupNodes.toArray(), initPacket);
+
+			// send packet to all backup replicas
+			try {
+			    this.messenger.send(m);
+			    logger.log(Level.INFO, String.format("%s:%s - fuselog-apply started in backup instances",
+					    myNodeID, PrimaryBackupManager.class.getSimpleName()));
+			} catch (IOException | JSONException e) {
+			    throw new RuntimeException(e);
+			}
                     }
             );
 
@@ -1032,6 +1050,23 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 			    } catch (InterruptedException e) {
 				throw new RuntimeException(e);
 			    }
+			}
+
+			// Start fuselog-apply in backup instances
+			Set<NodeIDType> backupNodes = nodes.stream()
+			.filter(node -> !node.equals(myNodeID))
+			.collect(Collectors.toSet());
+
+			InitBackupPacket initPacket = new InitBackupPacket(groupName);
+			GenericMessagingTask<NodeIDType, InitBackupPacket> m = new GenericMessagingTask<>(backupNodes.toArray(), initPacket);
+
+			// send packet to all backup replicas
+			try {
+			    this.messenger.send(m);
+			    logger.log(Level.INFO, String.format("%s:%s - fuselog-apply started in backup instances",
+					    myNodeID, PrimaryBackupManager.class.getSimpleName()));
+			} catch (IOException | JSONException e) {
+			    throw new RuntimeException(e);
 			}
                     }
             );
