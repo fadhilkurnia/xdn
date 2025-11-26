@@ -834,6 +834,8 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
                 serviceName, initialPlacementEpoch);
         String stateDirMountTarget = service.property.getStatefulComponentDirectory();
 
+	// TODO: Fix ordering. Must be:
+	// preInitialization -> startContainer -> postInitialization
         stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
         stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
 

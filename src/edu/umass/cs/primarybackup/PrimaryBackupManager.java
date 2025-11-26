@@ -961,6 +961,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 			    }
 			}
 
+			// TODO: Move fuselog-apply startup to executeStartEpochPacket
 			// Start fuselog-apply in backup instances
 			Set<NodeIDType> backupNodes = nodes.stream()
 			.filter(node -> !node.equals(myNodeID))
