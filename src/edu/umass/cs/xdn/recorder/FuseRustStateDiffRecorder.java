@@ -504,7 +504,6 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 		e.printStackTrace();
 	    }
 
-	    executor.shutdown();
 	}
 
 	Map<Integer, SocketPair> epochToChannelMap = this.serviceFsSocket.get(serviceName);
@@ -520,6 +519,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 	    throw new RuntimeException(e);
 	}
 
+	executor.shutdown();
 	return;
     }
 }
