@@ -434,9 +434,6 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 	int count = 0;
 
 	ExecutorService executor = Executors.newFixedThreadPool(backupReplicas.size());
-	String sshOption = sshKey != null && !sshKey.trim().isEmpty()
-	    ? String.format("-e \"ssh -i %s\"", sshKey)
-	    : "";
 
 	while (!allSyncSuccess) {
 	    if (++count > 10) {
@@ -448,32 +445,40 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
 	    for (String key : backupReplicas.keySet()) {
 		final String replicaKey = key;
+
+		List<String> cmd = new ArrayList<>();
+		cmd.add("rsync");
+		cmd.add("-avz");
+		cmd.add("--delete");
+		cmd.add("--human-readable");
+
 		futures.add(executor.submit(() -> {
 		    String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
 		    int exitCode = 0;
 
-		    if (hostAddr.equals("127.0.0.1")) {
-			exitCode = Shell.runCommand(String.format("""
-			    rsync -avz --delete --human-readable \
-			    --include='mnt/' --include='%s' --include='%s***' \
-			    --exclude='*' \
-			    %s %s""",
-			    mntDir, mntDir, currentReplica,
-			    backupReplicas.get(key)
-			), true);
-		    } else {
-			exitCode = Shell.runCommand(String.format("""
-			    rsync -avz --delete --human-readable \
-			    %s \
-			    --include='mnt/' --include='%s' --include='%s***' \
-			    --exclude='*' \
-			    %s %s@%s:%s""",
-			    sshOption,
-			    mntDir, mntDir, currentReplica,
-			    username, hostAddr,
-			    backupReplicas.get(key)
-			), true);
+		    if (!hostAddr.equals("127.0.0.1")) {
+			String resolvedKeyPath = sshKey;
+			if (sshKey.startsWith("~")) {
+			    resolvedKeyPath = sshKey.replaceFirst("^~", System.getProperty("user.home"));
+			}
+
+			cmd.add("-e");
+			cmd.add("ssh -i " + resolvedKeyPath);
 		    }
+
+		    cmd.add("--include=mnt/");
+		    cmd.add("--include=" + mntDir);
+		    cmd.add("--include=" + mntDir + "***"); // Note: Ensure mntDir doesn't end in / if adding *** immediately
+		    cmd.add("--exclude=*");
+		    cmd.add(currentReplica); 
+
+		    if (hostAddr.equals("127.0.0.1")) {
+			cmd.add(backupReplicas.get(key));
+		    } else {
+			cmd.add(username + "@" + hostAddr + ":" + backupReplicas.get(key));
+		    }
+
+		    exitCode = Shell.runCommand(cmd, false);
 
 		    if (exitCode != 0) {
 			System.out.println(String.format(
