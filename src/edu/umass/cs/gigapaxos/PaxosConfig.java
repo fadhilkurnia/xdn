@@ -953,6 +953,8 @@ public class PaxosConfig {
 		 */
 		ENABLE_EMBEDDED_STORE_SHUTDOWN(false),
 
+		DEFAULT_NUM_REPLICAS(3),
+		SSH_KEY_PATH(""),
 
 		/**
 		 * FIXME: The options below only exist for testing stringification
