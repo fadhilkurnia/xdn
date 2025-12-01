@@ -7,15 +7,13 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.pool.FixedChannelPool;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.channel.pool.FixedChannelPool;
 import io.netty.handler.codec.http.*;
-import io.netty.util.AsciiString;
 import io.netty.util.AttributeKey;
 import io.netty.util.ReferenceCountUtil;
-import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 
@@ -24,83 +22,59 @@ import java.net.InetSocketAddress;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * An HTTP proxy that intentionally delays request submission to and response delivery from an
- * upstream service. This is handy when debugging timeout logic because it simulates slow
- * application processing without touching the real service. The proxy expects each incoming
- * request to include the {@value #UPSTREAM_PORT_HEADER} header, which encodes the upstream port on
- * {@code localhost}. Both request and response delays are configured in milliseconds.
+ * A lightweight debugging HTTP proxy built on Netty. The proxy buffers entire inbound requests
+ * before forwarding them to origin servers and reuses persistent connections for identical
+ * {@code Host} destinations via {@link FixedChannelPool}. Unlike, {@link HttpDebugProxy}, this
+ * proxy also buffers entire responses from origin servers before sending them back to clients.
  *
- * <p>Usage:</p>
+ * <p>Running the proxy:</p>
  * <pre>{@code
- *   # java -cp build/classes/java/main edu.umass.cs.xdn.HttpDebugWaitProxy <listenPort> [reqDelayMs] [respDelayMs]
- *   # respDelayMs defaults to reqDelayMs when omitted.
+ *   # Compile the project first, then start the proxy on port 8080
+ *   java -cp build/classes/java/main edu.umass.cs.xdn.HttpDebugIndirectProxy 8080
+ *
+ *   # Configure your browser/client to use http://127.0.0.1:8080 as its HTTP proxy.
  * }</pre>
  *
- * <p>The implementation reuses most of {@link HttpDebugProxy}'s architecture: requests and responses
- * are fully buffered, Netty's {@link FixedChannelPool} keeps connections hot, and all delay
- * injection happens on a dedicated executor so Netty IO threads stay responsive.</p>
+ * <p>The proxy is intended for local testing and debugging; it is <em>not</em> hardened for
+ * production scenarios.</p>
  */
-public final class HttpDebugWaitProxy implements Closeable {
+public final class HttpDebugIndirectProxy implements Closeable {
 
-    private static final Logger LOG = Logger.getLogger(HttpDebugWaitProxy.class.getName());
+    private static final Logger LOG = Logger.getLogger(HttpDebugProxy.class.getName());
 
     private static final int MAX_CONTENT_LENGTH = 16 * 1024 * 1024;
-    private static final int DEFAULT_MAX_POOL_SIZE = 32;
-    private static final String LOCALHOST = "127.0.0.1";
-    private static final AsciiString UPSTREAM_PORT_HEADER = AsciiString.cached("x-upstream-port");
+    private static final int DEFAULT_MAX_POOL_SIZE = 8;
     private static final AttributeKey<ProxyRequestContext> CONTEXT_KEY =
-            AttributeKey.valueOf("httpDebugWaitProxyCtx");
+            AttributeKey.valueOf("httpDebugIndirectProxyCtx");
 
     private final EventLoopGroup bossGroup;
     private final EventLoopGroup workerGroup;
     private final EventLoopGroup clientGroup;
     private final ConcurrentMap<InetSocketAddress, FixedChannelPool> connectionPools =
             new ConcurrentHashMap<>();
-    private final long requestDelayMillis;
-    private final long responseDelayMillis;
-    private final ExecutorService waitExecutor;
 
     private volatile Channel serverChannel;
 
-    public HttpDebugWaitProxy() {
-        this(0L, 0L);
+    public HttpDebugIndirectProxy() {
+        this(new NioEventLoopGroup(1), new NioEventLoopGroup(), new NioEventLoopGroup());
     }
 
-    public HttpDebugWaitProxy(long requestDelayMillis, long responseDelayMillis) {
-        this(new NioEventLoopGroup(),
-                new NioEventLoopGroup(),
-                new NioEventLoopGroup(),
-                requestDelayMillis,
-                responseDelayMillis);
-    }
-
-    HttpDebugWaitProxy(EventLoopGroup bossGroup,
-                       EventLoopGroup workerGroup,
-                       EventLoopGroup clientGroup,
-                       long requestDelayMillis,
-                       long responseDelayMillis) {
+    HttpDebugIndirectProxy(EventLoopGroup bossGroup,
+                      EventLoopGroup workerGroup,
+                      EventLoopGroup clientGroup) {
         this.bossGroup = Objects.requireNonNull(bossGroup, "bossGroup");
         this.workerGroup = Objects.requireNonNull(workerGroup, "workerGroup");
         this.clientGroup = Objects.requireNonNull(clientGroup, "clientGroup");
-        this.requestDelayMillis = Math.max(0L, requestDelayMillis);
-        this.responseDelayMillis = responseDelayMillis >= 0 ? responseDelayMillis : this.requestDelayMillis;
-        this.waitExecutor = Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "http-wait-proxy");
-            t.setDaemon(true);
-            return t;
-        });
     }
 
     /**
-     * Starts the proxy server, wiring Netty pipelines and beginning to accept clients.
+     * Starts the proxy server and begins accepting client connections.
      *
-     * @param listenPort Port bound by the proxy.
+     * @param listenPort local port used by the proxy
      */
     public void start(int listenPort) throws InterruptedException {
         if (serverChannel != null) {
@@ -125,12 +99,11 @@ public final class HttpDebugWaitProxy implements Closeable {
 
         Channel channel = bootstrap.bind(listenPort).sync().channel();
         this.serverChannel = channel;
-        LOG.info(() -> "HttpDebugWaitProxy listening on port " + listenPort
-                + " (requestDelay=" + requestDelayMillis + "ms, responseDelay=" + responseDelayMillis + "ms)");
+        LOG.info(() -> "HttpDebugProxy listening on port " + listenPort);
     }
 
     /**
-     * Blocks until the proxy channel closes.
+     * Blocks until the proxy channel is closed.
      */
     public void awaitTermination() throws InterruptedException {
         Channel channel = this.serverChannel;
@@ -158,7 +131,6 @@ public final class HttpDebugWaitProxy implements Closeable {
         bossGroup.shutdownGracefully().syncUninterruptibly();
         workerGroup.shutdownGracefully().syncUninterruptibly();
         clientGroup.shutdownGracefully().syncUninterruptibly();
-        waitExecutor.shutdownNow();
     }
 
     private FixedChannelPool poolFor(InetSocketAddress address) {
@@ -177,29 +149,48 @@ public final class HttpDebugWaitProxy implements Closeable {
         return new FixedChannelPool(bootstrap, new PoolHandler(), DEFAULT_MAX_POOL_SIZE);
     }
 
-    /**
-     * Resolves the upstream address by reading {@value #UPSTREAM_PORT_HEADER}. The header is
-     * stripped before forwarding the request.
-     */
     private static Origin resolveOrigin(FullHttpRequest request) {
-        String portHeader = request.headers().get(UPSTREAM_PORT_HEADER);
-        if (portHeader == null || portHeader.isEmpty()) {
-            throw new IllegalArgumentException("Missing header: " + UPSTREAM_PORT_HEADER);
+        String hostHeader = request.headers().get(HttpHeaderNames.HOST);
+        if (hostHeader == null || hostHeader.isEmpty()) {
+            throw new IllegalArgumentException("Missing Host header in request");
         }
-        int port = parsePort(portHeader);
-        request.headers().remove(UPSTREAM_PORT_HEADER);
-        return new Origin(LOCALHOST, port);
+
+        int port = 80;
+        String trimmed = hostHeader.trim();
+        String host;
+
+        if (trimmed.startsWith("[")) {
+            int closingIdx = trimmed.indexOf(']');
+            if (closingIdx < 0) {
+                throw new IllegalArgumentException("Invalid IPv6 host header: " + hostHeader);
+            }
+            host = trimmed.substring(1, closingIdx);
+            if (closingIdx + 1 < trimmed.length() && trimmed.charAt(closingIdx + 1) == ':') {
+                String portPart = trimmed.substring(closingIdx + 2);
+                port = parsePort(portPart, hostHeader);
+            }
+        } else {
+            int colonIdx = trimmed.lastIndexOf(':');
+            if (colonIdx > 0 && trimmed.indexOf(':') == colonIdx) {
+                port = parsePort(trimmed.substring(colonIdx + 1), hostHeader);
+                host = trimmed.substring(0, colonIdx);
+            } else {
+                host = trimmed;
+            }
+        }
+
+        if (host.isEmpty()) {
+            throw new IllegalArgumentException("Empty host derived from Host header: " + hostHeader);
+        }
+
+        return new Origin(host, port);
     }
 
-    private static int parsePort(String value) {
+    private static int parsePort(String portPart, String originalHeader) {
         try {
-            int port = Integer.parseInt(value.trim());
-            if (port <= 0 || port > 65_535) {
-                throw new NumberFormatException("out of range");
-            }
-            return port;
+            return Integer.parseInt(portPart);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid upstream port header: " + value, e);
+            throw new IllegalArgumentException("Invalid port in Host header: " + originalHeader, e);
         }
     }
 
@@ -233,21 +224,6 @@ public final class HttpDebugWaitProxy implements Closeable {
         return copy;
     }
 
-    private void runAfterDelay(EventExecutor targetExecutor, long delayMillis, Runnable task) {
-        if (delayMillis <= 0 || waitExecutor.isShutdown()) {
-            targetExecutor.execute(task);
-            return;
-        }
-        waitExecutor.execute(() -> {
-            try {
-                Thread.sleep(delayMillis);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            targetExecutor.execute(task);
-        });
-    }
-
     private final class ProxyFrontendHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
         @Override
@@ -264,19 +240,6 @@ public final class HttpDebugWaitProxy implements Closeable {
             FullHttpRequest outboundRequest = copyRequest(msg);
             HttpUtil.setKeepAlive(outboundRequest, keepAlive);
 
-            runAfterDelay(ctx.executor(), requestDelayMillis,
-                    () -> dispatchToBackend(ctx, outboundRequest, origin, keepAlive));
-        }
-
-        private void dispatchToBackend(ChannelHandlerContext ctx,
-                                       FullHttpRequest outboundRequest,
-                                       Origin origin,
-                                       boolean keepAlive) {
-            if (!ctx.channel().isActive()) {
-                ReferenceCountUtil.release(outboundRequest);
-                return;
-            }
-
             FixedChannelPool pool = poolFor(origin.asAddress());
             Future<Channel> acquireFuture = pool.acquire();
             acquireFuture.addListener(new BackendAcquireListener(ctx, outboundRequest, pool, keepAlive));
@@ -289,7 +252,7 @@ public final class HttpDebugWaitProxy implements Closeable {
         }
     }
 
-    private final class BackendAcquireListener implements GenericFutureListener<Future<Channel>> {
+    private static final class BackendAcquireListener implements GenericFutureListener<Future<Channel>> {
 
         private final ChannelHandlerContext frontCtx;
         private final FullHttpRequest outboundRequest;
@@ -329,8 +292,7 @@ public final class HttpDebugWaitProxy implements Closeable {
                 });
                 return;
             }
-            ProxyRequestContext context = new ProxyRequestContext(
-                    frontCtx.channel(), pool, keepAlive, responseDelayMillis);
+            ProxyRequestContext context = new ProxyRequestContext(frontCtx.channel(), pool, keepAlive);
             outboundChannel.attr(CONTEXT_KEY).set(context);
 
             ChannelFuture writeFuture = outboundChannel.writeAndFlush(outboundRequest);
@@ -346,7 +308,7 @@ public final class HttpDebugWaitProxy implements Closeable {
         }
     }
 
-    private final class ProxyBackendHandler extends SimpleChannelInboundHandler<HttpObject> {
+    private static final class ProxyBackendHandler extends SimpleChannelInboundHandler<HttpObject> {
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) {
@@ -386,13 +348,13 @@ public final class HttpDebugWaitProxy implements Closeable {
             }
         }
 
-        private boolean isInformational(HttpResponse response) {
+        private static boolean isInformational(HttpResponse response) {
             HttpStatusClass statusClass = response.status().codeClass();
             return statusClass == HttpStatusClass.INFORMATIONAL
                     && response.status().code() != HttpResponseStatus.SWITCHING_PROTOCOLS.code();
         }
 
-        private FullHttpResponse toInformationalResponse(HttpResponse response) {
+        private static FullHttpResponse toInformationalResponse(HttpResponse response) {
             ByteBuf payload = response instanceof FullHttpResponse full && full.content().isReadable()
                     ? Unpooled.copiedBuffer(full.content())
                     : Unpooled.EMPTY_BUFFER;
@@ -410,10 +372,10 @@ public final class HttpDebugWaitProxy implements Closeable {
             return copy;
         }
 
-        private void forwardResponse(ChannelHandlerContext backendCtx,
-                                     ProxyRequestContext context,
-                                     FullHttpResponse response,
-                                     boolean finalResponse) {
+        private static void forwardResponse(ChannelHandlerContext backendCtx,
+                                            ProxyRequestContext context,
+                                            FullHttpResponse response,
+                                            boolean finalResponse) {
             Channel inboundChannel = context.clientChannel();
             if (!inboundChannel.isActive()) {
                 ReferenceCountUtil.release(response);
@@ -425,19 +387,6 @@ public final class HttpDebugWaitProxy implements Closeable {
                 return;
             }
 
-            Runnable writeTask = () -> writeResponse(backendCtx, context, response, finalResponse);
-            if (finalResponse && context.responseDelayMillis() > 0) {
-                runAfterDelay(backendCtx.executor(), context.responseDelayMillis(), writeTask);
-            } else {
-                writeTask.run();
-            }
-        }
-
-        private void writeResponse(ChannelHandlerContext backendCtx,
-                                   ProxyRequestContext context,
-                                   FullHttpResponse response,
-                                   boolean finalResponse) {
-            Channel inboundChannel = context.clientChannel();
             if (finalResponse) {
                 HttpUtil.setKeepAlive(response, context.keepAlive());
             }
@@ -465,9 +414,9 @@ public final class HttpDebugWaitProxy implements Closeable {
             }
         }
 
-        private void handleBackendFailure(ChannelHandlerContext ctx,
-                                          ProxyRequestContext context,
-                                          String message) {
+        private static void handleBackendFailure(ChannelHandlerContext ctx,
+                                                 ProxyRequestContext context,
+                                                 String message) {
             sendError(context.clientChannel(), HttpResponseStatus.BAD_GATEWAY, message);
             context.releasePendingResponse();
             context.release(ctx.channel());
@@ -497,7 +446,6 @@ public final class HttpDebugWaitProxy implements Closeable {
 
         @Override
         public void channelAcquired(Channel ch) {
-            assert ch.attr(CONTEXT_KEY).get() == null;
             // No-op
         }
 
@@ -513,17 +461,14 @@ public final class HttpDebugWaitProxy implements Closeable {
         private final Channel clientChannel;
         private final FixedChannelPool pool;
         private final boolean keepAlive;
-        private final long responseDelayMillis;
         private BackendResponseBuffer pendingResponse;
 
         private ProxyRequestContext(Channel clientChannel,
                                     FixedChannelPool pool,
-                                    boolean keepAlive,
-                                    long responseDelayMillis) {
+                                    boolean keepAlive) {
             this.clientChannel = clientChannel;
             this.pool = pool;
             this.keepAlive = keepAlive;
-            this.responseDelayMillis = responseDelayMillis;
         }
 
         void beginResponseBuffer(ChannelHandlerContext backendCtx, HttpResponse response) {
@@ -558,10 +503,6 @@ public final class HttpDebugWaitProxy implements Closeable {
 
         boolean keepAlive() {
             return keepAlive;
-        }
-
-        long responseDelayMillis() {
-            return responseDelayMillis;
         }
 
         void release(Channel backendChannel) {
@@ -663,9 +604,7 @@ public final class HttpDebugWaitProxy implements Closeable {
 
     public static void main(String[] args) throws Exception {
         int listenPort = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
-        long requestDelay = args.length > 1 ? Long.parseLong(args[1]) : 0L;
-        long responseDelay = args.length > 2 ? Long.parseLong(args[2]) : requestDelay;
-        HttpDebugWaitProxy proxy = new HttpDebugWaitProxy(requestDelay, responseDelay);
+        HttpDebugProxy proxy = new HttpDebugProxy();
         Runtime.getRuntime().addShutdownHook(new Thread(proxy::close));
         proxy.start(listenPort);
         proxy.awaitTermination();
