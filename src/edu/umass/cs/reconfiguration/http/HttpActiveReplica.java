@@ -123,7 +123,9 @@ public class HttpActiveReplica {
     private static final String DBG_HDR_BYPASS_COORDINATION = "___DBC";
     private static final String DBG_HDR_BYPASS_COORDINATION_PORT = "___DBCP";
     private static final String DBG_HDR_DIRECT_EXECUTE = "___DDE";
-    private static final XdnHttpForwarderClient debugHttpClient = new XdnHttpForwarderClient();
+    private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
+    private static final XdnHttpForwarderClient[] debugHttpClients =
+            new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
     public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
 
     public HttpActiveReplica(String nodeId,
@@ -598,20 +600,20 @@ public class HttpActiveReplica {
                 long startExecTimeNs = System.nanoTime();
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
+                // Retain the netty objects because we execute off the event loop and
+                // SimpleChannelInboundHandler will otherwise release them after this method returns.
+                ReferenceCountUtil.retain(httpRequest.getHttpRequest());
+                ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
+                this.request = null;
+                this.requestContent = null;
 
                 // Submit long-running request coordination and execution off the event loop
-                Future<HttpResponse> execFuture;
-                if (isHttpFrontendBatchEnabled) {
-                    // TODO: put comments about why we are increasing the reference-count here.
-                    //   By default, its handled, but not if we pass it into batching worker.
-                    ReferenceCountUtil.retain(httpRequest.getHttpRequest());
-                    ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
-                    execFuture = offload.submit(
-                            () -> executeXdnHttpRequestViaBatching(httpRequest, this.senderAddr));
-                } else {
-                    execFuture = offload.submit(() ->
-                            executeXdnHttpRequest(httpRequest, this.senderAddr));
-                }
+                Future<HttpResponse> execFuture =
+                        isHttpFrontendBatchEnabled
+                                ? offload.submit(() -> executeXdnHttpRequestViaBatching(
+                                        httpRequest, this.senderAddr))
+                                : offload.submit(() ->
+                                        executeXdnHttpRequest(httpRequest, this.senderAddr));
 
                 // If channel closes before completion, cancel the task
                 ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
@@ -676,11 +678,9 @@ public class HttpActiveReplica {
                                             isKeepAlive,
                                             startExecTimeNs);
                                 } finally {
-                                    if (isHttpFrontendBatchEnabled) {
-                                        ReferenceCountUtil.release(httpRequest.getHttpRequest());
-                                        ReferenceCountUtil.release(
-                                                httpRequest.getHttpRequestContent());
-                                    }
+                                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                    ReferenceCountUtil.release(
+                                            httpRequest.getHttpRequestContent());
                                 }
                             });
                         });
@@ -915,6 +915,9 @@ public class HttpActiveReplica {
 
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION);
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION_PORT);
+
+                int forwarderClientIdx = (int) (ctx.channel().remoteAddress().hashCode() % DBG_NUM_FORWARDER_CLIENTS);
+                XdnHttpForwarderClient debugHttpClient = debugHttpClients[forwarderClientIdx];
 
                 // Send and execute possibly long-running request in offload executor.
                 ReferenceCountUtil.retain(httpRequest.getHttpRequest());

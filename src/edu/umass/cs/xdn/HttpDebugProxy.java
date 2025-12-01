@@ -58,7 +58,7 @@ public final class HttpDebugProxy implements Closeable {
     private volatile Channel serverChannel;
 
     public HttpDebugProxy() {
-        this(new NioEventLoopGroup(1), new NioEventLoopGroup(), new NioEventLoopGroup());
+        this(new NioEventLoopGroup(), new NioEventLoopGroup(), new NioEventLoopGroup());
     }
 
     HttpDebugProxy(EventLoopGroup bossGroup,
