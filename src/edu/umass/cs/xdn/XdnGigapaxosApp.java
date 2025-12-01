@@ -121,8 +121,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         this.fsSocketConnection = new HashMap<>();
         this.isServiceActive = new HashMap<>();
 	this.httpForwarderClient = new XdnHttpForwarderClient();
-	this.largeCheckpointer = new LargeCheckpointer(
-	    String.format("/tmp/xdn/final/%s/", this.myNodeId), this.myNodeId);
+	this.largeCheckpointer = new LargeCheckpointer(String.format("/tmp/xdn/final/%s/", this.myNodeId), this.myNodeId);
 
         // Validate and initialize the stateDiff recorder for Primary Backup.
         // We need to check the Operating System as currently FUSE (i.e., Fuselog)
@@ -136,8 +135,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         } else if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.FUSERUST.toString())) {
             recorderType = RecorderType.FUSERUST;
         } else {
-            String errMsg = "[ERROR] Unknown StateDiff recorder type of " +
-                    stateDiffRecorderTypeString;
+            String errMsg = "[ERROR] Unknown StateDiff recorder type of " + stateDiffRecorderTypeString;
             System.out.println(errMsg);
             throw new RuntimeException(errMsg);
         }

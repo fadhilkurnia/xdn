@@ -123,18 +123,8 @@ public class InitBackupPacket extends PrimaryBackupPacket implements Byteable {
 
     @Deprecated
     public static InitBackupPacket createFromString(String encodedPacket) {
-        assert encodedPacket != null;
-        assert !encodedPacket.isEmpty();
-        assert encodedPacket.startsWith(SERIALIZED_PREFIX);
-
-        encodedPacket = encodedPacket.substring(SERIALIZED_PREFIX.length());
-
-        try {
-            JSONObject json = new JSONObject(encodedPacket);
-            String serviceName = json.getString("serviceName");
-            return new InitBackupPacket(serviceName);
-        } catch (JSONException e) {
-            throw new RuntimeException(e);
-        }
+	throw new UnsupportedOperationException(
+	    "createFromString(String) is deprecated. Use createFromBytes(byte[]) with protobuf instead."
+	);
     }
 }
