@@ -291,113 +291,114 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public void initContainerSync(String myNodeId, String serviceName, Map<String, InetAddress> ipAddresses, int placementEpoch, String sshKey) {
-	Set<String> backupNodes = ipAddresses.keySet().stream()
-	    .filter(node -> !node.equals(myNodeId.toString()))
-	    .map(String::toLowerCase)
-	    .collect(Collectors.toSet());
-	System.out.printf("FuselogStateDiff backupNodes = %s\n", backupNodes);
-	System.out.printf("FuselogStateDiff ipAddresses = %s\n", ipAddresses);
+    public void initContainerSync(String myNodeId, String serviceName,
+                                  Map<String, InetAddress> ipAddresses,
+                                  int placementEpoch, String sshKey) {
+        Set<String> backupNodes = ipAddresses.keySet().stream()
+                .filter(node -> !node.equals(myNodeId.toString()))
+                .map(String::toLowerCase)
+                .collect(Collectors.toSet());
+        System.out.printf("FuselogStateDiff backupNodes = %s\n", backupNodes);
+        System.out.printf("FuselogStateDiff ipAddresses = %s\n", ipAddresses);
 
-	String currentReplica = this.baseDirectoryPath;
+        String currentReplica = this.baseDirectoryPath;
 
-	Map<String, String> backupReplicas = new HashMap<>();
-	backupNodes.forEach(node -> backupReplicas.put(node, String.format("%s%s/", FuselogStateDiffRecorder.defaultWorkingBasePath, node)));
+        Map<String, String> backupReplicas = new HashMap<>();
+        backupNodes.forEach(node -> backupReplicas.put(node,
+                String.format("%s%s/", FuselogStateDiffRecorder.defaultWorkingBasePath, node)));
 
-	String mntDir = String.format("mnt/%s/", serviceName);
-	String username = Shell.runCommandWithOutput("whoami").stdout.trim();
+        String mntDir = String.format("mnt/%s/", serviceName);
+        String username = Shell.runCommandWithOutput("whoami").stdout.trim();
 
-	// Copy data to other replicas
-	Boolean allSyncSuccess = false;
-	int count = 0;
+        // Copy data to other replicas
+        Boolean allSyncSuccess = false;
+        int count = 0;
 
-	ExecutorService executor = Executors.newFixedThreadPool(backupReplicas.size());
-	String sshOption = sshKey != null && !sshKey.trim().isEmpty()
-	    ? String.format("-e \"ssh -i %s\"", sshKey)
-	    : "";
+        ExecutorService executor = Executors.newFixedThreadPool(backupReplicas.size());
+        String sshOption = sshKey != null && !sshKey.trim().isEmpty()
+                ? String.format("-e \"ssh -i %s\"", sshKey)
+                : "";
 
-	while (!allSyncSuccess) {
-	    if (++count > 10) {
-		throw new RuntimeException("Failed running rsync after 10 iterations");
-	    }
+        while (!allSyncSuccess) {
+            if (++count > 10) {
+                throw new RuntimeException("Failed running rsync after 10 iterations");
+            }
 
-	    allSyncSuccess = true;
-	    List<Future<Boolean>> futures = new ArrayList<>();
+            allSyncSuccess = true;
+            List<Future<Boolean>> futures = new ArrayList<>();
 
-	    for (String key : backupReplicas.keySet()) {
-		final String replicaKey = key;
-		futures.add(executor.submit(() -> {
-		    String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
+            for (String key : backupReplicas.keySet()) {
+                final String replicaKey = key;
+                futures.add(executor.submit(() -> {
+                    String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
 
-		    int exitCode = 0;
-		    if (hostAddr.equals("127.0.0.1")) {
-			exitCode = Shell.runCommand(String.format("""
-			    rsync -avz --delete --human-readable \
-			    --include='mnt/' --include='%s' --include='%s***' \
-			    --exclude='*' \
-			    %s %s""",
-			    mntDir, mntDir, currentReplica,
-			    backupReplicas.get(key)
-			), true);
-		    } else {
-			exitCode = Shell.runCommand(String.format("""
-			    rsync -avz --delete --human-readable \
-			    %s \
-			    --include='mnt/' --include='%s' --include='%s***' \
-			    --exclude='*' \
-			    %s %s@%s:%s""",
-			    sshOption,
-			    mntDir, mntDir, currentReplica,
-			    username, hostAddr,
-			    backupReplicas.get(key)
-			), true);
-		    }
+                    int exitCode = 0;
+                    if (hostAddr.equals("127.0.0.1")) {
+                        exitCode = Shell.runCommand(String.format("""
+                                        rsync -avz --delete --human-readable \
+                                        --include='mnt/' --include='%s' --include='%s***' \
+                                        --exclude='*' \
+                                        %s %s""",
+                                mntDir, mntDir, currentReplica,
+                                backupReplicas.get(key)
+                        ), true);
+                    } else {
+                        exitCode = Shell.runCommand(String.format("""
+                                        rsync -avz --delete --human-readable \
+                                        %s \
+                                        --include='mnt/' --include='%s' --include='%s***' \
+                                        --exclude='*' \
+                                        %s %s@%s:%s""",
+                                sshOption,
+                                mntDir, mntDir, currentReplica,
+                                username, hostAddr,
+                                backupReplicas.get(key)
+                        ), true);
+                    }
 
-		    if (exitCode != 0) {
-			System.out.println(String.format(
-			    "Failed to sync %s to %s", currentReplica, backupReplicas.get(key)
-			));
-			return false;
-		    }
+                    if (exitCode != 0) {
+                        System.out.println(String.format(
+                                "Failed to sync %s to %s", currentReplica, backupReplicas.get(key)
+                        ));
+                        return false;
+                    }
 
-		    return true;
-		}));
-	    }
+                    return true;
+                }));
+            }
 
 
-	    for (Future<Boolean> future : futures) {
-		try {
-		    if (!future.get()) {
-			allSyncSuccess = false;
-		    }
-		} catch (InterruptedException | ExecutionException e) {
-		    e.printStackTrace();
-		    allSyncSuccess = false;
-		}
-	    }
+            for (Future<Boolean> future : futures) {
+                try {
+                    if (!future.get()) {
+                        allSyncSuccess = false;
+                    }
+                } catch (InterruptedException | ExecutionException e) {
+                    e.printStackTrace();
+                    allSyncSuccess = false;
+                }
+            }
 
-	    try {
-		Thread.sleep(3000);
-	    } catch (InterruptedException e) {
-		e.printStackTrace();
-	    }
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
 
-	    executor.shutdown();
-	}
+            executor.shutdown();
+        }
 
-	Map<Integer, SocketChannel> epochToChannelMap = this.serviceFsSocket.get(serviceName);
-	assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
-	SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
-	assert socketChannel != null : "unknown fs socket client for " + serviceName;
+        Map<Integer, SocketChannel> epochToChannelMap = this.serviceFsSocket.get(serviceName);
+        assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
+        SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
+        assert socketChannel != null : "unknown fs socket client for " + serviceName;
 
-	// begin capturing statediff (c) in the filesystem
-	try {
-	    System.out.println(">> clear stateDiffs...");
-	    socketChannel.write(ByteBuffer.wrap("c".getBytes()));
-	} catch (IOException e) {
-	    throw new RuntimeException(e);
-	}
-
-	return;
+        // begin capturing statediff (c) in the filesystem
+        try {
+            System.out.println(">> clear stateDiffs...");
+            socketChannel.write(ByteBuffer.wrap("c".getBytes()));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

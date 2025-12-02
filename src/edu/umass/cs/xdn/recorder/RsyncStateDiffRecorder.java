@@ -231,96 +231,99 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     @Override
-    public void initContainerSync(String myNodeId, String serviceName, Map<String, InetAddress> ipAddresses, int placementEpoch, String sshKey) {
-	Set<String> backupNodes = ipAddresses.keySet().stream()
-	.filter(node -> !node.equals(myNodeId.toString()))
-	.map(String::toLowerCase)
-	.collect(Collectors.toSet());
+    public void initContainerSync(String myNodeId, String serviceName,
+                                  Map<String, InetAddress> ipAddresses,
+                                  int placementEpoch, String sshKey) {
+        Set<String> backupNodes = ipAddresses.keySet().stream()
+                .filter(node -> !node.equals(myNodeId.toString()))
+                .map(String::toLowerCase)
+                .collect(Collectors.toSet());
 
-	String currentReplica = String.format("%s%s/", this.defaultWorkingBasePath, myNodeId);
+        String currentReplica = String.format("%s%s/", this.defaultWorkingBasePath, myNodeId);
 
-	Map<String, String> backupReplicas = new HashMap<>();
-	backupNodes.forEach(node -> backupReplicas.put(node, String.format("%s%s/", this.defaultWorkingBasePath, node)));
+        Map<String, String> backupReplicas = new HashMap<>();
+        backupNodes.forEach(node -> backupReplicas.put(node,
+                String.format("%s%s/", this.defaultWorkingBasePath, node)));
 
-	String mntDir = String.format("mnt/%s/", serviceName);
-	String snpDir = String.format("snp/%s/", serviceName);
+        String mntDir = String.format("mnt/%s/", serviceName);
+        String snpDir = String.format("snp/%s/", serviceName);
 
-	String username = Shell.runCommandWithOutput("whoami").stdout.trim();
+        String username = Shell.runCommandWithOutput("whoami").stdout.trim();
 
-	while (true) {
-	    int exitCode = Shell.runCommand(String.format(
-		"rsync -avz --delete --human-readable %s/%s %s/%s",
-		currentReplica, mntDir, currentReplica, snpDir
-	    ), true);
+        while (true) {
+            int exitCode = Shell.runCommand(String.format(
+                    "rsync -avz --delete --human-readable %s/%s %s/%s",
+                    currentReplica, mntDir, currentReplica, snpDir
+            ), true);
 
-	    if (exitCode != 0) {
-		System.out.println(String.format("Failed to sync /mnt/ to /snp/ in %s", currentReplica));
-	    } else {
-		break;
-	    }
+            if (exitCode != 0) {
+                System.out.printf("Failed to sync /mnt/ to /snp/ in %s%n", currentReplica);
+            } else {
+                break;
+            }
 
-	    try {
-		Thread.sleep(3000);
-	    } catch (InterruptedException e) {
-		e.printStackTrace();
-	    }
-	}
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
 
-	// Copy data to other replicas
-	Boolean allSyncSuccess = false;
-	String sshOption = sshKey != null && !sshKey.trim().isEmpty()
-	    ? String.format("-e \"ssh -i %s\"", sshKey)
-	    : "";
-	int count = 0;
-	while (!allSyncSuccess) {
-	    if (++count > 10) {
-		throw new RuntimeException(String.format(
-		    "%s failed to rsync files for %s:%d during non-deterministic init after %d tries", 
-		    this.getClass().getSimpleName(), serviceName, placementEpoch, count));
-	    }
+        // Copy data to other replicas
+        Boolean allSyncSuccess = false;
+        String sshOption = sshKey != null && !sshKey.trim().isEmpty()
+                ? String.format("-e \"ssh -i %s\"", sshKey)
+                : "";
+        int count = 0;
+        while (!allSyncSuccess) {
+            if (++count > 10) {
+                throw new RuntimeException(String.format(
+                        "%s failed to rsync files for %s:%d during non-deterministic init after %d tries",
+                        this.getClass().getSimpleName(), serviceName, placementEpoch, count));
+            }
 
-	    allSyncSuccess = true;
+            allSyncSuccess = true;
 
-	    for (String key : backupReplicas.keySet()) {
-		String hostAddr = ipAddresses.get(key).getHostAddress();
+            for (String key : backupReplicas.keySet()) {
+                String hostAddr = ipAddresses.get(key).getHostAddress();
 
-		int exitCode = 0;
-		if (hostAddr.equals("127.0.0.1")) {
-		    exitCode = Shell.runCommand(String.format("""
-			rsync -avz --delete --human-readable \
-			--include='mnt/' --include='%s' --include='%s***' \
-			--exclude='*' \
-			%s %s""",
-			mntDir, mntDir, currentReplica,
-			backupReplicas.get(key)
-		    ), true);
-		} else {
-		    exitCode = Shell.runCommand(String.format("""
-			rsync -avz --delete --human-readable \
-			%s \
-			--include='mnt/' --include='%s' --include='%s***' \
-			--exclude='*' \
-			%s %s@%s:%s""",
-			sshOption,
-			mntDir, mntDir, currentReplica,
-			username, hostAddr,
-			backupReplicas.get(key)
-		    ), true);
-		}
+                int exitCode = 0;
+                if (hostAddr.equals("127.0.0.1")) {
+                    exitCode = Shell.runCommand(String.format("""
+                                    rsync -avz --delete --human-readable \
+                                    --include='mnt/' --include='%s' --include='%s***' \
+                                    --exclude='*' \
+                                    %s %s""",
+                            mntDir, mntDir, currentReplica,
+                            backupReplicas.get(key)
+                    ), true);
+                } else {
+                    exitCode = Shell.runCommand(String.format("""
+                                    rsync -avz --delete --human-readable \
+                                    %s \
+                                    --include='mnt/' --include='%s' --include='%s***' \
+                                    --exclude='*' \
+                                    %s %s@%s:%s""",
+                            sshOption,
+                            mntDir, mntDir, currentReplica,
+                            username, hostAddr,
+                            backupReplicas.get(key)
+                    ), true);
+                }
 
-		if (exitCode != 0) {
-		    System.out.println(String.format(
-			"Failed to sync %s to %s", currentReplica, backupReplicas.get(key)
-		    ));
-		    allSyncSuccess = false;
-		}
-	    }
+                if (exitCode != 0) {
+                    System.out.println(String.format(
+                            "Failed to sync %s to %s", currentReplica, backupReplicas.get(key)
+                    ));
+                    allSyncSuccess = false;
+                }
+            }
 
-	    try {
-		Thread.sleep(3000);
-	    } catch (InterruptedException e) {
-		e.printStackTrace();
-	    }
-	}
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
     }
 }

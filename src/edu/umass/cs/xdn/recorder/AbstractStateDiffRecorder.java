@@ -26,6 +26,10 @@ public abstract class AbstractStateDiffRecorder {
 
     abstract public boolean removeServiceRecorder(String serviceName, int placementEpoch);
 
+    @Deprecated
     abstract public String getDefaultBasePath();
-    abstract public void initContainerSync(String myNodeId, String serviceName, Map<String, InetAddress> ipAddresses, int placementEpoch, String sshKey);
+
+    abstract public void initContainerSync(String myNodeId, String serviceName,
+                                           Map<String, InetAddress> ipAddresses,
+                                           int placementEpoch, String sshKey);
 }

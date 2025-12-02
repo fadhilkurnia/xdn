@@ -45,6 +45,9 @@ public abstract class PrimaryBackupPacket implements ReplicableRequest {
             return ApplyStateDiffPacket.createFromBytes(encodedPacket);
         }
 
+        // TODO: This is a temporary hack for non-deterministic initialization.
+        //  Future update will be needed to integrate the initialization state
+        //  into Paxos-based agreement for safety reasons.
         if (packetType.equals(PrimaryBackupPacketType.PB_INIT_BACKUP_PACKET)) {
             return InitBackupPacket.createFromBytes(encodedPacket);
         }
