@@ -50,6 +50,7 @@ public class XdnSetCoordinatorNodeTest {
 
             String initialLeader = findReplicaByRole(initialRoles, "leader");
             assertNotNull(initialLeader, "Expected to observe a leader before changing coordinator");
+            System.out.println(">>> Detected initial leader: " + initialLeader);
 
             for (String newLeader : DEFAULT_REPLICAS) {
                 System.out.println(">>> Changing leader into " + newLeader);
@@ -68,7 +69,8 @@ public class XdnSetCoordinatorNodeTest {
                     for (var pair : roles.entrySet()) {
                         if (pair.getValue().equals("leader")) {
                             detectedLeader = pair.getKey();
-                        } else {
+                        }
+                        if (pair.getValue().equals("follower")) {
                             detectedFollowers.add(pair.getKey());
                         }
                     }
@@ -98,8 +100,78 @@ public class XdnSetCoordinatorNodeTest {
 
     @Test
     @Disabled
-    public void testSetCoordinatorChangesLeader_PrimaryBackup() {
-        // TODO: implement me
+    public void testSetCoordinatorChangesLeader_PrimaryBackup() throws Exception {
+        boolean isDockerAvailable = XdnTestCluster.isDockerAvailable();
+        assertTrue(isDockerAvailable,
+                "Docker is required for this XDN integration test");
+
+        String serviceName = "xdn-set-coordinator-test-pb";
+
+        try (XdnTestCluster cluster = new XdnTestCluster()) {
+            cluster.start();
+
+            cluster.launchService(serviceName, "fadhilkurnia/xdn-bookcatalog",
+                    "/app/data/", "LINEARIZABLE", false);
+
+            Thread.sleep(2000); // wait for service to be created
+
+            cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
+
+            Map<String, String> initialRoles = awaitReplicaRoles(cluster, serviceName, Duration.ofSeconds(60));
+            assertEquals(REPLICA_COUNT, initialRoles.size(),
+                    "Failed to retrieve role information from all replicas");
+
+            String initialPrimary = findReplicaByRole(initialRoles, "primary");
+            assertNotNull(initialPrimary, "Expected to observe a primary before changing coordinator");
+            System.out.println(">>> Detected initial primary: " + initialPrimary);
+
+            // TODO: implement checking for change primary
+            for (String newPrimary : DEFAULT_REPLICAS) {
+                System.out.println(">>> Changing primary into " + newPrimary);
+                int currAttempt = 0;
+                String detectedLeader = null;
+                Set<String> detectedBackups = new HashSet<>();
+                while (currAttempt < MAX_SET_COORDINATOR_ATTEMPT) {
+                    detectedLeader = null;
+                    detectedBackups.clear();
+                    HttpResponse<String> setCoordinatorResponse =
+                            sendSetCoordinatorRequest(cluster, serviceName, newPrimary);
+                    assertEquals(200, setCoordinatorResponse.statusCode(),
+                            "Set coordinator request failed: " + setCoordinatorResponse.body());
+
+                    Thread.sleep(Duration.ofSeconds(2)); // wait until the primary is changed
+
+                    Map<String, String> roles = fetchReplicaRoles(cluster, serviceName);
+                    for (var pair : roles.entrySet()) {
+                        if (pair.getValue().equals("primary")) {
+                            detectedLeader = pair.getKey();
+                        }
+                        if (pair.getValue().equals("backup")) {
+                            detectedBackups.add(pair.getKey());
+                        }
+                    }
+
+                    if (newPrimary.equals(detectedLeader)) {
+                        break;
+                    }
+
+                    Thread.sleep(Duration.ofSeconds(1));
+                    currAttempt++;
+                    if (currAttempt != MAX_SET_COORDINATOR_ATTEMPT) {
+                        System.out.println(">>> Fail to change the primary, retrying ...");
+                    }
+                }
+
+                Set<String> expectedBackups = new HashSet<>();
+                for (var r : DEFAULT_REPLICAS) {
+                    if (!r.equals(newPrimary)) expectedBackups.add(r);
+                }
+
+                assertEquals(newPrimary, detectedLeader);
+                assertEquals(detectedBackups, expectedBackups);
+                assertTrue(currAttempt <= MAX_SET_COORDINATOR_ATTEMPT);
+            }
+        }
     }
 
     private HttpResponse<String> sendSetCoordinatorRequest(XdnTestCluster cluster,
