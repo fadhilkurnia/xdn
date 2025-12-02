@@ -51,4 +51,8 @@ public class RequestMatcher {
     public String getPathPrefix() {
         return pathPrefix;
     }
+
+    public String getMatcherName() {
+        return matcherName;
+    }
 }

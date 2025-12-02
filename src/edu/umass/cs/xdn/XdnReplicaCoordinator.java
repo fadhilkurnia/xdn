@@ -15,19 +15,23 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.PramReplicaCoordinator;
 import edu.umass.cs.primarybackup.PrimaryBackupManager;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
+import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.PaxosReplicaCoordinator;
 import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.SetCoordinatorNodeRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
-import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
+import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.RequestMatcher;
+import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
@@ -167,7 +171,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        long startProcessingTime = System.nanoTime();
+        long startCoordinationTimeNs = System.nanoTime();
 
         // gets service name and its coordinator
         var serviceName = request.getServiceName();
@@ -176,10 +180,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             // returns 404 not found back to client
             return createNotFoundResponse(request, callback);
         }
+        long endGetCoordinatorTimeNs = System.nanoTime();
 
         // one edge case, handling XdnGetProtocolRoleRequest
-        if (request instanceof XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest) {
-            this.handleXdnGetProtocolRoleRequest(xdnGetProtocolRoleRequest, callback);
+        if (request instanceof XdnGetReplicaInfoRequest xdnGetReplicaInfoRequest) {
+            this.handleXdnGetProtocolRoleRequest(xdnGetReplicaInfoRequest, callback);
+            return true;
+        }
+
+        if (request instanceof SetCoordinatorNodeRequest<?> setCoordinatorNodeRequest) {
+            this.handleSetCoordinatorNodeRequest(setCoordinatorNodeRequest, callback);
             return true;
         }
 
@@ -190,6 +200,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         } else {
             gpRequest = ReplicableClientRequest.wrap(request);
         }
+        long endRequestPrepTimeNs = System.nanoTime();
+
         // TODO: validate what client address to set here. We need to explicitly set the
         //  client's address because down the pipeline that is being used for equals() method.
         if (gpRequest.getClientAddress() == null) {
@@ -210,23 +222,95 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             xdnHttpRequest.setRequestMatchers(serviceRequestMatchers);
             xdnHttpRequest.getBehaviors(); // populate cached behaviors
         }
+        long endPrepReqMatcherTimeNs = System.nanoTime();
 
         // cache the request in XdnGigapaxosApp, avoiding expensive deserialization
         xdnGigapaxosApp.cacheRequest(gpRequest.getRequest());
+        long endReqCacheTimeNs = System.nanoTime();
 
         // prepare updated callback that logs the elapsed time
         ReplicableClientRequest finalGpRequest = gpRequest;
         ExecutedCallback loggedCallback = (response, handled) -> {
-            callback.executed(response, handled);
-            long elapsedTime = System.nanoTime() - startProcessingTime;
-            logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms (id: {3})",
-                    new Object[]{this.myNodeID, this.getClass().getSimpleName(),
-                            elapsedTime / 1_000_000.0,
+            long endTimeNs = System.nanoTime();
+            logger.log(Level.FINE,
+                    "{0}:{1} - request coordination within {2}ms " +
+                            "(gcor={3}ms prp={4}ms mtc={5}ms cch={6}ms cor={7}ms) [id: {8}]",
+                    new Object[]{
+                            this.myNodeID.toLowerCase(),
+                            this.getClass().getSimpleName(),
+                            (endTimeNs - startCoordinationTimeNs) / 1_000_000.0,
+                            (endGetCoordinatorTimeNs - startCoordinationTimeNs) / 1_000_000.0,
+                            (endRequestPrepTimeNs - endGetCoordinatorTimeNs) / 1_000_000.0,
+                            (endPrepReqMatcherTimeNs - endRequestPrepTimeNs) / 1_000_000.0,
+                            (endReqCacheTimeNs - endPrepReqMatcherTimeNs) / 1_000_000.0,
+                            (endTimeNs - endReqCacheTimeNs) / 1_000_000.0,
                             String.valueOf(finalGpRequest.getRequestID())});
+            callback.executed(response, handled);
         };
 
         // asynchronously coordinate the request
-        return coordinator.coordinateRequest(gpRequest, loggedCallback);
+        boolean isCoordinated = coordinator.coordinateRequest(gpRequest, loggedCallback);
+        if (!isCoordinated) {
+            logger.log(Level.FINE,
+                    "{0}:{1} - fail coordinating request with {2}",
+                    new Object[]{
+                            this.myNodeID.toLowerCase(),
+                            this.getClass().getSimpleName(),
+                            coordinator.getClass().getSimpleName()});
+        }
+        return isCoordinated;
+    }
+
+    private void handleSetCoordinatorNodeRequest(
+            SetCoordinatorNodeRequest<?> setCoordinatorNodeRequest, ExecutedCallback callback) {
+        String serviceName = setCoordinatorNodeRequest.getServiceName();
+        if (serviceName == null || serviceName.isEmpty()) {
+            setCoordinatorNodeRequest.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);
+            setCoordinatorNodeRequest.setResponseMessage("Unknown serviceName");
+            callback.executed(setCoordinatorNodeRequest, true);
+            return;
+        }
+
+        var coordinator = this.serviceCoordinator.get(serviceName);
+        if (coordinator == null) {
+            setCoordinatorNodeRequest.setFailed(ClientReconfigurationPacket.ResponseCodes.ACTIVE_REPLICA_EXCEPTION);
+            setCoordinatorNodeRequest.setResponseMessage("Unknown coordinator for " + serviceName);
+            callback.executed(setCoordinatorNodeRequest, true);
+            return;
+        }
+
+        if (coordinator instanceof PaxosReplicaCoordinator<NodeIDType> pc &&
+                setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
+            if (!pc.isPaxosCoordinator(serviceName)) {
+                pc.tryToBeCoordinator(serviceName);
+            }
+            setCoordinatorNodeRequest.setResponseMessage("OK");
+            callback.executed(setCoordinatorNodeRequest, true);
+            return;
+        }
+
+        if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pb &&
+                setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
+            ChangePrimaryPacket cpPacket = new ChangePrimaryPacket(serviceName, myNodeID);
+            try {
+                if (pb.isPrimary(serviceName)) {
+                    setCoordinatorNodeRequest.setResponseMessage("OK");
+                    callback.executed(setCoordinatorNodeRequest, true);
+                } else {
+                    primaryBackupCoordinator.coordinateRequest(cpPacket, (response, handled) -> {
+                        assert handled : "Unhandled ChangePrimaryPacket";
+                        setCoordinatorNodeRequest.setResponseMessage("OK");
+                        callback.executed(setCoordinatorNodeRequest, true);
+                    });
+                }
+            } catch (IOException | RequestParseException e) {
+                throw new RuntimeException(e);
+            }
+            return;
+        }
+
+        setCoordinatorNodeRequest.setResponseMessage("OK");
+        callback.executed(setCoordinatorNodeRequest, true);
     }
 
     private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {
@@ -261,12 +345,14 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         return true;
     }
 
-    private void handleXdnGetProtocolRoleRequest(XdnGetProtocolRoleRequest request,
+    private void handleXdnGetProtocolRoleRequest(XdnGetReplicaInfoRequest request,
                                                  ExecutedCallback callback) {
         String serviceName = request.getServiceName();
         assert serviceName != null : "Unknown service name";
         ServiceProperty currServiceProperty = this.serviceProperties.get(serviceName);
         if (currServiceProperty == null) {
+            request.setHttpErrorCode(404);
+            request.setErrorMessage("Unknown service '" + serviceName + "'");
             callback.executed(request, true);
             return;
         }
@@ -291,6 +377,53 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pbCoordinator) {
             boolean isPrimary = pbCoordinator.isPrimary(serviceName);
             roleName = isPrimary ? "primary" : "backup";
+        }
+
+        if (xdnGigapaxosApp != null) {
+            List<String> containerIds = xdnGigapaxosApp.getContainerIds(serviceName);
+            List<String> createdAtInfo = xdnGigapaxosApp.getContainerCreatedAtInfo(serviceName);
+            List<String> containerStatus = xdnGigapaxosApp.getContainerStatus(serviceName);
+
+            ServiceInstance instance = xdnGigapaxosApp.getServiceInstance(serviceName);
+            boolean isDeterministic = false;
+            String entryComponent = null;
+            String stateDirectory = null;
+            String statefulComponent = null;
+            List<String> componentNames = null;
+            List<String> imageNames = null;
+            if (instance != null) {
+                isDeterministic = instance.property.isDeterministic();
+                stateDirectory = instance.stateDirectory;
+                componentNames = new ArrayList<>();
+                imageNames = new ArrayList<>();
+                for (var c : instance.property.getComponents()) {
+                    var componentName = c.getComponentName() != null
+                            ? c.getComponentName() : c.getImageName();
+                    componentNames.add(componentName);
+                    imageNames.add(c.getImageName());
+                    if (c.isEntryComponent()) {
+                        entryComponent = componentName;
+                    }
+                    if (c.isStateful()) {
+                        statefulComponent = componentName;
+                    }
+                }
+            }
+
+            Integer epoch = xdnGigapaxosApp.getEpoch(serviceName);
+
+            request.setContainerMetadata(
+                    epoch,
+                    isDeterministic,
+                    entryComponent,
+                    stateDirectory,
+                    statefulComponent,
+                    componentNames,
+                    imageNames,
+                    containerIds,
+                    createdAtInfo,
+                    containerStatus
+            );
         }
 
         request.setResponse(

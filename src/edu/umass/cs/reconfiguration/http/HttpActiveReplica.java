@@ -8,8 +8,9 @@ import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnGigapaxosApp;
+import edu.umass.cs.xdn.XdnHttpForwarderClient;
 import edu.umass.cs.xdn.XdnHttpRequestBatcher;
-import edu.umass.cs.xdn.request.XdnGetProtocolRoleRequest;
+import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -30,6 +31,7 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.MultithreadEventExecutorGroup;
 import org.json.JSONException;
@@ -37,23 +39,26 @@ import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.http.HttpClient;
+import java.net.SocketException;
+import java.nio.channels.ClosedChannelException;
 import java.security.cert.CertificateException;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static io.netty.handler.codec.http.HttpResponseStatus.*;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
+
+// Implemented endpoint:
+// - GET    /api/v2/services/{serviceName}/replica/info                 // get the replica metadata
+// - any    with `XDN`, `coordinator-request`, and `node-id` header     // change this node to be primary in primary backup
+//          this will be deprecated and moved into PUT /api/v2/services/{serviceName}/coordinator endpoint
+//          in the reconfigurator.
 
 /**
  * An HTTP front-end for an active replica that supports interaction
@@ -98,23 +103,30 @@ public class HttpActiveReplica {
 
     public final static String XDN_HOST_DOMAIN = "xdnapp.com";
 
-    private static final boolean isDemandProfilerEnabled =
-            Config.getGlobalBoolean(
-                    ReconfigurationConfig.RC.HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER);
-
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
 
-    private static final boolean isHttpFrontendBatchEnabled = false;
-    private final XdnHttpRequestBatcher batcher;
+    private static final boolean isHttpFrontendBatchEnabled =
+            Config.getGlobalBoolean(ReconfigurationConfig.RC.HTTP_AR_FRONTEND_BATCH_ENABLED);
 
-    // Flags to enable/disable debugging feature, specifically to identify bottleneck.
-    // - isDebugBypassCoordination: directly send request to docker service, require
-    //                              knowing the docker exposed port number,
-    // - isDebugUseDummyResponse: skip execution in docker service.
-    private static final boolean isDebugBypassCoordination = false;
-    private static final boolean isDebugUseDummyResponse = false;
-    private static final HttpClient debugHttpClient = HttpClient.newHttpClient();
+    // Backdoor headers used for debugging purpose (e.g., latency measurement to identify
+    // bottlenecks). We assume these headers are never used by any services.
+    //  - DBG_HDR_DUMMY_RESPONSE        : Skip execution and send dummy response.
+    //                                    Used to measure HTTP receiver stack of XDN.
+    //  - DBG_HDR_BYPASS_COORDINATION   : Bypass replica coordinator, and directly forward the
+    //                                    request into containerized service. This requires knowing
+    //                                    the exposed port from the container in
+    //                                    DBG_HDR_BYPASS_COORDINATION_PORT.
+    //  - DBG_HDR_DIRECT_EXECUTE        : Directly call execute() in XdnGigapaxosApp, ignoring
+    //                                    replica coordinator but still using the App.
+    private static final String DBG_HDR_DUMMY_RESPONSE = "___DDR";
+    private static final String DBG_HDR_BYPASS_COORDINATION = "___DBC";
+    private static final String DBG_HDR_BYPASS_COORDINATION_PORT = "___DBCP";
+    private static final String DBG_HDR_DIRECT_EXECUTE = "___DDE";
+    private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
+    private static final XdnHttpForwarderClient[] debugHttpClients =
+            new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
+    public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
 
     public HttpActiveReplica(String nodeId,
                              ActiveReplicaFunctions arf,
@@ -135,7 +147,7 @@ public class HttpActiveReplica {
         }
 
         // Initialize request batching
-        batcher = new edu.umass.cs.xdn.XdnHttpRequestBatcher(arf);
+        XdnHttpRequestBatcher requestBatcher = new XdnHttpRequestBatcher(arf);
 
         // Initializing boss and worker event loops.
         // The boss workers are accepting connections, which then will be passed to the child
@@ -156,7 +168,7 @@ public class HttpActiveReplica {
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childHandler(
                             new HttpActiveReplicaInitializer(
-                                    nodeId, arf, executorGroup, batcher, sslCtx)
+                                    nodeId, arf, executorGroup, requestBatcher, sslCtx)
                     );
 
             if (sockAddr == null) {
@@ -196,13 +208,13 @@ public class HttpActiveReplica {
         private final String nodeId;
         private final ActiveReplicaFunctions arFunctions;
         private final MultithreadEventExecutorGroup executorGroup;
-        private final edu.umass.cs.xdn.XdnHttpRequestBatcher requestBatching;
+        private final XdnHttpRequestBatcher requestBatching;
         private final SslContext sslCtx;
 
         HttpActiveReplicaInitializer(String nodeId,
                                      final ActiveReplicaFunctions arf,
                                      final MultithreadEventExecutorGroup executorGroup,
-                                     final edu.umass.cs.xdn.XdnHttpRequestBatcher requestBatching,
+                                     final XdnHttpRequestBatcher requestBatching,
                                      SslContext sslCtx) {
             this.nodeId = nodeId;
             this.arFunctions = arf;
@@ -241,7 +253,6 @@ public class HttpActiveReplica {
                             requestBatching,
                             channel.remoteAddress()));
         }
-
     }
 
     private static JSONObject getJSONObjectFromHttpContent(HttpContent httpContent) {
@@ -333,7 +344,7 @@ public class HttpActiveReplica {
         private static String nodeId = null;
         private final ActiveReplicaFunctions arFunctions;
         private final ExecutorService offload;
-        private final edu.umass.cs.xdn.XdnHttpRequestBatcher requestBatching;
+        private final XdnHttpRequestBatcher requestBatching;
         private final InetSocketAddress senderAddr; // client's inet address
 
         private HttpRequest request;
@@ -378,12 +389,14 @@ public class HttpActiveReplica {
                 }
 
                 // Handle the second condition: Host ending with "xdnapp.com"
-                String requestHost = httpRequest.headers().get(HttpHeaderNames.HOST);
-                if (requestHost != null) {
-                    String[] hostPort = requestHost.split(":");
-                    String host = hostPort[0];
-                    if (host.endsWith(XDN_HOST_DOMAIN)) {
-                        isXdnRequest = true;
+                if (!isXdnRequest) {
+                    String requestHost = httpRequest.headers().get(HttpHeaderNames.HOST);
+                    if (requestHost != null) {
+                        String[] hostPort = requestHost.split(":");
+                        String host = hostPort[0];
+                        if (host.endsWith(XDN_HOST_DOMAIN)) {
+                            isXdnRequest = true;
+                        }
                     }
                 }
 
@@ -397,21 +410,16 @@ public class HttpActiveReplica {
             // but we are planning to deprecate that soon.
             // TODO: deprecate this.
             {
-                /**
-                 * Request for GigaPaxos to coordinate
-                 */
+                // Request for GigaPaxos to coordinate
                 HttpActiveReplicaRequest gRequest = null;
-                /**
-                 * JSONObject to extract keys and values from http request
-                 */
+
+                // JSONObject to extract keys and values from http request
                 JSONObject json = new JSONObject();
 
-                /**
-                 * This boolean is used to indicate whether the request has been retrieved.
-                 * If request info is retrieved from HttpRequest, then don't bother to retrieve it from
-                 * HttpContent. Otherwise, retrieve the info from HttpContent.
-                 * If we still can't retrieve the info, then the request is a Malformed request.
-                 */
+                //  This boolean is used to indicate whether the request has been retrieved.
+                //  If request info is retrieved from HttpRequest, then don't bother to retrieve
+                //  it from HttpContent. Otherwise, retrieve the info from HttpContent.
+                //  If we still can't retrieve the info, then the request is a Malformed request.
                 boolean retrieved = false;
 
                 if (msg instanceof HttpRequest) {
@@ -422,10 +430,13 @@ public class HttpActiveReplica {
                         send100Continue(ctx);
                     }
 
-                    logger.log(Level.FINE, "Http server received a request with HttpRequest: {0}", new Object[]{httpRequest});
+                    logger.log(Level.FINE,
+                            "Http server received a request with HttpRequest: {0}",
+                            new Object[]{httpRequest});
 
-                    // converting url query parameters into JSON key value pair
-                    Map<String, List<String>> params = (new QueryStringDecoder(httpRequest.uri())).parameters();
+                    // Convert url query parameters into JSON key value pair
+                    Map<String, List<String>> params =
+                            (new QueryStringDecoder(httpRequest.uri())).parameters();
                     if (!params.isEmpty()) {
                         for (Entry<String, List<String>> p : params.entrySet()) {
                             String key = p.getKey();
@@ -437,10 +448,12 @@ public class HttpActiveReplica {
                         }
                     }
 
-                    if (json != null && json.length() > 0)
+                    if (json.length() > 0)
                         try {
                             gRequest = getRequestFromJSONObject(json);
-                            logger.log(Level.INFO, "Http server retrieved an HttpActiveReplicaRequest from HttpRequest: {0}", new Object[]{gRequest});
+                            logger.log(Level.INFO,
+                                    "Http server retrieved an HttpActiveReplicaRequest " +
+                                            "from HttpRequest: {0}", new Object[]{gRequest});
                             retrieved = true;
                         } catch (Exception e) {
                             // ignore and do nothing if this is a malformed request
@@ -451,56 +464,58 @@ public class HttpActiveReplica {
                 if (msg instanceof HttpContent) {
                     if (!retrieved) {
                         HttpContent httpContent = (HttpContent) msg;
-                        logger.log(Level.INFO, "Http server received a request with HttpContent: {0}", new Object[]{httpContent});
-                        if (httpContent != null) {
-                            json = getJSONObjectFromHttpContent(httpContent);
-                            if (json != null && json.length() > 0)
-                                try {
-                                    gRequest = getRequestFromJSONObject(json);
-                                    retrieved = true;
-                                } catch (Exception e) {
-                                    // TODO: A malformed request, we can send back the response here
-                                    e.printStackTrace();
-                                }
-                        }
+                        logger.log(Level.INFO,
+                                "Http server received a request with HttpContent: {0}",
+                                new Object[]{httpContent});
+                        json = getJSONObjectFromHttpContent(httpContent);
+                        if (json != null && json.length() > 0)
+                            try {
+                                gRequest = getRequestFromJSONObject(json);
+                                retrieved = true;
+                            } catch (Exception e) {
+                                // TODO: A malformed request, we can send back the response here
+                                e.printStackTrace();
+                            }
 
                     }
 
-                    if (msg instanceof LastHttpContent) {
+                    if (msg instanceof LastHttpContent trailer) {
                         if (retrieved) {
-                            logger.log(Level.INFO, "About to execute request: {0}", new Object[]{gRequest});
+                            logger.log(Level.INFO,
+                                    "About to execute request: {0}", new Object[]{gRequest});
                             Object lock = new Object();
                             finished = false;
                             ExecutedCallback callback = new HttpExecutedCallback(buf, lock);
 
                             // execute GigaPaxos request here
                             if (arFunctions != null) {
-                                logger.log(Level.FINE, "App {0} executes request: {1}", new Object[]{arFunctions, request});
+                                logger.log(Level.FINE,
+                                        "App {0} executes request: {1}",
+                                        new Object[]{arFunctions, request});
                                 boolean handled = arFunctions.handRequestToAppForHttp(
-                                        (gRequest.needsCoordination()) ? ReplicableClientRequest.wrap(gRequest) : gRequest,
+                                        (gRequest.needsCoordination())
+                                                ? ReplicableClientRequest.wrap(gRequest) : gRequest,
                                         callback);
 
-                                synchronized (lock) {
-                                    while (!finished) {
-                                        try {
-                                            lock.wait(100);
-                                        } catch (InterruptedException e) {
+                                // This one below is inefficient, and probably incorrect.
+                                while (!finished) {
+                                    try {
+                                        lock.wait(100);
+                                    } catch (InterruptedException ignored) {
 
-                                        }
                                     }
                                 }
 
-                                /**
-                                 *  If the request has been handled properly, then send demand profile to RC.
-                                 *  This logic follows the design of (@link ActiveReplica}.
-                                 */
+                                //  If the request has been handled properly, then send demand
+                                //  profile to RC. This logic follows the design of
+                                //  (@link ActiveReplica}.
                                 if (handled)
-                                    arFunctions.updateDemandStatsFromHttp(gRequest, senderAddr.getAddress());
+                                    arFunctions.updateDemandStatsFromHttp(
+                                            gRequest, senderAddr.getAddress());
                             }
 
                         }
 
-                        LastHttpContent trailer = (LastHttpContent) msg;
                         if (!trailer.trailingHeaders().isEmpty()) {
                             buf.append("\r\n");
                             for (CharSequence name : trailer.trailingHeaders()
@@ -533,66 +548,72 @@ public class HttpActiveReplica {
                 }
             }
 
-            ByteBuf bodyRefCopy;
             if (msg instanceof HttpContent content) {
-                bodyRefCopy = content.content().copy();
-                this.requestContent = new DefaultLastHttpContent(bodyRefCopy);
-            } else {
-                bodyRefCopy = null;
+                this.requestContent = new DefaultLastHttpContent(content.content());
             }
 
             if (msg instanceof LastHttpContent) {
                 assert this.request != null;
                 boolean isKeepAlive = HttpUtil.isKeepAlive(this.request);
 
-                // return http bad request if service name is not specified
+                // Return http bad request response if service name is not specified
                 String serviceName = XdnHttpRequest.inferServiceName(this.request);
                 if (serviceName == null || serviceName.isEmpty()) {
                     HttpActiveReplicaHandler.sendBadRequestResponse(
                             "Unspecified service name." +
                                     "This can be cause because of a wrong Host or empty XDN header",
-                            ctx,
-                            false);
+                            ctx
+                    );
                     return;
                 }
 
-                // FIXME: need to cleanly handle coordinator request. The two coordination requests
-                //  handled here are:
-                //   1. Request to set this node as the primary in PrimaryBackup.
-                //   2. Request to get the protocol role (e.g., primary/backup).
-                if (this.request.headers().get("coordinator-request") != null &&
-                        this.request.headers().get("node-id") != null) {
-                    String nodeID = this.request.headers().get("node-id");
-                    ChangePrimaryPacket p = new ChangePrimaryPacket(serviceName, nodeID);
-                    handleCoordinatorRequest(p, ctx);
-                    return;
-                }
-                if (this.request.headers().get("XdnGetProtocolRoleRequest") != null) {
-                    XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest =
-                            new XdnGetProtocolRoleRequest(serviceName);
-                    handleCoordinatorRequest(xdnGetProtocolRoleRequest, ctx);
+                // Check if this is a request to get replica info
+                // GET /api/v2/services/{name}/replica/info
+                String uri = this.request.uri();
+                if (uri.startsWith("/api/v2/") &&
+                        this.request.method() == HttpMethod.GET &&
+                        uri.matches("/api/v2/services/[^/]+/replica/info")) {
+                    // Extract service name from URI path
+                    String[] parts = uri.split("/");
+                    if (parts.length >= 5) {
+                        String serviceNameFromPath = parts[4];
+                        XdnGetReplicaInfoRequest xdnGetReplicaInfoRequest =
+                                new XdnGetReplicaInfoRequest(serviceNameFromPath);
+                        handleCoordinatorRequest(xdnGetReplicaInfoRequest, ctx);
+                        return;
+                    }
+                    // If we can't extract service name, send bad request
+                    HttpActiveReplicaHandler.sendBadRequestResponse(
+                            "Invalid service name in URI path", ctx);
                     return;
                 }
 
-                if (isDebugUseDummyResponse || isDebugBypassCoordination) {
+                // Handle debug requests, for measurement purposes.
+                if (this.request.headers().contains(DBG_HDR_DUMMY_RESPONSE) ||
+                        this.request.headers().contains(DBG_HDR_BYPASS_COORDINATION) ||
+                        this.request.headers().contains(DBG_HDR_DIRECT_EXECUTE)) {
                     handleDebugRequests(new XdnHttpRequest(this.request, this.requestContent), ctx);
                     return;
                 }
 
-                // instrumenting the request for latency measurement
+                // Instrumenting the request for latency measurement
                 long startExecTimeNs = System.nanoTime();
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
+                // Retain the netty objects because we execute off the event loop and
+                // SimpleChannelInboundHandler will otherwise release them after this method returns.
+                ReferenceCountUtil.retain(httpRequest.getHttpRequest());
+                ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
+                this.request = null;
+                this.requestContent = null;
 
                 // Submit long-running request coordination and execution off the event loop
-                Future<HttpResponse> execFuture;
-                if (isHttpFrontendBatchEnabled) {
-                    execFuture = offload.submit(
-                            () -> executeXdnHttpRequestViaBatching(httpRequest, this.senderAddr));
-                } else {
-                    execFuture = offload.submit(() ->
-                            executeXdnHttpRequest(httpRequest, this.senderAddr));
-                }
+                Future<HttpResponse> execFuture =
+                        isHttpFrontendBatchEnabled
+                                ? offload.submit(() -> executeXdnHttpRequestViaBatching(
+                                        httpRequest, this.senderAddr))
+                                : offload.submit(() ->
+                                        executeXdnHttpRequest(httpRequest, this.senderAddr));
 
                 // If channel closes before completion, cancel the task
                 ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
@@ -603,48 +624,64 @@ public class HttpActiveReplica {
                                 // Add timeout to prevent indefinite blocking
                                 return execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
                             } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt(); // Restore interrupt status
+                                // Restore interrupt status
+                                Thread.currentThread().interrupt();
                                 throw new RuntimeException("Request execution interrupted", e);
                             } catch (java.util.concurrent.TimeoutException e) {
-                                execFuture.cancel(true); // Cancel the future if it times out
-                                throw new RuntimeException("Request execution timed out after 10s", e);
+                                // Cancel the future if it times out
+                                execFuture.cancel(true);
+                                throw new RuntimeException(
+                                        "Request execution timed out after 10s",
+                                        e
+                                );
                             } catch (ExecutionException e) {
-                                throw new RuntimeException("Request execution failed: " + e.getCause().getMessage(), e);
+                                throw new RuntimeException(
+                                        "Request execution failed: " + e.getCause().getMessage(),
+                                        e
+                                );
                             }
                         }, offload)
                         .whenComplete((httpResponse, err) -> {
-                            // release buffer of http request's content
-                            bodyRefCopy.release();
-
-                            // Check channel state, do nothing if the channel is inactive (e.g., closed by client)
+                            // Check channel state, do nothing if the channel is inactive
+                            // (e.g., closed by client).
                             if (!ctx.channel().isActive()) {
-                                if (err != null) {
-                                    System.out.println(">>> HttpActiveReplica - original error: " + err.getMessage());
+                                if (err != null && !(err instanceof CancellationException)) {
+                                    System.out.println(">>> HttpActiveReplica - original error: " +
+                                            err.getMessage());
                                     err.printStackTrace();
                                 }
                                 return;
                             }
 
-                            // finally, handle the error or send the response
+                            // Finally, handle the error or send the response
                             ctx.executor().execute(() -> {
-                                // Error handling, send string message
-                                if (err != null) {
-                                    System.out.println("Writing error response: " + err.getMessage());
-                                    err.printStackTrace();
-                                    HttpActiveReplicaHandler.sendStringResponse(
-                                            err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
-                                    return;
+                                try {
+                                    // Error handling, send string message
+                                    if (err != null) {
+                                        System.out.println(
+                                                "Writing error response: " + err.getMessage());
+                                        err.printStackTrace();
+                                        HttpActiveReplicaHandler.sendStringResponse(
+                                                err.getMessage(),
+                                                INTERNAL_SERVER_ERROR,
+                                                false,
+                                                ctx
+                                        );
+                                        return;
+                                    }
+
+                                    // Success handling
+                                    HttpActiveReplicaHandler.writeHttpResponse(
+                                            httpRequest.getRequestID(),
+                                            httpResponse,
+                                            ctx,
+                                            isKeepAlive,
+                                            startExecTimeNs);
+                                } finally {
+                                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                    ReferenceCountUtil.release(
+                                            httpRequest.getHttpRequestContent());
                                 }
-
-                                // Success handling
-                                long totalExecDuration = System.nanoTime() - startExecTimeNs;
-                                HttpActiveReplicaHandler.writeHttpResponse(
-                                        httpRequest.getRequestID(),
-                                        httpResponse,
-                                        ctx,
-                                        isKeepAlive,
-                                        totalExecDuration);
-
                             });
                         });
             }
@@ -666,7 +703,8 @@ public class HttpActiveReplica {
             this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
                 if (handled) {
                     if (request == null) {
-                        future.completeExceptionally(new RuntimeException("Request was handled but returned null"));
+                        future.completeExceptionally(
+                                new RuntimeException("Request was handled but returned null"));
                     } else {
                         future.complete(request);
                     }
@@ -689,20 +727,19 @@ public class HttpActiveReplica {
             } catch (java.util.concurrent.TimeoutException e) {
                 throw new RuntimeException("Request execution timed out after 5s", e);
             } catch (ExecutionException e) {
-                throw new RuntimeException("Request execution failed: " + e.getCause().getMessage(), e);
+                throw new RuntimeException(
+                        "Request execution failed: " + e.getCause().getMessage(), e);
             }
 
             // Validate the executed Http request
             if (!(executedRequest instanceof XdnHttpRequest xdnRequest)) {
                 String exceptionMessage = "Unexpected executed request (" +
-                        (executedRequest != null
-                                ? executedRequest.getClass().getSimpleName() : "null") +
+                        executedRequest.getClass().getSimpleName() +
                         "), it must be a " + XdnHttpRequest.class.getSimpleName();
                 throw new RuntimeException(exceptionMessage);
             }
 
             // Get the response
-            // TODO: use Netty response instead of JDK.
             return xdnRequest.getHttpResponse();
         }
 
@@ -732,20 +769,42 @@ public class HttpActiveReplica {
                 throw new RuntimeException(e);
             }
 
+            assert httpRequest.getRequestID() == executedRequest.getRequestID() :
+                    "Mismatch between the received and the executed request";
+
             return executedRequest.getHttpResponse();
         }
 
-        // TODO: cleanly handle this
         private void handleCoordinatorRequest(Request p, ChannelHandlerContext context) {
-            assert p instanceof ChangePrimaryPacket || p instanceof XdnGetProtocolRoleRequest :
+            assert p instanceof ChangePrimaryPacket || p instanceof XdnGetReplicaInfoRequest :
                     "Unexpected packet type of " + p.getClass().getSimpleName();
-            arFunctions.handRequestToAppForHttp(p, (request, handled) -> {
-                String responseString = "OK\n";
-                if (request instanceof XdnGetProtocolRoleRequest xdnGetProtocolRoleRequest) {
-                    responseString = xdnGetProtocolRoleRequest.getJsonResponse();
-                }
-                sendStringResponse(responseString, context, false);
-            });
+
+            if (p instanceof XdnGetReplicaInfoRequest) {
+                arFunctions.handRequestToAppForHttp(p, (requestWithResponse, handled) -> {
+                    assert requestWithResponse instanceof XdnGetReplicaInfoRequest;
+                    assert handled : "Unhandled XdnGetReplicaInfoRequest";
+                    XdnGetReplicaInfoRequest resp = (XdnGetReplicaInfoRequest) requestWithResponse;
+                    if (resp.getErrorMessage() != null) {
+                        int errCode = resp.getHttpErrorCode() == null
+                                ? 500 : resp.getHttpErrorCode();
+                        sendStringResponse(resp.getErrorMessage(),
+                                HttpResponseStatus.valueOf(errCode),
+                                false,
+                                context);
+                        return;
+                    }
+                    String responseString =
+                            ((XdnGetReplicaInfoRequest) requestWithResponse).getJsonResponse();
+                    sendStringResponse(responseString, OK, true, context);
+                });
+            }
+
+            // TODO: cleanly handle this in Reconfigurator, instead of ActiveReplica
+            if (p instanceof ChangePrimaryPacket) {
+                arFunctions.handRequestToAppForHttp(p, (request, handled) -> {
+                    sendStringResponse("OK\n", context, false);
+                });
+            }
         }
 
         private void handleDebugRequests(XdnHttpRequest httpRequest, ChannelHandlerContext ctx) {
@@ -753,8 +812,8 @@ public class HttpActiveReplica {
 
             // Debug: send dummy response, the goal is to identify whether HttpActiveReplica
             //  is a bottleneck on receiving the incoming Http requests.
-            if (isDebugUseDummyResponse) {
-                httpRequest.getHttpRequestContent().content().release();
+            if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_DUMMY_RESPONSE)) {
+                long startExecTimeNs = System.nanoTime();
                 DefaultFullHttpResponse httpResponse = new DefaultFullHttpResponse(HTTP_1_1, OK,
                         Unpooled.copiedBuffer("DEBUG-OK", CharsetUtil.UTF_8));
                 httpResponse.headers().setInt(
@@ -763,48 +822,118 @@ public class HttpActiveReplica {
                 HttpActiveReplicaHandler.writeHttpResponse(
                         httpRequest.getRequestID(),
                         httpResponse,
-                        ctx, isKeepAlive, 0L);
+                        ctx,
+                        isKeepAlive,
+                        startExecTimeNs);
+                return;
+            }
+
+            // Debug: directly execute the request using XdnGigapaxosApp, skip replica coordinator.
+            if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_DIRECT_EXECUTE)) {
+                assert debugAppReference != null :
+                        "XdnGigapaxosApp reference has not been set in HttpActiveReplica";
+                long startExecTimeNs = System.nanoTime();
+
+                httpRequest.getHttpRequest().headers().remove(DBG_HDR_DIRECT_EXECUTE);
+
+                // Send and execute possibly long-running request in offload executor.
+                Future<HttpResponse> execFuture =
+                        offload.submit(() -> {
+                            boolean isExecuted = debugAppReference.execute(httpRequest);
+                            assert isExecuted : "failed to executed HTTP request";
+                            assert httpRequest.getHttpResponse() != null :
+                                    "obtained null HTTP response";
+                            return httpRequest.getHttpResponse();
+                        });
+
+                // If channel closes before completion, cancel the task
+                ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
+
+                // When done, switch back to the channel's EventLoop to write the response
+                CompletableFuture.supplyAsync(() -> {
+                            try {
+                                return execFuture.get();
+                            } catch (InterruptedException | ExecutionException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }, offload)
+                        .whenComplete((httpResponse, err) -> {
+                            // do nothing when the channel is inactive
+                            if (!ctx.channel().isActive()) return;
+
+                            // finally, handle the error or send the response
+                            ctx.executor().execute(() -> {
+                                // Error handling, send string message
+                                if (err != null) {
+                                    System.out.println("Writing error response: " + err.getMessage());
+                                    err.printStackTrace();
+                                    HttpActiveReplicaHandler.sendStringResponse(
+                                            err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
+                                    return;
+                                }
+
+                                // Success handling
+                                HttpActiveReplicaHandler.writeHttpResponse(
+                                        httpRequest.getRequestID(),
+                                        httpResponse,
+                                        ctx,
+                                        isKeepAlive,
+                                        startExecTimeNs);
+                            });
+                        });
+
                 return;
             }
 
             // Debug: forward http request directly to the dockerized service. The goal is to
             //  identify the "rough" cost of coordination via the Gigapaxos/XDN stack.
             //  To make this work, please specify the docker's service port in the
-            //  request header with XDN_DBG_SVC_PORT as the header name.
-            if (isDebugBypassCoordination) {
-                int detectedTargetPort = -1;
+            //  request header with DBG_HDR_BYPASS_COORDINATION (i.e., __DBCP).
+            if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_BYPASS_COORDINATION)) {
+                int detectedTargetPort;
 
-                String targetPortStr = httpRequest.getHttpRequest().
-                        headers().get("XDN_DBG_SVC_PORT");
+                String targetPortStr = httpRequest.getHttpRequest()
+                        .headers().get(DBG_HDR_BYPASS_COORDINATION_PORT);
                 if (targetPortStr != null) {
                     detectedTargetPort = Integer.parseInt(targetPortStr);
+                } else {
+                    detectedTargetPort = -1;
                 }
+
                 if (detectedTargetPort == -1) {
-                    throw new IllegalStateException(
-                            "Expecting port in the header with XDN_DBG_SVC_PORT as the key");
+                    sendBadRequestResponse(
+                            String.format(
+                                    "[DEBUG] Expecting container port in the header with %s " +
+                                            "as the key",
+                                    DBG_HDR_BYPASS_COORDINATION_PORT),
+                            ctx
+                    );
+                    return;
                 }
 
-                java.net.http.HttpRequest jdkHttpRequest =
-                        XdnGigapaxosApp.createOutboundHttpRequest(
-                                httpRequest.getHttpRequest(),
-                                httpRequest.getHttpRequestContent(),
-                                detectedTargetPort);
+                long startExecTimeNs = System.nanoTime();
 
-                java.net.http.HttpResponse<byte[]> response;
-                try {
-                    response = debugHttpClient.send(jdkHttpRequest,
-                            java.net.http.HttpResponse.BodyHandlers.ofByteArray());
-                } catch (IOException | InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
+                httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION);
+                httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION_PORT);
+
+                int forwarderClientIdx = (int) (ctx.channel().remoteAddress().hashCode() % DBG_NUM_FORWARDER_CLIENTS);
+                XdnHttpForwarderClient debugHttpClient = debugHttpClients[forwarderClientIdx];
 
                 // Send and execute possibly long-running request in offload executor.
-                Future<java.net.http.HttpResponse<byte[]>> execFuture = offload.submit(() -> {
+                ReferenceCountUtil.retain(httpRequest.getHttpRequest());
+                ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
+                Future<FullHttpResponse> execFuture = offload.submit(() -> {
                     try {
-                        return debugHttpClient.send(jdkHttpRequest,
-                                java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+                        httpRequest.getHttpRequestContent().retain();
+                        return debugHttpClient.execute(
+                                "127.0.0.1",
+                                detectedTargetPort,
+                                (FullHttpRequest) httpRequest.getHttpRequest());
                     } catch (IOException | InterruptedException e) {
                         throw new RuntimeException(e);
+                    } finally {
+                        ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                        ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
                     }
                 });
 
@@ -840,8 +969,10 @@ public class HttpActiveReplica {
                                 // Success handling
                                 HttpActiveReplicaHandler.writeHttpResponse(
                                         httpRequest.getRequestID(),
-                                        XdnGigapaxosApp.toNettyHttpResponse(response),
-                                        ctx, isKeepAlive, 0L);
+                                        httpResponse,
+                                        ctx,
+                                        isKeepAlive,
+                                        startExecTimeNs);
                             });
                         });
             }
@@ -849,12 +980,18 @@ public class HttpActiveReplica {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
-            cause.printStackTrace();
+            if (!(cause instanceof SocketException) ||
+                    cause.getMessage().contains("Connection reset")) {
+                System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
+                cause.printStackTrace();
+            }
             if (ctx.channel().isActive()) {
-                byte[] bytes = ("error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                byte[] bytes = ("Error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                boolean isUnknownServiceNameError =
+                        cause.getMessage().contains("Unknown coordinator for name=");
                 FullHttpResponse resp = new DefaultFullHttpResponse(
-                        HTTP_1_1, INTERNAL_SERVER_ERROR, Unpooled.wrappedBuffer(bytes));
+                        HTTP_1_1, isUnknownServiceNameError ? NOT_FOUND : INTERNAL_SERVER_ERROR,
+                        Unpooled.wrappedBuffer(bytes));
                 resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
                 resp.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, bytes.length);
                 ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
@@ -863,7 +1000,8 @@ public class HttpActiveReplica {
             }
         }
 
-        private static void sendBadRequestResponse(String message, ChannelHandlerContext ctx, boolean isKeepAlive) {
+        private static void sendBadRequestResponse(String message,
+                                                   ChannelHandlerContext ctx) {
             FullHttpResponse response = new DefaultFullHttpResponse(
                     HTTP_1_1, BAD_REQUEST,
                     Unpooled.copiedBuffer(message, CharsetUtil.UTF_8));
@@ -871,24 +1009,17 @@ public class HttpActiveReplica {
             // Add 'Content-Length' header only for a keep-alive connection.
             // Add keep alive header as per:
             // http://www.w3.org/Protocols/HTTP/1.1/draft-ietf-http-v11-spec-01.html#Connection
-            if (isKeepAlive) {
-                response.headers().setInt(
-                        HttpHeaderNames.CONTENT_LENGTH,
-                        response.content().readableBytes());
-                response.headers().set(
-                        HttpHeaderNames.CONNECTION,
-                        HttpHeaderValues.KEEP_ALIVE);
-            }
+            response.headers().setInt(
+                    HttpHeaderNames.CONTENT_LENGTH,
+                    response.content().readableBytes());
+            response.headers().set(
+                    HttpHeaderNames.CONNECTION,
+                    HttpHeaderValues.KEEP_ALIVE);
 
             ChannelFuture cf = ctx.writeAndFlush(response);
             if (!cf.isSuccess()) {
                 System.out.printf("%s:%s - sendBadRequestResponse, write failed: %s\n",
                         nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause());
-            }
-
-            // If keep-alive is off, close the connection once the content is fully written.
-            if (!isKeepAlive) {
-                ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
             }
         }
 
@@ -913,7 +1044,7 @@ public class HttpActiveReplica {
             }
 
             ChannelFuture cf = ctx.writeAndFlush(response);
-            if (!cf.isSuccess()) {
+            if (!cf.isSuccess() && cf.cause() != null) {
                 System.out.println("write failed: " + cf.cause());
                 System.out.printf("%s:%s - sendStringResponse, write failed: %s, string:%s\n",
                         nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause(), message);
@@ -926,7 +1057,9 @@ public class HttpActiveReplica {
         }
 
         @Deprecated
-        private static void sendStringResponse(String message, ChannelHandlerContext ctx, boolean isKeepAlive) {
+        private static void sendStringResponse(String message,
+                                               ChannelHandlerContext ctx,
+                                               boolean isKeepAlive) {
             HttpActiveReplicaHandler.sendStringResponse(message, OK, isKeepAlive, ctx);
         }
 
@@ -951,41 +1084,53 @@ public class HttpActiveReplica {
                 long postExecElapsedTime = System.nanoTime() - postExecTimestamp;
                 logger.log(Level.FINE, "{0}:{1} - HTTP post-execution over {2}ms",
                         new Object[]{
-                                nodeId,
+                                nodeId.toLowerCase(),
                                 HttpActiveReplica.class.getSimpleName(),
                                 (postExecElapsedTime / 1_000_000.0)});
                 httpResponse.headers().remove(postExecTimestampHeaderKey);
             }
 
-            if (isKeepAlive) {
-                httpResponse.headers().set(
-                        HttpHeaderNames.CONNECTION,
-                        HttpHeaderValues.KEEP_ALIVE);
-            }
-
+            long preResponseWriteTsNs = System.nanoTime();
             ChannelFuture cf = ctx.writeAndFlush(httpResponse);
             cf.addListener((ChannelFutureListener) channelFuture -> {
-                if (!channelFuture.isSuccess()) {
-                    logger.log(Level.WARNING,
-                            "Writing response failed: " + channelFuture.cause());
-                }
+                try {
+                    if (!channelFuture.isSuccess()) {
+                        if (channelFuture.cause() instanceof ClosedChannelException) {
+                            // do nothing if end-client is the one who close the connection.
+                            return;
+                        }
+                        logger.log(Level.WARNING,
+                                "Writing response failed: " + channelFuture.cause());
+                    }
 
-                // If keep-alive is off, close the connection once the content is fully written.
-                if (!isKeepAlive) {
-                    ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
-                            .addListener(ChannelFutureListener.CLOSE);
+                    if (startProcessingTime > 0) {
+                        long now = System.nanoTime();
+                        long writeDuration = now - preResponseWriteTsNs;
+                        long elapsedOverallTime = now - startProcessingTime;
+                        logger.log(Level.FINE,
+                                "{0}:{1} - Overall HTTP execution within {2}ms (wrt={3}ms) [id: {4}]",
+                                new Object[]{
+                                        nodeId.toLowerCase(),
+                                        HttpActiveReplica.class.getSimpleName(),
+                                        (elapsedOverallTime / 1_000_000.0),
+                                        (writeDuration / 1_000_000.0),
+                                        String.valueOf(requestId)});
+                    }
+
+                    // If keep-alive is off, close the connection once the content is fully written.
+                    if (!isKeepAlive) {
+                        ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
+                                .addListener(ChannelFutureListener.CLOSE);
+                    }
+                } finally {
+                    // We should release the reference-counted httpResponse here.
+                    // It is allocated in the XdnGigapaxosApp after forwarding the request
+                    // into the containerized service.
+                    // However, because this handler is a SimpleChannelInboundHandler, this
+                    // handler already automatically release the httpResponse for us because
+                    // of the ctx.writeAndFlush(..) above.
                 }
             });
-
-            if (startProcessingTime > 0) {
-                long elapsedTime = System.nanoTime() - startProcessingTime;
-                logger.log(Level.FINE, "{0}:{1} - Overall HTTP execution within {2}ms (id: {3})",
-                        new Object[]{
-                                nodeId,
-                                HttpActiveReplica.class.getSimpleName(),
-                                (elapsedTime / 1_000_000.0),
-                                String.valueOf(requestId)});
-            }
         }
 
         private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {
@@ -1033,44 +1178,6 @@ public class HttpActiveReplica {
             ctx.write(response);
         }
 
-        private record XdnHttpExecutedCallback(XdnHttpRequest request,
-                                               ChannelHandlerContext ctx,
-                                               ActiveReplicaFunctions arFunctions,
-                                               long startProcessingTime)
-                implements ExecutedCallback {
-            @Override
-            public void executed(Request executedRequest, boolean handled) {
-                // Validates the executed Http request
-                if (!(executedRequest instanceof XdnHttpRequest xdnRequest)) {
-                    String exceptionMessage = "Unexpected executed request (" +
-                            executedRequest.getClass().getSimpleName() +
-                            "), it must be a " + XdnHttpRequest.class.getSimpleName();
-                    throw new RuntimeException(exceptionMessage);
-                }
-
-                // Prepares the Http response, then send it back to client.
-                HttpResponse httpResponse = xdnRequest.getHttpResponse();
-                boolean isKeepAlive = HttpUtil.isKeepAlive(request.getHttpRequest());
-                if (httpResponse != null) {
-                    isKeepAlive = isKeepAlive && HttpUtil.isKeepAlive(httpResponse);
-                }
-                writeHttpResponse(xdnRequest.getRequestID(), httpResponse,
-                        ctx, isKeepAlive, startProcessingTime);
-
-                // Asynchronously sends statistics to the control plane (i.e., RC).
-                if (isDemandProfilerEnabled) {
-                    InetAddress clientInetAddress = null;
-                    if (ctx.channel().remoteAddress() instanceof InetSocketAddress isa) {
-                        clientInetAddress = isa.getAddress();
-                    }
-                    arFunctions.updateDemandStatsFromHttp(executedRequest, clientInetAddress);
-                }
-            }
-        }
-    }
-
-    public static void main(String[] args) throws CertificateException, SSLException, InterruptedException {
-        new HttpActiveReplica("node1", null, new InetSocketAddress(8080), false);
     }
 
 }

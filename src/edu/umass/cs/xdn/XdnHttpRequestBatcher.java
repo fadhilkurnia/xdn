@@ -12,12 +12,7 @@ import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
@@ -25,10 +20,10 @@ import java.util.logging.Logger;
 
 /**
  * Batches {@link XdnHttpRequest}s before handing them over to {@link ActiveReplicaFunctions} for
- * execution. The batcher is composed of three single-threaded workers:
+ * execution. The batcher is composed of three different kind of workers:
  * <ol>
- *   <li>A producer that drains the submission queue fed by {@link HttpActiveReplica} and pushes
- *   them into the batching queue.</li>
+ *   <li>Submission workers that drains the submission queue fed by {@link HttpActiveReplica}
+ *   and pushes them into the batching queue. These workers can be bypassed.</li>
  *   <li>A batching worker that aggregates pending requests into {@link XdnHttpRequestBatch}
  *   instances and forwards them to the application by invoking
  *   {@link ActiveReplicaFunctions#handRequestToAppForHttp(Request, ExecutedCallback)}.</li>
@@ -38,25 +33,29 @@ import java.util.logging.Logger;
  * </ol>
  */
 public final class XdnHttpRequestBatcher implements Closeable {
-
-    public static final int DEFAULT_MAX_BATCH_SIZE = 256;
-    public static final Duration DEFAULT_MAX_BATCH_DELAY = Duration.ofMillis(2);
-
-    private static final Logger LOG = Logger.getLogger(XdnHttpRequestBatcher.class.getName());
+    public static final int DEFAULT_MAX_BATCH_SIZE = 2048;
+    public static final Duration DEFAULT_MAX_BATCH_DELAY = Duration.ofNanos(100_000); // 0.1 ms
 
     private final ActiveReplicaFunctions arFunctions;
     private final int maxBatchSize;
     private final long maxBatchDelayNanos;
 
-    private final BlockingQueue<BatchEntry> submissionQueue = new LinkedBlockingQueue<>();
     private final BlockingQueue<BatchEntry> batchingQueue = new LinkedBlockingQueue<>();
     private final BlockingQueue<BatchResult> completionQueue = new LinkedBlockingQueue<>();
 
-    private final ExecutorService producerExecutor;
     private final ExecutorService batchingExecutor;
     private final ExecutorService completionExecutor;
 
+    // TODO: explain the impact of enabling/disabling submission workers.
+    //  - these dedicated workers are beneficial to bump up the size of a batch.
+    private final boolean isSeparateSubmissionWorkers = true;
+    private final ExecutorService submissionExecutor;
+    private final Queue<BatchEntry> submissionQueue = new ConcurrentLinkedQueue<>();
+    private static final int NUM_SUBMISSION_WORKERS = 2;
+
     private final AtomicBoolean running = new AtomicBoolean(true);
+
+    private static final Logger LOG = Logger.getLogger(XdnHttpRequestBatcher.class.getName());
 
     public XdnHttpRequestBatcher(ActiveReplicaFunctions arFunctions) {
         this(arFunctions, DEFAULT_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_DELAY);
@@ -69,11 +68,16 @@ public final class XdnHttpRequestBatcher implements Closeable {
         this.maxBatchSize = Math.max(1, maxBatchSize);
         this.maxBatchDelayNanos = Objects.requireNonNull(maxBatchDelay, "maxBatchDelay").toNanos();
 
-        this.producerExecutor = Executors.newSingleThreadExecutor(namedThreadFactory("xdn-batch-producer"));
+        if (isSeparateSubmissionWorkers) {
+            this.submissionExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        } else {
+            this.submissionExecutor = null;
+        }
+
         this.batchingExecutor = Executors.newSingleThreadExecutor(namedThreadFactory("xdn-batch-builder"));
         this.completionExecutor = Executors.newSingleThreadExecutor(namedThreadFactory("xdn-batch-completion"));
 
-        startProducerWorker();
+        startSubmissionWorker();
         startBatchingWorker();
         startCompletionWorker();
     }
@@ -87,28 +91,39 @@ public final class XdnHttpRequestBatcher implements Closeable {
         if (!running.get()) {
             throw new IllegalStateException("Batcher is closed");
         }
-        boolean isInserted = submissionQueue.offer(
-                new BatchEntry(request, clientInetSocketAddress, completionHandler));
-        assert isInserted : "Failed to submit request";
+        boolean isInserted;
+        if (isSeparateSubmissionWorkers) {
+            isInserted = submissionQueue.offer(
+                    new BatchEntry(request, clientInetSocketAddress, completionHandler));
+        } else {
+            isInserted = batchingQueue.offer(
+                    new BatchEntry(request, clientInetSocketAddress, completionHandler));
+        }
+        assert isInserted : "Failed to submit request into the receiving queue";
     }
 
     // ProducerWorker moves requests from submissionQueue into batchingQueue
-    private void startProducerWorker() {
-        producerExecutor.execute(() -> {
-            try {
-                while (running.get() || !submissionQueue.isEmpty()) {
-                    BatchEntry entry = submissionQueue.poll(100, TimeUnit.MILLISECONDS);
-                    if (entry == null) {
-                        continue;
+    private void startSubmissionWorker() {
+        if (!isSeparateSubmissionWorkers) {
+            return;
+        }
+        for (int i = 0; i < NUM_SUBMISSION_WORKERS; i++) {
+            submissionExecutor.execute(() -> {
+                try {
+                    while (running.get() || !submissionQueue.isEmpty()) {
+                        BatchEntry entry = submissionQueue.poll();
+                        if (entry == null) {
+                            continue;
+                        }
+                        batchingQueue.put(entry);
                     }
-                    batchingQueue.put(entry);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                } catch (Throwable t) {
+                    LOG.log(Level.WARNING, "Submission worker encountered an error", t);
                 }
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            } catch (Throwable t) {
-                LOG.log(Level.WARNING, "Producer worker encountered an error", t);
-            }
-        });
+            });
+        }
     }
 
     // BatchingWorker consumes multiple requests from batchingQueue, creates batch entry, and
@@ -118,20 +133,25 @@ public final class XdnHttpRequestBatcher implements Closeable {
             List<BatchEntry> buffer = new ArrayList<>(maxBatchSize);
             try {
                 while (running.get() || !batchingQueue.isEmpty()) {
-                    BatchEntry first = batchingQueue.poll(maxBatchDelayNanos, TimeUnit.NANOSECONDS);
+                    BatchEntry first = batchingQueue.poll();
                     if (first == null) {
                         continue;
                     }
 
-                    // Keep write or unknown requests isolated to avoid unsafe batching.
+                    // Keep write-only, read-modify-write, or unknown request type isolated
+                    // to avoid unsafe batching. For now, we only batch read-only requests.
                     if (isNotBehavioralReadOnly(first)) {
                         dispatchBatch(Collections.singletonList(first));
                         continue;
                     }
 
+                    // Put multiple read-only requests for the same service name into a batch,
+                    // otherwise, issue a batch with single request only.
                     buffer.add(first);
+                    String batchServiceName = first.request.getServiceName();
                     while (buffer.size() < maxBatchSize) {
-                        BatchEntry next = batchingQueue.poll();
+                        BatchEntry next = batchingQueue.poll(
+                                maxBatchDelayNanos, TimeUnit.NANOSECONDS);
                         if (next == null) {
                             break;
                         }
@@ -140,6 +160,14 @@ public final class XdnHttpRequestBatcher implements Closeable {
                             buffer.clear();
                             dispatchBatch(Collections.singletonList(next));
                             break;
+                        }
+                        String nextServiceName = next.request.getServiceName();
+                        if (!Objects.equals(batchServiceName, nextServiceName)) {
+                            dispatchBatch(new ArrayList<>(buffer));
+                            buffer.clear();
+                            buffer.add(next);
+                            batchServiceName = nextServiceName;
+                            continue;
                         }
                         buffer.add(next);
                     }
@@ -179,10 +207,13 @@ public final class XdnHttpRequestBatcher implements Closeable {
         completionExecutor.execute(() -> {
             try {
                 while (running.get() || !completionQueue.isEmpty()) {
-                    BatchResult result = completionQueue.poll(100, TimeUnit.MILLISECONDS);
+                    BatchResult result = completionQueue.poll(100, TimeUnit.MICROSECONDS);
                     if (result == null) {
                         continue;
                     }
+                    LOG.log(Level.FINEST, this.getClass().getSimpleName()
+                            + " - Delivering current batch result, remaining="
+                            + completionQueue.size());
                     deliverResult(result);
                 }
             } catch (InterruptedException ie) {
@@ -213,7 +244,8 @@ public final class XdnHttpRequestBatcher implements Closeable {
 
         XdnHttpRequestBatch batch;
         try {
-            LOG.log(Level.FINE, "Batching with request size of " + entries.size());
+            LOG.log(Level.FINE, this.getClass().getSimpleName()
+                    + " - Batching with request size of " + entries.size());
             batch = new XdnHttpRequestBatch(requests);
         } catch (RuntimeException e) {
             boolean isInserted = completionQueue.offer(new BatchResult(entries, e));
@@ -263,16 +295,18 @@ public final class XdnHttpRequestBatcher implements Closeable {
             return;
         }
 
-        producerExecutor.shutdownNow();
         batchingExecutor.shutdownNow();
         completionExecutor.shutdownNow();
 
         Throwable shutdownError = new IllegalStateException("Batcher closed");
         BatchEntry entry;
-        while ((entry = submissionQueue.poll()) != null) {
-            boolean isInserted = completionQueue.offer(
-                    new BatchResult(Collections.singletonList(entry), shutdownError));
-            assert isInserted : "Failed to insert closing error into the completion queue";
+        if (isSeparateSubmissionWorkers) {
+            submissionExecutor.shutdownNow();
+            while ((entry = submissionQueue.poll()) != null) {
+                boolean isInserted = completionQueue.offer(
+                        new BatchResult(Collections.singletonList(entry), shutdownError));
+                assert isInserted : "Failed to insert closing error into the completion queue";
+            }
         }
 
         while ((entry = batchingQueue.poll()) != null) {
@@ -330,7 +364,6 @@ public final class XdnHttpRequestBatcher implements Closeable {
                                 i, clientReqId, serverRespId);
             }
 
-
             // Get the batch of response, pair each with the request.
             for (int i = 0; i < executedXdnHttpRequestBatch.size(); i++) {
                 XdnHttpRequest clientReq = context.entries.get(i).request;
@@ -338,7 +371,7 @@ public final class XdnHttpRequestBatcher implements Closeable {
                 clientReq.setHttpResponse(serverResp.getHttpResponse());
             }
 
-            boolean isInserted = completionQueue.offer(new BatchResult(context.entries, error));
+            boolean isInserted = completionQueue.offer(new BatchResult(context.entries, null));
             assert isInserted : "Failed to insert execution batch result into completion queue";
         }
     }

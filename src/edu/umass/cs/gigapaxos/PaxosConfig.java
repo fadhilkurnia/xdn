@@ -937,9 +937,9 @@ public class PaxosConfig {
 		 * deterministically chosen coordinator during startup suddenly crashed,
 		 * making all the Nodes need to wait until coordinator timeout.
 		 * <p>
-		 * The default value is true.
+		 * The default value is false.
 		 */
-		ENABLE_STARTUP_LEADER_ELECTION(true),
+		ENABLE_STARTUP_LEADER_ELECTION(false),
 
 
 		/**

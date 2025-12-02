@@ -1,0 +1,18 @@
+services:
+  mongo:
+    image: "mongodb/mongodb-atlas-local"
+    ports:
+      - "27017:27017"
+  app:
+    image: "bookcatalog-mongo"
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - MONGO_URI=mongodb://mongo:27017/?directConnection=true
+      - MONGO_DB=books
+      - MONGO_COLLECTION=books
+    depends_on:
+      - mongo
+

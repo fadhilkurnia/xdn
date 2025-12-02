@@ -6,9 +6,7 @@ import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.gigapaxos.paxosutil.LargeCheckpointer;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
-import edu.umass.cs.primarybackup.packets.PrimaryBackupPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
-import edu.umass.cs.reconfiguration.http.HttpActiveReplicaRequest;
 import edu.umass.cs.reconfiguration.interfaces.InitialStateValidator;
 import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
@@ -26,17 +24,11 @@ import edu.umass.cs.xdn.utils.Utils;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
+import io.netty.util.ReferenceCountUtil;
 import org.json.JSONException;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.StringWriter;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.net.StandardProtocolFamily;
-import java.net.URI;
-import java.net.UnixDomainSocketAddress;
+import java.io.*;
+import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SocketChannel;
@@ -46,6 +38,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,8 +90,12 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     private AbstractStateDiffRecorder stateDiffRecorder;
 
     // Client to forward HTTP requests into the containerized services.
+    // It is specifically designed with Netty, matching HttpActiveReplica, to avoid
+    // unnecessary request conversion (e.g., Netty request to OpenJDK request).
     private final XdnHttpForwarderClient httpForwarderClient;
 
+    // HTTP request cache to prevent deserializing an already deserialized request
+    // upon coordination. This is useful for the entry replica.
     private static final int REQUEST_CACHE_CAPACITY = 4096;
     private final Map<Long, Request> requestCache = Collections.synchronizedMap(
             new LinkedHashMap<>(REQUEST_CACHE_CAPACITY, 0.75f, true) {
@@ -109,6 +107,10 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     // LargeCheckpointer for reconfiguration final state
     private final LargeCheckpointer largeCheckpointer;
+
+    // Backdoor HTTP header used to emulate NoOp execution by directly returning dummy response.
+    // This is used mainly for measuring the coordination, not execution, overhead.
+    private static final String DBG_HDR_NO_OP_EXECUTION = "___DNO";
 
     private final Logger logger = Logger.getLogger(XdnGigapaxosApp.class.getName());
 
@@ -204,37 +206,56 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public boolean execute(Request request) {
+        long startExecuteTimeNs = System.nanoTime();
         String serviceName = request.getServiceName();
 
-        if (request instanceof HttpActiveReplicaRequest) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive " +
-                    "HttpActiveReplicaRequest");
+        // Prepare XdnHttpRequest
+        boolean isXdnHttpReq = request instanceof XdnHttpRequest;
+        XdnHttpRequest xdnHttpRequest = null;
+        if (isXdnHttpReq) {
+            xdnHttpRequest = (XdnHttpRequest) request;
         }
 
-        if (request instanceof PrimaryBackupPacket) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive PrimaryBackupPacket");
+        // Debug: skip execution and return dummy response to emulate NoOp.
+        if (isXdnHttpReq && xdnHttpRequest.getHttpRequest()
+                .headers().contains(DBG_HDR_NO_OP_EXECUTION)) {
+            ByteBuf content = Unpooled.copiedBuffer("NoOp".getBytes());
+            FullHttpResponse dummyResponse = new DefaultFullHttpResponse(
+                    HttpVersion.HTTP_1_1,
+                    HttpResponseStatus.OK,
+                    content);
+            dummyResponse.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+            xdnHttpRequest.setHttpResponse(dummyResponse);
+            return true;
         }
 
-        if (request instanceof XDNStatediffApplyRequest) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive " +
-                    "XDNStatediffApplyRequest");
-        }
-
-        if (request instanceof XdnJsonHttpRequest) {
-            throw new RuntimeException("XdnGigapaxosApp should not receive XdnJsonHttpRequest");
-        }
-
-        if (request instanceof XdnHttpRequest xdnHttpRequest) {
-            long startTime = System.nanoTime();
+        // The actual HTTP request execution.
+        if (isXdnHttpReq) {
+            long preFwdTimeNs = System.nanoTime();
             forwardHttpRequestToContainerizedService(xdnHttpRequest);
+            assert xdnHttpRequest.getHttpResponse() != null
+                    : "Obtained null response after request execution";
+            assert ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()) == 1
+                    : String.format(
+                    "Unexpected refCnt of response after execution (%d!=1)",
+                    ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()));
+            releaseHttpResponseOnNonEntryReplica(xdnHttpRequest);
+            long endFwdTimeNs = System.nanoTime();
+
             requestCache.remove(xdnHttpRequest.getRequestID());
-            long elapsedTime = System.nanoTime() - startTime;
-            logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} (id: {6})",
-                    new Object[]{this.myNodeId, this.getClass().getSimpleName(),
-                            (elapsedTime / 1_000_000.0),
+            long endRmCacheTimeNs = System.nanoTime();
+
+            long endTime = System.nanoTime();
+            logger.log(Level.FINE, "{0}:{1} - execution within {2}ms, {3} {4}:{5} " +
+                            "(fwd={6}ms rmc={7}ms) [id: {8}]",
+                    new Object[]{this.myNodeId.toLowerCase(),
+                            this.getClass().getSimpleName(),
+                            (endTime - startExecuteTimeNs) / 1_000_000.0,
                             xdnHttpRequest.getHttpRequest().method(),
                             serviceName,
                             xdnHttpRequest.getHttpRequest().uri(),
+                            (endFwdTimeNs - preFwdTimeNs) / 1_000_000.0,
+                            (endRmCacheTimeNs - endFwdTimeNs) / 1_000_000.0,
                             String.valueOf(xdnHttpRequest.getRequestID())});
             return true;
         }
@@ -242,6 +263,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         if (request instanceof XdnHttpRequestBatch xdnBatch) {
             long startTime = System.nanoTime();
             forwardHttpRequestBatchToContainerizedService(xdnBatch);
+            releaseHttpResponsesOnNonEntryReplica(xdnBatch);
             requestCache.remove(xdnBatch.getRequestID());
             long elapsedTime = System.nanoTime() - startTime;
             logger.log(Level.FINE, "{0}:{1} - batch execution within {2}ms, size={3} service={4}",
@@ -264,6 +286,42 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         String exceptionMessage = String.format("%s:XdnGigapaxosApp executing unknown request %s",
                 this.myNodeId, request.getClass().getSimpleName());
         throw new RuntimeException(exceptionMessage);
+    }
+
+    //  Releasing buffer for httpResponse is tricky because
+    //  the release depends on the replica's role. If the replica
+    //  is the entry replica, then HttpActiveReplica is responsible
+    //  to release the response after writing it for the end client.
+    //  However, if the replica is not the entry replica, then we can
+    //  immediately release the response here as it will be discarded.
+    //  .
+    //  Our approach is to have a flag inside XdnHttpRequest (i.e., isCreatedFromString)
+    //  that indicates whether it is created in HttpActiveReplica (and
+    //  is in the entry replica) or it is created by XdnGigapaxosApp.getRequest()
+    //  in a non-entry replica.
+    //  .
+    //  Another complexity is regarding the requests in our cache.
+    private void releaseHttpResponseOnNonEntryReplica(XdnHttpRequest xdnHttpRequest) {
+        if (xdnHttpRequest == null) return;
+        if (xdnHttpRequest.getHttpResponse() == null) return;
+        if (xdnHttpRequest.isCreatedFromString()) {
+            ReferenceCountUtil.release(xdnHttpRequest.getHttpResponse());
+        }
+    }
+
+    private void releaseHttpResponsesOnNonEntryReplica(XdnHttpRequestBatch batch) {
+        if (batch == null) return;
+        if (!batch.isCreatedFromBytes()) return;
+        for (var requestWithResponse : batch.getRequestList()) {
+            if (requestWithResponse.getHttpResponse() == null) {
+                continue;
+            }
+            assert ReferenceCountUtil.refCnt(requestWithResponse.getHttpResponse()) == 1
+                    : String.format(
+                    "Unexpected refCnt of response after execution (%d!=1)",
+                    ReferenceCountUtil.refCnt(requestWithResponse.getHttpResponse()));
+            ReferenceCountUtil.release(requestWithResponse.getHttpResponse());
+        }
     }
 
     private void activate(String serviceName) {
@@ -333,7 +391,6 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
     @Override
     public String checkpoint(String name) {
         // TODO: implement me
-        System.out.println(">> XDNGigapaxosApp:" + this.myNodeId + " - checkpoint ... name=" + name);
         return "dummyXDNServiceCheckpoint";
     }
 
@@ -1367,6 +1424,148 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         }
     }
 
+    /**
+     * Retrieves docker container IDs for all components in the service by inspecting each known container name.
+     */
+    public List<String> getContainerIds(String serviceName) {
+        ServiceInstance service = services.get(serviceName);
+        if (service == null) {
+            return null;
+        }
+
+        List<String> containerIds = new ArrayList<>(service.containerNames.size());
+        for (String containerName : service.containerNames) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "container", "inspect", "--format", "{{.Id}}", containerName);
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                String output;
+                try (InputStream inputStream = process.getInputStream()) {
+                    output = new String(inputStream.readAllBytes(), StandardCharsets.ISO_8859_1).trim();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0 && !output.isEmpty()) {
+                    containerIds.add(output);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        return containerIds;
+    }
+
+    /**
+     * Get human readable uptime duration for all components in the service.
+     *
+     * @param serviceName Name of the service to get container uptimes for
+     * @return List of container uptime durations (e.g. "5 minutes ago", "3 days ago"), or null if service not found
+     */
+    public List<String> getContainerCreatedAtInfo(String serviceName) {
+        ServiceInstance service = services.get(serviceName);
+        if (service == null) {
+            return null;
+        }
+
+        List<String> createdAtInfo = new ArrayList<>(service.containerNames.size());
+        for (String containerName : service.containerNames) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "container", "inspect", "--format", "{{.State.StartedAt}}", containerName);
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                String output;
+                try (InputStream inputStream = process.getInputStream()) {
+                    output = new String(inputStream.readAllBytes(), StandardCharsets.ISO_8859_1).trim();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0 && !output.isEmpty()) {
+                    // Parse the ISO 8601 timestamp and convert to human readable format
+                    try {
+                        Instant startedAt = Instant.parse(output);
+                        Duration duration = Duration.between(startedAt, Instant.now());
+
+                        // Format duration in human readable form
+                        String humanReadable;
+                        if (duration.toDays() > 365) {
+                            long years = duration.toDays() / 365;
+                            humanReadable = years + (years == 1 ? " year" : " years") + " ago";
+                        } else if (duration.toDays() > 30) {
+                            long months = duration.toDays() / 30;
+                            humanReadable = months + (months == 1 ? " month" : " months") + " ago";
+                        } else if (duration.toDays() > 0) {
+                            long days = duration.toDays();
+                            humanReadable = days + (days == 1 ? " day" : " days") + " ago";
+                        } else if (duration.toHours() > 0) {
+                            long hours = duration.toHours();
+                            humanReadable = hours + (hours == 1 ? " hour" : " hours") + " ago";
+                        } else if (duration.toMinutes() > 0) {
+                            long minutes = duration.toMinutes();
+                            humanReadable = minutes + (minutes == 1 ? " minute" : " minutes") + " ago";
+                        } else {
+                            long seconds = duration.getSeconds();
+                            humanReadable = seconds + (seconds == 1 ? " second" : " seconds") + " ago";
+                        }
+                        createdAtInfo.add(humanReadable);
+                    } catch (DateTimeParseException e) {
+                        // If parsing fails, just add the original timestamp
+                        createdAtInfo.add(output);
+                    }
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        return createdAtInfo;
+    }
+
+    /**
+     * Get container status for all components in the service.
+     *
+     * @param serviceName Name of the service to get container status for
+     * @return List of container status strings (e.g. "running", "exited", "created"), or null if service not found
+     */
+    public List<String> getContainerStatus(String serviceName) {
+        ServiceInstance service = services.get(serviceName);
+        if (service == null) {
+            return null;
+        }
+
+        List<String> statusInfo = new ArrayList<>(service.containerNames.size());
+        for (String containerName : service.containerNames) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "docker", "container", "inspect", "--format", "{{.State.Status}}", containerName);
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                String output;
+                try (InputStream inputStream = process.getInputStream()) {
+                    output = new String(inputStream.readAllBytes(), StandardCharsets.ISO_8859_1).trim();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0 && !output.isEmpty()) {
+                    statusInfo.add(output);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        }
+        return statusInfo;
+    }
+
+    public ServiceInstance getServiceInstance(String serviceName) {
+        return services.get(serviceName);
+    }
+
     /**********************************************************************************************
      *             Begin implementation methods for BackupableApplication interface               *
      *********************************************************************************************/
@@ -1375,14 +1574,23 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
 
     @Override
     public String captureStatediff(String serviceName) {
+        long startCaptureTimeNs = System.nanoTime();
         int currentPlacementEpoch = this.getEpoch(serviceName);
         String stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
-        return XDN_STATE_DIFF_PREFIX + stateDiff;
+        String finalStateDiff = XDN_STATE_DIFF_PREFIX + stateDiff;
+        long endCaptureTimeNs = System.nanoTime();
+
+        logger.log(Level.FINE, "{0}:{1} - capture stateDiff within {2}ms, size={3}bytes service={4}",
+                new Object[]{this.myNodeId, this.getClass().getSimpleName(),
+                        (endCaptureTimeNs - startCaptureTimeNs) / 1_000_000.0,
+                        finalStateDiff.length(),
+                        serviceName});
+
+        return finalStateDiff;
     }
 
     @Override
     public boolean applyStatediff(String serviceName, String statediff) {
-
         ServiceInstance service = services.get(serviceName);
         if (service == null) {
             throw new RuntimeException("unknown service " + serviceName);
@@ -1409,6 +1617,7 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             String restartCommand = String.format("docker container restart %s", service.statefulContainer);
             int exitCode = runShellCommand(restartCommand, true);
             if (exitCode != 0) {
+                System.err.println("Fail to restart the container with exit code " + exitCode);
                 return false;
             }
         }
@@ -1782,7 +1991,25 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         return true;
     }
 
+    /**
+     * Forwards the HttpRequest and HttpRequestContent inside xdnRequest into the
+     * containerized service. When there is no error, xdnRequest contains the response
+     * from the service.
+     * NOTE: It is the responsibility of the caller of this method to release the buffer
+     * <pre>{@code
+     *   forwardHttpRequestToContainerizedService(xdnRequest);
+     *   ...
+     *   ReferenceCountUtil.release(xdnRequest.getHttpResponse());
+     * }</pre>
+     *
+     * @param xdnRequest non-null XdnHttpRequest that contains valid HttpRequest.
+     */
     private void forwardHttpRequestToContainerizedService(XdnHttpRequest xdnRequest) {
+        Objects.requireNonNull(xdnRequest, "xdnRequest");
+        Objects.requireNonNull(xdnRequest.getHttpRequest(), "xdnRequest.httpRequest");
+        Objects.requireNonNull(xdnRequest.getHttpRequestContent(), "xdnRequest.httpRequestContent");
+        assert xdnRequest.getHttpResponse() == null;
+
         long startTime = System.nanoTime();
         String serviceName = xdnRequest.getServiceName();
         assert serviceName != null;
@@ -1816,13 +2043,11 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
             xdnRequest.setHttpResponse(httpResponse);
             endConversionTime = System.nanoTime();
             endResponseStoreTime = System.nanoTime();
-
-            // TODO: httpResponse.release();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
 
-        logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms, val={3}ms crt={4}ms " +
+        logger.log(Level.FINE, "{0}:{1} - docker proxy takes {2}ms (val={3}ms crt={4}ms " +
                         "exc={5}ms conv={6}ms sto={7}ms)",
                 new Object[]{this.myNodeId, this.getClass().getSimpleName(),
                         (endResponseStoreTime - startTime) / 1_000_000.0,
@@ -1838,8 +2063,17 @@ public class XdnGigapaxosApp implements Replicable, Reconfigurable, BackupableAp
         CompletableFuture<?>[] futures = new CompletableFuture<?>[requests.size()];
         for (int i = 0; i < requests.size(); i++) {
             XdnHttpRequest httpRequest = requests.get(i);
-            futures[i] = CompletableFuture.runAsync(
-                    () -> forwardHttpRequestToContainerizedService(httpRequest));
+            futures[i] = CompletableFuture.runAsync(() -> {
+                forwardHttpRequestToContainerizedService(httpRequest);
+                assert httpRequest.getHttpResponse() != null
+                        : "Obtained null response after request execution";
+                assert ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()) == 1
+                        : String.format(
+                        "Unexpected refCnt of response after execution (%d!=1)",
+                        ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()));
+                // NOTE: we are not releasing the reference-counter response here because
+                //       it will be released in the HttpActiveReplica.
+            });
         }
         CompletableFuture.allOf(futures).join();
     }

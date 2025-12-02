@@ -3,6 +3,7 @@ package edu.umass.cs.xdn;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -27,12 +28,13 @@ import java.util.logging.Logger;
 /**
  * A lightweight debugging HTTP proxy built on Netty. The proxy buffers entire inbound requests
  * before forwarding them to origin servers and reuses persistent connections for identical
- * {@code Host} destinations via {@link FixedChannelPool}.
+ * {@code Host} destinations via {@link FixedChannelPool}. Unlike, {@link HttpDebugProxy}, this
+ * proxy also buffers entire responses from origin servers before sending them back to clients.
  *
  * <p>Running the proxy:</p>
  * <pre>{@code
  *   # Compile the project first, then start the proxy on port 8080
- *   java -cp build/classes/java/main edu.umass.cs.xdn.HttpDebugProxy 8080
+ *   java -cp build/classes/java/main edu.umass.cs.xdn.HttpDebugIndirectProxy 8080
  *
  *   # Configure your browser/client to use http://127.0.0.1:8080 as its HTTP proxy.
  * }</pre>
@@ -40,14 +42,14 @@ import java.util.logging.Logger;
  * <p>The proxy is intended for local testing and debugging; it is <em>not</em> hardened for
  * production scenarios.</p>
  */
-public final class HttpDebugProxy implements Closeable {
+public final class HttpDebugIndirectProxy implements Closeable {
 
     private static final Logger LOG = Logger.getLogger(HttpDebugProxy.class.getName());
 
     private static final int MAX_CONTENT_LENGTH = 16 * 1024 * 1024;
     private static final int DEFAULT_MAX_POOL_SIZE = 8;
     private static final AttributeKey<ProxyRequestContext> CONTEXT_KEY =
-            AttributeKey.valueOf("httpDebugProxyCtx");
+            AttributeKey.valueOf("httpDebugIndirectProxyCtx");
 
     private final EventLoopGroup bossGroup;
     private final EventLoopGroup workerGroup;
@@ -57,13 +59,13 @@ public final class HttpDebugProxy implements Closeable {
 
     private volatile Channel serverChannel;
 
-    public HttpDebugProxy() {
-        this(new NioEventLoopGroup(), new NioEventLoopGroup(), new NioEventLoopGroup());
+    public HttpDebugIndirectProxy() {
+        this(new NioEventLoopGroup(1), new NioEventLoopGroup(), new NioEventLoopGroup());
     }
 
-    HttpDebugProxy(EventLoopGroup bossGroup,
-                   EventLoopGroup workerGroup,
-                   EventLoopGroup clientGroup) {
+    HttpDebugIndirectProxy(EventLoopGroup bossGroup,
+                      EventLoopGroup workerGroup,
+                      EventLoopGroup clientGroup) {
         this.bossGroup = Objects.requireNonNull(bossGroup, "bossGroup");
         this.workerGroup = Objects.requireNonNull(workerGroup, "workerGroup");
         this.clientGroup = Objects.requireNonNull(clientGroup, "clientGroup");
@@ -222,24 +224,6 @@ public final class HttpDebugProxy implements Closeable {
         return copy;
     }
 
-    private static FullHttpResponse copyResponse(FullHttpResponse response) {
-        ByteBuf content = response.content();
-        ByteBuf copiedContent = content != null && content.isReadable()
-                ? Unpooled.copiedBuffer(content)
-                : Unpooled.EMPTY_BUFFER;
-
-        DefaultFullHttpResponse copy = new DefaultFullHttpResponse(
-                response.protocolVersion(), response.status(), copiedContent);
-        copy.headers().set(response.headers());
-        copy.trailingHeaders().set(response.trailingHeaders());
-        if (copiedContent != Unpooled.EMPTY_BUFFER) {
-            HttpUtil.setContentLength(copy, copiedContent.readableBytes());
-        } else {
-            copy.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
-        }
-        return copy;
-    }
-
     private final class ProxyFrontendHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
         @Override
@@ -324,42 +308,127 @@ public final class HttpDebugProxy implements Closeable {
         }
     }
 
-    private static final class ProxyBackendHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
+    private static final class ProxyBackendHandler extends SimpleChannelInboundHandler<HttpObject> {
 
         @Override
-        protected void channelRead0(ChannelHandlerContext ctx, FullHttpResponse msg) {
-            ProxyRequestContext context = ctx.channel().attr(CONTEXT_KEY).getAndSet(null);
+        protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) {
+            ProxyRequestContext context = ctx.channel().attr(CONTEXT_KEY).get();
             if (context == null) {
-                LOG.warning("Received response without context; dropping");
+                LOG.warning("Received backend message without request context; dropping");
                 return;
             }
 
+            if (msg instanceof HttpResponse response) {
+                if (isInformational(response)) {
+                    FullHttpResponse informational = toInformationalResponse(response);
+                    forwardResponse(ctx, context, informational, false);
+                    return;
+                }
+                context.beginResponseBuffer(ctx, response);
+            }
+
+            if (msg instanceof HttpContent content) {
+                BackendResponseBuffer buffer = context.pendingResponseBuffer();
+                if (buffer == null) {
+                    LOG.warning("Dropping HttpContent with no pending backend response");
+                    return;
+                }
+                if (!buffer.append(content)) {
+                    context.releasePendingResponse();
+                    handleBackendFailure(ctx, context,
+                            "Origin response exceeded " + MAX_CONTENT_LENGTH + " bytes");
+                    return;
+                }
+                if (msg instanceof LastHttpContent lastChunk) {
+                    FullHttpResponse aggregated = context.finishPendingResponse(lastChunk);
+                    if (aggregated != null) {
+                        forwardResponse(ctx, context, aggregated, true);
+                    }
+                }
+            }
+        }
+
+        private static boolean isInformational(HttpResponse response) {
+            HttpStatusClass statusClass = response.status().codeClass();
+            return statusClass == HttpStatusClass.INFORMATIONAL
+                    && response.status().code() != HttpResponseStatus.SWITCHING_PROTOCOLS.code();
+        }
+
+        private static FullHttpResponse toInformationalResponse(HttpResponse response) {
+            ByteBuf payload = response instanceof FullHttpResponse full && full.content().isReadable()
+                    ? Unpooled.copiedBuffer(full.content())
+                    : Unpooled.EMPTY_BUFFER;
+            DefaultFullHttpResponse copy = new DefaultFullHttpResponse(
+                    response.protocolVersion(), response.status(), payload);
+            copy.headers().set(response.headers());
+            if (payload.isReadable()) {
+                HttpUtil.setContentLength(copy, payload.readableBytes());
+            } else {
+                copy.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+            }
+            if (response instanceof FullHttpResponse full) {
+                copy.trailingHeaders().set(full.trailingHeaders());
+            }
+            return copy;
+        }
+
+        private static void forwardResponse(ChannelHandlerContext backendCtx,
+                                            ProxyRequestContext context,
+                                            FullHttpResponse response,
+                                            boolean finalResponse) {
             Channel inboundChannel = context.clientChannel();
             if (!inboundChannel.isActive()) {
-                context.release(ctx.channel());
+                ReferenceCountUtil.release(response);
+                if (finalResponse) {
+                    context.releasePendingResponse();
+                    context.release(backendCtx.channel());
+                    backendCtx.channel().attr(CONTEXT_KEY).set(null);
+                }
                 return;
             }
 
-            FullHttpResponse response = copyResponse(msg);
-            HttpUtil.setKeepAlive(response, context.keepAlive());
+            if (finalResponse) {
+                HttpUtil.setKeepAlive(response, context.keepAlive());
+            }
 
             ChannelFuture writeFuture = inboundChannel.writeAndFlush(response);
-            if (!context.keepAlive()) {
-                writeFuture.addListener(ChannelFutureListener.CLOSE);
-            }
-            writeFuture.addListener(f -> {
-                context.release(ctx.channel());
-                if (!f.isSuccess()) {
-                    LOG.log(Level.WARNING, "Failed to write response to client", f.cause());
-                    inboundChannel.close();
+            if (finalResponse) {
+                if (!context.keepAlive()) {
+                    writeFuture.addListener(ChannelFutureListener.CLOSE);
                 }
-            });
+                writeFuture.addListener(f -> {
+                    context.release(backendCtx.channel());
+                    backendCtx.channel().attr(CONTEXT_KEY).set(null);
+                    if (!f.isSuccess()) {
+                        LOG.log(Level.WARNING, "Failed to write response to client", f.cause());
+                        inboundChannel.close();
+                    }
+                });
+            } else {
+                writeFuture.addListener(f -> {
+                    if (!f.isSuccess()) {
+                        LOG.log(Level.WARNING, "Failed to write informational response to client", f.cause());
+                        inboundChannel.close();
+                    }
+                });
+            }
+        }
+
+        private static void handleBackendFailure(ChannelHandlerContext ctx,
+                                                 ProxyRequestContext context,
+                                                 String message) {
+            sendError(context.clientChannel(), HttpResponseStatus.BAD_GATEWAY, message);
+            context.releasePendingResponse();
+            context.release(ctx.channel());
+            ctx.channel().attr(CONTEXT_KEY).set(null);
+            ctx.close();
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             ProxyRequestContext context = ctx.channel().attr(CONTEXT_KEY).getAndSet(null);
             if (context != null) {
+                context.releasePendingResponse();
                 sendError(context.clientChannel(), HttpResponseStatus.BAD_GATEWAY,
                         "Origin connection error: " + cause.getMessage());
                 context.release(ctx.channel());
@@ -384,7 +453,6 @@ public final class HttpDebugProxy implements Closeable {
         public void channelCreated(Channel ch) {
             ChannelPipeline pipeline = ch.pipeline();
             pipeline.addLast(new HttpClientCodec());
-            pipeline.addLast(new HttpObjectAggregator(MAX_CONTENT_LENGTH));
             pipeline.addLast(new ProxyBackendHandler());
         }
     }
@@ -393,6 +461,7 @@ public final class HttpDebugProxy implements Closeable {
         private final Channel clientChannel;
         private final FixedChannelPool pool;
         private final boolean keepAlive;
+        private BackendResponseBuffer pendingResponse;
 
         private ProxyRequestContext(Channel clientChannel,
                                     FixedChannelPool pool,
@@ -400,6 +469,32 @@ public final class HttpDebugProxy implements Closeable {
             this.clientChannel = clientChannel;
             this.pool = pool;
             this.keepAlive = keepAlive;
+        }
+
+        void beginResponseBuffer(ChannelHandlerContext backendCtx, HttpResponse response) {
+            releasePendingResponse();
+            this.pendingResponse = new BackendResponseBuffer(backendCtx.alloc(), response);
+        }
+
+        BackendResponseBuffer pendingResponseBuffer() {
+            return pendingResponse;
+        }
+
+        FullHttpResponse finishPendingResponse(LastHttpContent lastChunk) {
+            if (pendingResponse == null) {
+                return null;
+            }
+            pendingResponse.addTrailers(lastChunk.trailingHeaders());
+            FullHttpResponse response = pendingResponse.build();
+            pendingResponse = null;
+            return response;
+        }
+
+        void releasePendingResponse() {
+            if (pendingResponse != null) {
+                pendingResponse.release();
+                pendingResponse = null;
+            }
         }
 
         Channel clientChannel() {
@@ -422,6 +517,81 @@ public final class HttpDebugProxy implements Closeable {
             } catch (Throwable t) {
                 LOG.log(Level.WARNING, "Failed to release backend channel", t);
                 backendChannel.close();
+            }
+        }
+    }
+
+    private static final class BackendResponseBuffer {
+        private final HttpVersion version;
+        private final HttpResponseStatus status;
+        private final HttpHeaders headers;
+        private final HttpHeaders trailingHeaders = new DefaultHttpHeaders();
+        private final ByteBufAllocator allocator;
+        private ByteBuf payload;
+        private long aggregatedBytes;
+
+        BackendResponseBuffer(ByteBufAllocator allocator, HttpResponse response) {
+            this.version = response.protocolVersion();
+            this.status = response.status();
+            this.headers = new DefaultHttpHeaders();
+            this.headers.set(response.headers());
+            this.allocator = allocator;
+            long declaredLength = HttpUtil.getContentLength(response, -1L);
+            if (declaredLength > 0 && declaredLength <= MAX_CONTENT_LENGTH) {
+                this.payload = allocator.buffer((int) declaredLength);
+            }
+        }
+
+        boolean append(HttpContent content) {
+            ByteBuf chunk = content.content();
+            if (!chunk.isReadable()) {
+                return true;
+            }
+            int readable = chunk.readableBytes();
+            long newSize = aggregatedBytes + readable;
+            if (newSize > MAX_CONTENT_LENGTH) {
+                return false;
+            }
+            aggregatedBytes = newSize;
+            ensurePayload(readable);
+            payload.writeBytes(chunk);
+            return true;
+        }
+
+        void addTrailers(HttpHeaders trailers) {
+            if (trailers != null && !trailers.isEmpty()) {
+                trailingHeaders.set(trailers);
+            }
+        }
+
+        FullHttpResponse build() {
+            ByteBuf content = payload == null ? Unpooled.EMPTY_BUFFER : payload;
+            payload = null;
+            DefaultFullHttpResponse response = new DefaultFullHttpResponse(version, status, content);
+            response.headers().set(headers);
+            if (content.isReadable()) {
+                HttpUtil.setContentLength(response, content.readableBytes());
+            } else {
+                response.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+            }
+            if (!trailingHeaders.isEmpty()) {
+                response.trailingHeaders().set(trailingHeaders);
+            }
+            return response;
+        }
+
+        void release() {
+            if (payload != null) {
+                payload.release();
+                payload = null;
+            }
+        }
+
+        private void ensurePayload(int minWritableBytes) {
+            if (payload == null) {
+                payload = allocator.buffer(Math.max(minWritableBytes, 256));
+            } else {
+                payload.ensureWritable(minWritableBytes);
             }
         }
     }
