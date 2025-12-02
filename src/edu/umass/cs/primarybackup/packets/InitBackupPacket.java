@@ -123,8 +123,9 @@ public class InitBackupPacket extends PrimaryBackupPacket implements Byteable {
 
     @Deprecated
     public static InitBackupPacket createFromString(String encodedPacket) {
-	throw new UnsupportedOperationException(
-	    "createFromString(String) is deprecated. Use createFromBytes(byte[]) with protobuf instead."
-	);
+        throw new UnsupportedOperationException(
+                "createFromString(String) is deprecated. " +
+                        "Use createFromBytes(byte[]) with protobuf instead."
+        );
     }
 }

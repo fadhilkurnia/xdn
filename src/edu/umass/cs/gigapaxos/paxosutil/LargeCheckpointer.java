@@ -167,29 +167,29 @@ public class LargeCheckpointer {
 	 * {@link Replicable} applications can use this method to create a
 	 * checkpoint handle after they have created a checkpoint in the file
 	 * {@code filename}.
-	 * 
+	 *
 	 * @param nodeId
 	 * @param filename
 	 * @return {@code filname} formatted as a paxos checkpoint handle.
 	 */
 	public String createCheckpointHandle(String nodeId, String filename) {
-	    JSONObject json = new JSONObject();
-	    try {
-		json.put(Keys.ISA3142.toString(),
-		(nodeId != null && PaxosConfig.getActives().get(nodeId) != null) ?
-		    new InetSocketAddress(PaxosConfig.getActives().get(nodeId).getAddress().getHostAddress(), this.serverSock.getLocalPort())
-		    : this.serverSock.getLocalSocketAddress()
-		);
-		json.put(Keys.FNAME2178.toString(), filename);
-		json.put(Keys.FSIZE6022.toString(), new File(filename).length());
+		JSONObject json = new JSONObject();
+		try {
+			json.put(Keys.ISA3142.toString(),
+					(nodeId != null && PaxosConfig.getActives().get(nodeId) != null) ?
+							new InetSocketAddress(PaxosConfig.getActives().get(nodeId)
+									.getAddress().getHostAddress(), this.serverSock.getLocalPort())
+							: this.serverSock.getLocalSocketAddress()
+			);
+			json.put(Keys.FNAME2178.toString(), filename);
+			json.put(Keys.FSIZE6022.toString(), new File(filename).length());
 
-	    } catch (JSONException e) {
-		e.printStackTrace();
-		return null;
-	    }
-	    return json.toString();
+		} catch (JSONException e) {
+			e.printStackTrace();
+			return null;
+		}
+		return json.toString();
 	}
-
 
 	/**
 	 * @param string
