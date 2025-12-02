@@ -36,6 +36,8 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     private static final String FUSELOG_BIN_PATH = "/usr/local/bin/fuselog";
     private static final String FUSELOG_APPLY_BIN_PATH = "/usr/local/bin/fuselog-apply";
 
+    private static final String defaultWorkingBasePath = "/tmp/xdn/state/fuselog/";
+
     // the default working base directory is /tmp/xdn/state/fuselog/
     private static final String workingBasePath =
             Config.getGlobalString(
