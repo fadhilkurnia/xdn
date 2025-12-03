@@ -1,0 +1,16 @@
+[package]
+name = "fuselog_rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[[bin]]
+name = "get_diff"
+path = "tools/get_diff.rs"
+
+[workspace]
+members = [ 
+    "fuselog_apply",
+    "fuselog_core",
+]
