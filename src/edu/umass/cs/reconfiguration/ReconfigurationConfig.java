@@ -454,6 +454,16 @@ public class ReconfigurationConfig {
         XDN_PB_STATEDIFF_RECORDER_TYPE("RSYNC"),
 
         /**
+         * Enable mechanism to sync non-deterministic state in primary-backup during
+         * initialization. This is generally needed for application that generates
+         * non-deterministic safety-critical state, such as apps that use MongoDB, MySQL, etc.
+         * Currently, we use rsync that may require ssh-key for the synchronization.
+         * It is still experimental, so we suggest to disable it.
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_PB_ENABLE_NON_DETERMINISTIC_INIT(true),
+
+        /**
          * The working directory for Fuselog, used to bind the state directory
          * of the replicated stateful services.
          * TODO: this should be specific to XDN, and not Gigapaxos config.
