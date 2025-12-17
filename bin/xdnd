@@ -24,23 +24,55 @@ function do_system_check() {
   echo "Error! unimplemented."
 }
 
-function do_distributed_initialization() {
-  echo "Initializing all the machines from the provided config ..."
-
-  # get config from parameters, if any.
+# parse_common_dist_args extracts shared distributed args and validates them.
+function parse_common_dist_args() {
   local DEFAULT_CONFIG="./conf/gigapaxos.properties"
-  local CONFIG=$DEFAULT_CONFIG
+  local config=$DEFAULT_CONFIG
+  local ssh_key=""
+  local username=""
+
   for ARG in "$@"; do
     case $ARG in
     -config=*)
-      CONFIG="${ARG#*=}"
+      config="${ARG#*=}"
+      ;;
+    -ssh-key=*)
+      ssh_key="${ARG#*=}"
+      ;;
+    -username=*)
+      username="${ARG#*=}"
       ;;
     esac
   done
 
-  # check if the specified/default config file exist
-  if [ ! -f "$CONFIG" ]; then
-    echo "Config file '$CONFIG' can not be found!"
+  if [ ! -f "$config" ]; then
+    echo "Config file '$config' can not be found!" >&2
+    return 1
+  fi
+
+  if [ -z "$ssh_key" ]; then
+    echo "Please specify the ssh key with '-ssh-key=<location>' argument." >&2
+    return 1
+  fi
+
+  if [ -z "$username" ]; then
+    echo "Please specify the username with '-username=<name>' argument." >&2
+    return 1
+  fi
+
+  printf "%s %s %s\n" "$config" "$ssh_key" "$username"
+}
+
+function do_distributed_initialization() {
+  echo "Initializing all the machines from the provided config ..."
+
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
+  if [[ -z ${CONFIG} || -z ${SSH_KEY} || -z ${USERNAME} ]]; then
+    echo "CONFIG, SSH_KEY, and USERNAME must all be provided" >&2
     exit 1
   fi
 
@@ -55,34 +87,6 @@ function do_distributed_initialization() {
     fi
   done <"$CONFIG"
 
-  # get the ssh key from args
-  local SSH_KEY=""
-  for ARG in "$@"; do
-    case $ARG in
-    -ssh-key=*)
-      SSH_KEY="${ARG#*=}"
-      ;;
-    esac
-  done
-  if [ -z "$SSH_KEY" ]; then
-    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
-    exit 1
-  fi
-
-  # get the username from args
-  local USERNAME=""
-  for ARG in "$@"; do
-    case $ARG in
-    -username=*)
-      USERNAME="${ARG#*=}"
-      ;;
-    esac
-  done
-  if [ -z "$USERNAME" ]; then
-    echo "Please specify the username with '-username=<name>' argument."
-    exit 1
-  fi
-
   # Print out the unique IPs/Hosts, ssh-key, and username
   echo " - config file       : ${CONFIG}"
   echo " - ssh key           : ${SSH_KEY}"
@@ -96,8 +100,9 @@ function do_distributed_initialization() {
   # go over all the machines to install the dependencies
   # and put the xdn source code into the machines.
   for machine in "${unique_ips[@]}"; do
-    install_dependencies $machine $SSH_KEY $USERNAME
-    upload_binaries $machine $SSH_KEY $USERNAME
+    prepare_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME"
+    install_dependencies "$machine" "$SSH_KEY" "$USERNAME"
+    upload_binaries "$machine" "$SSH_KEY" "$USERNAME"
   done
 
   exit 0
@@ -260,6 +265,83 @@ function do_start_instance() {
   esac
 }
 
+# prepare_ssh_config prepares the ssh config file to avoid host key checking prompts,
+# assuming all machines share the same ssh key and cloudlab machines with 10.10.x.x ips.
+# arg-1: machine ip address
+# arg-2: config file
+# arg-3: ssh-key location
+# arg-4: username for ssh
+function prepare_ssh_config() {
+  if [ "$#" -lt 4 ]; then
+    echo "prepare_ssh_config expects 4 args (node, config, ssh_key, username)" >&2
+    return 1
+  fi
+
+  local node=$1;
+  local config_file=$2;
+  local ssh_key=$3;
+  local username=$4;
+
+  echo "Preparing ssh config for machine $node ..."
+
+  local tmp_config
+  tmp_config=$(mktemp)
+
+  # extract unique IPs from the config file
+  local unique_ips=()
+  while IFS= read -r line; do
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
+      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
+      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
+        unique_ips+=("$ip")
+      fi
+    fi
+  done <"$config_file"
+
+  # prepare ssh config file
+  for host in "${unique_ips[@]}"; do
+    cat >>"$tmp_config" <<EOF
+Host $host
+  User $username
+  IdentityFile /users/$username/.ssh/xdn_ssh_key
+  StrictHostKeyChecking no
+
+EOF
+  done
+
+  # distribute the ssh config and key to the target machine
+  ssh_key="${ssh_key/#\~/$HOME}"
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+  scp -i "$ssh_key" -o StrictHostKeyChecking=no $ssh_key "$username@$node:~/.ssh/xdn_ssh_key"
+  scp -i "$ssh_key" -o StrictHostKeyChecking=no "$tmp_config" "$username@$node:~/.ssh/config"
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "chmod 600 ~/.ssh/config"
+  rm -f "$tmp_config"
+
+  # also prepare local ssh config for this machine,
+  # ideally this should be done only once outside the this prepare_ssh_config function
+  # that is called multiple times for each remote machine.
+  local local_ssh_dir="$HOME/.ssh"
+  local local_ssh_key="$local_ssh_dir/xdn_ssh_key"
+  local local_config_file="$local_ssh_dir/config"
+  mkdir -p "$local_ssh_dir"
+  chmod 700 "$local_ssh_dir"
+  cp $ssh_key "$local_ssh_key"
+  chmod 600 "$local_ssh_key"
+  local local_tmp_config
+  local_tmp_config=$(mktemp)
+  for host in "${unique_ips[@]}"; do
+    cat >>"$local_tmp_config" <<EOF
+Host $host
+  User $username
+  IdentityFile $local_ssh_key
+  StrictHostKeyChecking no
+
+EOF
+  done
+  mv "$local_tmp_config" "$local_config_file"
+  chmod 600 "$local_config_file"
+}
+
 # install_dependencies installs all the required dependencies for xdn (e.g., docker)
 # arg-1: machine ip address
 # arg-2: ssh-key location
@@ -379,9 +461,13 @@ function upload_binaries() {
   CMD+=("sudo rm -rf /usr/local/bin/xdn")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
+  CMD+=("sudo rm -rf /usr/local/bin/fuserust")
+  CMD+=("sudo rm -rf /usr/local/bin/fuserust-apply")
   CMD+=('sudo ln -s $HOME/xdn/bin/xdn /usr/local/bin/xdn')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuselog')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuselog-apply')
+  CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuserust')
+  CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuserust-apply')
   CMD+=("sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf")
   for i in "${!CMD[@]}"; do
     cmd=${CMD[$i]}
@@ -636,19 +722,14 @@ PROMDROP
 function do_distributed_init_observability() {
   echo "Initializing distributed observability setup ..."
 
-  # get config from parameters, if any.
-  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
-  local CONFIG=$DEFAULT_CONFIG
-  for ARG in "$@"; do
-    case $ARG in
-    -config=*)
-      CONFIG="${ARG#*=}"
-      ;;
-    esac
-  done
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
 
-  if [ ! -f "$CONFIG" ]; then
-    echo "Config file '$CONFIG' can not be found!"
+  if [[ -z ${CONFIG} || -z ${SSH_KEY} || -z ${USERNAME} ]]; then
+    echo "CONFIG, SSH_KEY, and USERNAME must all be provided" >&2
     exit 1
   fi
 
@@ -662,34 +743,6 @@ function do_distributed_init_observability() {
       fi
     fi
   done <"$CONFIG"
-
-  # get the ssh key from args
-  local SSH_KEY=""
-  for ARG in "$@"; do
-    case $ARG in
-    -ssh-key=*)
-      SSH_KEY="${ARG#*=}"
-      ;;
-    esac
-  done
-  if [ -z "$SSH_KEY" ]; then
-    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
-    exit 1
-  fi
-
-  # get the username from args
-  local USERNAME=""
-  for ARG in "$@"; do
-    case $ARG in
-    -username=*)
-      USERNAME="${ARG#*=}"
-      ;;
-    esac
-  done
-  if [ -z "$USERNAME" ]; then
-    echo "Please specify the username with '-username=<name>' argument."
-    exit 1
-  fi
 
   echo " - config file       : ${CONFIG}"
   echo " - ssh key           : ${SSH_KEY}"
