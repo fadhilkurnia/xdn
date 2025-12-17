@@ -954,27 +954,28 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         currentPrimaryEpoch.put(groupName, zero);
                         processOutstandingRequests();
 
+                        PrimaryBackupMiddlewareApp middleware;
+                        XdnGigapaxosApp xdnApp;
+
+                        // non-deterministic sync at initialization works only for
+                        // specific gigapaxos App
+                        if (!(this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp))
+                            return;
+                        middleware = (PrimaryBackupMiddlewareApp) this.paxosMiddlewareApp;
+                        if (!(middleware.getReplicableApp() instanceof XdnGigapaxosApp))
+                            return;
+                        xdnApp = (XdnGigapaxosApp) middleware.getReplicableApp();
+
+                        // TODO: use `Config.getGlobalString(PaxosConfig.PC.SSH_KEY_PATH)`
+                        String sshKey = PaxosConfig.getAsProperties()
+                                .getProperty("SSH_KEY_PATH", "");
+                        logger.log(Level.INFO, String.format(
+                                "%s:%s - Handling non-deterministic service initialization",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName()));
+
+                        xdnApp.restore(groupName, "nondeter:start:");
+
                         if (ENABLE_NON_DETERMINISTIC_INIT) {
-                            PrimaryBackupMiddlewareApp middleware;
-                            XdnGigapaxosApp xdnApp;
-
-                            // non-deterministic sync at initialization works only for
-                            // specific gigapaxos App
-                            if (!(this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp))
-                                return;
-                            middleware = (PrimaryBackupMiddlewareApp) this.paxosMiddlewareApp;
-                            if (!(middleware.getReplicableApp() instanceof XdnGigapaxosApp))
-                                return;
-                            xdnApp = (XdnGigapaxosApp) middleware.getReplicableApp();
-
-                            // TODO: use `Config.getGlobalString(PaxosConfig.PC.SSH_KEY_PATH)`
-                            String sshKey = PaxosConfig.getAsProperties()
-                                    .getProperty("SSH_KEY_PATH", "");
-                            logger.log(Level.INFO, String.format(
-                                    "%s:%s - Handling non-deterministic service initialization",
-                                    myNodeID, PrimaryBackupManager.class.getSimpleName()));
-
-                            xdnApp.restore(groupName, "nondeter:start:");
                             xdnApp.nonDeterministicInitialization(groupName, ipAddresses, sshKey);
 
                             while (!this.paxosManager.getPaxosCoordinator(groupName).equals(this.myNodeID)) {
@@ -1073,24 +1074,25 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         currentPrimaryEpoch.put(groupName, zero);
                         processOutstandingRequests();
 
+                        PrimaryBackupMiddlewareApp middleware;
+                        XdnGigapaxosApp xdnApp;
+
+                        if (!(this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp))
+                            return;
+                        middleware = (PrimaryBackupMiddlewareApp) this.paxosMiddlewareApp;
+                        if (!(middleware.getReplicableApp() instanceof XdnGigapaxosApp))
+                            return;
+                        xdnApp = (XdnGigapaxosApp) middleware.getReplicableApp();
+
+                        String sshKey = PaxosConfig.getAsProperties().
+                                getProperty("SSH_KEY_PATH", "");
+                        logger.log(Level.INFO, String.format(
+                                "%s:%s - Handling non-deterministic service initialization",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName()));
+
+                        xdnApp.restore(groupName, "nondeter:start:");
+
                         if (ENABLE_NON_DETERMINISTIC_INIT) {
-                            PrimaryBackupMiddlewareApp middleware;
-                            XdnGigapaxosApp xdnApp;
-
-                            if (!(this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp))
-                                return;
-                            middleware = (PrimaryBackupMiddlewareApp) this.paxosMiddlewareApp;
-                            if (!(middleware.getReplicableApp() instanceof XdnGigapaxosApp))
-                                return;
-                            xdnApp = (XdnGigapaxosApp) middleware.getReplicableApp();
-
-                            String sshKey = PaxosConfig.getAsProperties().
-                                    getProperty("SSH_KEY_PATH", "");
-                            logger.log(Level.INFO, String.format(
-                                    "%s:%s - Handling non-deterministic service initialization",
-                                    myNodeID, PrimaryBackupManager.class.getSimpleName()));
-
-                            xdnApp.restore(groupName, "nondeter:start:");
                             xdnApp.nonDeterministicInitialization(groupName, ipAddresses, sshKey);
 
                             logger.log(Level.INFO, String.format(
