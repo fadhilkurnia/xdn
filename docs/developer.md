@@ -12,6 +12,13 @@ ant jar
 ant xdn-unit-test-console
 ```
 
+## Formatting XDN Java code
+We enforce Google Java Style for everything under `src/edu/umass/cs/xdn` and `test`, and CI will block pushes that are not formatted.
+
+- Run `bin/google-java-format.sh` to format the XDN Java sources and tests in-place. The helper downloads `google-java-format` 1.17.0 into `bin/` on first use.
+- Run `bin/google-java-format.sh --check` to verify formatting without changing files (same command used in `.github/workflows/google-java-format.yml`).
+- Requirements: `bash`, `curl`, and `java` on your PATH. Override the formatter version by exporting `GOOGLE_JAVA_FORMAT_VERSION` before running the script.
+
 ## Logging, or why we should not use printf()
 
 To printout logging for specific classes, you can specify those classes 
