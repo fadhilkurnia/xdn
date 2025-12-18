@@ -7,94 +7,104 @@ package edu.umass.cs.xdn.proto;
 
 public final class XdnStopRequestProto {
   private XdnStopRequestProto() {}
+
   static {
     com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
-      com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
-      /* major= */ 4,
-      /* minor= */ 28,
-      /* patch= */ 2,
-      /* suffix= */ "",
-      XdnStopRequestProto.class.getName());
-  }
-  public static void registerAllExtensions(
-      com.google.protobuf.ExtensionRegistryLite registry) {
+        com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 28,
+        /* patch= */ 2,
+        /* suffix= */ "",
+        XdnStopRequestProto.class.getName());
   }
 
-  public static void registerAllExtensions(
-      com.google.protobuf.ExtensionRegistry registry) {
-    registerAllExtensions(
-        (com.google.protobuf.ExtensionRegistryLite) registry);
+  public static void registerAllExtensions(com.google.protobuf.ExtensionRegistryLite registry) {}
+
+  public static void registerAllExtensions(com.google.protobuf.ExtensionRegistry registry) {
+    registerAllExtensions((com.google.protobuf.ExtensionRegistryLite) registry);
   }
-  public interface XdnStopRequestOrBuilder extends
+
+  public interface XdnStopRequestOrBuilder
+      extends
       // @@protoc_insertion_point(interface_extends:xdn.XdnStopRequest)
       com.google.protobuf.MessageOrBuilder {
 
     /**
      * <code>int64 request_id = 1;</code>
+     *
      * @return The requestId.
      */
     long getRequestId();
 
     /**
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     java.lang.String getServiceName();
+
     /**
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
-    com.google.protobuf.ByteString
-        getServiceNameBytes();
+    com.google.protobuf.ByteString getServiceNameBytes();
 
     /**
      * <code>int32 reconfiguration_epoch = 3;</code>
+     *
      * @return The reconfigurationEpoch.
      */
     int getReconfigurationEpoch();
   }
-  /**
-   * Protobuf type {@code xdn.XdnStopRequest}
-   */
-  public static final class XdnStopRequest extends
-      com.google.protobuf.GeneratedMessage implements
+
+  /** Protobuf type {@code xdn.XdnStopRequest} */
+  public static final class XdnStopRequest extends com.google.protobuf.GeneratedMessage
+      implements
       // @@protoc_insertion_point(message_implements:xdn.XdnStopRequest)
       XdnStopRequestOrBuilder {
-  private static final long serialVersionUID = 0L;
+    private static final long serialVersionUID = 0L;
+
     static {
       com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
-        com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
-        /* major= */ 4,
-        /* minor= */ 28,
-        /* patch= */ 2,
-        /* suffix= */ "",
-        XdnStopRequest.class.getName());
+          com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+          /* major= */ 4,
+          /* minor= */ 28,
+          /* patch= */ 2,
+          /* suffix= */ "",
+          XdnStopRequest.class.getName());
     }
+
     // Use XdnStopRequest.newBuilder() to construct.
     private XdnStopRequest(com.google.protobuf.GeneratedMessage.Builder<?> builder) {
       super(builder);
     }
+
     private XdnStopRequest() {
       serviceName_ = "";
     }
 
-    public static final com.google.protobuf.Descriptors.Descriptor
-        getDescriptor() {
-      return edu.umass.cs.xdn.proto.XdnStopRequestProto.internal_static_xdn_XdnStopRequest_descriptor;
+    public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+      return edu.umass.cs.xdn.proto.XdnStopRequestProto
+          .internal_static_xdn_XdnStopRequest_descriptor;
     }
 
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
         internalGetFieldAccessorTable() {
-      return edu.umass.cs.xdn.proto.XdnStopRequestProto.internal_static_xdn_XdnStopRequest_fieldAccessorTable
+      return edu.umass.cs.xdn.proto.XdnStopRequestProto
+          .internal_static_xdn_XdnStopRequest_fieldAccessorTable
           .ensureFieldAccessorsInitialized(
-              edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.class, edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.Builder.class);
+              edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.class,
+              edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.Builder.class);
     }
 
     public static final int REQUEST_ID_FIELD_NUMBER = 1;
     private long requestId_ = 0L;
+
     /**
      * <code>int64 request_id = 1;</code>
+     *
      * @return The requestId.
      */
     @java.lang.Override
@@ -103,10 +113,13 @@ public final class XdnStopRequestProto {
     }
 
     public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object serviceName_ = "";
+
     /**
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     @java.lang.Override
@@ -115,25 +128,24 @@ public final class XdnStopRequestProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         serviceName_ = s;
         return s;
       }
     }
+
     /**
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getServiceNameBytes() {
+    public com.google.protobuf.ByteString getServiceNameBytes() {
       java.lang.Object ref = serviceName_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         serviceName_ = b;
         return b;
       } else {
@@ -143,8 +155,10 @@ public final class XdnStopRequestProto {
 
     public static final int RECONFIGURATION_EPOCH_FIELD_NUMBER = 3;
     private int reconfigurationEpoch_ = 0;
+
     /**
      * <code>int32 reconfiguration_epoch = 3;</code>
+     *
      * @return The reconfigurationEpoch.
      */
     @java.lang.Override
@@ -153,6 +167,7 @@ public final class XdnStopRequestProto {
     }
 
     private byte memoizedIsInitialized = -1;
+
     @java.lang.Override
     public final boolean isInitialized() {
       byte isInitialized = memoizedIsInitialized;
@@ -164,8 +179,7 @@ public final class XdnStopRequestProto {
     }
 
     @java.lang.Override
-    public void writeTo(com.google.protobuf.CodedOutputStream output)
-                        throws java.io.IOException {
+    public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
       if (requestId_ != 0L) {
         output.writeInt64(1, requestId_);
       }
@@ -185,15 +199,13 @@ public final class XdnStopRequestProto {
 
       size = 0;
       if (requestId_ != 0L) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt64Size(1, requestId_);
+        size += com.google.protobuf.CodedOutputStream.computeInt64Size(1, requestId_);
       }
       if (!com.google.protobuf.GeneratedMessage.isStringEmpty(serviceName_)) {
         size += com.google.protobuf.GeneratedMessage.computeStringSize(2, serviceName_);
       }
       if (reconfigurationEpoch_ != 0) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt32Size(3, reconfigurationEpoch_);
+        size += com.google.protobuf.CodedOutputStream.computeInt32Size(3, reconfigurationEpoch_);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -203,19 +215,17 @@ public final class XdnStopRequestProto {
     @java.lang.Override
     public boolean equals(final java.lang.Object obj) {
       if (obj == this) {
-       return true;
+        return true;
       }
       if (!(obj instanceof edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest)) {
         return super.equals(obj);
       }
-      edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest other = (edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest) obj;
+      edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest other =
+          (edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest) obj;
 
-      if (getRequestId()
-          != other.getRequestId()) return false;
-      if (!getServiceName()
-          .equals(other.getServiceName())) return false;
-      if (getReconfigurationEpoch()
-          != other.getReconfigurationEpoch()) return false;
+      if (getRequestId() != other.getRequestId()) return false;
+      if (!getServiceName().equals(other.getServiceName())) return false;
+      if (getReconfigurationEpoch() != other.getReconfigurationEpoch()) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -228,8 +238,7 @@ public final class XdnStopRequestProto {
       int hash = 41;
       hash = (19 * hash) + getDescriptor().hashCode();
       hash = (37 * hash) + REQUEST_ID_FIELD_NUMBER;
-      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-          getRequestId());
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(getRequestId());
       hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
       hash = (53 * hash) + getServiceName().hashCode();
       hash = (37 * hash) + RECONFIGURATION_EPOCH_FIELD_NUMBER;
@@ -240,127 +249,129 @@ public final class XdnStopRequestProto {
     }
 
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
-        java.nio.ByteBuffer data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+        java.nio.ByteBuffer data) throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
-        java.nio.ByteBuffer data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
         throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
         com.google.protobuf.ByteString data)
         throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
         com.google.protobuf.ByteString data,
         com.google.protobuf.ExtensionRegistryLite extensionRegistry)
         throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(byte[] data)
         throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
-        byte[] data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
         throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessage
-          .parseWithIOException(PARSER, input);
-    }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessage
-          .parseWithIOException(PARSER, input, extensionRegistry);
+        java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage.parseWithIOException(PARSER, input);
     }
 
-    public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseDelimitedFrom(java.io.InputStream input)
+    public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
+        java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
         throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessage
-          .parseDelimitedWithIOException(PARSER, input);
+      return com.google.protobuf.GeneratedMessage.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseDelimitedFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessage
-          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+        java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage.parseDelimitedWithIOException(PARSER, input);
     }
+
+    public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseDelimitedFrom(
+        java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+        throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage.parseDelimitedWithIOException(
+          PARSER, input, extensionRegistry);
+    }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
-        com.google.protobuf.CodedInputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessage
-          .parseWithIOException(PARSER, input);
+        com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessage.parseWithIOException(PARSER, input);
     }
+
     public static edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest parseFrom(
         com.google.protobuf.CodedInputStream input,
         com.google.protobuf.ExtensionRegistryLite extensionRegistry)
         throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessage
-          .parseWithIOException(PARSER, input, extensionRegistry);
+      return com.google.protobuf.GeneratedMessage.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     @java.lang.Override
-    public Builder newBuilderForType() { return newBuilder(); }
+    public Builder newBuilderForType() {
+      return newBuilder();
+    }
+
     public static Builder newBuilder() {
       return DEFAULT_INSTANCE.toBuilder();
     }
-    public static Builder newBuilder(edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest prototype) {
+
+    public static Builder newBuilder(
+        edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest prototype) {
       return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
-    }
-    @java.lang.Override
-    public Builder toBuilder() {
-      return this == DEFAULT_INSTANCE
-          ? new Builder() : new Builder().mergeFrom(this);
     }
 
     @java.lang.Override
-    protected Builder newBuilderForType(
-        com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+    public Builder toBuilder() {
+      return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
+    }
+
+    @java.lang.Override
+    protected Builder newBuilderForType(com.google.protobuf.GeneratedMessage.BuilderParent parent) {
       Builder builder = new Builder(parent);
       return builder;
     }
-    /**
-     * Protobuf type {@code xdn.XdnStopRequest}
-     */
-    public static final class Builder extends
-        com.google.protobuf.GeneratedMessage.Builder<Builder> implements
+
+    /** Protobuf type {@code xdn.XdnStopRequest} */
+    public static final class Builder extends com.google.protobuf.GeneratedMessage.Builder<Builder>
+        implements
         // @@protoc_insertion_point(builder_implements:xdn.XdnStopRequest)
         edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequestOrBuilder {
-      public static final com.google.protobuf.Descriptors.Descriptor
-          getDescriptor() {
-        return edu.umass.cs.xdn.proto.XdnStopRequestProto.internal_static_xdn_XdnStopRequest_descriptor;
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.xdn.proto.XdnStopRequestProto
+            .internal_static_xdn_XdnStopRequest_descriptor;
       }
 
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
           internalGetFieldAccessorTable() {
-        return edu.umass.cs.xdn.proto.XdnStopRequestProto.internal_static_xdn_XdnStopRequest_fieldAccessorTable
+        return edu.umass.cs.xdn.proto.XdnStopRequestProto
+            .internal_static_xdn_XdnStopRequest_fieldAccessorTable
             .ensureFieldAccessorsInitialized(
-                edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.class, edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.Builder.class);
+                edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.class,
+                edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.Builder.class);
       }
 
       // Construct using edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.newBuilder()
-      private Builder() {
+      private Builder() {}
 
-      }
-
-      private Builder(
-          com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+      private Builder(com.google.protobuf.GeneratedMessage.BuilderParent parent) {
         super(parent);
-
       }
+
       @java.lang.Override
       public Builder clear() {
         super.clear();
@@ -372,9 +383,9 @@ public final class XdnStopRequestProto {
       }
 
       @java.lang.Override
-      public com.google.protobuf.Descriptors.Descriptor
-          getDescriptorForType() {
-        return edu.umass.cs.xdn.proto.XdnStopRequestProto.internal_static_xdn_XdnStopRequest_descriptor;
+      public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+        return edu.umass.cs.xdn.proto.XdnStopRequestProto
+            .internal_static_xdn_XdnStopRequest_descriptor;
       }
 
       @java.lang.Override
@@ -393,8 +404,11 @@ public final class XdnStopRequestProto {
 
       @java.lang.Override
       public edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest buildPartial() {
-        edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest result = new edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest(this);
-        if (bitField0_ != 0) { buildPartial0(result); }
+        edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest result =
+            new edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest(this);
+        if (bitField0_ != 0) {
+          buildPartial0(result);
+        }
         onBuilt();
         return result;
       }
@@ -415,7 +429,7 @@ public final class XdnStopRequestProto {
       @java.lang.Override
       public Builder mergeFrom(com.google.protobuf.Message other) {
         if (other instanceof edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest) {
-          return mergeFrom((edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest)other);
+          return mergeFrom((edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest) other);
         } else {
           super.mergeFrom(other);
           return this;
@@ -423,7 +437,8 @@ public final class XdnStopRequestProto {
       }
 
       public Builder mergeFrom(edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest other) {
-        if (other == edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.getDefaultInstance()) return this;
+        if (other == edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest.getDefaultInstance())
+          return this;
         if (other.getRequestId() != 0L) {
           setRequestId(other.getRequestId());
         }
@@ -461,27 +476,31 @@ public final class XdnStopRequestProto {
               case 0:
                 done = true;
                 break;
-              case 8: {
-                requestId_ = input.readInt64();
-                bitField0_ |= 0x00000001;
-                break;
-              } // case 8
-              case 18: {
-                serviceName_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000002;
-                break;
-              } // case 18
-              case 24: {
-                reconfigurationEpoch_ = input.readInt32();
-                bitField0_ |= 0x00000004;
-                break;
-              } // case 24
-              default: {
-                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
-                  done = true; // was an endgroup tag
-                }
-                break;
-              } // default:
+              case 8:
+                {
+                  requestId_ = input.readInt64();
+                  bitField0_ |= 0x00000001;
+                  break;
+                } // case 8
+              case 18:
+                {
+                  serviceName_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000002;
+                  break;
+                } // case 18
+              case 24:
+                {
+                  reconfigurationEpoch_ = input.readInt32();
+                  bitField0_ |= 0x00000004;
+                  break;
+                } // case 24
+              default:
+                {
+                  if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                    done = true; // was an endgroup tag
+                  }
+                  break;
+                } // default:
             } // switch (tag)
           } // while (!done)
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
@@ -491,19 +510,24 @@ public final class XdnStopRequestProto {
         } // finally
         return this;
       }
+
       private int bitField0_;
 
-      private long requestId_ ;
+      private long requestId_;
+
       /**
        * <code>int64 request_id = 1;</code>
+       *
        * @return The requestId.
        */
       @java.lang.Override
       public long getRequestId() {
         return requestId_;
       }
+
       /**
        * <code>int64 request_id = 1;</code>
+       *
        * @param value The requestId to set.
        * @return This builder for chaining.
        */
@@ -514,8 +538,10 @@ public final class XdnStopRequestProto {
         onChanged();
         return this;
       }
+
       /**
        * <code>int64 request_id = 1;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearRequestId() {
@@ -526,15 +552,16 @@ public final class XdnStopRequestProto {
       }
 
       private java.lang.Object serviceName_ = "";
+
       /**
        * <code>string service_name = 2;</code>
+       *
        * @return The serviceName.
        */
       public java.lang.String getServiceName() {
         java.lang.Object ref = serviceName_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           serviceName_ = s;
           return s;
@@ -542,38 +569,43 @@ public final class XdnStopRequestProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
        * <code>string service_name = 2;</code>
+       *
        * @return The bytes for serviceName.
        */
-      public com.google.protobuf.ByteString
-          getServiceNameBytes() {
+      public com.google.protobuf.ByteString getServiceNameBytes() {
         java.lang.Object ref = serviceName_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           serviceName_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
        * <code>string service_name = 2;</code>
+       *
        * @param value The serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceName(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceName(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       /**
        * <code>string service_name = 2;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearServiceName() {
@@ -582,14 +614,17 @@ public final class XdnStopRequestProto {
         onChanged();
         return this;
       }
+
       /**
        * <code>string service_name = 2;</code>
+       *
        * @param value The bytes for serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceNameBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceNameBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         serviceName_ = value;
         bitField0_ |= 0x00000002;
@@ -597,17 +632,21 @@ public final class XdnStopRequestProto {
         return this;
       }
 
-      private int reconfigurationEpoch_ ;
+      private int reconfigurationEpoch_;
+
       /**
        * <code>int32 reconfiguration_epoch = 3;</code>
+       *
        * @return The reconfigurationEpoch.
        */
       @java.lang.Override
       public int getReconfigurationEpoch() {
         return reconfigurationEpoch_;
       }
+
       /**
        * <code>int32 reconfiguration_epoch = 3;</code>
+       *
        * @param value The reconfigurationEpoch to set.
        * @return This builder for chaining.
        */
@@ -618,8 +657,10 @@ public final class XdnStopRequestProto {
         onChanged();
         return this;
       }
+
       /**
        * <code>int32 reconfiguration_epoch = 3;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearReconfigurationEpoch() {
@@ -634,6 +675,7 @@ public final class XdnStopRequestProto {
 
     // @@protoc_insertion_point(class_scope:xdn.XdnStopRequest)
     private static final edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest DEFAULT_INSTANCE;
+
     static {
       DEFAULT_INSTANCE = new edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest();
     }
@@ -642,27 +684,28 @@ public final class XdnStopRequestProto {
       return DEFAULT_INSTANCE;
     }
 
-    private static final com.google.protobuf.Parser<XdnStopRequest>
-        PARSER = new com.google.protobuf.AbstractParser<XdnStopRequest>() {
-      @java.lang.Override
-      public XdnStopRequest parsePartialFrom(
-          com.google.protobuf.CodedInputStream input,
-          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-          throws com.google.protobuf.InvalidProtocolBufferException {
-        Builder builder = newBuilder();
-        try {
-          builder.mergeFrom(input, extensionRegistry);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-          throw e.setUnfinishedMessage(builder.buildPartial());
-        } catch (com.google.protobuf.UninitializedMessageException e) {
-          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
-        } catch (java.io.IOException e) {
-          throw new com.google.protobuf.InvalidProtocolBufferException(e)
-              .setUnfinishedMessage(builder.buildPartial());
-        }
-        return builder.buildPartial();
-      }
-    };
+    private static final com.google.protobuf.Parser<XdnStopRequest> PARSER =
+        new com.google.protobuf.AbstractParser<XdnStopRequest>() {
+          @java.lang.Override
+          public XdnStopRequest parsePartialFrom(
+              com.google.protobuf.CodedInputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws com.google.protobuf.InvalidProtocolBufferException {
+            Builder builder = newBuilder();
+            try {
+              builder.mergeFrom(input, extensionRegistry);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+              throw e.setUnfinishedMessage(builder.buildPartial());
+            } catch (com.google.protobuf.UninitializedMessageException e) {
+              throw e.asInvalidProtocolBufferException()
+                  .setUnfinishedMessage(builder.buildPartial());
+            } catch (java.io.IOException e) {
+              throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                  .setUnfinishedMessage(builder.buildPartial());
+            }
+            return builder.buildPartial();
+          }
+        };
 
     public static com.google.protobuf.Parser<XdnStopRequest> parser() {
       return PARSER;
@@ -677,40 +720,38 @@ public final class XdnStopRequestProto {
     public edu.umass.cs.xdn.proto.XdnStopRequestProto.XdnStopRequest getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
-
   }
 
   private static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_xdn_XdnStopRequest_descriptor;
-  private static final 
-    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_xdn_XdnStopRequest_descriptor;
+  private static final com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_xdn_XdnStopRequest_fieldAccessorTable;
 
-  public static com.google.protobuf.Descriptors.FileDescriptor
-      getDescriptor() {
+  public static com.google.protobuf.Descriptors.FileDescriptor getDescriptor() {
     return descriptor;
   }
-  private static  com.google.protobuf.Descriptors.FileDescriptor
-      descriptor;
+
+  private static com.google.protobuf.Descriptors.FileDescriptor descriptor;
+
   static {
     java.lang.String[] descriptorData = {
-      "\n1src/edu/umass/cs/xdn/proto/xdn_stop_re" +
-      "quest.proto\022\003xdn\"Y\n\016XdnStopRequest\022\022\n\nre" +
-      "quest_id\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\t\022\035\n\025" +
-      "reconfiguration_epoch\030\003 \001(\005B-\n\026edu.umass" +
-      ".cs.xdn.protoB\023XdnStopRequestProtob\006prot" +
-      "o3"
+      "\n1src/edu/umass/cs/xdn/proto/xdn_stop_re"
+          + "quest.proto\022\003xdn\"Y\n\016XdnStopRequest\022\022\n\nre"
+          + "quest_id\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\t\022\035\n\025"
+          + "reconfiguration_epoch\030\003 \001(\005B-\n\026edu.umass"
+          + ".cs.xdn.protoB\023XdnStopRequestProtob\006prot"
+          + "o3"
     };
-    descriptor = com.google.protobuf.Descriptors.FileDescriptor
-      .internalBuildGeneratedFileFrom(descriptorData,
-        new com.google.protobuf.Descriptors.FileDescriptor[] {
-        });
-    internal_static_xdn_XdnStopRequest_descriptor =
-      getDescriptor().getMessageTypes().get(0);
-    internal_static_xdn_XdnStopRequest_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
-        internal_static_xdn_XdnStopRequest_descriptor,
-        new java.lang.String[] { "RequestId", "ServiceName", "ReconfigurationEpoch", });
+    descriptor =
+        com.google.protobuf.Descriptors.FileDescriptor.internalBuildGeneratedFileFrom(
+            descriptorData, new com.google.protobuf.Descriptors.FileDescriptor[] {});
+    internal_static_xdn_XdnStopRequest_descriptor = getDescriptor().getMessageTypes().get(0);
+    internal_static_xdn_XdnStopRequest_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+            internal_static_xdn_XdnStopRequest_descriptor,
+            new java.lang.String[] {
+              "RequestId", "ServiceName", "ReconfigurationEpoch",
+            });
     descriptor.resolveAllFeaturesImmutable();
   }
 
