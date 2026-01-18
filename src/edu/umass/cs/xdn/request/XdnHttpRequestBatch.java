@@ -3,14 +3,18 @@ package edu.umass.cs.xdn.request;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
 import java.util.zip.DataFormatException;
@@ -46,7 +50,7 @@ import java.util.zip.Inflater;
  *   }
  * </pre>
  */
-public final class XdnHttpRequestBatch extends XdnRequest implements ClientRequest, Byteable {
+public final class XdnHttpRequestBatch extends XdnRequest implements ClientRequest, Byteable, BehavioralRequest {
 
   private static final Logger LOG = Logger.getLogger(XdnHttpRequestBatch.class.getName());
 
@@ -59,6 +63,8 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
   // httpResponses. In XDN, the XdnHttpRequestBatch instance is created via createFromBytes()
   // in non entry-replica node, and thus we can discard and release the httpResponses immediately.
   private final boolean isCreatedFromBytes;
+
+  private Set<RequestBehaviorType> behaviors;
 
   public XdnHttpRequestBatch(List<XdnHttpRequest> requests) {
     this(generateRequestId(), null, requests.toArray(new XdnHttpRequest[0]), true, false);
@@ -146,6 +152,18 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
   @Override
   public boolean needsCoordination() {
     return true;
+  }
+
+  @Override
+  public Set < RequestBehaviorType > getBehaviors() {
+      if (this.behaviors == null) {
+          Set < RequestBehaviorType > allBehaviors = new HashSet < > ();
+          for (XdnHttpRequest request: this.requests) {
+              allBehaviors.addAll(request.getBehaviors());
+          }
+          this.behaviors = allBehaviors;
+      }
+      return this.behaviors;
   }
 
   @Override

@@ -28,6 +28,7 @@ import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn.request.XdnRequestType;
 import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.RequestMatcher;
@@ -222,6 +223,19 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       xdnHttpRequest.setRequestMatchers(serviceRequestMatchers);
       xdnHttpRequest.getBehaviors(); // populate cached behaviors
     }
+
+    if (gpRequest.getRequest() instanceof XdnHttpRequestBatch xdnHttpRequestBatch) {
+        ServiceProperty serviceProperty = this.serviceProperties.get(serviceName);
+        List < RequestMatcher > serviceRequestMatchers = (serviceProperty != null) ?
+            serviceProperty.getRequestMatchers() :
+            XdnHttpRequest.defaultSingletonRequestMatchers;
+        for (XdnHttpRequest req: xdnHttpRequestBatch.getRequests()) {
+            req.setRequestMatchers(serviceRequestMatchers);
+            req.getBehaviors();
+        }
+        xdnHttpRequestBatch.getBehaviors();
+    }
+
     long endPrepReqMatcherTimeNs = System.nanoTime();
 
     // cache the request in XdnGigapaxosApp, avoiding expensive deserialization
