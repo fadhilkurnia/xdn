@@ -50,7 +50,8 @@ import java.util.zip.Inflater;
  *   }
  * </pre>
  */
-public final class XdnHttpRequestBatch extends XdnRequest implements ClientRequest, Byteable, BehavioralRequest {
+public final class XdnHttpRequestBatch extends XdnRequest
+    implements ClientRequest, Byteable, BehavioralRequest {
 
   private static final Logger LOG = Logger.getLogger(XdnHttpRequestBatch.class.getName());
 
@@ -155,15 +156,15 @@ public final class XdnHttpRequestBatch extends XdnRequest implements ClientReque
   }
 
   @Override
-  public Set < RequestBehaviorType > getBehaviors() {
-      if (this.behaviors == null) {
-          Set < RequestBehaviorType > allBehaviors = new HashSet < > ();
-          for (XdnHttpRequest request: this.requests) {
-              allBehaviors.addAll(request.getBehaviors());
-          }
-          this.behaviors = allBehaviors;
+  public Set<RequestBehaviorType> getBehaviors() {
+    if (this.behaviors == null) {
+      Set<RequestBehaviorType> allBehaviors = new HashSet<>();
+      for (XdnHttpRequest request : this.requests) {
+        allBehaviors.addAll(request.getBehaviors());
       }
-      return this.behaviors;
+      this.behaviors = allBehaviors;
+    }
+    return this.behaviors;
   }
 
   @Override

@@ -225,15 +225,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     }
 
     if (gpRequest.getRequest() instanceof XdnHttpRequestBatch xdnHttpRequestBatch) {
-        ServiceProperty serviceProperty = this.serviceProperties.get(serviceName);
-        List < RequestMatcher > serviceRequestMatchers = (serviceProperty != null) ?
-            serviceProperty.getRequestMatchers() :
-            XdnHttpRequest.defaultSingletonRequestMatchers;
-        for (XdnHttpRequest req: xdnHttpRequestBatch.getRequests()) {
-            req.setRequestMatchers(serviceRequestMatchers);
-            req.getBehaviors();
-        }
-        xdnHttpRequestBatch.getBehaviors();
+      ServiceProperty serviceProperty = this.serviceProperties.get(serviceName);
+      List<RequestMatcher> serviceRequestMatchers =
+          (serviceProperty != null)
+              ? serviceProperty.getRequestMatchers()
+              : XdnHttpRequest.defaultSingletonRequestMatchers;
+      for (XdnHttpRequest req : xdnHttpRequestBatch.getRequests()) {
+        req.setRequestMatchers(serviceRequestMatchers);
+        req.getBehaviors();
+      }
+      xdnHttpRequestBatch.getBehaviors();
     }
 
     long endPrepReqMatcherTimeNs = System.nanoTime();
