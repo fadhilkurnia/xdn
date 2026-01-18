@@ -16,9 +16,8 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
-import org.json.JSONException;
-import org.json.JSONObject;
-
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
@@ -27,6 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
@@ -129,7 +130,7 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
             }
 
             // for write request, send WRITE_AFTER packets to all replicas but myself
-            // TODO: remove response in the forwarded response
+            // Response are removed in receiver side before execution.
             if (isWriteOnly && isMonotonic) {
                 LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
                         myNodeId.toString(), clientRequest);
@@ -160,6 +161,15 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                 throw new RuntimeException(
                         "Expecting (Monotonic and WriteOnly) request for LazyReplicaCoordinator");
             }
+
+            if (clientRequest instanceof XdnHttpRequest xhr) {
+                xhr.clearHttpResponse();
+            } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+                for (XdnHttpRequest xhr: batch.getRequestList()) {
+                    xhr.clearHttpResponse();
+                }
+            }
+
             return this.app.execute(clientRequest, true);
         }
 

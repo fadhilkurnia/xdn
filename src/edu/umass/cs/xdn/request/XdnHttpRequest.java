@@ -315,6 +315,11 @@ public class XdnHttpRequest extends XdnRequest
     this.httpResponseBody = fullHttpResponse.content();
   }
 
+  public void clearHttpResponse() {
+    this.httpResponse = null;
+    this.httpResponseBody = null;
+  }
+
   @Override
   public byte[] toBytes() {
     final int packetType = this.getRequestType().getInt();
