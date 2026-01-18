@@ -227,6 +227,7 @@ public class XdnHttpRequest extends XdnRequest
 
   public void setRequestMatchers(List<RequestMatcher> requestMatchers) {
     this.requestMatchers = requestMatchers;
+    this.behaviors = null;
   }
 
   @Override
