@@ -631,6 +631,10 @@ public class HttpActiveReplica {
                 // Instrumenting the request for latency measurement
                 long startExecTimeNs = System.nanoTime();
 
+                // For now, thread pool selection for each request is based on HTTP method heuristics,
+                // where GET, HEAD, OPTIONS, and TRACE are considered read-only/safe methods.
+                // TODO: Ideally, maybe, we should determine which pool this request should use based on
+                // the behavior of the request instead of relying on HTTP method heuristics.
                 ExecutorService selectedPool =
                         isSafeMethod(this.request.method()) ? this.readPool : this.writePool;
 
