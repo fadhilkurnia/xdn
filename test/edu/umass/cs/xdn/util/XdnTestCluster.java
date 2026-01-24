@@ -31,6 +31,7 @@ import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -98,6 +99,17 @@ public class XdnTestCluster implements AutoCloseable {
       String consistency,
       boolean deterministic)
       throws IOException, InterruptedException, JSONException {
+    launchService(serviceName, imageName, stateDirectory, consistency, deterministic, null);
+  }
+
+  public void launchService(
+      String serviceName,
+      String imageName,
+      String stateDirectory,
+      String consistency,
+      boolean deterministic,
+      JSONArray requests)
+      throws IOException, InterruptedException, JSONException {
 
     JSONObject serviceJson = new JSONObject();
     serviceJson.put("name", serviceName);
@@ -108,6 +120,9 @@ public class XdnTestCluster implements AutoCloseable {
       serviceJson.put("consistency", consistency);
     }
     serviceJson.put("deterministic", deterministic);
+    if (requests != null && requests.length() > 0) {
+      serviceJson.put("requests", requests);
+    }
 
     String initialState = "xdn:init:" + serviceJson;
     String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
