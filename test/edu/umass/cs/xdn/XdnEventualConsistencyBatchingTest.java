@@ -39,18 +39,21 @@ public class XdnEventualConsistencyBatchingTest {
           "EVENTUAL",
           true,
           new JSONArray()
-              .put(new JSONObject()
-                  .put("path_prefix", "/")
-                  .put("methods", "GET,OPTIONS,HEAD")
-                  .put("behavior", "read_only"))
-              .put(new JSONObject()
-                  .put("path_prefix", "/")
-                  .put("methods", "PUT,POST,DELETE")
-                  .put("behavior", "write_only"))
-              .put(new JSONObject()
-                  .put("path_prefix", "/")
-                  .put("methods", "PUT,POST,DELETE")
-                  .put("behavior", "monotonic")));
+              .put(
+                  new JSONObject()
+                      .put("path_prefix", "/")
+                      .put("methods", "GET,OPTIONS,HEAD")
+                      .put("behavior", "read_only"))
+              .put(
+                  new JSONObject()
+                      .put("path_prefix", "/")
+                      .put("methods", "PUT,POST,DELETE")
+                      .put("behavior", "write_only"))
+              .put(
+                  new JSONObject()
+                      .put("path_prefix", "/")
+                      .put("methods", "PUT,POST,DELETE")
+                      .put("behavior", "monotonic")));
 
       Thread.sleep(2000);
 
