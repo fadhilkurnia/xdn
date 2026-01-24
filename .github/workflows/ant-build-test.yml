@@ -61,7 +61,6 @@ jobs:
     - name: 🧪 Running XDN unit tests with ant ...
       run: |
         set -o pipefail
-    #   ant xdn-unit-tests 2>&1 | tee junit-test-output.log
         ant xdn-full-tests 2>&1 | tee junit-test-output.log
     - name: 🪲 Display test log and debug info
       if: always()  # Run even if tests fail
