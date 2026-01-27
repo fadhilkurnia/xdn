@@ -3157,6 +3157,12 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		// first get file list, then live list
 		if(candidates == null || candidates.size() == 0)
 				return ;
+		if (DISABLE_CHECKPOINTING) {
+			log.log(Level.FINE,
+					"{0} skipping journal GC because checkpointing is disabled",
+					this);
+			return;
+		}
 		
 		if (SQLPaxosLogger.this.journaler.numOngoingGCs++ > 0)
 			log.severe(this + " has "
@@ -3240,8 +3246,13 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			assert (!messagesRS.isClosed());
 			while (messagesRS.next())
 				logfiles.add(messagesRS.getString(1));
-			assert (!logfiles.isEmpty()) : this
-					+ " found no minLogfile with query \"" + cmd + "\"";
+			if (logfiles.isEmpty()) {
+				if (!DISABLE_CHECKPOINTING)
+					assert (false) : this
+							+ " found no minLogfile with query \"" + cmd + "\"";
+				log.log(Level.FINE, "{0} found no logfiles with query \"{1}\"",
+						new Object[] { this, cmd });
+			}
 
 			// DelayProfiler.updateDelay("get_indexed_logfiles", t);
 		} catch (SQLException e) {
@@ -3259,6 +3270,19 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			TreeSet<Filename> candidates) {
 		assert (candidates != null && !candidates.isEmpty());
 		ArrayList<String> activeFrontier = this.getIndexedLogfiles(getCTable());
+		if (activeFrontier.isEmpty()) {
+			if (!DISABLE_CHECKPOINTING)
+				assert (false) : this
+						+ " found no minLogfile while trying to garbage collect candidates "
+						+ candidates + "; activeFrontier=" + activeFrontier;
+			ArrayList<String> activeLogfiles = new ArrayList<String>();
+			for (Filename candidate : candidates)
+				activeLogfiles.add(candidate.file.toString());
+			log.log(Level.FINE,
+					"{0} found no checkpoint logfiles; treating all candidates as active: {1}",
+					new Object[] { this, activeLogfiles });
+			return activeLogfiles;
+		}
 		Filename minLogfilename = null;
 		for (String active : activeFrontier) {
 			Filename curFilename = new Filename(new File(active));
@@ -3267,9 +3291,19 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			if (curFilename.compareTo(minLogfilename) < 0)
 				minLogfilename = curFilename;
 		}
-		assert (minLogfilename != null) : this
-				+ " found no minLogfile while trying to garbage collect candidates "
-				+ candidates + "; activeFrontier=" + activeFrontier;
+		if (minLogfilename == null) {
+			if (!DISABLE_CHECKPOINTING)
+				assert (false) : this
+						+ " found no minLogfile while trying to garbage collect candidates "
+						+ candidates + "; activeFrontier=" + activeFrontier;
+			ArrayList<String> activeLogfiles = new ArrayList<String>();
+			for (Filename candidate : candidates)
+				activeLogfiles.add(candidate.file.toString());
+			log.log(Level.FINE,
+					"{0} found no minLogfile while trying to garbage collect; keeping all candidates: {1}",
+					new Object[] { this, activeLogfiles });
+			return activeLogfiles;
+		}
 		ArrayList<String> activeLogfiles = new ArrayList<String>();
 		for (Filename candidate : candidates)
 			if (minLogfilename.compareTo(candidate) <= 0)

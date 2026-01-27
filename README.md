@@ -167,6 +167,7 @@ To deploy a stateful service with this existing provider, simply follow the step
 >  sudo rm -rf /tmp/xdn
 > ```
 
+
 ## Deployment as XDN provider (TBD)
 
 Assuming we have 4 machines with the following IP address:
