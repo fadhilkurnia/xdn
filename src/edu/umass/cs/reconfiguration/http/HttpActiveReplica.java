@@ -128,6 +128,12 @@ public class HttpActiveReplica {
             new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
     public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
 
+    static {
+        for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
+            debugHttpClients[i] = new XdnHttpForwarderClient();
+        }
+    }
+
     public HttpActiveReplica(String nodeId,
                              ActiveReplicaFunctions arf,
                              InetSocketAddress sockAddr,
