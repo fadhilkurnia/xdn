@@ -439,4 +439,44 @@
         </java>
     </target>
 
+    <target name="xdn-regular-unit-tests"
+            description="Run all tests EXCEPT Xdn*Test patterns and PrimaryBackup folder"
+            depends="xdn-compile-tests">
+        <echo message="Running regular unit tests (Excluding XDN and PrimaryBackup)..."/>
+        <mkdir dir="out/junit5-test-output"/>
+
+        <junitlauncher printSummary="true" haltOnFailure="false">
+            <classpath refid="junit5.lib.jars"/>
+            <classpath location="build/classes"/>
+            <classpath location="build/test-classes"/>
+            <classpath refid="classpath.base"/>
+
+            <testclasses outputdir="out/junit5-test-output">
+                <fileset dir="build/test-classes">
+                    <include name="**/*Test.class"/>
+
+                    <exclude name="**/Xdn*Test.class"/>
+
+                    <exclude name="**/edu/umass/cs/primarybackup/**"/>
+                </fileset>
+                <listener type="legacy-plain" sendSysErr="true" sendSysOut="true" />
+                <listener type="legacy-xml" sendSysErr="true" sendSysOut="true"/>
+            </testclasses>
+        </junitlauncher>
+    </target>
+
+    <target name="xdn-unit-tests-script"
+            description="Run all unit tests with Xdn*Test pattern"
+            depends="xdn-compile-tests">
+    <echo message="Running all the tests with Xdn*Test pattern, reporting the results into './out/junit5-test-output/' ..."/>
+        <exec executable="bash" failonerror="true" dir="${basedir}">
+            <arg value="bin/run-xdn-tests.sh"/>
+        </exec>
+    </target>
+
+    <target name="xdn-full-tests"
+            description="Run regular tests followed by XDN scripted tests"
+            depends="xdn-regular-unit-tests, xdn-unit-tests-script">
+    </target>
+
 </project>

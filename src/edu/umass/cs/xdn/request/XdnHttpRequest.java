@@ -227,6 +227,14 @@ public class XdnHttpRequest extends XdnRequest
 
   public void setRequestMatchers(List<RequestMatcher> requestMatchers) {
     this.requestMatchers = requestMatchers;
+
+    // The cached behaviors are cleared so that the next call to getBehaviors()
+    // will recompute them using the new matchers. This is needed because, in batching mode,
+    // getBehaviors() may be called before setRequestMatchers() is called,
+    // which causes behaviors from the default matchers to be cached.
+    // Without clearing the cache, the old cached value would still be returned
+    // even after the correct YAML matchers are set.
+    this.behaviors = null;
   }
 
   @Override
@@ -313,6 +321,11 @@ public class XdnHttpRequest extends XdnRequest
     FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;
     this.httpResponse = fullHttpResponse;
     this.httpResponseBody = fullHttpResponse.content();
+  }
+
+  public void clearHttpResponse() {
+    this.httpResponse = null;
+    this.httpResponseBody = null;
   }
 
   @Override

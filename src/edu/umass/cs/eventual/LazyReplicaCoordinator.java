@@ -16,8 +16,10 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
-import org.json.JSONException;
-import org.json.JSONObject;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
+import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 
 import java.io.IOException;
 import java.util.HashSet;
@@ -27,6 +29,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
@@ -124,24 +129,34 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
             }
 
             boolean isExecSuccess = this.app.execute(clientRequest);
-            if (isExecSuccess) {
-                callback.executed(clientRequest, true);
-            }
 
             // for write request, send WRITE_AFTER packets to all replicas but myself
-            // TODO: remove response in the forwarded response
+            // Response are removed in receiver side before execution.
             if (isWriteOnly && isMonotonic) {
-                LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
-                        myNodeId.toString(), clientRequest);
-                Set<NodeIDType> myPeers = currInstance.nodes();
-                myPeers.remove(myNodeId);
-                GenericMessagingTask<NodeIDType, LazyPacket> m =
-                        new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                retainRequestContent(clientRequest);
                 try {
-                    logger.log(Level.INFO,  "Sending WRITE_AFTER packet ...");
-                    messenger.send(m);
-                } catch (JSONException e) {
-                    throw new RuntimeException(e);
+                    if (isExecSuccess) {
+                        callback.executed(clientRequest, true);
+
+                        LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
+                                myNodeId.toString(), clientRequest);
+                        Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                        myPeers.remove(myNodeId);
+                        GenericMessagingTask<NodeIDType, LazyPacket> m =
+                                new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                        try {
+                            logger.log(Level.INFO, "Sending WRITE_AFTER packet ...");
+                            messenger.send(m);
+                        } catch (JSONException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                } finally {
+                    releaseRequestContent(clientRequest);
+                }
+            } else {
+                if (isExecSuccess) {
+                    callback.executed(clientRequest, true);
                 }
             }
 
@@ -160,6 +175,15 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                 throw new RuntimeException(
                         "Expecting (Monotonic and WriteOnly) request for LazyReplicaCoordinator");
             }
+
+            if (clientRequest instanceof XdnHttpRequest xhr) {
+                xhr.clearHttpResponse();
+            } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+                for (XdnHttpRequest xhr: batch.getRequestList()) {
+                    xhr.clearHttpResponse();
+                }
+            }
+
             return this.app.execute(clientRequest, true);
         }
 
@@ -196,5 +220,43 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     public Set<NodeIDType> getReplicaGroup(String serviceName) {
         LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
         return replicaInstance != null ? replicaInstance.nodes() : null;
+    }
+
+    private void retainRequestContent(ClientRequest request) {
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) {
+                retainSingleRequestContent(xhr);
+            }
+        } else if (request instanceof XdnHttpRequest xhr) {
+            retainSingleRequestContent(xhr);
+        }
+    }
+
+    private void retainSingleRequestContent(XdnHttpRequest xhr) {
+        if (xhr.getHttpRequestContent() != null) {
+            ByteBuf content = xhr.getHttpRequestContent().content();
+            if (content != null && content.refCnt() > 0) {
+                ReferenceCountUtil.retain(content);
+            }
+        }
+    }
+
+    private void releaseRequestContent(ClientRequest request) {
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) {
+                releaseSingleRequestContent(xhr);
+            }
+        } else if (request instanceof XdnHttpRequest xhr) {
+            releaseSingleRequestContent(xhr);
+        }
+    }
+
+    private void releaseSingleRequestContent(XdnHttpRequest xhr) {
+        if (xhr.getHttpRequestContent() != null) {
+            ByteBuf content = xhr.getHttpRequestContent().content();
+            if (content != null && content.refCnt() > 0) {
+                ReferenceCountUtil.release(content);
+            }
+        }
     }
 }

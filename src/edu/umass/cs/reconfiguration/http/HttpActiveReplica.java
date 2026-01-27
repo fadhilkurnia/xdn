@@ -157,7 +157,14 @@ public class HttpActiveReplica {
 
         // Dedicated executor group for long-running application execution and coordination.
         int threads = Math.max(4, Runtime.getRuntime().availableProcessors());
-        DefaultEventExecutorGroup executorGroup = new DefaultEventExecutorGroup(threads);
+        
+        // Pool 1: Writes
+        DefaultEventExecutorGroup writePool =
+                new DefaultEventExecutorGroup((int) (threads * 0.6));
+
+        // Pool 2: Reads 
+        DefaultEventExecutorGroup readPool =
+                new DefaultEventExecutorGroup((int) (threads * 0.4));
 
         try {
             ServerBootstrap b = new ServerBootstrap();
@@ -168,7 +175,7 @@ public class HttpActiveReplica {
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childHandler(
                             new HttpActiveReplicaInitializer(
-                                    nodeId, arf, executorGroup, requestBatcher, sslCtx)
+                                    nodeId, arf, readPool, writePool, requestBatcher, sslCtx)
                     );
 
             if (sockAddr == null) {
@@ -197,6 +204,8 @@ public class HttpActiveReplica {
         } finally {
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
+            readPool.shutdownGracefully();
+            writePool.shutdownGracefully();
         }
 
     }
@@ -207,18 +216,21 @@ public class HttpActiveReplica {
 
         private final String nodeId;
         private final ActiveReplicaFunctions arFunctions;
-        private final MultithreadEventExecutorGroup executorGroup;
+        private final MultithreadEventExecutorGroup readPool;
+        private final MultithreadEventExecutorGroup writePool;
         private final XdnHttpRequestBatcher requestBatching;
         private final SslContext sslCtx;
 
         HttpActiveReplicaInitializer(String nodeId,
                                      final ActiveReplicaFunctions arf,
-                                     final MultithreadEventExecutorGroup executorGroup,
+                                     final MultithreadEventExecutorGroup readPool,
+                                     final MultithreadEventExecutorGroup writePool,
                                      final XdnHttpRequestBatcher requestBatching,
                                      SslContext sslCtx) {
             this.nodeId = nodeId;
             this.arFunctions = arf;
-            this.executorGroup = executorGroup;
+            this.readPool = readPool;
+            this.writePool = writePool;
             this.requestBatching = requestBatching;
             this.sslCtx = sslCtx;
         }
@@ -245,13 +257,13 @@ public class HttpActiveReplica {
 
             // handle http request in separate executor group because execution
             // and coordination can take a long time
-            p.addLast(executorGroup,
-                    new HttpActiveReplicaHandler(
-                            nodeId,
-                            arFunctions,
-                            executorGroup,
-                            requestBatching,
-                            channel.remoteAddress()));
+            p.addLast(new HttpActiveReplicaHandler(
+                    nodeId,
+                    arFunctions,
+                    readPool,
+                    writePool,
+                    requestBatching,
+                    channel.remoteAddress()));
         }
     }
 
@@ -343,12 +355,30 @@ public class HttpActiveReplica {
 
         private static String nodeId = null;
         private final ActiveReplicaFunctions arFunctions;
-        private final ExecutorService offload;
+        private final ExecutorService readPool;
+        private final ExecutorService writePool;        
         private final XdnHttpRequestBatcher requestBatching;
         private final InetSocketAddress senderAddr; // client's inet address
 
         private HttpRequest request;
         private HttpContent requestContent;
+
+        /**
+         * Returns true if the HTTP method is read-only according to the default
+         * matcher defined in ServiceProperty.
+         * It is also aligned with the safe methods defined in RFC 7231.
+         * Reference: https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1
+         *
+         * This is used as a heuristic to classify requests into read vs. write pools,
+         * so that write requests do not cause congestion that blocks read requests.
+         */
+        private static boolean isSafeMethod(HttpMethod method) {
+            return method == HttpMethod.GET ||
+                method == HttpMethod.HEAD ||
+                method == HttpMethod.OPTIONS ||
+                method == HttpMethod.TRACE;
+        }
+
         /**
          * Buffer that stores the response content
          */
@@ -356,12 +386,14 @@ public class HttpActiveReplica {
 
         HttpActiveReplicaHandler(String nodeId,
                                  ActiveReplicaFunctions arFunctions,
-                                 ExecutorService offload,
+                                 ExecutorService readPool,
+                                 ExecutorService writePool,
                                  XdnHttpRequestBatcher requestBatching,
                                  InetSocketAddress addr) {
             HttpActiveReplicaHandler.nodeId = nodeId;
             this.arFunctions = arFunctions;
-            this.offload = offload;
+            this.readPool = readPool;
+            this.writePool = writePool;
             this.requestBatching = requestBatching;
             this.senderAddr = addr;
         }
@@ -598,6 +630,14 @@ public class HttpActiveReplica {
 
                 // Instrumenting the request for latency measurement
                 long startExecTimeNs = System.nanoTime();
+
+                // For now, thread pool selection for each request is based on HTTP method heuristics,
+                // where GET, HEAD, OPTIONS, and TRACE are considered read-only/safe methods.
+                // TODO: Ideally, maybe, we should determine which pool this request should use based on
+                // the behavior of the request instead of relying on HTTP method heuristics.
+                ExecutorService selectedPool =
+                        isSafeMethod(this.request.method()) ? this.readPool : this.writePool;
+
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
                 // Retain the netty objects because we execute off the event loop and
@@ -610,9 +650,9 @@ public class HttpActiveReplica {
                 // Submit long-running request coordination and execution off the event loop
                 Future<HttpResponse> execFuture =
                         isHttpFrontendBatchEnabled
-                                ? offload.submit(() -> executeXdnHttpRequestViaBatching(
+                                ? selectedPool.submit(() -> executeXdnHttpRequestViaBatching(
                                         httpRequest, this.senderAddr))
-                                : offload.submit(() ->
+                                : selectedPool.submit(() ->
                                         executeXdnHttpRequest(httpRequest, this.senderAddr));
 
                 // If channel closes before completion, cancel the task
@@ -640,7 +680,7 @@ public class HttpActiveReplica {
                                         e
                                 );
                             }
-                        }, offload)
+                        }, selectedPool)
                         .whenComplete((httpResponse, err) -> {
                             // Check channel state, do nothing if the channel is inactive
                             // (e.g., closed by client).
@@ -810,6 +850,11 @@ public class HttpActiveReplica {
         private void handleDebugRequests(XdnHttpRequest httpRequest, ChannelHandlerContext ctx) {
             boolean isKeepAlive = HttpUtil.isKeepAlive(httpRequest.getHttpRequest());
 
+            ExecutorService selectedPool =
+                    isSafeMethod(httpRequest.getHttpRequest().method())
+                            ? this.readPool
+                            : this.writePool;
+                            
             // Debug: send dummy response, the goal is to identify whether HttpActiveReplica
             //  is a bottleneck on receiving the incoming Http requests.
             if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_DUMMY_RESPONSE)) {
@@ -838,7 +883,7 @@ public class HttpActiveReplica {
 
                 // Send and execute possibly long-running request in offload executor.
                 Future<HttpResponse> execFuture =
-                        offload.submit(() -> {
+                        selectedPool.submit(() -> {
                             boolean isExecuted = debugAppReference.execute(httpRequest);
                             assert isExecuted : "failed to executed HTTP request";
                             assert httpRequest.getHttpResponse() != null :
@@ -856,7 +901,7 @@ public class HttpActiveReplica {
                             } catch (InterruptedException | ExecutionException e) {
                                 throw new RuntimeException(e);
                             }
-                        }, offload)
+                        }, selectedPool)
                         .whenComplete((httpResponse, err) -> {
                             // do nothing when the channel is inactive
                             if (!ctx.channel().isActive()) return;
@@ -922,7 +967,7 @@ public class HttpActiveReplica {
                 // Send and execute possibly long-running request in offload executor.
                 ReferenceCountUtil.retain(httpRequest.getHttpRequest());
                 ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
-                Future<FullHttpResponse> execFuture = offload.submit(() -> {
+                Future<FullHttpResponse> execFuture = selectedPool.submit(() -> {
                     try {
                         httpRequest.getHttpRequestContent().retain();
                         return debugHttpClient.execute(
@@ -947,7 +992,7 @@ public class HttpActiveReplica {
                             } catch (InterruptedException | ExecutionException e) {
                                 throw new RuntimeException(e);
                             }
-                        }, offload)
+                        }, selectedPool)
                         .whenComplete((httpResponse, err) -> {
                             // release buffer of http request's content
                             httpRequest.getHttpRequestContent().content().release();
