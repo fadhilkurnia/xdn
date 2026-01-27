@@ -31,6 +31,12 @@ type CommonProperties struct {
 	isDeterministic   bool
 	stateDir          string
 	rawJsonProperties string
+	envVars           []EnvPair
+}
+
+type EnvPair struct {
+	Key   string
+	Value string
 }
 
 var LaunchCmd = &cobra.Command{
@@ -80,9 +86,10 @@ func init() {
 	LaunchCmd.PersistentFlags().StringP("image", "i", "", "docker image name")
 	LaunchCmd.PersistentFlags().IntP("port", "p", 80, "service's port to serve HTTP requests")
 	LaunchCmd.PersistentFlags().StringP("consistency", "c", "linearizability", "consistency model for the replicated service")
-	LaunchCmd.PersistentFlags().StringP("state", "s", "/", "absolute path of directory in which the service store the state durably")
+	LaunchCmd.PersistentFlags().StringP("state", "s", "/", "absolute path of directory in which the service store the state durably (end with `/`)")
 	LaunchCmd.PersistentFlags().BoolP("deterministic", "d", false, "indicate whether the service is deterministic (default: false)")
 	LaunchCmd.PersistentFlags().StringP("methods", "m", "", "HTTP methods allowed by the replicated service")
+	LaunchCmd.PersistentFlags().StringArrayP("env", "e", []string{}, "environment variables for the service (repeat: --env KEY=VALUE)")
 
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")
@@ -155,24 +162,57 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		return prop, err
 	}
 
-	prop.rawJsonProperties = fmt.Sprintf(`
-	{
-		"name":"%s",
-		"image":"%s",
-		"port":%d,
-		"state":"%s",
-		"consistency":"%s",
-		"deterministic":%t
-	}`, prop.serviceName,
-		prop.imageName,
-		prop.httpPort,
-		prop.stateDir,
-		prop.consistencyModel,
-		prop.isDeterministic)
-	trimmedJson := strings.ReplaceAll(prop.rawJsonProperties, " ", "")
-	trimmedJson = strings.ReplaceAll(trimmedJson, "\t", "")
-	trimmedJson = strings.ReplaceAll(trimmedJson, "\n", "")
-	prop.rawJsonProperties = trimmedJson
+	// parse repeated env vars passed as --env KEY=VALUE for single-component services
+	rawEnvVars, err := flags.GetStringArray("env")
+	if err != nil {
+		return prop, err
+	}
+	seenEnv := map[string]struct{}{}
+	for _, envVar := range rawEnvVars {
+		if !strings.Contains(envVar, "=") {
+			return prop, fmt.Errorf("invalid env format %q, expected KEY=VALUE", envVar)
+		}
+		split := strings.SplitN(envVar, "=", 2)
+		key := strings.TrimSpace(split[0])
+		val := split[1]
+		if key == "" {
+			return prop, fmt.Errorf("invalid env format %q, key cannot be empty", envVar)
+		}
+		if _, exists := seenEnv[key]; exists {
+			return prop, fmt.Errorf("duplicate environment variable %q", key)
+		}
+		prop.envVars = append(prop.envVars, EnvPair{
+			Key:   key,
+			Value: val,
+		})
+		seenEnv[key] = struct{}{}
+	}
+
+	config := map[string]interface{}{
+		"name":          prop.serviceName,
+		"image":         prop.imageName,
+		"port":          prop.httpPort,
+		"state":         prop.stateDir,
+		"consistency":   prop.consistencyModel,
+		"deterministic": prop.isDeterministic,
+	}
+
+	if len(prop.envVars) > 0 {
+		var envList []map[string]string
+		for _, env := range prop.envVars {
+			envList = append(envList, map[string]string{
+				env.Key: env.Value,
+			})
+		}
+		config["environments"] = envList
+	}
+
+	jsonBody, err := json.Marshal(config)
+	if err != nil {
+		return prop, fmt.Errorf("failed to build service properties: %w", err)
+	}
+
+	prop.rawJsonProperties = string(jsonBody)
 
 	return prop, nil
 }
