@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 
 public class XdnHttpRequestTest {
 
@@ -223,6 +224,7 @@ public class XdnHttpRequestTest {
   }
 
   @Test
+  @DisabledIfEnvironmentVariable(named = "RUNNER_ENVIRONMENT", matches = "github-hosted")
   public void testBenchmarkAgainstJsonEncoding_Serialization() {
     HttpRequest request = helpCreateDummyHttpRequest();
     HttpContent content = helpCreateDummyHttpContent(1024);
@@ -260,6 +262,7 @@ public class XdnHttpRequestTest {
   }
 
   @Test
+  @DisabledIfEnvironmentVariable(named = "RUNNER_ENVIRONMENT", matches = "github-hosted")
   public void testBenchmarkAgainstJsonEncoding_Deserialization() {
     HttpRequest request = helpCreateDummyHttpRequest();
     HttpContent content = helpCreateDummyHttpContent(1024);
