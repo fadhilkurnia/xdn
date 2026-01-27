@@ -89,7 +89,11 @@ func Connect() {
 	case "sqlite":
 		dataDir := filepath.Join(".", "data")
 		os.MkdirAll(dataDir, os.ModePerm)
-		dsn := "data/data.db"
+		dsn := "file:data/data.db"
+		isEnableWAL := os.Getenv("ENABLE_WAL")
+		if isEnableWAL != "" && strings.ToLower(isEnableWAL) == "true" {
+			dsn = "file:data/data.db?_journal_mode=WAL"
+		}
 		d, err := gorm.Open(sqlite.Open(dsn), gormConfig)
 		if err != nil {
 			fmt.Println(err)
