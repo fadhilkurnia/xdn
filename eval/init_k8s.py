@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-INSTALL_STEPS = [
+K8S_PREP_STEPS = [
     "sudo swapoff -a",
     "sudo sed -i.bak '/\\sswap\\s/s/^/#/' /etc/fstab",
     "sudo apt-get update -y",
@@ -18,12 +18,21 @@ INSTALL_STEPS = [
     'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] '
     'https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list',
     "sudo apt-get update -y",
-    "sudo apt-get install -y containerd kubelet kubeadm kubectl",
+]
+
+K8S_PACKAGES_STEP = "sudo apt-get install -y kubelet kubeadm kubectl"
+CONTAINERD_PACKAGE_STEP = "sudo apt-get install -y containerd"
+
+CONTAINERD_CONFIG_STEPS = [
     "sudo mkdir -p /etc/containerd",
     'sudo bash -lc \'containerd config default | sed "s/SystemdCgroup = false/SystemdCgroup = true/" > /etc/containerd/config.toml\'',
     "sudo systemctl enable --now containerd",
-    "sudo systemctl enable --now kubelet",
     "sudo systemctl restart containerd",
+]
+
+KUBELET_CONFIG_STEPS = [
+    "echo 'KUBELET_EXTRA_ARGS=--container-runtime-endpoint=unix:///run/containerd/containerd.sock' | sudo tee /etc/default/kubelet",
+    "sudo systemctl enable --now kubelet",
     "sudo systemctl restart kubelet",
 ]
 
@@ -54,9 +63,25 @@ def copy_ssh_key(host: str, user: str, key_path: Path) -> None:
     run(["ssh-copy-id", "-i", str(key_path), f"{user}@{host}"])
 
 
-def run_remote(host: str, user: str, key_path: Path, command: str) -> subprocess.CompletedProcess:
+def run_remote(
+    host: str,
+    user: str,
+    key_path: Path,
+    command: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
     remote_cmd = f"bash -lc {shlex.quote(command)}"
-    return run(["ssh", "-i", str(key_path), "-o", "StrictHostKeyChecking=no", f"{user}@{host}", remote_cmd])
+    return run(
+        ["ssh", "-i", str(key_path), "-o", "StrictHostKeyChecking=no", f"{user}@{host}", remote_cmd],
+        check=check,
+    )
+
+
+def docker_installed(host: str, user: str, key_path: Path, local: bool) -> bool:
+    cmd = "command -v docker >/dev/null 2>&1"
+    if local:
+        return run(["bash", "-lc", cmd], check=False).returncode == 0
+    return run_remote(host, user, key_path, cmd, check=False).returncode == 0
 
 
 def reset_control_plane() -> None:
@@ -77,7 +102,28 @@ def reset_worker(host: str, user: str, key_path: Path) -> None:
 
 def install_dependencies(host: str, user: str, key_path: Path, local: bool) -> None:
     logging.info("Installing Kubernetes dependencies on %s", "local master" if local else host)
-    for step in INSTALL_STEPS:
+    for step in K8S_PREP_STEPS:
+        if local:
+            run(["bash", "-lc", step])
+        else:
+            run_remote(host, user, key_path, step)
+
+    if local:
+        has_docker = docker_installed(host, user, key_path, local=True)
+    else:
+        has_docker = docker_installed(host, user, key_path, local=False)
+
+    if not has_docker:
+        steps = [CONTAINERD_PACKAGE_STEP]
+    else:
+        logging.info("Docker detected on %s; keeping Docker and using containerd runtime for kubelet.", "local master" if local else host)
+        steps = []
+
+    steps.append(K8S_PACKAGES_STEP)
+    steps.extend(CONTAINERD_CONFIG_STEPS)
+    steps.extend(KUBELET_CONFIG_STEPS)
+
+    for step in steps:
         if local:
             run(["bash", "-lc", step])
         else:

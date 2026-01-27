@@ -7,15 +7,24 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 DEFAULT_RATE_RPS = 300
 APP_LABEL = "app"
 K8S_STORAGE_CLASS = "openebs-3-replica"
+DEFAULT_LOAD_GENERATOR = "go"
+
+VALID_APPS = {
+    "fadhilkurnia/xdn-bookcatalog", 
+    "fadhilkurnia/xdn-webkv",
+    "fadhilkurnia/xdn-todo",
+}
+
 logger = logging.getLogger(__name__)
 
 def normalize_name(image: str) -> str:
@@ -30,33 +39,6 @@ def run_cmd(cmd: List[str], manifest: str = "") -> None:
         kwargs.update({"text": True, "input": manifest})
     logger.debug("Running command: %s", " ".join(cmd))
     subprocess.run(cmd, **kwargs)
-
-
-def parse_duration_seconds(duration: str) -> float:
-    match = re.fullmatch(r"(?i)(\d+(?:\.\d+)?)([smh]?)", duration.strip())
-    if not match:
-        raise ValueError(f"Unsupported duration format: {duration}")
-    value = float(match.group(1))
-    unit = match.group(2).lower()
-    if unit == "m":
-        value *= 60
-    elif unit == "h":
-        value *= 3600
-    if value <= 0:
-        raise ValueError("Duration must be positive")
-    return value
-
-
-def percentile(values: List[float], p: float) -> float:
-    if not values:
-        return 0.0
-    sorted_vals = sorted(values)
-    idx = (len(sorted_vals) - 1) * p
-    lower = math.floor(idx)
-    upper = math.ceil(idx)
-    if lower == upper:
-        return sorted_vals[int(idx)]
-    return sorted_vals[lower] + (sorted_vals[upper] - sorted_vals[lower]) * (idx - lower)
 
 
 def create_pvc(name: str, namespace: str, storage: str) -> None:
@@ -77,9 +59,21 @@ spec:
     run_cmd(["kubectl", "apply", "-f", "-"], manifest)
 
 
-# TODO: create deployment for another app based on the image name, add another one for fadhilkurnia/xdn-restkv
-def create_deployment(name: str, image: str, pvc_name: str, namespace: str) -> None:
-    manifest = f"""
+def create_deployment(name: str, image: str, pvc_name: str, namespace: str, env_vars: Optional[Dict[str, str]] = None) -> None:
+    if image not in VALID_APPS:
+        raise ValueError(f"Unsupported application image: {image}")
+
+    env_block = ""
+    if env_vars:
+        env_lines = []
+        for k, v in env_vars.items():
+            env_lines.append(f"        - name: {k}")
+            env_lines.append(f"          value: \"{v}\"")
+        env_block = "\n        env:\n" + "\n".join(env_lines)
+    
+    manifest = ""
+    if image == "fadhilkurnia/xdn-bookcatalog":
+        manifest = f"""
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -100,6 +94,7 @@ spec:
         image: {image}
         ports:
         - containerPort: 80
+{env_block if env_block else ''}
         volumeMounts:
         - name: data
           mountPath: /app/data
@@ -108,6 +103,72 @@ spec:
         persistentVolumeClaim:
           claimName: {pvc_name}
 """
+    if image == "fadhilkurnia/xdn-webkv":
+        manifest = f"""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {name}
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {APP_LABEL}: {name}
+  template:
+    metadata:
+      labels:
+        {APP_LABEL}: {name}
+    spec:
+      containers:
+      - name: {name}
+        image: {image}
+        ports:
+        - containerPort: 80
+{env_block if env_block else ''}
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: {pvc_name}
+"""
+    if image == "fadhilkurnia/xdn-todo":
+        manifest = f"""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {name}
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {APP_LABEL}: {name}
+  template:
+    metadata:
+      labels:
+        {APP_LABEL}: {name}
+    spec:
+      containers:
+      - name: {name}
+        image: {image}
+        ports:
+        - containerPort: 80
+{env_block if env_block else ''}
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: {pvc_name}
+"""
+        
+    if not manifest:
+        raise ValueError(f"No deployment manifest defined for image: {image}")
+
     run_cmd(["kubectl", "apply", "-f", "-"], manifest)
     run_cmd(["kubectl", "-n", namespace, "rollout", "status", f"deployment/{name}", "--timeout=120s"])
 
@@ -154,56 +215,28 @@ def wait_for_port(host: str, port: int, timeout: int = 60) -> None:
             time.sleep(0.3)
     raise TimeoutError(f"Port {host}:{port} not ready: {last_error}")
 
+def get_app_request_config(image: str) -> Tuple[str, Dict[str, str], Dict[str, str]]:
+    if image not in VALID_APPS:
+        raise ValueError(f"Unsupported application image: {image}")
 
-def generate_ramp_rates(warmup_rate: int, peak_rate: int, ramp_steps: int) -> List[int]:
-    if ramp_steps < 2:
-        raise ValueError("ramp_steps must be at least 2")
-    increment = max(1, (peak_rate - warmup_rate) // (ramp_steps - 1))
-    rates = [warmup_rate + i * increment for i in range(ramp_steps)]
-    rates[-1] = peak_rate
-    return rates
+    if image == "fadhilkurnia/xdn-bookcatalog":
+        return "api/books", {"author": "abc", "title": "xyz"}, {"ENABLE_WAL": "true"}
+    if image == "fadhilkurnia/xdn-webkv":
+        return "api/kv/abc", {"key": "abc", "value": "xyz"}, {}
+    if image == "fadhilkurnia/xdn-todo":
+        return "api/todo/tasks", {"item": "task"}, {}
 
-def build_k6_vu_script(
-    url: str, stage_duration: str, median_threshold_ms: float, warmup_rate: int, peak_rate: int, ramp_steps: int
-) -> str:
-    max_vus = peak_rate
-    start_vus = max(1, warmup_rate)
+    raise ValueError(f"No request payload defined for image: {image}")
+
+
+def build_k6_constant_rate_script(image: str, url: str, stage_duration: str, median_threshold_ms: float, rate: int) -> str:
+    post_endpoint, payload_data, _ = get_app_request_config(image)
+    payload = json.dumps(payload_data)
+    pre_allocated = 1000
+    max_vus = 20000
     return f"""
 import http from 'k6/http';
-
-export const options = {{
-  scenarios: {{
-    smooth_ramp: {{
-      executor: 'ramping-vus',
-      startVUs: {start_vus},
-      stages: [
-        {{ target: {max_vus}, duration: '30m' }},
-        {{ target: {max_vus}, duration: '1m' }},
-      ],      
-      gracefulRampDown: '{stage_duration}',
-    }},
-  }},
-  thresholds: {{
-    http_req_duration: [
-      {{ threshold: 'p(50)<{median_threshold_ms}', abortOnFail: true, delayAbortEval: '{stage_duration}' }},
-      'p(95)<500',
-    ],
-  }},
-}};
-
-const HEADERS = {{ 'XDN': 'bookcatalog' }};
-const PAYLOAD = {{ 'author': 'abc', 'title': 'xyz' }};
-
-export default function () {{
-  http.post('{url}api/books', PAYLOAD, {{ headers: HEADERS }});
-}}
-"""
-
-def build_k6_constant_rate_script(url: str, stage_duration: str, median_threshold_ms: float, rate: int) -> str:
-    pre_allocated = max(50, rate)
-    max_vus = max(pre_allocated * 2, rate * 2)
-    return f"""
-import http from 'k6/http';
+import {{ sleep }} from 'k6';
 
 export const options = {{
   scenarios: {{
@@ -224,13 +257,37 @@ export const options = {{
   }},
 }};
 
-const HEADERS = {{ 'XDN': 'bookcatalog' }};
-const PAYLOAD = {{ 'author': 'abc', 'title': 'xyz' }};
+const HEADERS = {{ 'XDN': 'svc', 'Content-Type': 'application/json' }};
+const PAYLOAD = {payload};
+
+// Exponential sleep function to model inter-arrival times
+const LAMBDA = {rate};
+function expSleep(lambda) {{
+  return -Math.log(1 - Math.random()) / lambda;
+}}
 
 export default function () {{
-  http.post('{url}api/books', PAYLOAD, {{ headers: HEADERS }});
+  sleep(expSleep(LAMBDA));
+  http.post('{url}{post_endpoint}', PAYLOAD, {{ headers: HEADERS }});
 }}
 """
+
+
+def parse_duration_seconds(duration: str) -> float:
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)(ms|s|m|h)?\s*$", duration)
+    if not match:
+        raise ValueError("Duration must be a number optionally followed by ms, s, m, or h")
+    value = float(match.group(1))
+    unit = match.group(2) or "s"
+    if unit == "ms":
+        return value / 1000.0
+    if unit == "s":
+        return value
+    if unit == "m":
+        return value * 60.0
+    if unit == "h":
+        return value * 3600.0
+    raise ValueError("Unsupported duration unit")
 
 
 def run_k6(script_path: str, summary_path: Path, timeseries_path: Path) -> None:
@@ -281,9 +338,9 @@ def parse_k6_summary(summary_path: Path) -> List[Dict[str, float]]:
         logger.warning("k6 summary missing required metrics")
         return []
 
-    throughput = throughput_metrics.get("rate") or 0.0
+    offered_rate_rps = throughput_metrics.get("rate") or 0.0
     row = {
-        "throughput_rps": float(throughput),
+        "offered_rate_rps": float(offered_rate_rps),
         "p95_ms": float(duration_metrics.get("p(95)", duration_metrics.get("p95", 0.0))),
         "p90_ms": float(duration_metrics.get("p(90)", duration_metrics.get("p90", 0.0))),
         "p50_ms": float(duration_metrics.get("med", duration_metrics.get("p(50)", 0.0))),
@@ -291,63 +348,83 @@ def parse_k6_summary(summary_path: Path) -> List[Dict[str, float]]:
     }
     return [row]
 
-def parse_k6_timeseries(timeseries_path: Path) -> List[Dict[str, float]]:
-    df = pd.read_csv(timeseries_path)
 
-    metric_col = next((col for col in ("metric_name", "metric", "name") if col in df.columns), None)
-    time_col = "timestamp" if "timestamp" in df.columns else ("time" if "time" in df.columns else None)
-    value_col = "metric_value" if "metric_value" in df.columns else ("value" if "value" in df.columns else None)
-    if not metric_col or not time_col or not value_col:
-        logger.warning("k6 timeseries data missing required columns")
-        return []
-
-    df = df[df[metric_col] == "http_req_duration"]
-    if df.empty:
-        logger.warning("k6 timeseries data missing http_req_duration metric")
-        return []
-
-    df[time_col] = pd.to_datetime(df[time_col], unit="s", errors="coerce")
-    df[value_col] = pd.to_numeric(df[value_col], errors="coerce")
-    df = df.dropna(subset=[time_col, value_col])
-    if df.empty:
-        logger.warning("k6 timeseries data has no valid timestamp or value entries")
-        return []
-
-    df = df.set_index(time_col)
-    grouped = df[value_col].resample("10s")
-    summary = pd.DataFrame(
-        {
-            "throughput_rps": grouped.count() / 10.0,
-            "p50_ms": grouped.quantile(0.5),
-            "p90_ms": grouped.quantile(0.9),
-            "p95_ms": grouped.quantile(0.95),
-            "avg_ms": grouped.mean(),
-        }
-    )
-    summary = summary.fillna(0)
-    if summary.empty:
-        logger.warning("k6 timeseries data produced no resampled metrics")
-        return []
-
-    rows: List[Dict[str, float]] = []
-    for row in summary.itertuples():
-        throughput = float(row.throughput_rps)
-        rows.append(
-            {
-                "throughput_rps": throughput,
-                "p95_ms": float(row.p95_ms),
-                "p90_ms": float(row.p90_ms),
-                "p50_ms": float(row.p50_ms),
-                "avg_ms": float(row.avg_ms),
-            }
+def run_latency_client(
+    source_path: Path,
+    url: str,
+    payload: str,
+    duration_seconds: float,
+    rate: int,
+    output_path: Path,
+    headers: Optional[List[str]] = None,
+) -> None:
+    duration_arg = f"{duration_seconds:.0f}" if duration_seconds.is_integer() else f"{duration_seconds}"
+    env = os.environ.copy()
+    env["GO111MODULE"] = "off"
+    env["GOWORK"] = "off"
+    cmd = ["go", "run", source_path.name]
+    for header in headers or []:
+        cmd.extend(["-H", header])
+    cmd.extend([url, payload, duration_arg, f"{rate}"])
+    with open(output_path, "w", encoding="utf-8") as fh:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            cwd=str(source_path.parent),
         )
+    if result.returncode != 0:
+        try:
+            with open(output_path, "r", encoding="utf-8") as fh:
+                error_output = fh.read().strip()
+        except OSError:
+            error_output = ""
+        if error_output:
+            print("Latency client failed output:\n" + error_output, file=sys.stderr)
+        else:
+            print("Latency client failed with no output.", file=sys.stderr)
+        raise subprocess.CalledProcessError(result.returncode, cmd)
 
-    return rows
+
+def parse_latency_output(output_path: Path) -> List[Dict[str, float]]:
+    try:
+        with open(output_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        logger.warning("Failed to load latency output %s: %s", output_path, exc)
+        return []
+    metrics: Dict[str, float] = {}
+    for line in lines:
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        try:
+            metrics[key] = float(raw_value)
+        except ValueError:
+            continue
+
+    if not metrics:
+        logger.warning("Latency output missing metrics")
+        return []
+
+    row = {
+        "offered_rate_rps": float(metrics.get("actual_achieved_rate_rps", 0.0)),
+        "p95_ms": float(metrics.get("p95_latency_ms", 0.0)),
+        "p90_ms": float(metrics.get("p90_latency_ms", 0.0)),
+        "p50_ms": float(metrics.get("median_latency_ms", 0.0)),
+        "avg_ms": float(metrics.get("average_latency_ms", 0.0)),
+    }
+    return [row]
 
 
 def write_results(results_dir: Path, rows: List[Dict[str, float]]) -> Path:
     csv_path = results_dir / "oebs_load_results.csv"
-    fieldnames = ["app", "rate_rps", "throughput_rps", "p95_ms", "p90_ms", "p50_ms", "avg_ms"]
+    fieldnames = ["app", "offered_rate_rps", "throughput_rps", "p95_ms", "p90_ms", "p50_ms", "avg_ms"]
     with open(csv_path, "w", encoding="utf-8", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -362,7 +439,7 @@ def main() -> None:
     logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s %(message)s")
 
     parser = argparse.ArgumentParser(
-        description="Deploy Docker images to Kubernetes with PVCs and run k6 load tests."
+        description="Deploy Docker images to Kubernetes with PVCs and run load tests."
     )
     parser.add_argument("dockerImages", nargs="+", help="Docker images to deploy")
     parser.add_argument("--namespace", default="default", help="Kubernetes namespace")
@@ -376,6 +453,12 @@ def main() -> None:
     parser.add_argument("--duration", default="1m", help="Duration for each k6 constant-rate run")
     parser.add_argument("--port-start", type=int, default=18080, help="Starting local port for port-forward")
     parser.add_argument("--data-parsing-only", action="store_true", help="Only parse existing k6 result files")
+    parser.add_argument(
+        "--load-generator",
+        choices=("k6", "go"),
+        default=DEFAULT_LOAD_GENERATOR,
+        help="Load generator to use (k6 or get_latency_at_rate.go)",
+    )
     parser.add_argument(
         "--rates",
         type=str,
@@ -403,6 +486,10 @@ def main() -> None:
     median_threshold_ms = args.median_latency_threshold_s * 1000.0
 
     all_rows: List[Dict[str, float]] = []
+    go_source: Optional[Path] = None
+    if args.load_generator == "go" and not args.data_parsing_only:
+        go_source = Path(__file__).resolve().parent / "get_latency_at_rate.go"
+
     for idx, image in enumerate(args.dockerImages):
         app_name = normalize_name(image)
         pvc_name = f"{app_name}-pvc"
@@ -411,25 +498,32 @@ def main() -> None:
         pf_proc: Optional[subprocess.Popen] = None
         logger.info("Deploying app %s with image %s", app_name, image)
         try:
+            post_endpoint, payload_data, env_vars = get_app_request_config(image)
+            payload_json = json.dumps(payload_data)
             if not args.data_parsing_only:
                 # Create storage and workload resources.
                 create_pvc(pvc_name, args.namespace, args.storage)
-                create_deployment(app_name, image, pvc_name, args.namespace)
+                create_deployment(app_name, image, pvc_name, args.namespace, env_vars)
                 create_service(app_name, args.namespace)
 
                 # Expose the service locally for the load generator.
                 pf_proc = start_port_forward(app_name, args.namespace, local_port)
                 wait_for_port("127.0.0.1", local_port)
 
-                logger.info("Port-forward ready, starting k6 runs for rates: %s", rates)
+                logger.info("Port-forward ready, starting load runs for rates: %s", rates)
 
             for rate in rates:
                 summary_file = results_dir / f"{app_name}_{rate}rps_summary.json"
                 timeseries_file = results_dir / f"{app_name}_{rate}rps_timeseries.csv"
+                latency_output_file = results_dir / f"{app_name}_{rate}rps_latency.txt"
 
-                if not args.data_parsing_only:
+                if not args.data_parsing_only and args.load_generator == "k6":
                     script_content = build_k6_constant_rate_script(
-                        f"http://127.0.0.1:{local_port}/", args.duration, median_threshold_ms, rate
+                        image,
+                        f"http://127.0.0.1:{local_port}/", 
+                        args.duration, 
+                        median_threshold_ms, 
+                        rate
                     )
                     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
                         tf.write(script_content)
@@ -439,13 +533,45 @@ def main() -> None:
                     run_k6(tmp_script, summary_file, timeseries_file)
                     Path(tmp_script).unlink(missing_ok=True)
                     tmp_script = None
+                elif not args.data_parsing_only and args.load_generator == "go":
+                    duration_seconds = parse_duration_seconds(args.duration)
+                    logger.info("Running Go latency client (%srps) against %s", rate, app_name)
+                    run_latency_client(
+                        go_source,
+                        f"http://127.0.0.1:{local_port}/{post_endpoint}",
+                        payload_json,
+                        duration_seconds,
+                        rate,
+                        latency_output_file,
+                        headers=["Content-Type: application/json"],
+                    )
 
-                logger.info("Parsing k6 summary results for %s at target %srps", app_name, rate)
-                stage_metrics = parse_k6_summary(summary_file)
+                if args.load_generator == "k6":
+                    logger.info("Parsing k6 summary results for %s at target %srps", app_name, rate)
+                    stage_metrics = parse_k6_summary(summary_file)
+                else:
+                    logger.info("Parsing Go latency results for %s at target %srps", app_name, rate)
+                    stage_metrics = parse_latency_output(latency_output_file)
+                
+                exceeded_latency = False
+                max_avg_ms = 0.0
                 for metrics in stage_metrics:
-                    throughput = metrics["throughput_rps"]
-                    logger.info("Metrics for %s rps on %s: %s", throughput, app_name, metrics)
-                    all_rows.append({"app": app_name, "rate_rps": rate, **metrics})
+                    offered_rate_rps = metrics["offered_rate_rps"]
+                    logger.info("Metrics for %s rps on %s: %s", offered_rate_rps, app_name, metrics)
+                    all_rows.append({"app": app_name, "offered_rate_rps": offered_rate_rps, **metrics})
+                    avg_ms = float(metrics.get("avg_ms", 0.0))
+                    if avg_ms > max_avg_ms:
+                        max_avg_ms = avg_ms
+                    if avg_ms > median_threshold_ms:
+                        exceeded_latency = True
+                if exceeded_latency:
+                    logger.warning(
+                        "Average latency %.2fms exceeded threshold %.2fms; skipping remaining rates for %s",
+                        max_avg_ms,
+                        median_threshold_ms,
+                        app_name,
+                    )
+                    break
         finally:
             # Always tear down the port-forward and Kubernetes objects.
             if pf_proc and pf_proc.poll() is None:

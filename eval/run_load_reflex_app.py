@@ -6,19 +6,27 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
 from urllib.error import HTTPError
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Script to start an XDN cluster, deploy a Dockerized service, hammer it with k6,
 # and persist throughput/latency metrics for quick load comparisons.
 
 ACTIVE_REPLICA_RE = re.compile(r"^\s*active\.[^=]+=\s*([^:\s]+):(\d+)", re.IGNORECASE)
 RECONFIGURATOR_RE = re.compile(r"^\s*reconfigurator\.[^=]+=\s*([^:\s]+):(\d+)", re.IGNORECASE)
-DEFAULT_VUS = [1, 5, 10, 20, 50]
+DEFAULT_RATES = [100, 200, 300, 400, 500, 800, 1000]
+DEFAULT_LOAD_GENERATOR = "go"
+HTTP_PORT_OFFSET = 300
+VALID_APPS = {
+    "fadhilkurnia/xdn-bookcatalog",
+    "fadhilkurnia/xdn-webkv",
+    "fadhilkurnia/xdn-todo"
+}
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +61,20 @@ def normalize_service_name(image_name: str) -> str:
     return f"svc_{base or 'app'}"
 
 
+def get_app_request_config(image: str) -> Tuple[str, Dict[str, str], str, Dict[str, str]]:
+    if image not in VALID_APPS:
+        raise ValueError(f"Unsupported application image: {image}")
+
+    if image == "fadhilkurnia/xdn-bookcatalog":
+        return "/api/books", {"author": "abc", "title": "xyz"}, "bookcatalog", {"ENABLE_WAL": "true"}
+    if image == "fadhilkurnia/xdn-webkv":
+        return "/api/kv/abc", {"key": "abc", "value": "xyz"}, "webkv", {}
+    if image == "fadhilkurnia/xdn-todo":
+        return "/api/todo/tasks", {"item": "task"}, "todo", {}
+
+    raise ValueError(f"No request payload defined for image: {image}")
+
+
 def start_cluster(config_path: Path, repo_root: Path):
     gp_server = repo_root / "bin" / "gpServer.sh"
     cmd = [str(gp_server), f"-DgigapaxosConfig={config_path}", "start", "all"]
@@ -70,13 +92,17 @@ def stop_cluster(config_path: Path, repo_root: Path):
         logger.warning("Cluster cleanup failed for command: %s", " ".join(clear_cmd))
 
 
-def deploy_service(control_plane_host: str, image: str, service_name: str):
+def deploy_service(control_plane_host: str, image: str, service_name: str, env_vars: Optional[Dict[str, str]] = None):
     # Launch the target image as an XDN service via CLI; assume control-plane host resolves.
+    env_parts = []
+    for key, value in (env_vars or {}).items():
+        env_parts.append(f"--env {shlex.quote(f'{key}={value}')}")
+    env_arg = " ".join(env_parts)
     cmd = (
         f"XDN_CONTROL_PLANE={shlex.quote(control_plane_host)} "
         f"xdn launch {shlex.quote(service_name)} "
         f"--image={shlex.quote(image)} --deterministic=true "
-        f"--consistency=linearizability --state=/app/data/"
+        f"--consistency=linearizability --state=/app/data/ {env_arg}"
     )
     logger.info("Launching XDN service %s with image %s", service_name, image)
     subprocess.run(cmd, shell=True, check=True)
@@ -94,17 +120,40 @@ def destroy_service(control_plane_host: str, service_name: str):
         logger.warning("Failed to destroy service %s; manual cleanup may be needed", service_name)
 
 
-def build_k6_script(host: str, port: int, service_name: str) -> str:
+def build_k6_script(
+    host: str,
+    port: int,
+    service_name: str,
+    rate: int,
+    duration: str,
+    post_endpoint: str,
+    payload_data: Dict[str, str],
+) -> str:
     # Keep the load script minimal to reduce JS build overhead.
+    pre_alloc_vus = max(1, rate * 2)
+    max_vus = pre_alloc_vus * 2
+    payload = json.dumps(payload_data)
     return f"""
 import http from 'k6/http';
-import {{ sleep }} from 'k6';
 
-const HEADERS = {{ 'XDN': '{service_name}' }};
+export const options = {{
+  scenarios: {{
+    constant_rate: {{
+      executor: 'constant-arrival-rate',
+      rate: {rate},
+      timeUnit: '1s',
+      duration: '{duration}',
+      preAllocatedVUs: {pre_alloc_vus},
+      maxVUs: {max_vus},
+    }},
+  }},
+}};
+
+const HEADERS = {{ 'XDN': '{service_name}', 'Content-Type': 'application/json' }};
+const PAYLOAD = {payload};
 
 export default function () {{
-  http.get('http://{host}:{port}/api/books', {{ headers: HEADERS }});
-  sleep(0.1);
+  http.post('http://{host}:{port}{post_endpoint}', PAYLOAD, {{ headers: HEADERS }});
 }}
 """
 
@@ -137,18 +186,49 @@ def verify_service(host: str, port: int, service_name: str, timeout: int = 60, i
     raise TimeoutError(f"Service {service_name} not ready at {url}; last error: {last_error}")
 
 
-def run_k6(script_path: str, vus: int, duration: str, summary_path: Path):
-    cmd = [
-        "k6",
-        "run",
-        "--vus",
-        str(vus),
-        "--duration",
-        duration,
-        "--summary-export",
-        str(summary_path),
-        script_path,
-    ]
+def detect_leader_replica(
+    active_replicas: List[Tuple[str, int]],
+    service_name: str,
+    retries: int = 5,
+    interval: float = 1.0,
+) -> Tuple[str, int]:
+    """
+    Query each active replica's replica/info endpoint and return the leader/primary.
+    Raises a RuntimeError if no leader is found after retries.
+    """
+    fallback_host, fallback_port = active_replicas[0]
+    headers = {"XDN": service_name}
+
+    for attempt in range(1, retries + 1):
+        for host, port in active_replicas:
+            http_port = port + HTTP_PORT_OFFSET
+            url = f"http://{host}:{http_port}/api/v2/services/{service_name}/replica/info"
+            try:
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    if resp.status >= 400:
+                        continue
+                    info = json.load(resp)
+            except Exception as exc:
+                logger.debug("Replica info probe failed for %s (attempt %s): %s", url, attempt, exc)
+                continue
+
+            role = str(info.get("role", "")).lower()
+            if role in ("leader", "primary"):
+                logger.info("Detected %s replica at %s:%s", role, host, port)
+                return host, port
+
+        if attempt < retries:
+            time.sleep(interval)
+
+    raise RuntimeError(
+        "Unable to determine leader/primary replica for "
+        f"{service_name} after {retries} attempts; last fallback was {fallback_host}:{fallback_port}"
+    )
+
+
+def run_k6(script_path: str, summary_path: Path):
+    cmd = ["k6", "run", "--summary-export", str(summary_path), script_path]
     subprocess.run(cmd, check=True)
 
 
@@ -190,10 +270,107 @@ def parse_k6_summary(summary_path: Path):
     }
 
 
+def parse_duration_seconds(duration: str) -> float:
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)(ms|s|m|h)?\s*$", duration)
+    if not match:
+        raise ValueError("Duration must be a number optionally followed by ms, s, m, or h")
+    value = float(match.group(1))
+    unit = match.group(2) or "s"
+    if unit == "ms":
+        return value / 1000.0
+    if unit == "s":
+        return value
+    if unit == "m":
+        return value * 60.0
+    if unit == "h":
+        return value * 3600.0
+    raise ValueError("Unsupported duration unit")
+
+
+def run_latency_client(
+    source_path: Path,
+    service_name: str,
+    url: str,
+    payload: str,
+    duration_seconds: float,
+    rate: int,
+    output_path: Path,
+) -> None:
+    duration_arg = f"{duration_seconds:.0f}" if duration_seconds.is_integer() else f"{duration_seconds}"
+    env = os.environ.copy()
+    env["GO111MODULE"] = "off"
+    env["GOWORK"] = "off"
+    cmd = [
+        "go",
+        "run",
+        source_path.name,
+        "-H",
+        f"XDN: {service_name}",
+        "-H",
+        "Content-Type: application/json",
+        url,
+        payload,
+        duration_arg,
+        f"{rate}",
+    ]
+    with open(output_path, "w", encoding="utf-8") as fh:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            cwd=str(source_path.parent),
+        )
+    if result.returncode != 0:
+        try:
+            with open(output_path, "r", encoding="utf-8") as fh:
+                error_output = fh.read().strip()
+        except OSError:
+            error_output = ""
+        if error_output:
+            print("Latency client failed output:\n" + error_output, file=sys.stderr)
+        else:
+            print("Latency client failed with no output.", file=sys.stderr)
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+
+
+def parse_latency_output(output_path: Path) -> Dict[str, float]:
+    try:
+        with open(output_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        raise ValueError(f"Failed to read latency output {output_path}: {exc}") from exc
+
+    metrics: Dict[str, float] = {}
+    for line in lines:
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        try:
+            metrics[key] = float(raw_value)
+        except ValueError:
+            continue
+
+    if not metrics:
+        raise ValueError(f"Latency output missing metrics in {output_path}")
+
+    return {
+        "throughput_rps": float(metrics.get("actual_throughput_rps", 0.0)),
+        "p95_ms": float(metrics.get("p95_latency_ms", 0.0)),
+        "p90_ms": float(metrics.get("p90_latency_ms", 0.0)),
+        "p50_ms": float(metrics.get("median_latency_ms", 0.0)),
+        "avg_ms": float(metrics.get("average_latency_ms", 0.0)),
+    }
+
+
 def write_results_csv(results_dir: Path, rows):
     csv_path = results_dir / "reflex_load_results.csv"
     fieldnames = [
-        "virtual_users",
+        "rate_rps",
         "throughput_rps",
         "p95_ms",
         "p90_ms",
@@ -218,15 +395,27 @@ def main():
     parser.add_argument("xdnConfigFile", help="Path to gigapaxos.xdn.*.properties file")
     parser.add_argument("dockerImageName", help="Docker image for the XDN service")
     parser.add_argument(
-        "--vus",
-        help="Comma-separated list of virtual users to test",
-        default=",".join(str(v) for v in DEFAULT_VUS),
+        "--rates",
+        help="Comma-separated list of request rates (per second) to test",
+        default=",".join(str(v) for v in DEFAULT_RATES),
     )
     parser.add_argument("--duration", default="30s", help="Duration for each k6 run (e.g., 30s)")
     parser.add_argument(
         "--service-name",
         default=None,
         help="Optional XDN service name (default: 'svc')",
+    )
+    parser.add_argument(
+        "--median-latency-threshold-ms",
+        type=float,
+        default=1000.0,
+        help="Stop load tests when median latency exceeds this threshold (default: 1000ms)",
+    )
+    parser.add_argument(
+        "--load-generator",
+        choices=("k6", "go"),
+        default=DEFAULT_LOAD_GENERATOR,
+        help="Load generator to use (k6 or get_latency_at_rate.go)",
     )
     args = parser.parse_args()
 
@@ -238,45 +427,94 @@ def main():
     active_replicas = parse_active_replicas(config_path)
     control_plane_host, _ = parse_control_plane(config_path)
     target_host, target_port = active_replicas[0]
-    http_target_port = target_port + 300  # Assuming HTTP port offset
-    vus_list = [int(v.strip()) for v in args.vus.split(",") if v.strip()]
+    http_target_port = target_port + HTTP_PORT_OFFSET
+    rates_list = [int(v.strip()) for v in args.rates.split(",") if v.strip()]
     service_name = args.service_name or "svc"
+    latency_threshold_ms = args.median_latency_threshold_ms
+    post_endpoint, payload_data, app_name, env_vars = get_app_request_config(args.dockerImageName)
     logger.info(
-        "Using service name=%s, target=%s:%s (http port %s), VUs=%s",
+        "Using service name=%s, target=%s:%s (http port %s), rates=%s req/s",
         service_name,
         target_host,
         target_port,
         http_target_port,
-        vus_list,
+        rates_list,
     )
+    logger.info("Using request endpoint %s with payload %s", post_endpoint, payload_data)
 
-    tmp_script = None
+    go_source: Optional[Path] = None
+    if args.load_generator == "go":
+        go_source = Path(__file__).resolve().parent / "get_latency_at_rate.go"
+
     try:
         start_cluster(config_path, repo_root)
-        deploy_service(control_plane_host, args.dockerImageName, service_name)
+        deploy_service(control_plane_host, args.dockerImageName, service_name, env_vars)
         verify_service(target_host, http_target_port, service_name)
 
-        script_content = build_k6_script(target_host, http_target_port, service_name)
-        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
-            tf.write(script_content)
-            tmp_script = tf.name
+        target_host, target_port = detect_leader_replica(active_replicas, service_name)
+        http_target_port = target_port + HTTP_PORT_OFFSET
+        logger.info(
+            "Using leader/primary replica %s:%s (http port %s) for load testing",
+            target_host,
+            target_port,
+            http_target_port,
+        )
 
         results = []
-        for vu in vus_list:
-            summary_file = results_dir / f"reflex_k6_summary_vu{vu}.json"
-            logger.info("Running k6 with %s virtual users", vu)
-            run_k6(tmp_script, vu, args.duration, summary_file)
-            metrics = parse_k6_summary(summary_file)
-            logger.info("Results for VUs=%s: %s", vu, metrics)
-            results.append({"virtual_users": vu, **metrics})
+        for rate in rates_list:
+            script_path = None
+            summary_file = results_dir / f"reflex_k6_summary_rate_{app_name}_{rate}.json"
+            latency_output = results_dir / f"reflex_go_latency_rate_{app_name}_{rate}.txt"
+            try:
+                if args.load_generator == "k6":
+                    logger.info("Running k6 with target rate %s req/s", rate)
+                    script_content = build_k6_script(
+                        target_host,
+                        http_target_port,
+                        service_name,
+                        rate,
+                        args.duration,
+                        post_endpoint,
+                        payload_data,
+                    )
+                    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
+                        tf.write(script_content)
+                        script_path = tf.name
+                    run_k6(script_path, summary_file)
+                    metrics = parse_k6_summary(summary_file)
+                else:
+                    duration_seconds = parse_duration_seconds(args.duration)
+                    payload_json = json.dumps(payload_data)
+                    logger.info("Running Go latency client with target rate %s req/s", rate)
+                    run_latency_client(
+                        go_source,
+                        service_name,
+                        f"http://{target_host}:{http_target_port}{post_endpoint}",
+                        payload_json,
+                        duration_seconds,
+                        rate,
+                        latency_output,
+                    )
+                    metrics = parse_latency_output(latency_output)
+                logger.info("Results for rate=%s: %s", rate, metrics)
+                results.append({"rate_rps": rate, **metrics})
+                if metrics["p50_ms"] > latency_threshold_ms:
+                    logger.warning(
+                        "Median latency %.2f ms exceeded threshold %.2f ms at rate %s req/s; stopping further tests",
+                        metrics["p50_ms"],
+                        latency_threshold_ms,
+                        rate,
+                    )
+                    break
+            finally:
+                if script_path:
+                    Path(script_path).unlink(missing_ok=True)
 
         csv_path = write_results_csv(results_dir, results)
         print(f"Results saved to {csv_path}")
     finally:
         destroy_service(control_plane_host, service_name)
         stop_cluster(config_path, repo_root)
-        if tmp_script:
-            Path(tmp_script).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
