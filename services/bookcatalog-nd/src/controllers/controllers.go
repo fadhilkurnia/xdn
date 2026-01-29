@@ -3,7 +3,6 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 
@@ -17,7 +16,6 @@ var NewBook models.Book
 func CreateBook(w http.ResponseWriter, r *http.Request) {
 	CreateBook := &models.Book{}
 	utils.ParseBody(r, CreateBook)
-	log.Println("create new book: ", *CreateBook)
 	b := CreateBook.CreateBook()
 	res, _ := json.Marshal(b)
 	w.WriteHeader(http.StatusOK)
@@ -25,7 +23,6 @@ func CreateBook(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetBook(w http.ResponseWriter, r *http.Request) {
-
 	newBooks := models.GetAllBooks()
 	res, _ := json.Marshal(newBooks)
 	w.Header().Set("Content-Type", "application/json")

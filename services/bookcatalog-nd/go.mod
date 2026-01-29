@@ -1,9 +1,12 @@
 module github.com/arpesam/go-book-api
 
-go 1.19
+go 1.21
+
+toolchain go1.22.4
 
 require (
 	github.com/gorilla/mux v1.8.0
+	goki.dev/rqlite v0.0.0-20231221000036-cbdefbc19a54
 	gorm.io/driver/mysql v1.5.2
 	gorm.io/driver/postgres v1.5.4
 	gorm.io/driver/sqlite v1.5.4
@@ -18,6 +21,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-sqlite3 v1.14.17 // indirect
+	github.com/rqlite/gorqlite v0.0.0-20231117160833-4e4ea5aa6d88 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 )
