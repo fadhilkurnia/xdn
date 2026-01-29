@@ -67,7 +67,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     // Retry configuration for StartEpochPacket proposal
     // This handles the race condition where other nodes may not have created their paxos instances yet
-    private static final int START_EPOCH_PROPOSAL_MAX_RETRIES = 10;
+    private static final int START_EPOCH_PROPOSAL_MAX_RETRIES = 50;
     private static final long START_EPOCH_PROPOSAL_TIMEOUT_MS = 500;
     private static final long START_EPOCH_PROPOSAL_RETRY_DELAY_MS = 200;
 
@@ -603,6 +603,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             myCurrentRole = this.currentRole.get(groupName);
             curEpoch = this.currentPrimaryEpoch.get(groupName);
         }
+        logger.log(Level.INFO,
+                String.format(
+                        "%s:%s - handleChangePrimaryPacket svc=%s target=%s role=%s epoch=%s isPrimary=%b isPaxosCoordinator=%b",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        groupName, packet.getNodeID(), myCurrentRole, curEpoch,
+                        isCurrentPrimary(groupName),
+                        this.paxosManager.isPaxosCoordinator(groupName)));
         if (myCurrentRole == null) {
             logger.log(Level.SEVERE,
                     String.format(
@@ -644,6 +651,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     currentPrimary.put(groupName, myNodeID);
                     processOutstandingRequests();
 
+                    logger.log(Level.INFO,
+                            String.format(
+                                    "%s:%s - change primary completed svc=%s target=%s epoch=%s handled=%b",
+                                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                    groupName, packet.getNodeID(), newEpoch, isHandled));
                     callback.executed(packet, isHandled);
 
                     this.paxosManager.tryToBePaxosCoordinator(groupName);
@@ -724,6 +736,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         String newPrimaryEpochStr = packet.getStartingEpochString();
         PrimaryEpoch<NodeIDType> newPrimaryEpoch = new PrimaryEpoch<>(newPrimaryEpochStr);
         PrimaryEpoch<NodeIDType> currentEpoch = this.currentPrimaryEpoch.get(groupName);
+        logger.log(Level.INFO,
+                String.format(
+                        "%s:%s - executeStartEpoch svc=%s newEpoch=%s currentEpoch=%s role=%s",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        groupName, newPrimaryEpoch, currentEpoch, this.currentRole.get(groupName)));
         String newPrimaryIDStr = newPrimaryEpoch.nodeID;
         NodeIDType newPrimaryID = nodeIDTypeStringifiable.valueOf(newPrimaryIDStr);
 
@@ -770,6 +787,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 this.currentPrimary.put(groupName, newPrimaryID);
 
                 System.out.printf(">> %s shutting down .... \n", myNodeID);
+                logger.log(Level.INFO,
+                        String.format(
+                                "%s:%s - stepping down svc=%s role=%s oldEpoch=%s newEpoch=%s",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                groupName, myCurrentRole, currentEpoch, newPrimaryEpoch));
                 this.restartPaxosInstance(groupName);
                 return true;
             }
@@ -1264,6 +1286,18 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             return false;
         }
         return myCurrentRole.equals(Role.PRIMARY);
+    }
+
+    public NodeIDType getCurrentPrimary(String groupName) {
+        return this.currentPrimary.get(groupName);
+    }
+
+    public PrimaryEpoch<NodeIDType> getCurrentPrimaryEpoch(String groupName) {
+        return this.currentPrimaryEpoch.get(groupName);
+    }
+
+    public Role getCurrentRole(String groupName) {
+        return this.currentRole.get(groupName);
     }
 
     // same as isCurrentPrimary, but proactively try to make this node to be
