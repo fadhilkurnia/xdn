@@ -440,9 +440,9 @@
     </target>
 
     <target name="xdn-regular-unit-tests"
-            description="Run all tests EXCEPT Xdn*Test patterns and PrimaryBackup folder"
+            description="Run all tests EXCEPT Xdn*Test patterns"
             depends="xdn-compile-tests">
-        <echo message="Running regular unit tests (Excluding XDN and PrimaryBackup)..."/>
+        <echo message="Running regular unit tests (Excluding XDN tests)..."/>
         <mkdir dir="out/junit5-test-output"/>
 
         <junitlauncher printSummary="true" haltOnFailure="false">
@@ -456,8 +456,6 @@
                     <include name="**/*Test.class"/>
 
                     <exclude name="**/Xdn*Test.class"/>
-
-                    <exclude name="**/edu/umass/cs/primarybackup/**"/>
                 </fileset>
                 <listener type="legacy-plain" sendSysErr="true" sendSysOut="true" />
                 <listener type="legacy-xml" sendSysErr="true" sendSysOut="true"/>

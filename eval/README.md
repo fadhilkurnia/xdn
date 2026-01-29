@@ -42,6 +42,27 @@ python eval/run_load_distdb_app.py <xdn-config.properties> <docker-image> --rate
 python eval/run_load_distdb_app.py <xdn-config.properties> <docker-image> --load-generator k6 --rates 100,200 --duration 30s
 ```
 
+### `run_load_drbd_app.py`
+
+Creates a 3-node DRBD resource using the first three `active.*` entries in the
+Gigapaxos config, formats and mounts the replicated block device on the primary
+node, starts the demo app container with the mounted volume, and runs load tests.
+
+**Prereqs:** DRBD + drbd-utils installed on all three hosts, passwordless sudo,
+and Docker available on the primary host.
+
+**Usage (Go, default):**
+
+```
+python eval/run_load_drbd_app.py ../conf/gigapaxos.xdn.3way.cloudlab.properties fadhilkurnia/xdn-bookcatalog --backing-device /dev/sdb --force-primary --force-create-md
+```
+
+**Usage (k6):**
+
+```
+python eval/run_load_drbd_app.py ../conf/gigapaxos.xdn.3way.cloudlab.properties fadhilkurnia/xdn-todo --backing-device /dev/sdb --load-generator k6 --rates 100,200 --duration 30s --force-primary --force-create-md
+```
+
 ### `get_latency_at_rate.go`
 
 Sends POST requests to a target URL at a Poisson arrival rate for a fixed
@@ -68,4 +89,21 @@ python eval/init_openebs.py <node1> <node2> ...
 
 ```
 python eval/init_openebs.py <node1> <node2> ... --skip-prep
+```
+
+### `init_drbd.py`
+
+Prepares nodes for DRBD by installing packages, loading the DRBD kernel module,
+and wiping the backing disk used for replication.
+
+**Usage:**
+
+```
+python eval/init_drbd.py <node1> <node2> <node3> --backing-device /dev/sdb
+```
+
+**Usage (skip disk prep):**
+
+```
+python eval/init_drbd.py <node1> <node2> <node3> --skip-disk-prep
 ```
