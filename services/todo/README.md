@@ -25,12 +25,19 @@ Running the web service:
 cargo run .
 ```
 
+To run on a non-privileged port:
+```
+PORT=8080 cargo run .
+```
+
+To use rqlite as the datastore:
+```
+DB_TYPE=rqlite DB_HOST=localhost cargo run .
+```
+Ensure rqlite is reachable at `http://<DB_HOST>:4001` (or set `DB_HOST` to `host:port` / full URL).
+
 To run the web service as a container:
 ```
 docker build -t todo-simple .
 docker run -p 8080:8080 todo-simple
 ```
-
-## TODO
-- [ ] Make a smaller docker image with 2 phase building.
-- [ ] Store the AppState persistently using SQLite.

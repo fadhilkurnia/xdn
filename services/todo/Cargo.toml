@@ -8,4 +8,6 @@ actix-web = "4.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls", "macros"] }
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls", "macros"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+libsqlite3-sys = { version = "0.27", features = ["bundled"] }
