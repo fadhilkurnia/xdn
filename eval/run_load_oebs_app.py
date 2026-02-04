@@ -20,9 +20,9 @@ K8S_STORAGE_CLASS = "openebs-3-replica"
 DEFAULT_LOAD_GENERATOR = "go"
 
 VALID_APPS = {
-    "fadhilkurnia/xdn-bookcatalog", 
+    "fadhilkurnia/xdn-bookcatalog",
     "fadhilkurnia/xdn-webkv",
-    "fadhilkurnia/xdn-todo",
+    "fadhilkurnia/xdn-todo"
 }
 
 logger = logging.getLogger(__name__)
@@ -128,7 +128,7 @@ spec:
 {env_block if env_block else ''}
         volumeMounts:
         - name: data
-          mountPath: /data
+          mountPath: /app/data
       volumes:
       - name: data
         persistentVolumeClaim:
@@ -224,7 +224,7 @@ def get_app_request_config(image: str) -> Tuple[str, Dict[str, str], Dict[str, s
     if image == "fadhilkurnia/xdn-webkv":
         return "api/kv/abc", {"key": "abc", "value": "xyz"}, {}
     if image == "fadhilkurnia/xdn-todo":
-        return "api/todo/tasks", {"item": "task"}, {}
+        return "api/todo/tasks", {"item": "task"}, {"ENABLE_WAL": "true"}
 
     raise ValueError(f"No request payload defined for image: {image}")
 
