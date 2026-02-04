@@ -92,7 +92,7 @@ func Connect() {
 		dsn := "file:data/data.db"
 		isEnableWAL := os.Getenv("ENABLE_WAL")
 		if isEnableWAL != "" && strings.ToLower(isEnableWAL) == "true" {
-			dsn = "file:data/data.db?_journal_mode=WAL"
+			dsn = "file:data/data.db?_journal_mode=WAL&_synchronous=FULL"
 		}
 		d, err := gorm.Open(sqlite.Open(dsn), gormConfig)
 		if err != nil {
