@@ -1,0 +1,49 @@
+name: "XDN CLI Checks"
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  xdn-cli:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: xdn-cli/go.mod
+
+      - name: Check gofmt
+        working-directory: xdn-cli
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt needed on:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Build XDN CLI binaries
+        run: bash bin/build_xdn_cli.sh
+
+      - name: Verify generated binaries are up to date
+        run: |
+          for f in bin/xdn-linux-amd64 bin/xdn-darwin-arm64; do
+            if [ ! -f "$f" ]; then
+              echo "Missing expected binary: $f"
+              exit 1
+            fi
+          done
+
+          if ! git diff --exit-code -- bin/xdn-linux-amd64 bin/xdn-darwin-arm64; then
+            echo "Binaries are out of date. Run: bash bin/build_xdn_cli.sh"
+            exit 1
+          fi
