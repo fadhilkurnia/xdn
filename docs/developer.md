@@ -66,6 +66,12 @@ java -cp "lib/junit-platform-console-standalone-1.11.1.jar:build/classes:build/t
   --details=summary
 ```
 
+## Running XDN scripted tests
+Some Xdn*Test classes require per-method JVM isolation. Use `bin/run_xdn_tests.sh` (or `ant xdn-unit-tests-script`) to execute them. Example:
+```bash
+bin/run_xdn_tests.sh XdnGetReplicaInfoTest
+```
+
 ## Logging, or why we should not use printf()
 
 To printout logging for specific classes, you can specify those classes 
