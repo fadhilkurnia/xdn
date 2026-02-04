@@ -8,13 +8,13 @@ TARGET_DIRS=(
   "${REPO_ROOT}/src/edu/umass/cs/xdn"
   "${REPO_ROOT}/test"
 )
-JAR_PATH="${REPO_ROOT}/bin/google-java-format-${VERSION}-all-deps.jar"
+JAR_PATH="${REPO_ROOT}/jars/google-java-format-${VERSION}-all-deps.jar"
 JAR_URL="https://github.com/google/google-java-format/releases/download/v${VERSION}/google-java-format-${VERSION}-all-deps.jar"
 JAVA_FILES=()
 
 usage() {
   cat <<'EOF'
-Usage: bin/google-java-format.sh [--check]
+Usage: bin/run_java_formatter.sh [--check]
 
 Formats XDN Java sources (including tests) with google-java-format.
 

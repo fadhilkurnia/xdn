@@ -19,5 +19,4 @@ output.txt
 *.jfr
 *.png
 .pycache
-bin/google-java-format-*.jar
-tools/google-java-format-*.jar
+jars/google-java-format-*.jar
