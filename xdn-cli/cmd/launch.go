@@ -124,6 +124,10 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		fmt.Printf("docker image name is required, set with --image flag.\n")
 		return prop, err
 	}
+	if imageErr := validateImageName(prop.imageName); imageErr != nil {
+		fmt.Printf("%s\n", imageErr.Error())
+		return prop, imageErr
+	}
 
 	// parse the web service exposed port
 	prop.httpPort, err = flags.GetInt("port")
@@ -243,6 +247,9 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 	if propMap["components"] == nil {
 		prop.serviceName = propMap["name"].(string)
 		prop.imageName = propMap["image"].(string)
+		if imageErr := validateImageName(prop.imageName); imageErr != nil {
+			return prop, imageErr
+		}
 		prop.httpPort = int(propMap["port"].(float64))
 		prop.consistencyModel = propMap["consistency"].(string)
 		prop.stateDir = propMap["state"].(string)
@@ -260,6 +267,9 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 			for componentName, componentPropIf := range components.(map[string]interface{}) {
 				componentProp := componentPropIf.(map[string]interface{})
 				componentImage := componentProp["image"].(string)
+				if imageErr := validateImageName(componentImage); imageErr != nil {
+					return prop, fmt.Errorf("component %q: %w", componentName, imageErr)
+				}
 				images += fmt.Sprintf("%s:%s", componentName, componentImage)
 				if !isLast {
 					images += "\n                 "
@@ -299,6 +309,17 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 	// TODO: validate state directory
 
 	return prop, nil
+}
+
+func validateImageName(imageName string) error {
+	imageName = strings.TrimSpace(imageName)
+	if imageName == "" {
+		return fmt.Errorf("docker image name is required")
+	}
+	if strings.ContainsAny(imageName, " \t\r\n") {
+		return fmt.Errorf("docker image name must not contain whitespace")
+	}
+	return nil
 }
 
 func runLaunchCommand(prop CommonProperties) error {

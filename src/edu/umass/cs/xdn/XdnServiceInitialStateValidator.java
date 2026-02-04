@@ -41,9 +41,14 @@ public class XdnServiceInitialStateValidator implements InitialStateValidator {
     // try to validate all the provided container image names
     Set<String> containerNames = new HashSet<>();
     for (ServiceComponent c : property.getComponents()) {
-      containerNames.add(c.getImageName());
+      if (c.getImageName() != null) {
+        containerNames.add(c.getImageName().trim());
+      }
     }
     for (String imageName : containerNames) {
+      if (imageName == null || imageName.isEmpty()) {
+        continue;
+      }
       // First, try to inspect local image, if any.
       String command = String.format("docker image inspect %s", imageName);
       int errCode = Shell.runCommand(command, true);
