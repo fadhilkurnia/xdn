@@ -468,7 +468,7 @@
             depends="xdn-compile-tests">
     <echo message="Running all the tests with Xdn*Test pattern, reporting the results into './out/junit5-test-output/' ..."/>
         <exec executable="bash" failonerror="true" dir="${basedir}">
-            <arg value="bin/run-xdn-tests.sh"/>
+            <arg value="bin/run_xdn_tests.sh"/>
         </exec>
     </target>
 

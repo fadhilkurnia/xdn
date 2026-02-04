@@ -4,8 +4,8 @@
 # This script is used because each test method that calls
 # cluster.start() and cluster.close() needs to run in its own JVM.
 # usage example :
-#   ./bin/run-xdn-tests.sh                        # Run all Xdn*Test classes
-#   ./bin/run-xdn-tests.sh XdnGetReplicaInfoTest  # Run specific test class
+#   ./bin/run_xdn_tests.sh                        # Run all Xdn*Test classes
+#   ./bin/run_xdn_tests.sh XdnGetReplicaInfoTest  # Run specific test class
 
 set -euo pipefail
 
