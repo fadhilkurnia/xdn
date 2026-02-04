@@ -21,10 +21,39 @@ function main() {
   local XDN_ROOT="$PWD"
   cd ./xdn-cli/
 
-  # actually build the xdn cli
-  go build -o ../bin/xdn .
+  local BIN_DIR="${XDN_ROOT}/bin"
+  local LINUX_AMD64_BIN="${BIN_DIR}/xdn-linux-amd64"
+  local DARWIN_ARM64_BIN="${BIN_DIR}/xdn-darwin-arm64"
+  local HOST_OS
+  local HOST_ARCH
 
-  echo "Success! the CLI is accessible at \$XDN_ROOT/bin/xdn"
+  # build the xdn cli for linux/amd64 and darwin/arm64
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${LINUX_AMD64_BIN}" .
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o "${DARWIN_ARM64_BIN}" .
+
+  HOST_OS="$(uname -s)"
+  HOST_ARCH="$(uname -m)"
+
+  case "${HOST_OS}-${HOST_ARCH}" in
+    Linux-x86_64)
+      ln -sf "${LINUX_AMD64_BIN}" "${BIN_DIR}/xdn"
+      ;;
+    Darwin-arm64)
+      ln -sf "${DARWIN_ARM64_BIN}" "${BIN_DIR}/xdn"
+      ;;
+    *)
+      echo "Warning: Unsupported host (${HOST_OS}/${HOST_ARCH})."
+      echo "Built binaries:"
+      echo "  ${LINUX_AMD64_BIN}"
+      echo "  ${DARWIN_ARM64_BIN}"
+      echo "Create a suitable alias manually if needed."
+      ;;
+  esac
+
+  echo "Success! binaries generated:"
+  echo "  ${LINUX_AMD64_BIN}"
+  echo "  ${DARWIN_ARM64_BIN}"
+  echo "Alias (if supported) at ${BIN_DIR}/xdn"
   echo ""
   echo "To run 'xdn' from anywhere in your machine, add XDN's binary directory into your \$PATH:"
   echo "  export PATH=$XDN_ROOT/bin/:\$PATH"
