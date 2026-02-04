@@ -3,8 +3,18 @@ name: "XDN CLI Checks"
 on:
   push:
     branches: [ "master", "main" ]
+    paths:
+      - "xdn-cli/**"
+      - "bin/xdn-linux-amd64"
+      - "bin/xdn-darwin-arm64"
+      - "bin/build_xdn_cli.sh"
   pull_request:
     branches: [ "master", "main" ]
+    paths:
+      - "xdn-cli/**"
+      - "bin/xdn-linux-amd64"
+      - "bin/xdn-darwin-arm64"
+      - "bin/build_xdn_cli.sh"
 
 permissions:
   contents: read
