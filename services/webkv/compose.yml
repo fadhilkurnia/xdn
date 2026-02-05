@@ -202,7 +202,7 @@ services:
     environment:
       DB_TYPE: tikv
       DB_HOST: pd1:2379,pd2:2379,pd3:2379
-      RUST_BACKTRACE: 1
+      RUST_BACKTRACE: full
     ports:
       - "8080:80"
     networks:
