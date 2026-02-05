@@ -109,8 +109,16 @@ fn rocket() -> _ {
     let db = init_store_from_env()
         .expect("Failed to initialize key-value store from env (DB_TYPE/DB_HOST)");
 
-    let host = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
-    let port = 80;
+    let host = match env::var("HOST") {
+        Ok(value) => value.parse::<IpAddr>().expect("HOST must be a valid IP"),
+        Err(_) => IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+    };
+    let port = match env::var("PORT") {
+        Ok(value) => value
+            .parse::<u16>()
+            .expect("PORT must be a valid u16"),
+        Err(_) => 80,
+    };
 
     rocket::build()
         .manage(db)

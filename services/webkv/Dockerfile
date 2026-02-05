@@ -10,8 +10,35 @@
 # docker buildx build --platform linux/amd64,linux/arm64 --tag=webkv .
 
 # ===== build stage ============================================================
-FROM rust:1.83-bullseye AS builder
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.4.0 AS xx
+
+FROM --platform=$BUILDPLATFORM rust:1.83-bullseye AS builder
 WORKDIR /app
+COPY --from=xx / /
+ARG TARGETPLATFORM
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV PKG_CONFIG=xx-pkg-config
+
+## Prepare host dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    clang \
+    lld \
+    libclang-dev \
+    pkg-config \
+    libssl-dev \
+    cmake \
+    perl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Target toolchain for cross-compilation
+RUN xx-apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libc6-dev
+
+# Set up cross-compilation for C/C++ code (used by rocksdb, openssl-src, etc.)
+RUN xx-clang --setup-target-triple
 
 ## Copy the source code
 COPY Cargo.lock .
@@ -20,28 +47,20 @@ COPY src ./src
 COPY static ./static
 RUN mkdir -p /app/data
 
-## Prepare dependencies
-RUN apt-get update && apt-get install -y \
-    clang \
-    libclang-dev \
-    pkg-config \
-    libssl-dev
-
-ENV OPENSSL_STATIC=1
-ENV PKG_CONFIG_ALL_STATIC=1
-RUN cargo build --release --locked \
-    && strip target/release/webkv
+RUN xx-cargo build --release --locked
+RUN mkdir -p /out \
+    && find target -name webkv -path '*/release/webkv' -type f -exec cp {} /out/webkv \;
 
 # ===== release stage ==========================================================
-FROM gcr.io/distroless/base-debian12
+FROM --platform=$TARGETPLATFORM debian:bullseye-slim
 WORKDIR /app
-COPY --from=builder /app/target/release/webkv .
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libstdc++6 \
+    libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/webkv .
 COPY --from=builder /app/static ./static
 COPY --from=builder /app/data ./data
-# Distroless doesn't ship OpenSSL 1.1 runtime libs; copy only what we need.
-COPY --from=builder /usr/lib/*-linux-gnu/libssl.so.1.1 /usr/lib/
-COPY --from=builder /usr/lib/*-linux-gnu/libcrypto.so.1.1 /usr/lib/
-COPY --from=builder /usr/lib/*-linux-gnu/libstdc++.so.6 /usr/lib/
-COPY --from=builder /lib/*-linux-gnu/libgcc_s.so.1 /lib/
 EXPOSE 80
 CMD ["./webkv"]
