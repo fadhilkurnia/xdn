@@ -108,6 +108,8 @@ public class HttpActiveReplica {
 
     private static final boolean isHttpFrontendBatchEnabled =
             Config.getGlobalBoolean(ReconfigurationConfig.RC.HTTP_AR_FRONTEND_BATCH_ENABLED);
+    private static final long httpFrontendRequestTimeoutMs =
+            Config.getGlobalLong(ReconfigurationConfig.RC.HTTP_AR_FRONTEND_REQUEST_TIMEOUT_MS);
 
     // Backdoor headers used for debugging purpose (e.g., latency measurement to identify
     // bottlenecks). We assume these headers are never used by any services.
@@ -668,7 +670,8 @@ public class HttpActiveReplica {
                 CompletableFuture.supplyAsync(() -> {
                             try {
                                 // Add timeout to prevent indefinite blocking
-                                return execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                                return execFuture.get(httpFrontendRequestTimeoutMs,
+                                        java.util.concurrent.TimeUnit.MILLISECONDS);
                             } catch (InterruptedException e) {
                                 // Restore interrupt status
                                 Thread.currentThread().interrupt();
@@ -677,7 +680,8 @@ public class HttpActiveReplica {
                                 // Cancel the future if it times out
                                 execFuture.cancel(true);
                                 throw new RuntimeException(
-                                        "Request execution timed out after 10s",
+                                        "Request execution timed out after "
+                                                + httpFrontendRequestTimeoutMs + "ms",
                                         e
                                 );
                             } catch (ExecutionException e) {

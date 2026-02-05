@@ -20,8 +20,10 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnGigapaxosApp;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn.service.ServiceProperty;
+import io.netty.util.ReferenceCountUtil;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -518,6 +520,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     messenger.send(m);
                 } catch (IOException | JSONException e) {
                     throw new RuntimeException(e);
+                } finally {
+                    releaseForwardedResponse(requestWithResponse.getResponse());
                 }
 
                 // callback.executed(request, handled);
@@ -586,6 +590,29 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             return false;
         }
         return true;
+    }
+
+    private void releaseForwardedResponse(ClientRequest response) {
+        if (response == null) {
+            return;
+        }
+        if (response instanceof XdnHttpRequest xdnHttpRequest) {
+            if (xdnHttpRequest.getHttpResponse() != null
+                    && ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()) > 0) {
+                ReferenceCountUtil.release(xdnHttpRequest.getHttpResponse());
+            }
+            return;
+        }
+        if (response instanceof XdnHttpRequestBatch batch) {
+            for (var requestWithResponse : batch.getRequestList()) {
+                if (requestWithResponse.getHttpResponse() == null) {
+                    continue;
+                }
+                if (ReferenceCountUtil.refCnt(requestWithResponse.getHttpResponse()) > 0) {
+                    ReferenceCountUtil.release(requestWithResponse.getHttpResponse());
+                }
+            }
+        }
     }
 
     private boolean handleChangePrimaryPacket(ChangePrimaryPacket packet,
@@ -848,10 +875,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         "groupName: %s, placementEpoch: %d, initialState: %s, nodes: %s\n",
                 myNodeID, groupName, placementEpoch, initialState, nodes.toString());
 
+        // We encapsulate the initial/final state with primary-backup prefix since we need
+        // different app initialization (i.e., only starting the full app in primary, not backups).
         if (initialState != null
                 && (initialState.startsWith(ServiceProperty.XDN_INITIAL_STATE_PREFIX)
                 || initialState.startsWith(ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX))) {
-            initialState = String.format("nondeter:create:%s", initialState);
+            initialState = String.format("%s%s",
+                    ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX, initialState);
         }
 
         boolean created = this.paxosManager.createPaxosInstanceForcibly(
@@ -878,6 +908,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         // (1) if preferred coordinator is specified in placement metadata,
         //     then we set paxos' coordinator and the primary.
         // (2) if preferred coordinator is not specified: detect paxos leader -> set primary.
+        //     Option (2) is the default when we are bootstrapping.
         if (placementMetadata != null) {
             boolean isInitSuccess = this.initializePrimaryEpoch(
                     groupName, nodes, placementMetadata, placementEpoch);
@@ -1051,6 +1082,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         return true;
     }
 
+    // Initialize a replica in a primary-backup replica group without placement metadata.
+    // Thus, we set the node that is the paxos' coordinator to be the primary.
     private boolean initializePrimaryEpoch(String groupName, Set<NodeIDType> nodes,
                                            int placementEpoch) {
         assert groupName != null && !groupName.isEmpty();
@@ -1059,7 +1092,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         // all nodes start as BACKUP, initially.
         this.currentRole.put(groupName, Role.BACKUP);
 
-        // detect the current paxos' coordinator
+        // Detect the current paxos' coordinator.
+        // WARNING: We assume paxos' coordinator is chosen already, which should be the case
+        //  when we set ENABLE_STARTUP_LEADER_ELECTION=false (the default) that will cause
+        //  deterministic coordinator picking upon replica-group creation.
         NodeIDType paxosCoordinatorID = this.paxosManager.getPaxosCoordinator(groupName);
         if (paxosCoordinatorID == null) {
             throw new RuntimeException("Failed to get paxos coordinator for " + groupName);
@@ -1070,7 +1106,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         this.myNodeID, PrimaryBackupManager.class.getSimpleName(),
                         groupName, paxosCoordinatorID, placementEpoch));
 
-        // try to be the primary, co-located with the paxos' coordinator
+        // Try to be the primary, co-located with the paxos' coordinator.
         if (paxosCoordinatorID.equals(myNodeID)) {
             if (!(this.messenger instanceof JSONMessenger)) {
                 throw new RuntimeException(
@@ -1084,13 +1120,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     initNodeConfig.getNodeAddress(node)
             ));
 
-            System.out.printf(">> %s Initializing primary epoch for %s\n", myNodeID, groupName);
             logger.log(Level.INFO,
                     String.format("%s:%s:initializePrimaryEpoch - initializing PRIMARY for %s:%d",
                             this.myNodeID, PrimaryBackupManager.class.getSimpleName(),
                             groupName, placementEpoch));
 
-            // Note that PrimaryEpoch != PlacementEpoch
+            // Note that PrimaryEpoch != PlacementEpoch.
             PrimaryEpoch<NodeIDType> zero = new PrimaryEpoch<>(myNodeID, 0);
             this.currentRole.put(groupName, Role.PRIMARY_CANDIDATE);
             this.currentPrimaryEpoch.put(groupName, zero);

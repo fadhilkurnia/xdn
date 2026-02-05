@@ -313,6 +313,9 @@ public class XdnGigapaxosApp
   private void releaseHttpResponseOnNonEntryReplica(XdnHttpRequest xdnHttpRequest) {
     if (xdnHttpRequest == null) return;
     if (xdnHttpRequest.getHttpResponse() == null) return;
+    if (!shouldReleaseResponseOnNonEntryReplica(xdnHttpRequest.getServiceName())) {
+      return;
+    }
     if (xdnHttpRequest.isCreatedFromString()) {
       ReferenceCountUtil.release(xdnHttpRequest.getHttpResponse());
     }
@@ -320,6 +323,9 @@ public class XdnGigapaxosApp
 
   private void releaseHttpResponsesOnNonEntryReplica(XdnHttpRequestBatch batch) {
     if (batch == null) return;
+    if (!shouldReleaseResponseOnNonEntryReplica(batch.getServiceName())) {
+      return;
+    }
     if (!batch.isCreatedFromBytes()) return;
     for (var requestWithResponse : batch.getRequestList()) {
       if (requestWithResponse.getHttpResponse() == null) {
@@ -331,6 +337,33 @@ public class XdnGigapaxosApp
               ReferenceCountUtil.refCnt(requestWithResponse.getHttpResponse()));
       ReferenceCountUtil.release(requestWithResponse.getHttpResponse());
     }
+  }
+
+  private boolean shouldReleaseResponseOnNonEntryReplica(String serviceName) {
+    if (serviceName == null) {
+      return true;
+    }
+    ServiceProperty property = getServiceProperty(serviceName);
+    if (property == null) {
+      logger.log(Level.WARNING,
+          "Unknown service property when deciding response release for " + serviceName);
+      return true;
+    }
+    // Non-deterministic services use primary-backup; responses must be forwarded to entry replica.
+    return property.isDeterministic();
+  }
+
+  private ServiceProperty getServiceProperty(String serviceName) {
+    Map<Integer, ServiceInstance> currServiceInstance = this.serviceInstances.get(serviceName);
+    if (currServiceInstance == null) {
+      return null;
+    }
+    Integer currServicePlacementEpoch = this.servicePlacementEpoch.get(serviceName);
+    if (currServicePlacementEpoch == null) {
+      return null;
+    }
+    ServiceInstance currInstance = currServiceInstance.get(currServicePlacementEpoch);
+    return currInstance != null ? currInstance.property : null;
   }
 
   private void activate(String serviceName) {
@@ -454,7 +487,7 @@ public class XdnGigapaxosApp
       throw new RuntimeException("unimplemented! restore(.) with latest checkpoint state");
     }
 
-    // Case-5: handle the reconfiguration case in new higher placement epoch
+    // Case-5: handle the reconfiguration case in a new higher placement epoch
     if (state.startsWith(ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX)) {
       // format: xdn:final:<epoch>::<serviceProperty>::<finalState>
       String[] raw = state.split("::");
@@ -469,7 +502,7 @@ public class XdnGigapaxosApp
           name, encodedServiceProperty, encodedFinalState, newPlacementEpoch);
     }
 
-    // Case-6: handle create service for non-deterministic initialization
+    // Case-6: handle create service for non-deterministic initialization in primary-backup.
     if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX)) {
       state = state.substring(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX.length());
       boolean isServiceCreated = createServiceInstance(name, state);
@@ -477,8 +510,7 @@ public class XdnGigapaxosApp
         throw new RuntimeException(
             String.format("%s: Failed to create service %s", this.myNodeId, name));
       }
-
-      return isServiceCreated;
+      return true;
     }
 
     // Case-7: handle start Fuselog in backup (non-deterministic init)
@@ -697,7 +729,8 @@ public class XdnGigapaxosApp
    * port number.
    *
    * @param serviceName name of the to-be-initialized service.
-   * @param initialState the initial state with "xdn:init:" prefix.
+   * @param initialState the initial state with "xdn:init:", "xdn:final", or "nondeter:create"
+   *     prefix.
    */
   private boolean createServiceInstance(String serviceName, String initialState) {
     if (initialState.startsWith(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX)) {
