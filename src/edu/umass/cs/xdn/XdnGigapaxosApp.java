@@ -1272,8 +1272,7 @@ public class XdnGigapaxosApp
       boolean isSuccess =
           DockerComposeManager.composeDown(
               serviceInstance.composeFilePath, serviceInstance.composeProjectName);
-      assert isSuccess
-          : "failed to remove compose project " + serviceInstance.composeProjectName;
+      assert isSuccess : "failed to remove compose project " + serviceInstance.composeProjectName;
 
       Path composeDir = Paths.get(serviceInstance.composeFilePath).getParent();
       if (composeDir != null) {
@@ -1334,8 +1333,7 @@ public class XdnGigapaxosApp
       boolean isSuccess =
           DockerComposeManager.composeStop(
               serviceInstance.composeFilePath, serviceInstance.composeProjectName);
-      assert isSuccess
-          : "failed to stop compose project " + serviceInstance.composeProjectName;
+      assert isSuccess : "failed to stop compose project " + serviceInstance.composeProjectName;
     } else {
       List<String> toBeStoppedContainerNames = serviceInstance.containerNames;
       for (String containerName : toBeStoppedContainerNames) {
@@ -2200,8 +2198,7 @@ public class XdnGigapaxosApp
         && !mountDirSource.isEmpty()
         && mountDirTarget != null
         && !mountDirTarget.isEmpty()) {
-      mountSubCmd =
-          String.format("type=bind,source=%s,target=%s", mountDirSource, mountDirTarget);
+      mountSubCmd = String.format("type=bind,source=%s,target=%s", mountDirSource, mountDirTarget);
     }
 
     String userSubCmd = "";
@@ -2605,8 +2602,7 @@ public class XdnGigapaxosApp
           iter++;
           commandOutput =
               Shell.runCommandWithOutput(
-                  String.format(
-                      "docker logs --tail %d %s", numOfLines, statefulContainerName),
+                  String.format("docker logs --tail %d %s", numOfLines, statefulContainerName),
                   true);
 
           String output =
