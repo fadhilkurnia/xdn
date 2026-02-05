@@ -23,6 +23,9 @@ public class ServiceComponent {
 
   private final Map<String, String> environmentVariables;
 
+  /** Optional healthcheck command for readiness signaling in multi-component services. */
+  private final String healthcheckCommand;
+
   protected ServiceComponent(
       String componentName,
       String imageName,
@@ -30,7 +33,8 @@ public class ServiceComponent {
       boolean isStateful,
       boolean isEntryComponent,
       Integer entryPort,
-      Map<String, String> environmentVariables) {
+      Map<String, String> environmentVariables,
+      String healthcheckCommand) {
     this.componentName = componentName;
     this.imageName = imageName;
     this.exposedPort = exposedPort;
@@ -38,6 +42,7 @@ public class ServiceComponent {
     this.isEntryComponent = isEntryComponent;
     this.entryPort = entryPort;
     this.environmentVariables = environmentVariables;
+    this.healthcheckCommand = healthcheckCommand;
 
     if (this.isEntryComponent && entryPort == null) {
       throw new RuntimeException("port is required for service's entry component");
@@ -76,6 +81,10 @@ public class ServiceComponent {
     return environmentVariables;
   }
 
+  public String getHealthcheckCommand() {
+    return healthcheckCommand;
+  }
+
   public final JSONObject toJsonObject() {
     JSONObject jsonObject = new JSONObject();
     try {
@@ -84,6 +93,9 @@ public class ServiceComponent {
       if (this.exposedPort != null) jsonObject.put("expose", this.exposedPort);
       if (this.isStateful) jsonObject.put("stateful", true);
       if (this.isEntryComponent) jsonObject.put("entry", true);
+      if (this.healthcheckCommand != null && !this.healthcheckCommand.isEmpty()) {
+        jsonObject.put("healthcheck", this.healthcheckCommand);
+      }
       if (this.environmentVariables != null && !this.environmentVariables.isEmpty()) {
         JSONArray envArr = new JSONArray();
         for (Map.Entry<String, String> env : this.environmentVariables.entrySet()) {

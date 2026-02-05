@@ -140,7 +140,14 @@ public class ServiceProperty {
 
       ServiceComponent c =
           new ServiceComponent(
-              serviceName, imageName, entryPort, (stateDirectory != null), true, entryPort, env);
+              serviceName,
+              imageName,
+              entryPort,
+              (stateDirectory != null),
+              true,
+              entryPort,
+              env,
+              null);
       components.add(c);
     }
     // case-2: handle service with multiple components
@@ -429,6 +436,32 @@ public class ServiceProperty {
         env = parseEnvironmentVariables(envJSON);
       }
 
+      // parse healthcheck command for multi-component readiness gating
+      String healthcheckCommand = null;
+      if (componentDetailJSON.has("healthcheck")) {
+        Object healthcheckRaw = componentDetailJSON.get("healthcheck");
+        if (healthcheckRaw instanceof JSONObject) {
+          JSONObject healthcheckObj = (JSONObject) healthcheckRaw;
+          if (!healthcheckObj.has("command")) {
+            throw new IllegalStateException(
+                "healthcheck object requires a 'command' field for component '"
+                    + componentName
+                    + "'");
+          }
+          healthcheckCommand = healthcheckObj.getString("command");
+        } else if (healthcheckRaw instanceof String) {
+          healthcheckCommand = (String) healthcheckRaw;
+        } else {
+          throw new IllegalStateException(
+              "healthcheck must be a string or object for component '" + componentName + "'");
+        }
+
+        if (healthcheckCommand == null || healthcheckCommand.isEmpty()) {
+          throw new IllegalStateException(
+              "healthcheck command cannot be empty for component '" + componentName + "'");
+        }
+      }
+
       components.add(
           new ServiceComponent(
               componentName,
@@ -437,7 +470,8 @@ public class ServiceProperty {
               isStateful,
               isEntry,
               entryPort == 0 ? null : entryPort,
-              env));
+              env,
+              healthcheckCommand));
     }
 
     return components;

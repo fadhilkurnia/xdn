@@ -117,6 +117,90 @@ public class ServicePropertyTest {
     }
   }
 
+  @Test
+  public void ServicePropertyTest_ParseMultiComponentHealthcheckString() {
+    String serviceName = "wordpress";
+    String prop =
+        String.format(
+            """
+                {
+                  "name": "%s",
+                  "components": [
+                    {
+                      "database": {
+                        "image": "mysql:8.4.0",
+                        "expose": 3306,
+                        "stateful": true,
+                        "healthcheck": "mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD"
+                      }
+                    },
+                    {
+                      "wordpress": {
+                        "image": "wordpress:6.5.4-apache",
+                        "port": 80,
+                        "entry": true
+                      }
+                    }
+                  ],
+                  "deterministic": false,
+                  "state": "database:/var/lib/mysql/",
+                  "consistency": "linearizability"
+                }
+                """,
+            serviceName);
+    try {
+      ServiceProperty sp = ServiceProperty.createFromJsonString(prop);
+      ServiceComponent database = sp.getComponents().get(0);
+      Assert.assertEquals(
+          "mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD", database.getHealthcheckCommand());
+    } catch (JSONException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  @Test
+  public void ServicePropertyTest_ParseMultiComponentHealthcheckObject() {
+    String serviceName = "wordpress";
+    String prop =
+        String.format(
+            """
+                {
+                  "name": "%s",
+                  "components": [
+                    {
+                      "database": {
+                        "image": "mysql:8.4.0",
+                        "expose": 3306,
+                        "stateful": true,
+                        "healthcheck": {
+                          "command": "mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD"
+                        }
+                      }
+                    },
+                    {
+                      "wordpress": {
+                        "image": "wordpress:6.5.4-apache",
+                        "port": 80,
+                        "entry": true
+                      }
+                    }
+                  ],
+                  "deterministic": false,
+                  "state": "database:/var/lib/mysql/",
+                  "consistency": "linearizability"
+                }
+                """,
+            serviceName);
+    try {
+      ServiceProperty sp = ServiceProperty.createFromJsonString(prop);
+      ServiceComponent database = sp.getComponents().get(0);
+      Assert.assertEquals(
+          "mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD", database.getHealthcheckCommand());
+    } catch (JSONException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
   @Ignore("Disabled due to ongoing development")
   @Test
   public void ServicePropertyTest_ToJsonStringTwoComponents() {
