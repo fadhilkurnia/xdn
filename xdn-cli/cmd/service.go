@@ -333,7 +333,7 @@ var ServiceDestroyCmd = &cobra.Command{
 		_, _ = infoColorPrint.Printf("%s", serviceName)
 		fmt.Printf("' ...\n")
 		client := http.Client{
-			Timeout: 3 * time.Second,
+			Timeout: 60 * time.Second,
 		}
 		resp, err := client.Get(deleteEndpoint)
 		if err != nil {
