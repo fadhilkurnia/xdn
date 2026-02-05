@@ -19,6 +19,11 @@ use std::io::{Read, Seek, SeekFrom, Write, ErrorKind};
 use std::fs::{File, OpenOptions};
 
 const TTL: Duration = Duration::from_secs(1);
+// O_DIRECT is Linux-specific; treat it as unavailable on non-Linux targets (e.g., macOS).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_DIRECT_FLAG: i32 = libc::O_DIRECT as i32;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const O_DIRECT_FLAG: i32 = 0;
 
 static STATEDIFF_LOG: once_cell::sync::Lazy<Arc<Mutex<StateDiffLog>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(StateDiffLog::default())));
 
@@ -410,7 +415,7 @@ impl Filesystem for FuseLogFS {
 
         let mut open_flag = 0;
 
-        if (flags & libc::O_DIRECT as i32) != 0 {
+        if (flags & O_DIRECT_FLAG) != 0 {
             info!("O_DIRECT flag detected for ino {}, enabling FOPEN_DIRECT_IO", ino);
             open_flag |= fuser::consts::FOPEN_DIRECT_IO;
         }
@@ -479,7 +484,7 @@ impl Filesystem for FuseLogFS {
                     
                     // FIX : Handle O_DIRECT flag correctly
                     let mut open_flags = 0;
-                    if (flags & libc::O_DIRECT as i32) != 0 {
+                    if (flags & O_DIRECT_FLAG) != 0 {
                         info!("O_DIRECT flag detected on create for {:?}, enabling FOPEN_DIRECT_IO", file_path);
                         open_flags |= fuser::consts::FOPEN_DIRECT_IO;
                     }
