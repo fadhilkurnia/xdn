@@ -209,10 +209,6 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   /**********************************************************************************************
    *                        Non-Deterministic Initialization Methods                            *
    *********************************************************************************************/
-  @Override
-  public String getDefaultBasePath() {
-    return ZipStateDiffRecorder.defaultWorkingBasePath;
-  }
 
   @Override
   public void initContainerSync(
