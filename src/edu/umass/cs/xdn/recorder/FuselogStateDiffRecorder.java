@@ -140,7 +140,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // remove the trailing '/' at the end of targetDir
     String targetDirPath = targetDir.substring(0, targetDir.length() - 1);
     String cmd =
-        String.format("%s -s -o allow_other -o allow_root %s", FUSELOG_BIN_PATH, targetDirPath);
+        String.format("%s -o allow_other -o allow_root %s", FUSELOG_BIN_PATH, targetDirPath);
     Map<String, String> env = new HashMap<>();
     env.put("FUSELOG_SOCKET_FILE", socketFile);
     int exitCode = Shell.runCommand(cmd, false, env);
@@ -315,10 +315,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   /**********************************************************************************************
    *                        Non-Deterministic Initialization Methods                            *
    *********************************************************************************************/
-  @Override
-  public String getDefaultBasePath() {
-    return FuselogStateDiffRecorder.defaultWorkingBasePath;
-  }
 
   @Override
   public void initContainerSync(

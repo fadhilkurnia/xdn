@@ -345,11 +345,13 @@ public class XdnGigapaxosApp
     }
     ServiceProperty property = getServiceProperty(serviceName);
     if (property == null) {
-      logger.log(Level.WARNING,
+      logger.log(
+          Level.WARNING,
           "Unknown service property when deciding response release for " + serviceName);
       return true;
     }
-    // Non-deterministic services use primary-backup; responses must be forwarded to entry replica.
+    // Non-deterministic services use primary-backup; responses must be forwarded to entry replica,
+    // and thus should not be released here.
     return property.isDeterministic();
   }
 
