@@ -15,6 +15,10 @@ import java.util.Map;
  */
 public final class DockerComposeManager {
   private static final String COMPOSE_BASE_DIR = "/tmp/xdn/compose";
+  private static final String HEALTHCHECK_INTERVAL = "5s";
+  private static final String HEALTHCHECK_TIMEOUT = "3s";
+  private static final String HEALTHCHECK_RETRIES = "20";
+  private static final String HEALTHCHECK_START_PERIOD = "10s";
 
   private DockerComposeManager() {}
 
@@ -47,6 +51,15 @@ public final class DockerComposeManager {
     sb.append("services:\n");
 
     List<ServiceComponent> components = service.property.getComponents();
+    ServiceComponent statefulComponent = service.property.getStatefulComponent();
+    String statefulComponentName =
+        statefulComponent == null ? null : statefulComponent.getComponentName();
+    String statefulHealthcheck =
+        statefulComponent == null ? null : statefulComponent.getHealthcheckCommand();
+    boolean hasStatefulHealthcheck =
+        statefulComponentName != null
+            && statefulHealthcheck != null
+            && !statefulHealthcheck.isEmpty();
     for (int i = 0; i < components.size(); i++) {
       ServiceComponent component = components.get(i);
       String componentName = component.getComponentName();
@@ -58,11 +71,29 @@ public final class DockerComposeManager {
       sb.append("    hostname: ").append(quoteYamlScalar(componentName)).append("\n");
       sb.append("    restart: unless-stopped\n");
 
-      // Preserve component startup order using a simple dependency chain.
-      if (i > 0) {
-        String dependency = components.get(i - 1).getComponentName();
+      // Ensure the stateful component starts first; other components can start in parallel.
+      if (statefulComponentName != null
+          && !statefulComponentName.equals(componentName)
+          && components.size() > 1) {
         sb.append("    depends_on:\n");
-        sb.append("      - ").append(dependency).append("\n");
+        if (hasStatefulHealthcheck) {
+          sb.append("      ").append(statefulComponentName).append(":\n");
+          sb.append("        condition: service_healthy\n");
+        } else {
+          sb.append("      - ").append(statefulComponentName).append("\n");
+        }
+      }
+
+      if (component.getHealthcheckCommand() != null
+          && !component.getHealthcheckCommand().isEmpty()) {
+        sb.append("    healthcheck:\n");
+        sb.append("      test: [\"CMD-SHELL\", ")
+            .append(quoteYamlScalar(component.getHealthcheckCommand()))
+            .append("]\n");
+        sb.append("      interval: ").append(HEALTHCHECK_INTERVAL).append("\n");
+        sb.append("      timeout: ").append(HEALTHCHECK_TIMEOUT).append("\n");
+        sb.append("      retries: ").append(HEALTHCHECK_RETRIES).append("\n");
+        sb.append("      start_period: ").append(HEALTHCHECK_START_PERIOD).append("\n");
       }
 
       boolean hasPublish = false;

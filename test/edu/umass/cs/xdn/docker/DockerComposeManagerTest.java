@@ -26,6 +26,9 @@ public class DockerComposeManagerTest {
                     "image": "mysql:8.4.0",
                     "expose": 3306,
                     "stateful": true,
+                    "healthcheck": {
+                      "command": "mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD"
+                    },
                     "environments": [
                       { "MYSQL_ROOT_PASSWORD": "supersecret" }
                     ]
@@ -75,13 +78,18 @@ public class DockerComposeManagerTest {
     assertTrue(yaml.contains("hostname: database"), "database hostname missing");
     assertTrue(yaml.contains("expose:"), "database expose missing");
     assertTrue(yaml.contains("\"3306\""), "database exposed port missing");
+    assertTrue(yaml.contains("healthcheck:"), "database healthcheck missing");
+    assertTrue(
+        yaml.contains("CMD-SHELL"), "healthcheck command must use CMD-SHELL for env expansion");
 
     // Validate key fields for the wordpress entry component.
     assertTrue(yaml.contains("wordpress:"), "wordpress service missing");
     assertTrue(
         yaml.contains("container_name: c1.e0.wordpress.ar1.xdn.io"),
         "wordpress container name missing");
-    assertTrue(yaml.contains("depends_on:\n      - database"), "depends_on missing");
+    assertTrue(
+        yaml.contains("depends_on:\n      database:\n        condition: service_healthy"),
+        "depends_on service_healthy missing");
     assertTrue(yaml.contains("\"52341:80\""), "entry port mapping missing");
 
     // Ensure env values with colons are quoted to keep YAML valid.
