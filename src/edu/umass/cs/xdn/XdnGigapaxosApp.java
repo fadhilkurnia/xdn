@@ -2087,16 +2087,7 @@ public class XdnGigapaxosApp
         && mountDirTarget != null
         && !mountDirTarget.isEmpty()) {
       mountSubCmd =
-          String.format("--mount type=bind,source=%s,target=%s", mountDirSource, mountDirTarget);
-    }
-
-    String envSubCmd = "";
-    if (env != null) {
-      StringBuilder sb = new StringBuilder();
-      for (Map.Entry<String, String> keyVal : env.entrySet()) {
-        sb.append(String.format("--env %s=%s ", keyVal.getKey(), keyVal.getValue()));
-      }
-      envSubCmd = sb.toString();
+          String.format("type=bind,source=%s,target=%s", mountDirSource, mountDirTarget);
     }
 
     String userSubCmd = "";
@@ -2114,19 +2105,39 @@ public class XdnGigapaxosApp
     String clearCommand = String.format("docker container rm --force %s", containerName);
     Shell.runCommand(clearCommand, true);
 
-    String startCommand =
-        String.format(
-            "docker run -d --restart unless-stopped --name=%s --hostname=%s --network=%s "
-                + "%s %s %s %s %s %s",
-            containerName,
-            hostName,
-            networkName,
-            publishPortSubCmd,
-            exposePortSubCmd,
-            mountSubCmd,
-            envSubCmd,
-            userSubCmd,
-            imageName);
+    List<String> startCommand = new ArrayList<>();
+    startCommand.add("docker");
+    startCommand.add("run");
+    startCommand.add("-d");
+    startCommand.add("--restart");
+    startCommand.add("unless-stopped");
+    startCommand.add("--name=" + containerName);
+    startCommand.add("--hostname=" + hostName);
+    startCommand.add("--network=" + networkName);
+    if (!publishPortSubCmd.isEmpty()) {
+      startCommand.add(publishPortSubCmd);
+    }
+    if (!exposePortSubCmd.isEmpty()) {
+      startCommand.add(exposePortSubCmd);
+    }
+    if (!mountSubCmd.isEmpty()) {
+      startCommand.add("--mount");
+      startCommand.add(mountSubCmd);
+    }
+    if (env != null) {
+      for (Map.Entry<String, String> keyVal : env.entrySet()) {
+        startCommand.add("--env");
+        startCommand.add(keyVal.getKey() + "=" + keyVal.getValue());
+      }
+    }
+    if (!userSubCmd.isEmpty()) {
+      for (String token : userSubCmd.split("\\s+")) {
+        if (!token.isEmpty()) {
+          startCommand.add(token);
+        }
+      }
+    }
+    startCommand.add(imageName);
     int exitCode = Shell.runCommand(startCommand, false);
     if (exitCode != 0) {
       throw new RuntimeException(
