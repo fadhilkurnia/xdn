@@ -575,8 +575,8 @@ function clear_all {
           edu.umass.cs.reconfiguration.ReconfigurableNode \
           clear $server "&
 
-        # remove all docker container instances
-        $SSH $username@$address "docker ps -aq | xargs -r docker stop | xargs -r docker rm";
+        # remove all docker container instances (ending with .xdn.io)
+        $SSH $username@$address "docker ps -a --format '{{.ID}} {{.Names}}' | awk '\$2 ~ /\\.xdn\\.io$/ {print \$1}' | xargs -r docker rm -f";
         $SSH $username@$address " docker network prune --force";
 
         # unmount all filesystem
@@ -584,6 +584,7 @@ function clear_all {
         $SSH $username@$address "$cmd";
 
         $SSH $username@$address "sudo rm -rf /tmp/xdn";
+        $SSH $username@$address "sudo rm -rf /dev/shm/xdn";
 
       fi
     done;
