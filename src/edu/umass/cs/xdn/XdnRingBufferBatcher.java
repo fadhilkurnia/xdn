@@ -1,0 +1,54 @@
+package edu.umass.cs.xdn;
+
+import com.lmax.disruptor.RingBuffer;
+import com.lmax.disruptor.YieldingWaitStrategy;
+import com.lmax.disruptor.dsl.Disruptor;
+import com.lmax.disruptor.dsl.ProducerType;
+import com.lmax.disruptor.util.DaemonThreadFactory;
+import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+
+import java.io.Closeable;
+import java.net.InetSocketAddress;
+
+
+public class XdnRingBufferBatcher implements Closeable {
+    public static final int BUFFER_SIZE = 2048;
+    private final Disruptor<XdnBatchEvent> disruptor;
+    private final RingBuffer<XdnBatchEvent> ringBuffer;
+
+    public XdnRingBufferBatcher(ActiveReplicaFunctions arFunctions, int maxBatchSize) {
+        // Initialize Disruptor with MULTI producer for multiple Netty worker threads
+        this.disruptor = new Disruptor<>(
+                XdnBatchEvent::new,
+                BUFFER_SIZE,
+                DaemonThreadFactory.INSTANCE,
+                ProducerType.MULTI,
+                new YieldingWaitStrategy()
+        );
+
+        this.disruptor.handleEventsWith(new XdnBatchHandler(arFunctions, maxBatchSize));
+        this.ringBuffer = disruptor.start();
+    }
+
+    public void submit(XdnHttpRequest request, InetSocketAddress clientAddr,
+                       RequestCompletionHandler handler) {
+        long sequence = ringBuffer.next();
+        try {
+            XdnBatchEvent event = ringBuffer.get(sequence);
+            event.set(request, clientAddr, handler);
+        } finally {
+            ringBuffer.publish(sequence);
+        }
+    }
+
+    @FunctionalInterface
+    public interface RequestCompletionHandler {
+        void onComplete(XdnHttpRequest request, Throwable error);
+    }
+
+    @Override
+    public void close() {
+        disruptor.shutdown();
+    }
+}
