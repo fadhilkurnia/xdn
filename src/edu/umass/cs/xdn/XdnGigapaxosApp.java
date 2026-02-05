@@ -15,6 +15,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.utils.ZipFiles;
+import edu.umass.cs.xdn.docker.DockerComposeManager;
 import edu.umass.cs.xdn.recorder.*;
 import edu.umass.cs.xdn.request.*;
 import edu.umass.cs.xdn.service.ServiceComponent;
@@ -951,28 +952,73 @@ public class XdnGigapaxosApp
     stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
     stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
 
-    // actually start the service, run each component as container, in the same order as they
-    // are specified in the declared service property.
-    int idx = 0;
-    for (ServiceComponent c : service.property.getComponents()) {
-      boolean isSuccess =
-          startContainer(
-              c.getImageName(),
-              service.containerNames.get(idx),
-              service.networkName,
-              c.getComponentName(),
-              c.getExposedPort(),
-              c.getEntryPort(),
-              c.isEntryComponent() ? allocatedPort : null,
-              c.isStateful() ? stateDirMountSource : null,
-              c.isStateful() ? stateDirMountTarget : null,
-              c.getEnvironmentVariables());
-      if (!isSuccess) {
-        throw new RuntimeException(
-            "failed to start container for component " + c.getComponentName());
+    if (service.property.getComponents().size() > 1) {
+      // Multi-component services use docker compose for consistent multi-container lifecycle.
+      String composeFilePath =
+          DockerComposeManager.buildComposeFilePath(
+              this.myNodeId, serviceName, initialPlacementEpoch);
+      String composeProjectName =
+          DockerComposeManager.buildComposeProjectName(
+              this.myNodeId, serviceName, initialPlacementEpoch);
+      String composeYaml =
+          DockerComposeManager.generateComposeFile(
+              service,
+              initialPlacementEpoch,
+              allocatedPort,
+              stateDirMountSource,
+              stateDirMountTarget,
+              this.myNodeId);
+
+      try {
+        Path composeDir = Paths.get(composeFilePath).getParent();
+        if (composeDir != null) {
+          Files.createDirectories(composeDir);
+        }
+        // Overwrite the compose file to keep the definition deterministic per epoch.
+        Files.writeString(
+            Paths.get(composeFilePath),
+            composeYaml,
+            StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING);
+      } catch (IOException e) {
+        throw new RuntimeException("failed to write compose file for " + serviceName, e);
       }
 
-      idx++;
+      service.composeFilePath = composeFilePath;
+      service.composeProjectName = composeProjectName;
+      boolean isSuccess = DockerComposeManager.composeUp(composeFilePath, composeProjectName);
+      if (!isSuccess) {
+        throw new RuntimeException("failed to start compose project for " + serviceName);
+      }
+    } else {
+      // Single-component services keep the existing docker run path unchanged.
+      service.composeFilePath = null;
+      service.composeProjectName = null;
+
+      // actually start the service, run each component as container, in the same order as they
+      // are specified in the declared service property.
+      int idx = 0;
+      for (ServiceComponent c : service.property.getComponents()) {
+        boolean isSuccess =
+            startContainer(
+                c.getImageName(),
+                service.containerNames.get(idx),
+                service.networkName,
+                c.getComponentName(),
+                c.getExposedPort(),
+                c.getEntryPort(),
+                c.isEntryComponent() ? allocatedPort : null,
+                c.isStateful() ? stateDirMountSource : null,
+                c.isStateful() ? stateDirMountTarget : null,
+                c.getEnvironmentVariables());
+        if (!isSuccess) {
+          throw new RuntimeException(
+              "failed to start container for component " + c.getComponentName());
+        }
+
+        idx++;
+      }
     }
 
     // Handle non-deterministic initialization,
@@ -1100,28 +1146,71 @@ public class XdnGigapaxosApp
       return false;
     }
 
-    // actually start the service, run each component as container, in the same order as they
-    // are specified in the declared service property.
-    idx = 0;
-    for (ServiceComponent c : property.getComponents()) {
-      boolean isSuccess =
-          startContainer(
-              c.getImageName(),
-              containerNames.get(idx),
-              networkName,
-              c.getComponentName(),
-              c.getExposedPort(),
-              c.getEntryPort(),
-              c.isEntryComponent() ? allocatedPort : null,
-              c.isStateful() ? stateDirMountSource : null,
-              c.isStateful() ? stateDirMountTarget : null,
-              c.getEnvironmentVariables());
-      if (!isSuccess) {
-        throw new RuntimeException(
-            "failed to start container for component " + c.getComponentName());
+    if (property.getComponents().size() > 1) {
+      // Multi-component services use docker compose to preserve shared lifecycle behavior.
+      String composeFilePath =
+          DockerComposeManager.buildComposeFilePath(this.myNodeId, serviceName, placementEpoch);
+      String composeProjectName =
+          DockerComposeManager.buildComposeProjectName(this.myNodeId, serviceName, placementEpoch);
+      String composeYaml =
+          DockerComposeManager.generateComposeFile(
+              service,
+              placementEpoch,
+              allocatedPort,
+              stateDirMountSource,
+              stateDirMountTarget,
+              this.myNodeId);
+
+      try {
+        Path composeDir = Paths.get(composeFilePath).getParent();
+        if (composeDir != null) {
+          Files.createDirectories(composeDir);
+        }
+        // Overwrite the compose file to keep the definition deterministic per epoch.
+        Files.writeString(
+            Paths.get(composeFilePath),
+            composeYaml,
+            StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING);
+      } catch (IOException e) {
+        throw new RuntimeException("failed to write compose file for " + serviceName, e);
       }
 
-      idx++;
+      service.composeFilePath = composeFilePath;
+      service.composeProjectName = composeProjectName;
+      boolean isSuccess = DockerComposeManager.composeUp(composeFilePath, composeProjectName);
+      if (!isSuccess) {
+        throw new RuntimeException("failed to start compose project for " + serviceName);
+      }
+    } else {
+      // Single-component services keep the existing docker run path unchanged.
+      service.composeFilePath = null;
+      service.composeProjectName = null;
+
+      // actually start the service, run each component as container, in the same order as they
+      // are specified in the declared service property.
+      idx = 0;
+      for (ServiceComponent c : property.getComponents()) {
+        boolean isSuccess =
+            startContainer(
+                c.getImageName(),
+                containerNames.get(idx),
+                networkName,
+                c.getComponentName(),
+                c.getExposedPort(),
+                c.getEntryPort(),
+                c.isEntryComponent() ? allocatedPort : null,
+                c.isStateful() ? stateDirMountSource : null,
+                c.isStateful() ? stateDirMountTarget : null,
+                c.getEnvironmentVariables());
+        if (!isSuccess) {
+          throw new RuntimeException(
+              "failed to start container for component " + c.getComponentName());
+        }
+
+        idx++;
+      }
     }
 
     // TODO: need to handle non-deterministic initialization,
@@ -1178,9 +1267,25 @@ public class XdnGigapaxosApp
     }
 
     // Terminate service containers for this epoch
-    for (String containerName : toBeRemovedContainerNames) {
-      boolean isSuccess = this.removeContainer(containerName);
-      assert isSuccess : "failed to remove container " + containerName;
+    if (serviceInstance.composeFilePath != null) {
+      // Compose-managed services are removed as a project for idempotent cleanup.
+      boolean isSuccess =
+          DockerComposeManager.composeDown(
+              serviceInstance.composeFilePath, serviceInstance.composeProjectName);
+      assert isSuccess
+          : "failed to remove compose project " + serviceInstance.composeProjectName;
+
+      Path composeDir = Paths.get(serviceInstance.composeFilePath).getParent();
+      if (composeDir != null) {
+        List<String> removeCommand = Arrays.asList("rm", "-rf", composeDir.toString());
+        int exitCode = Shell.runCommand(removeCommand, true);
+        assert exitCode == 0 : "failed to remove compose directory " + composeDir;
+      }
+    } else {
+      for (String containerName : toBeRemovedContainerNames) {
+        boolean isSuccess = this.removeContainer(containerName);
+        assert isSuccess : "failed to remove container " + containerName;
+      }
     }
 
     // clean the mounted dir for this epoch
@@ -1224,10 +1329,19 @@ public class XdnGigapaxosApp
       return true;
     }
 
-    List<String> toBeStoppedContainerNames = serviceInstance.containerNames;
-    for (String containerName : toBeStoppedContainerNames) {
-      boolean isSuccess = this.stopContainer(containerName);
-      assert isSuccess : "failed to stop container " + containerName;
+    if (serviceInstance.composeFilePath != null) {
+      // Compose-managed services stop as a project to keep lifecycle consistent.
+      boolean isSuccess =
+          DockerComposeManager.composeStop(
+              serviceInstance.composeFilePath, serviceInstance.composeProjectName);
+      assert isSuccess
+          : "failed to stop compose project " + serviceInstance.composeProjectName;
+    } else {
+      List<String> toBeStoppedContainerNames = serviceInstance.containerNames;
+      for (String containerName : toBeStoppedContainerNames) {
+        boolean isSuccess = this.stopContainer(containerName);
+        assert isSuccess : "failed to stop container " + containerName;
+      }
     }
 
     logger.log(
@@ -2467,50 +2581,61 @@ public class XdnGigapaxosApp
       int iter = 0;
       int MAX_ITER = 100;
 
-      // Assumes that the stateful container is always the first
-      // declared service property (not always the case)
-      int idx = 0;
-      int epoch = this.servicePlacementEpoch.get(serviceName);
+      // Use the resolved stateful container name to avoid relying on component order.
+      String statefulContainerName = service.statefulContainer;
+      if (statefulContainerName == null && !service.containerNames.isEmpty()) {
+        // Fallback to the first container when a stateful component is not defined.
+        statefulContainerName = service.containerNames.getFirst();
+      }
 
       ShellOutput commandOutput = null;
 
-      // Format  : c<component-id>.e<reconfiguration-epoch>.<service-name>.<node-id>.xdn.io
-      // Example : c1.e2.bookcatalog.ar2.xdn.io
-      do {
-        iter++;
-        commandOutput =
-            Shell.runCommandWithOutput(
-                String.format(
-                    "docker logs --tail %d c%d.e%d.%s.%s.xdn.io",
-                    numOfLines, idx, epoch, serviceName, this.myNodeId),
-                true);
+      if (statefulContainerName == null) {
+        logger.log(
+            Level.WARNING,
+            "{0}:{1} unable to detect stateful container for {2}:{3}; skipping DB readiness check",
+            new Object[] {
+              this.myNodeId.toUpperCase(),
+              this.getClass().getSimpleName(),
+              serviceName,
+              placementEpoch
+            });
+      } else {
+        do {
+          iter++;
+          commandOutput =
+              Shell.runCommandWithOutput(
+                  String.format(
+                      "docker logs --tail %d %s", numOfLines, statefulContainerName),
+                  true);
 
-        String output =
-            ((commandOutput.stdout == null) ? "" : commandOutput.stdout)
-                + ((commandOutput.stderr == null) ? "" : commandOutput.stderr);
-        Matcher matcher = p.matcher(output);
+          String output =
+              ((commandOutput.stdout == null) ? "" : commandOutput.stdout)
+                  + ((commandOutput.stderr == null) ? "" : commandOutput.stderr);
+          Matcher matcher = p.matcher(output);
 
-        if (commandOutput.exitCode != 0) {
-          System.out.println("Command failed to run");
-        } else if (!matcher.find()) {
-          System.out.printf("Failed detecting database initialization (iter=%d)\n", iter);
-          if (iter >= MAX_ITER) {
-            System.out.printf(
-                "Failed detecting database initialization after %d iterations. Forcefully exit"
-                    + " loop\n",
-                iter);
+          if (commandOutput.exitCode != 0) {
+            System.out.println("Command failed to run");
+          } else if (!matcher.find()) {
+            System.out.printf("Failed detecting database initialization (iter=%d)\n", iter);
+            if (iter >= MAX_ITER) {
+              System.out.printf(
+                  "Failed detecting database initialization after %d iterations. Forcefully exit"
+                      + " loop\n",
+                  iter);
+              break;
+            }
+          } else {
             break;
           }
-        } else {
-          break;
-        }
 
-        try {
-          Thread.sleep(3000);
-        } catch (InterruptedException e) {
-          e.printStackTrace();
-        }
-      } while (true);
+          try {
+            Thread.sleep(3000);
+          } catch (InterruptedException e) {
+            e.printStackTrace();
+          }
+        } while (true);
+      }
 
       System.out.println("Database initialized");
     }
@@ -2522,8 +2647,21 @@ public class XdnGigapaxosApp
       e.printStackTrace();
     }
 
+    // Synchronize initialized state to backup replicas to keep non-deterministic state aligned.
+    logger.log(
+        Level.INFO,
+        "{0}:{1} starting initContainerSync for {2}:{3}",
+        new Object[] {
+          this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
+        });
     this.stateDiffRecorder.initContainerSync(
         this.myNodeId, serviceName, ipAddresses, placementEpoch, sshKey);
+    logger.log(
+        Level.INFO,
+        "{0}:{1} completed initContainerSync for {2}:{3}",
+        new Object[] {
+          this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
+        });
     service.initializationSucceed = true;
   }
 
