@@ -10,8 +10,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * DockerComposeManager generates docker-compose YAML files and wraps docker compose CLI calls.
- * It is intentionally minimal to keep behavior aligned with the existing docker run path.
+ * DockerComposeManager generates docker-compose YAML files and wraps docker compose CLI calls. It
+ * is intentionally minimal to keep behavior aligned with the existing docker run path.
  */
 public final class DockerComposeManager {
   private static final String COMPOSE_BASE_DIR = "/tmp/xdn/compose";
@@ -26,13 +26,14 @@ public final class DockerComposeManager {
 
   /** Builds a deterministic compose project name that is safe for docker compose. */
   public static String buildComposeProjectName(String nodeId, String serviceName, int epoch) {
-    String raw = String.format("xdn-%s-%s-e%d", nodeId, serviceName, epoch).toLowerCase(Locale.ROOT);
+    String raw =
+        String.format("xdn-%s-%s-e%d", nodeId, serviceName, epoch).toLowerCase(Locale.ROOT);
     return raw.replaceAll("[^a-z0-9_-]", "_");
   }
 
   /**
-   * Generates a docker-compose YAML that mirrors the current docker run behavior.
-   * Component order is preserved via depends_on to keep startup ordering stable.
+   * Generates a docker-compose YAML that mirrors the current docker run behavior. Component order
+   * is preserved via depends_on to keep startup ordering stable.
    */
   public static String generateComposeFile(
       ServiceInstance service,
