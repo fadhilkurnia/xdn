@@ -3,6 +3,9 @@
 set -euo pipefail
 
 VERSION="${GOOGLE_JAVA_FORMAT_VERSION:-1.17.0}"
+# Guard against hidden whitespace (e.g., CRLF) or a leading "v" in env overrides.
+VERSION="${VERSION//[[:space:]]/}"
+VERSION="${VERSION#v}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIRS=(
   "${REPO_ROOT}/src/edu/umass/cs/xdn"
@@ -24,8 +27,12 @@ EOF
 }
 
 download_jar_if_needed() {
-  if [[ -f "${JAR_PATH}" ]]; then
+  if [[ -s "${JAR_PATH}" ]]; then
     return
+  fi
+
+  if [[ -e "${JAR_PATH}" ]]; then
+    echo "Existing google-java-format jar is empty or unreadable; re-downloading..."
   fi
 
   echo "Downloading google-java-format ${VERSION} ..."
