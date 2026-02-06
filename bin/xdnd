@@ -26,8 +26,7 @@ function do_system_check() {
 
 # parse_common_dist_args extracts shared distributed args and validates them.
 function parse_common_dist_args() {
-  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
-  local config=$DEFAULT_CONFIG
+  local config=""
   local ssh_key=""
   local username=""
 
@@ -45,6 +44,10 @@ function parse_common_dist_args() {
     esac
   done
 
+  if [ -z "$config" ]; then
+    echo "Please specify the config file with '-config=<path>' argument." >&2
+    return 1
+  fi
   if [ ! -f "$config" ]; then
     echo "Config file '$config' can not be found!" >&2
     return 1
@@ -52,6 +55,10 @@ function parse_common_dist_args() {
 
   if [ -z "$ssh_key" ]; then
     echo "Please specify the ssh key with '-ssh-key=<location>' argument." >&2
+    return 1
+  fi
+  if [ ! -f "$ssh_key" ]; then
+    echo "SSH key file '$ssh_key' can not be found!" >&2
     return 1
   fi
 
@@ -811,14 +818,11 @@ function do_distributed_init_observability() {
 
   # extract unique IPs from the config file
   local unique_ips=()
-  while IFS= read -r line; do
-    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
-      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
-      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
-        unique_ips+=("$ip")
-      fi
-    fi
-  done <"$CONFIG"
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
 
   echo " - config file       : ${CONFIG}"
   echo " - ssh key           : ${SSH_KEY}"
@@ -827,6 +831,7 @@ function do_distributed_init_observability() {
   for ip in "${unique_ips[@]}"; do
     echo "   - $ip"
   done
+  echo " - parallel workers  : ${#unique_ips[@]}"
   echo ""
 
   # Install Grafana, k6, and Prometheus locally
@@ -855,9 +860,28 @@ function do_distributed_init_observability() {
     echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
   fi
 
-  # Install node-exporter on all remote nodes
+  # Install node-exporter on all remote nodes in parallel
+  local LOG_DIR="$XDN_SRC_PATH/eval/xdn_observability_logs"
+  mkdir -p "$LOG_DIR"
+  exec 3>&1
+  declare -A pid_to_host
   for machine in "${unique_ips[@]}"; do
-    install_node_exporter_on_remote "$machine" "$SSH_KEY" "$USERNAME"
+    local sanitized_machine="${machine//[^a-zA-Z0-9_.-]/_}"
+    local log_file="$LOG_DIR/${sanitized_machine}.log"
+    (
+      progress_line "$machine" "[node-exporter] start"
+      install_node_exporter_on_remote "$machine" "$SSH_KEY" "$USERNAME"
+      progress_line "$machine" "[node-exporter] ok"
+    ) >"$log_file" 2>&1 &
+    pid_to_host[$!]="$machine"
+  done
+
+  local failed=0
+  for pid in "${!pid_to_host[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+      progress_line "${pid_to_host[$pid]}" "[FAILED] see log"
+    fi
   done
 
   if command -v apt-get >/dev/null 2>&1; then
@@ -869,6 +893,12 @@ function do_distributed_init_observability() {
 
     # Provision Grafana dashboard for k6 Prometheus metrics
     provision_k6_prometheus_dashboard
+  fi
+
+  if [ $failed -ne 0 ]; then
+    echo ""
+    echo "[dist-init-observability] completed with failures. Logs in: $LOG_DIR"
+    exit 1
   fi
 
   echo "Distributed observability setup complete."
