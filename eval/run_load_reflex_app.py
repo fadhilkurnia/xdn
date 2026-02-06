@@ -14,11 +14,17 @@ from urllib.error import HTTPError
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Script to start an XDN cluster, deploy a Dockerized service, hammer it with k6,
+# Script to start an XDN cluster, deploy a Dockerized service, hammer it with k6 or a Go client,
 # and persist throughput/latency metrics for quick load comparisons.
 
 ACTIVE_REPLICA_RE = re.compile(r"^\s*active\.[^=]+=\s*([^:\s]+):(\d+)", re.IGNORECASE)
 RECONFIGURATOR_RE = re.compile(r"^\s*reconfigurator\.[^=]+=\s*([^:\s]+):(\d+)", re.IGNORECASE)
+HTTP_PORT_OFFSET_RE = re.compile(r"^\s*HTTP_PORT_OFFSET\s*=\s*(\d+)\s*$", re.IGNORECASE)
+ENABLE_RECONFIGURATOR_HTTP_RE = re.compile(r"^\s*ENABLE_RECONFIGURATOR_HTTP\s*=\s*(\S+)\s*$", re.IGNORECASE)
+ENABLE_ACTIVE_REPLICA_HTTP_RE = re.compile(r"^\s*ENABLE_ACTIVE_REPLICA_HTTP\s*=\s*(\S+)\s*$", re.IGNORECASE)
+ENABLE_ACTIVE_REPLICA_HTTP_PORT_80_RE = re.compile(
+    r"^\s*ENABLE_ACTIVE_REPLICA_HTTP_PORT_80\s*=\s*(\S+)\s*$", re.IGNORECASE
+)
 DEFAULT_RATES = [100, 200, 300, 400, 500, 800, 1000]
 DEFAULT_LOAD_GENERATOR = "go"
 HTTP_PORT_OFFSET = 300
@@ -55,6 +61,106 @@ def parse_control_plane(config_path: Path) -> Tuple[str, int]:
     raise ValueError(f"No reconfigurator entry found in {config_path}")
 
 
+def parse_reconfigurators(config_path: Path) -> List[Tuple[str, int]]:
+    reconfigurators: List[Tuple[str, int]] = []
+    with open(config_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            match = RECONFIGURATOR_RE.match(line)
+            if match:
+                host, port = match.group(1), int(match.group(2))
+                reconfigurators.append((host, port))
+    if not reconfigurators:
+        raise ValueError(f"No reconfigurators found in {config_path}")
+    logger.info("Parsed %s reconfigurators from %s: %s", len(reconfigurators), config_path, reconfigurators)
+    return reconfigurators
+
+
+def parse_http_settings(config_path: Path) -> Tuple[int, Optional[bool], Optional[bool], bool]:
+    http_offset = HTTP_PORT_OFFSET
+    enable_rc_http: Optional[bool] = None
+    enable_active_http: Optional[bool] = None
+    active_http_port_80 = False
+    with open(config_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = HTTP_PORT_OFFSET_RE.match(stripped)
+            if match:
+                http_offset = int(match.group(1))
+                continue
+            match = ENABLE_RECONFIGURATOR_HTTP_RE.match(stripped)
+            if match:
+                enable_rc_http = parse_bool(match.group(1))
+                continue
+            match = ENABLE_ACTIVE_REPLICA_HTTP_RE.match(stripped)
+            if match:
+                enable_active_http = parse_bool(match.group(1))
+                continue
+            match = ENABLE_ACTIVE_REPLICA_HTTP_PORT_80_RE.match(stripped)
+            if match:
+                active_http_port_80 = parse_bool(match.group(1)) is True
+                continue
+    return http_offset, enable_rc_http, enable_active_http, active_http_port_80
+
+
+def parse_bool(raw: str) -> Optional[bool]:
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def wait_for_http_ready(
+    targets: List[Tuple[str, int]],
+    label: str,
+    timeout: int = 90,
+    interval: float = 0.5,
+    request_timeout: float = 2.0,
+) -> None:
+    if not targets:
+        return
+    pending = {(host, port): None for host, port in targets}
+    deadline = time.time() + timeout
+    logger.info(
+        "Waiting for %s HTTP readiness across %s endpoints (timeout=%ss, interval=%ss)",
+        label,
+        len(pending),
+        timeout,
+        interval,
+    )
+    while pending and time.time() < deadline:
+        ready_now = []
+        for host, port in pending:
+            url = f"http://{host}:{port}/"
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=request_timeout) as resp:
+                    if resp.status < 500:
+                        ready_now.append((host, port))
+                        continue
+            except HTTPError as exc:
+                if exc.code < 500:
+                    ready_now.append((host, port))
+                    continue
+                pending[(host, port)] = exc
+            except Exception as exc:
+                pending[(host, port)] = exc
+        for target in ready_now:
+            pending.pop(target, None)
+        if pending:
+            time.sleep(interval)
+    if pending:
+        pending_desc = ", ".join(f"{host}:{port}" for host, port in pending)
+        last_error = next(iter(pending.values()))
+        raise TimeoutError(
+            f"{label} HTTP endpoints not ready after {timeout}s: {pending_desc}; last error: {last_error}"
+        )
+    logger.info("%s HTTP endpoints ready.", label)
+
+
 def normalize_service_name(image_name: str) -> str:
     base = image_name.split("/")[-1].replace(":", "_")
     base = re.sub(r"[^A-Za-z0-9_.-]", "_", base)
@@ -80,7 +186,22 @@ def start_cluster(config_path: Path, repo_root: Path):
     cmd = [str(gp_server), f"-DgigapaxosConfig={config_path}", "start", "all"]
     logger.info("Starting XDN cluster with %s", config_path)
     subprocess.run(cmd, check=True)
-    time.sleep(5)
+    
+    logger.info("Waiting for control plane and active replica HTTP endpoints to be ready...")
+    http_offset, rc_http_enabled, active_http_enabled, active_http_port_80 = parse_http_settings(config_path)
+    if rc_http_enabled is False:
+        raise ValueError("ENABLE_RECONFIGURATOR_HTTP=false; control plane HTTP is disabled.")
+    if active_http_enabled is False:
+        raise ValueError("ENABLE_ACTIVE_REPLICA_HTTP=false; active replica HTTP is disabled.")
+    reconfigurators = parse_reconfigurators(config_path)
+    actives = parse_active_replicas(config_path)
+    rc_targets = [(host, port + http_offset) for host, port in reconfigurators]
+    if active_http_port_80:
+        active_targets = [(host, 80) for host, _ in actives]
+    else:
+        active_targets = [(host, port + http_offset) for host, port in actives]
+    wait_for_http_ready(rc_targets, "reconfigurator")
+    wait_for_http_ready(active_targets, "active replica")
 
 
 def stop_cluster(config_path: Path, repo_root: Path):
