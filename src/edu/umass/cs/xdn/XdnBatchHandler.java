@@ -54,12 +54,25 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
     }
 
     private void flushBatch() {
-        if (currentBatch.isEmpty()) return;
+        if (currentBatch.isEmpty()) {
+            batchServiceName = null; // Ensure state is reset
+            return;
+        }
 
         // Copy the requests out of the ring buffer
-        List<XdnBatchEvent> entriesForThisBatch = new ArrayList<>();
+        List<XdnBatchEvent> entriesForThisBatch = new ArrayList<>(currentBatch);
+
+        currentBatch.clear();
+        batchServiceName = null;
+
         List<XdnHttpRequest> requests = new ArrayList<>(entriesForThisBatch.size());
-        for (XdnBatchEvent e: entriesForThisBatch) requests.add(e.request);
+        for (XdnBatchEvent e: entriesForThisBatch) {
+            if (e.request != null) {
+                requests.add(e.request);
+            }
+        }
+
+        if (requests.isEmpty()) return;
 
         // Create Gigapaxos' request, it is important to explicitly set the clientAddress,
         // otherwise, down the pipeline, the RequestPacket's equals method will return false
@@ -67,16 +80,17 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
         // waiting for response.
         XdnHttpRequestBatch batch = new XdnHttpRequestBatch(requests);
         ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(batch);
-        gpRequest.setClientAddress(entriesForThisBatch.get(0).clientAddress);
+        if (!entriesForThisBatch.isEmpty() && entriesForThisBatch.get(0).clientAddress != null) {
+            gpRequest.setClientAddress(entriesForThisBatch.get(0).clientAddress);
+        }
 
         arFunctions.handRequestToAppForHttp(gpRequest, (executedRequestBatch, handled) -> {
-            for (XdnBatchEvent entry: entriesForThisBatch) {
-                entry.completionHandler.onComplete(entry.request, null);
-                entry.clear();
+            for (XdnBatchEvent entry : entriesForThisBatch) {
+                if (entry.completionHandler != null) {
+                    entry.completionHandler.onComplete(entry.request, null);
+                }
+                entry.clear(); // Clear the Ring Buffer slot pre-allocated object
             }
         });
-
-        currentBatch.clear();
-        batchServiceName = null;
     }
 }

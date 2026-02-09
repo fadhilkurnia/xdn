@@ -9,7 +9,7 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnGigapaxosApp;
 import edu.umass.cs.xdn.XdnHttpForwarderClient;
-import edu.umass.cs.xdn.XdnHttpRequestBatcher;
+import edu.umass.cs.xdn.XdnRingBufferBatcher;
 import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.bootstrap.ServerBootstrap;
@@ -153,7 +153,7 @@ public class HttpActiveReplica {
         }
 
         // Initialize request batching
-        XdnHttpRequestBatcher requestBatcher = new XdnHttpRequestBatcher(arf);
+        XdnRingBufferBatcher requestBatcher = new XdnRingBufferBatcher(arf, 256);
 
         // Initializing boss and worker event loops.
         // The boss workers are accepting connections, which then will be passed to the child
@@ -224,14 +224,14 @@ public class HttpActiveReplica {
         private final ActiveReplicaFunctions arFunctions;
         private final MultithreadEventExecutorGroup readPool;
         private final MultithreadEventExecutorGroup writePool;
-        private final XdnHttpRequestBatcher requestBatching;
+        private final XdnRingBufferBatcher requestBatching;
         private final SslContext sslCtx;
 
         HttpActiveReplicaInitializer(String nodeId,
                                      final ActiveReplicaFunctions arf,
                                      final MultithreadEventExecutorGroup readPool,
                                      final MultithreadEventExecutorGroup writePool,
-                                     final XdnHttpRequestBatcher requestBatching,
+                                     final XdnRingBufferBatcher requestBatching,
                                      SslContext sslCtx) {
             this.nodeId = nodeId;
             this.arFunctions = arf;
@@ -363,7 +363,7 @@ public class HttpActiveReplica {
         private final ActiveReplicaFunctions arFunctions;
         private final ExecutorService readPool;
         private final ExecutorService writePool;        
-        private final XdnHttpRequestBatcher requestBatching;
+        private final XdnRingBufferBatcher requestBatching;
         private final InetSocketAddress senderAddr; // client's inet address
 
         private HttpRequest request;
@@ -394,7 +394,7 @@ public class HttpActiveReplica {
                                  ActiveReplicaFunctions arFunctions,
                                  ExecutorService readPool,
                                  ExecutorService writePool,
-                                 XdnHttpRequestBatcher requestBatching,
+                                 XdnRingBufferBatcher requestBatching,
                                  InetSocketAddress addr) {
             HttpActiveReplicaHandler.nodeId = nodeId;
             this.arFunctions = arFunctions;
