@@ -88,7 +88,7 @@ public final class DockerComposeManager {
           && !component.getHealthcheckCommand().isEmpty()) {
         sb.append("    healthcheck:\n");
         sb.append("      test: [\"CMD-SHELL\", ")
-            .append(quoteYamlScalar(component.getHealthcheckCommand()))
+            .append(quoteYamlScalar(escapeComposeInterpolation(component.getHealthcheckCommand())))
             .append("]\n");
         sb.append("      interval: ").append(HEALTHCHECK_INTERVAL).append("\n");
         sb.append("      timeout: ").append(HEALTHCHECK_TIMEOUT).append("\n");
@@ -198,6 +198,13 @@ public final class DockerComposeManager {
     }
     // docker compose returns exit code 1 when resources are already gone.
     return allowNotFound && exitCode == 1;
+  }
+
+  private static String escapeComposeInterpolation(String value) {
+    if (value == null) {
+      return null;
+    }
+    return value.replace("$", "$$");
   }
 
   private static String quoteYamlScalar(String value) {

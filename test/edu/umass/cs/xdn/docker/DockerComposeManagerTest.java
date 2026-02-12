@@ -81,6 +81,9 @@ public class DockerComposeManagerTest {
     assertTrue(yaml.contains("healthcheck:"), "database healthcheck missing");
     assertTrue(
         yaml.contains("CMD-SHELL"), "healthcheck command must use CMD-SHELL for env expansion");
+    assertTrue(
+        yaml.contains("-p$$MYSQL_ROOT_PASSWORD"),
+        "healthcheck must escape $ to $$ for Docker Compose interpolation");
 
     // Validate key fields for the wordpress entry component.
     assertTrue(yaml.contains("wordpress:"), "wordpress service missing");
