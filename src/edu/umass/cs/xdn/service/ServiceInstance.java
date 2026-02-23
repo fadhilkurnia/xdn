@@ -18,6 +18,12 @@ public class ServiceInstance {
   /** containerNames contains list of container names for each component in the service */
   public final List<String> containerNames;
 
+  /** composeFilePath is non-null when the instance is managed via docker compose. */
+  public String composeFilePath;
+
+  /** composeProjectName is non-null when the instance is managed via docker compose. */
+  public String composeProjectName;
+
   /** state directory inside the stateful component of this service */
   public final String stateDirectory;
 

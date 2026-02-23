@@ -476,6 +476,11 @@ public class ReconfigurationConfig {
         HTTP_AR_FRONTEND_BATCH_ENABLED(false),
 
         /**
+         * Timeout for frontend request execution in HttpActiveReplica (milliseconds).
+         */
+        HTTP_AR_FRONTEND_REQUEST_TIMEOUT_MS(120_000L),
+
+        /**
          * Enable reporting demand profile into the Reconfigurators (i.e. Control Plane)
          * upon executing HTTP request in the HttpActiveReplica.
          */

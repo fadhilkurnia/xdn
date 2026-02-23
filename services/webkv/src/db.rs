@@ -1,7 +1,7 @@
-use rocksdb::DB;
+use rocksdb::{Options, TransactionDB, TransactionDBOptions, TransactionOptions, WriteOptions};
 use rusqlite::{params, Connection};
 use std::sync::Mutex;
-use tikv_client::RawClient;
+use tikv_client::TransactionClient;
 use tokio::runtime::{Handle, Runtime};
 use tokio::task;
 
@@ -68,46 +68,55 @@ impl KeyValueStore for SqliteKeyValueStore {
 }
 
 pub struct RocksDbKeyValueStore {
-    conn: DB,
+    conn: TransactionDB,
 }
 
 impl KeyValueStore for RocksDbKeyValueStore {
     fn new(db_path: &str) -> Result<Self, String> {
-        let db = DB::open_default(db_path);
-        match db {
-            Ok(db) => Ok(RocksDbKeyValueStore { conn: db }),
-            Err(e) => Err(e.to_string()),
-        }
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.set_use_fsync(true);
+        let txn_opts = TransactionDBOptions::default();
+        let db = TransactionDB::open(&opts, &txn_opts, db_path).map_err(|e| e.to_string())?;
+        Ok(RocksDbKeyValueStore { conn: db })
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
-        match self.conn.put(key, value.as_bytes()) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(true);
+        let txn = self
+            .conn
+            .transaction_opt(&write_opts, &TransactionOptions::default());
+        txn.put(key, value.as_bytes()).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())
     }
 
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        match self.conn.get(key) {
-            Ok(Some(value)) => {
-                let as_string = String::from_utf8(value.to_vec()).map_err(|e| e.to_string())?;
+        let txn = self.conn.transaction();
+        let value = txn.get(key).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+        match value {
+            Some(value) => {
+                let as_string = String::from_utf8(value).map_err(|e| e.to_string())?;
                 Ok(Some(as_string))
             }
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.to_string()),
+            None => Ok(None),
         }
     }
 
     fn delete(&self, key: &str) -> Result<(), String> {
-        match self.conn.delete(key) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        }
+        let mut write_opts = WriteOptions::default();
+        write_opts.set_sync(true);
+        let txn = self
+            .conn
+            .transaction_opt(&write_opts, &TransactionOptions::default());
+        txn.delete(key).map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())
     }
 }
 
 pub struct TiKeyValueStore {
-    client: RawClient,
+    client: TransactionClient,
     runtime: Runtime,
 }
 
@@ -127,23 +136,32 @@ impl KeyValueStore for TiKeyValueStore {
 
         let runtime = Runtime::new().map_err(|e| e.to_string())?;
         let client = runtime
-            .block_on(RawClient::new(endpoints))
+            .block_on(TransactionClient::new(endpoints))
             .map_err(|e| e.to_string())?;
 
         Ok(TiKeyValueStore { client, runtime })
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
-        self.run(self.client.put(key.to_owned(), value.to_owned()))
+        self.run(async {
+            let mut txn = self.client.begin_optimistic().await?;
+            txn.put(key.to_owned(), value.to_owned()).await?;
+            txn.commit().await?;
+            Ok(())
+        })
     }
 
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let result = self.run(self.client.get(key.to_owned()))?;
+        let result = self.run(async {
+            let mut txn = self.client.begin_optimistic().await?;
+            let result = txn.get(key.to_owned()).await?;
+            txn.commit().await?;
+            Ok(result)
+        })?;
 
         match result {
             Some(val) => {
-                let bytes: Vec<u8> = val.into();
-                let value = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+                let value = String::from_utf8(val).map_err(|e| e.to_string())?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -151,7 +169,12 @@ impl KeyValueStore for TiKeyValueStore {
     }
 
     fn delete(&self, key: &str) -> Result<(), String> {
-        self.run(self.client.delete(key.to_owned()))
+        self.run(async {
+            let mut txn = self.client.begin_optimistic().await?;
+            txn.delete(key.to_owned()).await?;
+            txn.commit().await?;
+            Ok(())
+        })
     }
 }
 

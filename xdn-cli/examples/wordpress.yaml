@@ -1,20 +1,26 @@
 ---
 name: wordpress
 components:
-   - wordpress:
-      image: wordpress:6.5.4-fpm-alpine
-      port: 80
-      entry: true
-      environments:
-        - WORDPRESS_CONFIG_EXTRA:
-            define('FORCE_SSL_ADMIN', false);
-            define('FORCE_SSL_LOGIN', false);
    - database:
       image: mysql:8.4.0
       expose: 3306
       stateful: true
+      healthcheck: "mysqladmin ping -h localhost -p$MYSQL_ROOT_PASSWORD"
       environments:
         - MYSQL_ROOT_PASSWORD: supersecret
+        - MYSQL_DATABASE: wordpress
+   - wordpress:
+      image: wordpress:6.5.4-apache
+      port: 80
+      entry: true
+      environments:
+        - WORDPRESS_DB_HOST: database
+        - WORDPRESS_DB_USER: root
+        - WORDPRESS_DB_PASSWORD: supersecret
+        - WORDPRESS_DB_NAME: wordpress
+        - WORDPRESS_CONFIG_EXTRA:
+            define('FORCE_SSL_ADMIN', false);
+            define('FORCE_SSL_LOGIN', false);
 deterministic: false
 state: database:/var/lib/mysql/
 consistency: linearizability

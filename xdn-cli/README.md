@@ -14,3 +14,4 @@ xdn launch my-service \
 ```
 
 - Multi-component via YAML: put `environments` (or `env`) under each component in the service file and launch with `-f your-service.yaml`.
+- Multi-component healthchecks: add `healthcheck` under a component (string or `{ command: "..." }`) to gate other components with `depends_on: service_healthy`.

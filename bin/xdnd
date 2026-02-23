@@ -26,8 +26,7 @@ function do_system_check() {
 
 # parse_common_dist_args extracts shared distributed args and validates them.
 function parse_common_dist_args() {
-  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
-  local config=$DEFAULT_CONFIG
+  local config=""
   local ssh_key=""
   local username=""
 
@@ -45,6 +44,10 @@ function parse_common_dist_args() {
     esac
   done
 
+  if [ -z "$config" ]; then
+    echo "Please specify the config file with '-config=<path>' argument." >&2
+    return 1
+  fi
   if [ ! -f "$config" ]; then
     echo "Config file '$config' can not be found!" >&2
     return 1
@@ -52,6 +55,16 @@ function parse_common_dist_args() {
 
   if [ -z "$ssh_key" ]; then
     echo "Please specify the ssh key with '-ssh-key=<location>' argument." >&2
+    return 1
+  fi
+  # handle the case when ssh_key starts with '~/'.
+  case "$ssh_key" in
+  "~/"*)
+    ssh_key="${HOME}/${ssh_key:2}"
+    ;;
+  esac
+  if [ ! -f "$ssh_key" ]; then
+    echo "SSH key file '$ssh_key' can not be found!" >&2
     return 1
   fi
 
@@ -78,14 +91,11 @@ function do_distributed_initialization() {
 
   # extract unique IPs from the config file
   local unique_ips=()
-  while IFS= read -r line; do
-    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
-      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
-      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
-        unique_ips+=("$ip")
-      fi
-    fi
-  done <"$CONFIG"
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
 
   # Print out the unique IPs/Hosts, ssh-key, and username
   echo " - config file       : ${CONFIG}"
@@ -95,15 +105,55 @@ function do_distributed_initialization() {
   for ip in "${unique_ips[@]}"; do
     echo "   - $ip"
   done
+  echo " - parallel workers  : ${#unique_ips[@]}"
   echo ""
 
-  # go over all the machines to install the dependencies
-  # and put the xdn source code into the machines.
+  # prepare local ssh config/key once, then run per-machine work in parallel.
+  if ! prepare_local_ssh_config "$CONFIG" "$SSH_KEY" "$USERNAME"; then
+    echo "Failed to prepare local ssh config." >&2
+    exit 1
+  fi
+
+  local LOG_DIR="$XDN_SRC_PATH/eval/xdn_init_logs"
+  mkdir -p "$LOG_DIR"
+
+  exec 3>&1
+  declare -A pid_to_host
   for machine in "${unique_ips[@]}"; do
-    prepare_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME"
-    install_dependencies "$machine" "$SSH_KEY" "$USERNAME"
-    upload_binaries "$machine" "$SSH_KEY" "$USERNAME"
+    local sanitized_machine="${machine//[^a-zA-Z0-9_.-]/_}"
+    local log_file="$LOG_DIR/${sanitized_machine}.log"
+    (
+      progress_line "$machine" "[ssh] start"
+      prepare_remote_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME"
+      progress_line "$machine" "[ssh] ok"
+
+      progress_line "$machine" "[install] start"
+      install_dependencies "$machine" "$SSH_KEY" "$USERNAME"
+      progress_line "$machine" "[install] ok"
+
+      progress_line "$machine" "[upload] start"
+      upload_binaries "$machine" "$SSH_KEY" "$USERNAME"
+      progress_line "$machine" "[upload] ok"
+    ) >"$log_file" 2>&1 &
+    pid_to_host[$!]="$machine"
   done
+
+  local failed=0
+  for pid in "${!pid_to_host[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+      progress_line "${pid_to_host[$pid]}" "[FAILED] see log"
+    fi
+  done
+
+  if [ $failed -ne 0 ]; then
+    echo ""
+    echo "[dist-init] completed with failures. Logs in: $LOG_DIR"
+    exit 1
+  fi
+
+  echo ""
+  echo "[dist-init] completed successfully. Logs in: $LOG_DIR"
 
   exit 0
 
@@ -271,9 +321,9 @@ function do_start_instance() {
 # arg-2: config file
 # arg-3: ssh-key location
 # arg-4: username for ssh
-function prepare_ssh_config() {
+function prepare_remote_ssh_config() {
   if [ "$#" -lt 4 ]; then
-    echo "prepare_ssh_config expects 4 args (node, config, ssh_key, username)" >&2
+    echo "prepare_remote_ssh_config expects 4 args (node, config, ssh_key, username)" >&2
     return 1
   fi
 
@@ -281,6 +331,7 @@ function prepare_ssh_config() {
   local config_file=$2;
   local ssh_key=$3;
   local username=$4;
+  local err=0
 
   echo "Preparing ssh config for machine $node ..."
 
@@ -289,14 +340,7 @@ function prepare_ssh_config() {
 
   # extract unique IPs from the config file
   local unique_ips=()
-  while IFS= read -r line; do
-    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
-      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
-      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
-        unique_ips+=("$ip")
-      fi
-    fi
-  done <"$config_file"
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$config_file")
 
   # prepare ssh config file
   for host in "${unique_ips[@]}"; do
@@ -311,22 +355,36 @@ EOF
 
   # distribute the ssh config and key to the target machine
   ssh_key="${ssh_key/#\~/$HOME}"
-  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
-  scp -i "$ssh_key" -o StrictHostKeyChecking=no $ssh_key "$username@$node:~/.ssh/xdn_ssh_key"
-  scp -i "$ssh_key" -o StrictHostKeyChecking=no "$tmp_config" "$username@$node:~/.ssh/config"
-  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "chmod 600 ~/.ssh/config"
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "mkdir -p ~/.ssh && chmod 700 ~/.ssh" || err=1
+  scp -i "$ssh_key" -o StrictHostKeyChecking=no $ssh_key "$username@$node:~/.ssh/xdn_ssh_key" || err=1
+  scp -i "$ssh_key" -o StrictHostKeyChecking=no "$tmp_config" "$username@$node:~/.ssh/config" || err=1
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "chmod 600 ~/.ssh/config" || err=1
   rm -f "$tmp_config"
 
-  # also prepare local ssh config for this machine,
-  # ideally this should be done only once outside the this prepare_ssh_config function
-  # that is called multiple times for each remote machine.
+  return $err
+}
+
+function prepare_local_ssh_config() {
+  if [ "$#" -lt 3 ]; then
+    echo "prepare_local_ssh_config expects 3 args (config, ssh_key, username)" >&2
+    return 1
+  fi
+
+  local config_file=$1;
+  local ssh_key=$2;
+  local username=$3;
+  local err=0
+
+  local unique_ips=()
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$config_file")
+
   local local_ssh_dir="$HOME/.ssh"
   local local_ssh_key="$local_ssh_dir/xdn_ssh_key"
   local local_config_file="$local_ssh_dir/config"
-  mkdir -p "$local_ssh_dir"
-  chmod 700 "$local_ssh_dir"
-  cp $ssh_key "$local_ssh_key"
-  chmod 600 "$local_ssh_key"
+  mkdir -p "$local_ssh_dir" || err=1
+  chmod 700 "$local_ssh_dir" || err=1
+  cp $ssh_key "$local_ssh_key" || err=1
+  chmod 600 "$local_ssh_key" || err=1
   local local_tmp_config
   local_tmp_config=$(mktemp)
   for host in "${unique_ips[@]}"; do
@@ -338,8 +396,10 @@ Host $host
 
 EOF
   done
-  mv "$local_tmp_config" "$local_config_file"
-  chmod 600 "$local_config_file"
+  mv "$local_tmp_config" "$local_config_file" || err=1
+  chmod 600 "$local_config_file" || err=1
+
+  return $err
 }
 
 # install_dependencies installs all the required dependencies for xdn (e.g., docker)
@@ -350,6 +410,7 @@ function install_dependencies() {
   local node=$1;
   local ssh_key=$2;
   local username=$3;
+  local err=0
   local golang_tar_name="go1.22.4.linux-amd64.tar.gz";
   local golang_download_url="https://go.dev/dl/go1.22.4.linux-amd64.tar.gz";
 
@@ -433,9 +494,11 @@ function install_dependencies() {
     ret=$?
     if [ $return_code -ne 0 ]; then
       echo " [ERROR] failed to run command '$cmd'."
+      err=1
     fi
   done
   echo ""
+  return $err
 }
 
 # copy_binaries transfer all the required binaries to the remote machines
@@ -448,11 +511,12 @@ function upload_binaries() {
   local ssh_key=$2;
   local username=$3;
   local xdn_src_dir=$XDN_SRC_PATH;
+  local err=0
 
   # copy from current source into the target machine
   echo "Uploading XDN binaries from $xdn_src_dir/ ..."
-  ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "rm -rf xdn"
-  rsync -Pav -e "ssh -i $ssh_key -q" --exclude=".*/" -q -a $xdn_src_dir/ $username@$node:~/xdn
+  ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "rm -rf xdn" || err=1
+  rsync -Pav -e "ssh -i $ssh_key -q" --exclude=".*/" -q -a $xdn_src_dir/ $username@$node:~/xdn || err=1
 
   # TODO: check that fuselog and fuselog-apply are working
 
@@ -476,9 +540,11 @@ function upload_binaries() {
     ret=$?
     if [ $return_code -ne 0 ]; then
       echo " [ERROR] failed to run command '$cmd'."
+      err=1
     fi
   done
   echo ""
+  return $err
 }
 
 # arg-1: machine ip address
@@ -514,6 +580,29 @@ function print_usage() {
   echo ""
   echo " To start an active replica and make it join existing xdn deployment:"
   echo "   xdnd start -join=10.10.10.10 -host=11.11.11.11 AR10"
+}
+
+# get_unique_ips_from_config extracts unique IPs/hosts from a config file.
+function get_unique_ips_from_config() {
+  local config_file=$1
+  local unique_ips=()
+  local ip=""
+  while IFS= read -r line; do
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
+      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
+      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
+        unique_ips+=("$ip")
+      fi
+    fi
+  done <"$config_file"
+  printf "%s\n" "${unique_ips[@]}"
+}
+
+# progress_line prints a concise progress line to the original stdout (fd 3).
+function progress_line() {
+  local host=$1
+  local msg=$2
+  printf "%-16s %s\n" "$host" "$msg" >&3
 }
 
 # checks if a string is in the list
@@ -735,14 +824,11 @@ function do_distributed_init_observability() {
 
   # extract unique IPs from the config file
   local unique_ips=()
-  while IFS= read -r line; do
-    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
-      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
-      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
-        unique_ips+=("$ip")
-      fi
-    fi
-  done <"$CONFIG"
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
 
   echo " - config file       : ${CONFIG}"
   echo " - ssh key           : ${SSH_KEY}"
@@ -751,6 +837,7 @@ function do_distributed_init_observability() {
   for ip in "${unique_ips[@]}"; do
     echo "   - $ip"
   done
+  echo " - parallel workers  : ${#unique_ips[@]}"
   echo ""
 
   # Install Grafana, k6, and Prometheus locally
@@ -779,9 +866,28 @@ function do_distributed_init_observability() {
     echo "[WARN] apt-get not found. Please install Grafana, k6, and Prometheus manually."
   fi
 
-  # Install node-exporter on all remote nodes
+  # Install node-exporter on all remote nodes in parallel
+  local LOG_DIR="$XDN_SRC_PATH/eval/xdn_observability_logs"
+  mkdir -p "$LOG_DIR"
+  exec 3>&1
+  declare -A pid_to_host
   for machine in "${unique_ips[@]}"; do
-    install_node_exporter_on_remote "$machine" "$SSH_KEY" "$USERNAME"
+    local sanitized_machine="${machine//[^a-zA-Z0-9_.-]/_}"
+    local log_file="$LOG_DIR/${sanitized_machine}.log"
+    (
+      progress_line "$machine" "[node-exporter] start"
+      install_node_exporter_on_remote "$machine" "$SSH_KEY" "$USERNAME"
+      progress_line "$machine" "[node-exporter] ok"
+    ) >"$log_file" 2>&1 &
+    pid_to_host[$!]="$machine"
+  done
+
+  local failed=0
+  for pid in "${!pid_to_host[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+      progress_line "${pid_to_host[$pid]}" "[FAILED] see log"
+    fi
   done
 
   if command -v apt-get >/dev/null 2>&1; then
@@ -793,6 +899,12 @@ function do_distributed_init_observability() {
 
     # Provision Grafana dashboard for k6 Prometheus metrics
     provision_k6_prometheus_dashboard
+  fi
+
+  if [ $failed -ne 0 ]; then
+    echo ""
+    echo "[dist-init-observability] completed with failures. Logs in: $LOG_DIR"
+    exit 1
   fi
 
   echo "Distributed observability setup complete."

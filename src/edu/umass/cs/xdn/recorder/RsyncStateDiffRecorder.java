@@ -220,10 +220,6 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   /**********************************************************************************************
    *                        Non-Deterministic Initialization Methods                            *
    *********************************************************************************************/
-  @Override
-  public String getDefaultBasePath() {
-    return RsyncStateDiffRecorder.defaultWorkingBasePath;
-  }
 
   @Override
   public void initContainerSync(

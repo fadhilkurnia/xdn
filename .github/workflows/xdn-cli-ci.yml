@@ -1,0 +1,45 @@
+name: "XDN CLI Checks"
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "xdn-cli/**"
+      - "bin/xdn-linux-amd64"
+      - "bin/xdn-darwin-arm64"
+      - "bin/build_xdn_cli.sh"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "xdn-cli/**"
+      - "bin/xdn-linux-amd64"
+      - "bin/xdn-darwin-arm64"
+      - "bin/build_xdn_cli.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  xdn-cli:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: xdn-cli/go.mod
+
+      - name: Check gofmt
+        working-directory: xdn-cli
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt needed on:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Build XDN CLI binaries
+        run: bash bin/build_xdn_cli.sh

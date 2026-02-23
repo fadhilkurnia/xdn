@@ -108,6 +108,8 @@ public class HttpActiveReplica {
 
     private static final boolean isHttpFrontendBatchEnabled =
             Config.getGlobalBoolean(ReconfigurationConfig.RC.HTTP_AR_FRONTEND_BATCH_ENABLED);
+    private static final long httpFrontendRequestTimeoutMs =
+            Config.getGlobalLong(ReconfigurationConfig.RC.HTTP_AR_FRONTEND_REQUEST_TIMEOUT_MS);
 
     // Backdoor headers used for debugging purpose (e.g., latency measurement to identify
     // bottlenecks). We assume these headers are never used by any services.
@@ -126,9 +128,14 @@ public class HttpActiveReplica {
     private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
     private static final XdnHttpForwarderClient[] debugHttpClients =
             new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
-    public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
+    
+    // Direct reference to the app for debugging purpose, needed for DBG_HDR_DIRECT_EXECUTE.
+    // In normal execution, the app should be interacted with through the replica coordinator, 
+    // and this reference should not be used.
+    public static XdnGigapaxosApp debugAppReference = null;
 
     static {
+        // Initialize HTTP clients for debugging purposes.
         for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
             debugHttpClients[i] = new XdnHttpForwarderClient();
         }
@@ -152,8 +159,9 @@ public class HttpActiveReplica {
             sslCtx = null;
         }
 
-        // Initialize request batching
-        XdnHttpRequestBatcher requestBatcher = new XdnHttpRequestBatcher(arf);
+        // Initialize request batcher, if enabled.
+        XdnHttpRequestBatcher requestBatcher = isHttpFrontendBatchEnabled ? 
+            new XdnHttpRequestBatcher(arf) : null;
 
         // Initializing boss and worker event loops.
         // The boss workers are accepting connections, which then will be passed to the child
@@ -668,7 +676,8 @@ public class HttpActiveReplica {
                 CompletableFuture.supplyAsync(() -> {
                             try {
                                 // Add timeout to prevent indefinite blocking
-                                return execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                                return execFuture.get(httpFrontendRequestTimeoutMs,
+                                        java.util.concurrent.TimeUnit.MILLISECONDS);
                             } catch (InterruptedException e) {
                                 // Restore interrupt status
                                 Thread.currentThread().interrupt();
@@ -677,7 +686,8 @@ public class HttpActiveReplica {
                                 // Cancel the future if it times out
                                 execFuture.cancel(true);
                                 throw new RuntimeException(
-                                        "Request execution timed out after 10s",
+                                        "Request execution timed out after "
+                                                + httpFrontendRequestTimeoutMs + "ms",
                                         e
                                 );
                             } catch (ExecutionException e) {
@@ -763,7 +773,8 @@ public class HttpActiveReplica {
             // i.e., the httpRequest is already coordinated and executed.
             Request executedRequest;
             try {
-                executedRequest = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                executedRequest = future.get(httpFrontendRequestTimeoutMs,
+                        java.util.concurrent.TimeUnit.MILLISECONDS);
                 if (executedRequest == null) {
                     throw new RuntimeException("Executed request is null after future completion");
                 }
@@ -771,7 +782,8 @@ public class HttpActiveReplica {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Request execution was interrupted", e);
             } catch (java.util.concurrent.TimeoutException e) {
-                throw new RuntimeException("Request execution timed out after 5s", e);
+                throw new RuntimeException("Request execution timed out after "
+                        + httpFrontendRequestTimeoutMs + "ms", e);
             } catch (ExecutionException e) {
                 throw new RuntimeException(
                         "Request execution failed: " + e.getCause().getMessage(), e);
@@ -1031,15 +1043,19 @@ public class HttpActiveReplica {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            String message = cause.getMessage();
+            if (message == null) {
+                message = cause.getClass().getSimpleName();
+            }
             if (!(cause instanceof SocketException) ||
-                    cause.getMessage().contains("Connection reset")) {
-                System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
+                    message.contains("Connection reset")) {
+                System.out.println("HttpActiveReplicaHandler Error: " + message);
                 cause.printStackTrace();
             }
             if (ctx.channel().isActive()) {
-                byte[] bytes = ("Error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                byte[] bytes = ("Error: " + message).getBytes(CharsetUtil.UTF_8);
                 boolean isUnknownServiceNameError =
-                        cause.getMessage().contains("Unknown coordinator for name=");
+                        message.contains("Unknown coordinator for name=");
                 FullHttpResponse resp = new DefaultFullHttpResponse(
                         HTTP_1_1, isUnknownServiceNameError ? NOT_FOUND : INTERNAL_SERVER_ERROR,
                         Unpooled.wrappedBuffer(bytes));

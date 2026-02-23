@@ -45,16 +45,33 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   private final String baseSocketDirPath;
   private final String baseDiffDirPath;
 
-  // important locations:
-  // /tmp/xdn/state/fuselog/<node-id>/                                    the base directory
-  // /tmp/xdn/state/fuselog/<node-id>/mnt/                                the mount directory
-  // /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/        mount dir of specific
-  // service
-  // /tmp/xdn/state/fuselog/<node-id>/sock/                               the socket directory
-  // /tmp/xdn/state/fuselog/<node-id>/sock/<service-name>::e<epoch>.sock  socket to fs of specific
-  // service
-  // /tmp/xdn/state/fuselog/<node-id>/diff/                               the stateDiff directory
-  // /tmp/xdn/state/fuselog/<node-id>/diff/<service-name>::e<epoch>.diff  the stateDiff file
+  // Few important state and working directories are defined as below.
+  //  In the primary replica, there is the mount directory where the fuselog filesystem is mounted.
+  //  Because there can be multiple placement epochs for the same service, we put the epoch number
+  //  in the path to differentiate them:
+  //    /tmp/xdn/state/fuselog/<node-id>/
+  //    /tmp/xdn/state/fuselog/<node-id>/mnt/
+  //    /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/
+  //
+  //  Still in the primary replica, for each service and epoch, there is a socket file for the
+  //  mounted filesystem to receive commands (e.g., capture stateDiff):
+  //    /tmp/xdn/state/fuselog/<node-id>/sock/
+  //    /tmp/xdn/state/fuselog/<node-id>/sock/<service-name>::e<epoch>.sock
+  //
+  //  In the backup replicas, there is no mounted filesystem, but there is diff directory to store
+  //  the latest stateDiff file received from the primary replica, which will be applied to the
+  //  target directory by the fuselog-apply program:
+  //    /tmp/xdn/state/fuselog/<node-id>/diff/
+  //    /tmp/xdn/state/fuselog/<node-id>/diff/<service-name>::e<epoch>.diff
+  //
+  //  TODO: introduce blob directory to decouple statediff transfer and order agreement.
+  //  Using blob directory, the primary replica can write the captured stateDiff into a blob file
+  //  and only returns the blob's digest in the captureStateDiff() method. Then the backup replicas
+  //  can fetch the stateDiff blob file from the primary replica based on the digest and apply it to
+  //  the target directory. This can avoid the extra overhead of transferring large stateDiff via
+  //  the coordination layer (e.g., paxos) can make the stateDiff transfer more robust by leveraging
+  //  existing blob transfer protocols (i.e., rsync). The blob directory is defined as below:
+  //   /tmp/xdn/state/fuselog/<node-id>/blobs/<service-name>::e<epoch>::<digest>.blob
 
   // mapping service name and epoch into its fuselog filesystem socket
   private final Map<String, Map<Integer, SocketChannel>> serviceFsSocket;
@@ -64,62 +81,69 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   public FuselogStateDiffRecorder(String nodeID) {
     super(nodeID, workingBasePath + nodeID + "/");
     logger.log(
-        Level.FINE,
+        Level.INFO,
         String.format(
             "%s:%s - initializing FUSE stateDiff recorder",
             nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
 
-    // make sure that fuselog and fuselog-apply are exist
+    // Ensure that fuselog and fuselog-apply binaries exist.
     File fuselog = new File(FUSELOG_BIN_PATH);
     if (!fuselog.exists()) {
       String errMessage = "fuselog binary does not exist at " + FUSELOG_BIN_PATH;
-      System.out.println("ERROR: " + errMessage);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s", nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
     File fuselogApplicator = new File(FUSELOG_APPLY_BIN_PATH);
     if (!fuselogApplicator.exists()) {
       String errMessage = "fuselog-apply binary does not exist at " + FUSELOG_APPLY_BIN_PATH;
-      System.out.println("ERROR: " + errMessage);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s", nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
 
-    // create working mount dir, if not exist
+    // Create working mount dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/mnt/
     this.baseMountDirPath = this.baseDirectoryPath + "mnt/";
     try {
       Files.createDirectories(Paths.get(this.baseMountDirPath));
     } catch (IOException e) {
-      System.err.println("ERROR: " + e);
+      logger.log(Level.SEVERE, "Failed to create mount directory: " + this.baseMountDirPath, e);
       throw new RuntimeException(e);
     }
 
-    // create socket dir, if not exist
+    // Create socket dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/sock/
     this.baseSocketDirPath = workingBasePath + nodeID + "/sock/";
     try {
       Files.createDirectories(Paths.get(this.baseSocketDirPath));
     } catch (IOException e) {
-      System.err.println("ERROR: " + e);
+      logger.log(Level.SEVERE, "Failed to create socket directory: " + this.baseSocketDirPath, e);
       throw new RuntimeException(e);
     }
 
-    // create diff dir, if not exist
+    // Create diff dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/diff/
     this.baseDiffDirPath = workingBasePath + nodeID + "/diff/";
     try {
       Files.createDirectories(Paths.get(this.baseDiffDirPath));
     } catch (IOException e) {
-      System.err.println("ERROR: " + e);
+      logger.log(Level.SEVERE, "Failed to create diff directory: " + this.baseDiffDirPath, e);
       throw new RuntimeException(e);
     }
 
-    // initialize mapping between serviceName to the FS socket
+    // Initialize mapping between serviceName to the FS socket so we can send commands to the
+    // filesystem to capture stateDiff later.
     this.serviceFsSocket = new ConcurrentHashMap<>();
   }
 
   @Override
   public String getTargetDirectory(String serviceName, int placementEpoch) {
-    // location: /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/
+    // Location: /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
 
@@ -128,39 +152,70 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
     String socketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
-    // create target mnt dir, if not exist
+    // Create target mnt dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/mnt/service1/
     Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
     Shell.runCommand("rm -rf " + targetDir);
     int code = Shell.runCommand("mkdir -p " + targetDir);
-    assert code == 0 : "statediff dir creation must success";
+    if (code != 0) {
+      String errMessage =
+          String.format(
+              "failed to create target mount directory %s with exit code %d", targetDir, code);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
+      throw new RuntimeException(errMessage);
+    }
 
-    // initialize file system in the mnt dir, with socket
+    // Initialize filesystem by mounting it on the mnt dir, preparing its socket file.
+    // Note that the filesystem is intended to be mounted in the primary replica during
+    // pre-initialization.
     assert targetDir.length() > 1 : "invalid target mount directory";
+    assert targetDir.endsWith("/") : "target mount directory should end with '/'";
     // remove the trailing '/' at the end of targetDir
     String targetDirPath = targetDir.substring(0, targetDir.length() - 1);
-    String cmd =
-        String.format("%s -s -o allow_other -o allow_root %s", FUSELOG_BIN_PATH, targetDirPath);
+
+    // Note: We need `allow_other` option so the containerized service can also
+    // access the mounted filesystem. This requires `user_allow_other` to be set in
+    // /etc/fuse.conf and the recorder to be run with root privilege.
+    // We do not use the `allow_root` that is more restrictive than `allow_other`.
+    String cmd = String.format("%s -o allow_other %s", FUSELOG_BIN_PATH, targetDirPath);
+
     Map<String, String> env = new HashMap<>();
     env.put("FUSELOG_SOCKET_FILE", socketFile);
     int exitCode = Shell.runCommand(cmd, false, env);
-    assert exitCode == 0 : "failed to mount filesystem with exit code " + exitCode;
+    if (exitCode != 0) {
+      String errMessage =
+          String.format("failed to mount filesystem at %s with exit code %d", targetDir, exitCode);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
+      throw new RuntimeException(errMessage);
+    }
 
-    // initialize socket client for the filesystem
+    // Initialize socket client for the filesystem.
     SocketChannel socketChannel;
     UnixDomainSocketAddress address = UnixDomainSocketAddress.of(Path.of(socketFile));
     try {
       socketChannel = SocketChannel.open(StandardProtocolFamily.UNIX);
       boolean isConnEstablished = socketChannel.connect(address);
       if (!isConnEstablished) {
-        System.err.println("failed to connect to the filesystem");
+        logger.log(
+            Level.SEVERE,
+            String.format(
+                "%s:%s - failed to connect to the filesystem socket at %s",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), socketFile));
         return false;
       }
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
 
-    // update the socket metadata
+    // Update the socket metadata.
     if (!serviceFsSocket.containsKey(serviceName)) {
       serviceFsSocket.put(serviceName, new ConcurrentHashMap<>());
     }
@@ -171,12 +226,17 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean postInitialization(String serviceName, int placementEpoch) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
     // TODO: read initialization stateDiff and discard it
-    return false;
+    return true;
   }
 
   @Override
   public String captureStateDiff(String serviceName, int placementEpoch) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
     assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
@@ -184,7 +244,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     long startTime = System.nanoTime();
 
-    // send get command (g) to the filesystem
+    // Send get command (g) to the filesystem
     try {
       logger.log(
           Level.FINEST,
@@ -196,7 +256,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(e);
     }
 
-    // wait for response indicating the stateDiff size
+    // Wait for response indicating the stateDiff size.
     ByteBuffer sizeBuffer = ByteBuffer.allocate(8);
     sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
     sizeBuffer.clear();
@@ -212,7 +272,12 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(e);
     }
     if (numRead < 8) {
-      System.err.println("failed to read size of the stateDiff");
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - failed to read stateDiff size from filesystem socket, expected 8 bytes but"
+                  + " got %d bytes",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
       return null;
     }
     long stateDiffSize = sizeBuffer.getLong(0);
@@ -221,8 +286,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         String.format(
             "%s:%s - receiving stateDiff with size=%d bytes",
             this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
+    assert stateDiffSize >= 0 : "invalid stateDiff size received from filesystem socket";
 
-    // read all the stateDiff
+    // Read all the stateDiff based on the obtained size.
     ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
     numRead = 0;
     try {
@@ -233,7 +299,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(e);
     }
 
-    // convert the stateDiff into String using Base64
+    // Convert the stateDiff into String using Base64
     String stateDiff = Base64.getEncoder().encodeToString(stateDiffBuffer.array());
     logger.log(
         Level.FINER,
@@ -260,8 +326,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
-    // TODO: directly apply stateDiff from the obtained byte[], not via
-    //  the fuselog-apply program, which we currently use.
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+    assert encodedState != null : "encoded stateDiff should not be null";
 
     logger.log(
         Level.FINER,
@@ -281,7 +348,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     String diffFile = this.baseDiffDirPath + serviceName + "::" + placementEpoch + ".diff";
     String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
 
-    // store stateDiff into an external file
+    // Store stateDiff into an external .diff file.
     byte[] stateDiff;
     try {
       FileOutputStream outputStream;
@@ -294,31 +361,61 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(e);
     }
 
-    // preparing the shell command to apply stateDiff
+    // Prepare the shell command to apply stateDiff.
     String cmd =
         String.format("%s %s --silent --statediff=%s", FUSELOG_APPLY_BIN_PATH, targetDir, diffFile);
     int exitCode = Shell.runCommand(cmd, true);
-    assert exitCode == 0 : "failed to apply stateDiff with exit code " + exitCode;
+    if (exitCode != 0) {
+      String errMessage =
+          String.format(
+              "failed to apply stateDiff for service %s epoch %d with exit code %d",
+              serviceName, placementEpoch, exitCode);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
+      throw new RuntimeException(errMessage);
+    }
 
     return true;
   }
 
   @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+
     String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
     int umountRetCode = Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1", false);
+    if (umountRetCode != 0) {
+      logger.log(
+          Level.WARNING,
+          String.format(
+              "%s:%s - failed to unmount target directory %s with exit code %d",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              targetDir,
+              umountRetCode));
+      return false;
+    }
+
     int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
-    assert rmRetCode == 0;
+    if (rmRetCode != 0) {
+      logger.log(
+          Level.WARNING,
+          String.format(
+              "%s:%s - failed to remove target directory %s with exit code %d",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), targetDir, rmRetCode));
+      return false;
+    }
+
     return true;
   }
 
   /**********************************************************************************************
    *                        Non-Deterministic Initialization Methods                            *
    *********************************************************************************************/
-  @Override
-  public String getDefaultBasePath() {
-    return FuselogStateDiffRecorder.defaultWorkingBasePath;
-  }
 
   @Override
   public void initContainerSync(
@@ -327,20 +424,34 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       Map<String, InetAddress> ipAddresses,
       int placementEpoch,
       String sshKey) {
+
+    // Obtain the backup nodes' IDs and their corresponding IP addresses.
+    // The backup nodes are all the nodes except the current node.
     Set<String> backupNodes =
         ipAddresses.keySet().stream()
             .filter(node -> !node.equals(myNodeId.toString()))
             .map(String::toLowerCase)
             .collect(Collectors.toSet());
-    System.out.printf("FuselogStateDiff backupNodes = %s\n", backupNodes);
-    System.out.printf("FuselogStateDiff ipAddresses = %s\n", ipAddresses);
+    logger.log(
+        Level.INFO,
+        String.format(
+            "%s:%s - initializing container sync for service %s epoch %d with backup nodes %s (ip:"
+                + " %s)",
+            myNodeId,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            serviceName,
+            placementEpoch,
+            backupNodes,
+            ipAddresses));
 
+    // Prepare the backup replicas' target directory on each backup node, which is where we will
+    // sync the data from current replica and also where fuselog-apply will apply the stateDiff.
+    // e.g., backup-node1 => /tmp/xdn/state/fuselog/backup-node1/mnt/<serviceName>/e<epoch>/
     String currentReplica = this.baseDirectoryPath;
-
-    Map<String, String> backupReplicas = new HashMap<>();
+    Map<String, String> backupIdToTargetPaths = new HashMap<>();
     backupNodes.forEach(
         node ->
-            backupReplicas.put(
+            backupIdToTargetPaths.put(
                 node,
                 String.format("%s%s/", FuselogStateDiffRecorder.defaultWorkingBasePath, node)));
 
@@ -351,7 +462,8 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     Boolean allSyncSuccess = false;
     int count = 0;
 
-    ExecutorService executor = Executors.newFixedThreadPool(backupReplicas.size());
+    int numBackupReplicas = backupIdToTargetPaths.size();
+    ExecutorService executor = Executors.newFixedThreadPool(numBackupReplicas);
     String sshOption =
         sshKey != null && !sshKey.trim().isEmpty() ? String.format("-e \"ssh -i %s\"", sshKey) : "";
 
@@ -363,54 +475,19 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       allSyncSuccess = true;
       List<Future<Boolean>> futures = new ArrayList<>();
 
-      for (String key : backupReplicas.keySet()) {
+      for (String key : backupIdToTargetPaths.keySet()) {
         final String replicaKey = key;
+        final String targetReplica = backupIdToTargetPaths.get(replicaKey);
         futures.add(
             executor.submit(
-                () -> {
-                  String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
-
-                  int exitCode = 0;
-                  if (hostAddr.equals("127.0.0.1")) {
-                    exitCode =
-                        Shell.runCommand(
-                            String.format(
-                                """
-                                        rsync -avz --delete --human-readable \
-                                        --include='mnt/' --include='%s' --include='%s***' \
-                                        --exclude='*' \
-                                        %s %s""",
-                                mntDir, mntDir, currentReplica, backupReplicas.get(key)),
-                            true);
-                  } else {
-                    exitCode =
-                        Shell.runCommand(
-                            String.format(
-                                """
-                                        rsync -avz --delete --human-readable \
-                                        %s \
-                                        --include='mnt/' --include='%s' --include='%s***' \
-                                        --exclude='*' \
-                                        %s %s@%s:%s""",
-                                sshOption,
-                                mntDir,
-                                mntDir,
-                                currentReplica,
-                                username,
-                                hostAddr,
-                                backupReplicas.get(key)),
-                            true);
-                  }
-
-                  if (exitCode != 0) {
-                    System.out.println(
-                        String.format(
-                            "Failed to sync %s to %s", currentReplica, backupReplicas.get(key)));
-                    return false;
-                  }
-
-                  return true;
-                }));
+                () ->
+                    syncReplicaWithRsync(
+                        currentReplica,
+                        targetReplica,
+                        ipAddresses.get(replicaKey).getHostAddress(),
+                        mntDir,
+                        username,
+                        sshOption)));
       }
 
       for (Future<Boolean> future : futures) {
@@ -445,5 +522,46 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  private boolean syncReplicaWithRsync(
+      String currentReplica,
+      String targetReplica,
+      String hostAddr,
+      String mntDir,
+      String username,
+      String sshOption) {
+    int exitCode;
+    if ("127.0.0.1".equals(hostAddr)) {
+      exitCode =
+          Shell.runCommand(
+              String.format(
+                  """
+                          rsync -avz --delete --human-readable \
+                          --include='mnt/' --include='%s' --include='%s***' \
+                          --exclude='*' \
+                          %s %s""",
+                  mntDir, mntDir, currentReplica, targetReplica),
+              true);
+    } else {
+      exitCode =
+          Shell.runCommand(
+              String.format(
+                  """
+                          rsync -avz --delete --human-readable \
+                          %s \
+                          --include='mnt/' --include='%s' --include='%s***' \
+                          --exclude='*' \
+                          %s %s@%s:%s""",
+                  sshOption, mntDir, mntDir, currentReplica, username, hostAddr, targetReplica),
+              true);
+    }
+
+    if (exitCode != 0) {
+      System.out.println(String.format("Failed to sync %s to %s", currentReplica, targetReplica));
+      return false;
+    }
+
+    return true;
   }
 }

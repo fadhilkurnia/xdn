@@ -409,10 +409,6 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   /**********************************************************************************************
    *                        Non-Deterministic Initialization Methods                            *
    *********************************************************************************************/
-  @Override
-  public String getDefaultBasePath() {
-    return FuseRustStateDiffRecorder.defaultWorkingBasePath;
-  }
 
   @Override
   public void initContainerSync(
