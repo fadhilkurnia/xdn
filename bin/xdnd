@@ -57,6 +57,11 @@ function parse_common_dist_args() {
     echo "Please specify the ssh key with '-ssh-key=<location>' argument." >&2
     return 1
   fi
+  case "$ssh_key" in
+  "~/"*)
+    ssh_key="${HOME}/${ssh_key#~/}"
+    ;;
+  esac
   if [ ! -f "$ssh_key" ]; then
     echo "SSH key file '$ssh_key' can not be found!" >&2
     return 1
