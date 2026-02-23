@@ -128,9 +128,14 @@ public class HttpActiveReplica {
     private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
     private static final XdnHttpForwarderClient[] debugHttpClients =
             new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
-    public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
+    
+    // Direct reference to the app for debugging purpose, needed for DBG_HDR_DIRECT_EXECUTE.
+    // In normal execution, the app should be interacted with through the replica coordinator, 
+    // and this reference should not be used.
+    public static XdnGigapaxosApp debugAppReference = null;
 
     static {
+        // Initialize HTTP clients for debugging purposes.
         for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
             debugHttpClients[i] = new XdnHttpForwarderClient();
         }
@@ -154,8 +159,9 @@ public class HttpActiveReplica {
             sslCtx = null;
         }
 
-        // Initialize request batching
-        XdnHttpRequestBatcher requestBatcher = new XdnHttpRequestBatcher(arf);
+        // Initialize request batcher, if enabled.
+        XdnHttpRequestBatcher requestBatcher = isHttpFrontendBatchEnabled ? 
+            new XdnHttpRequestBatcher(arf) : null;
 
         // Initializing boss and worker event loops.
         // The boss workers are accepting connections, which then will be passed to the child
