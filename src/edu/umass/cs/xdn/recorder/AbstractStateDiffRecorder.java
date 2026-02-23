@@ -36,7 +36,12 @@ public abstract class AbstractStateDiffRecorder {
 
   /**
    * Prepares the state directory before the service is initialized. Examples of things that we can
-   * do include removing stale state, creating needed directory, mounting filesystem, etc.
+   * do include removing stale state, creating needed directory, putting initial state, mounting
+   * filesystem, etc.
+   *
+   * <p>TODO: new @param encodedInitialState the initial state encoded as a string. The content can
+   * be defined by the implementation, e.g., it can be a base64-encoded string of the initial state,
+   * or a URL to the initial state stored in remote server.
    *
    * @param serviceName name of the app/service (e.g., "my-service")
    * @param placementEpoch current placement epoch.
@@ -76,8 +81,8 @@ public abstract class AbstractStateDiffRecorder {
       String serviceName, int placementEpoch, String encodedState);
 
   /**
-   * Removes the target directory that hold the safety-critical state. Mainly used when we remove a
-   * service, or bump-up the placement epoch.
+   * Removes the target directory that hold the safety-critical state, include unmounting filesystem
+   * if needed. Mainly used when we remove a service, or bump-up the placement epoch.
    *
    * @param serviceName name of the app/service (e.g., "my-service")
    * @param placementEpoch current placement epoch number.
