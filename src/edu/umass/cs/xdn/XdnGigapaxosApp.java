@@ -94,7 +94,8 @@ public class XdnGigapaxosApp
   private final XdnHttpForwarderClient httpForwarderClient;
 
   // HTTP request cache to prevent deserializing an already deserialized request
-  // upon coordination. This is useful for the entry replica.
+  // upon coordination. This is useful for the entry replica (i.e., replica that
+  // receives the requests from client, not from the coordinator).
   private static final int REQUEST_CACHE_CAPACITY = 4096;
   private final Map<Long, Request> requestCache =
       Collections.synchronizedMap(
@@ -105,7 +106,7 @@ public class XdnGigapaxosApp
             }
           });
 
-  // LargeCheckpointer for reconfiguration final state
+  // LargeCheckpointer for reconfiguration final state.
   private final LargeCheckpointer largeCheckpointer;
 
   // Backdoor HTTP header used to emulate NoOp execution by directly returning dummy response.
@@ -115,10 +116,14 @@ public class XdnGigapaxosApp
   private final Logger logger = Logger.getLogger(XdnGigapaxosApp.class.getName());
 
   public XdnGigapaxosApp(String[] args) {
-    System.out.println(">> XDNGigapaxosApp initialization ...");
-    assert args.length > 0 : "expecting args for XdnGigapaxosApp";
-
+    assert args.length > 0
+        : "expecting args for XdnGigapaxosApp, with the last arg being the nodeId";
     this.myNodeId = args[args.length - 1].toLowerCase();
+    logger.log(
+        Level.INFO,
+        "{0}:{1} Initializing with args: {2}",
+        new Object[] {myNodeId, XdnGigapaxosApp.class.getSimpleName(), Arrays.toString(args)});
+
     this.serviceInstances = new ConcurrentHashMap<>();
     this.servicePlacementEpoch = new ConcurrentHashMap<>();
     this.activeServicePorts = new HashMap<>();
@@ -142,7 +147,7 @@ public class XdnGigapaxosApp
       recorderType = RecorderType.FUSERUST;
     } else {
       String errMsg = "[ERROR] Unknown StateDiff recorder type of " + stateDiffRecorderTypeString;
-      System.out.println(errMsg);
+      logger.log(Level.SEVERE, errMsg);
       throw new RuntimeException(errMsg);
     }
 
@@ -150,7 +155,6 @@ public class XdnGigapaxosApp
       String osName = System.getProperty("os.name");
       if (!osName.equalsIgnoreCase("linux")) {
         String errMsg = "[WARNING] FUSE can only be used in Linux. Failing back to rsync.";
-        System.out.println(errMsg);
         logger.log(Level.WARNING, errMsg);
         recorderType = RecorderType.RSYNC;
       }
@@ -195,7 +199,10 @@ public class XdnGigapaxosApp
     }
 
     // TODO:
-    //  - Validate fuselog binary exist
+    //  - Validate docker version
+    //  - Validate fuselog and fuselog-apply exist
+    //  - Validate fuserust and fuserust-apply exist
+    //  - Validate fuse3 is installed for FUSE-based recorder
     //  - Validate rsync exist
     return true;
   }
@@ -369,6 +376,7 @@ public class XdnGigapaxosApp
     return currInstance != null ? currInstance.property : null;
   }
 
+  @Deprecated
   private void activate(String serviceName) {
     System.out.println(">> " + myNodeId + " activate...");
 
@@ -437,7 +445,7 @@ public class XdnGigapaxosApp
   @Override
   public String checkpoint(String name) {
     // TODO: implement me
-    return "dummyXDNServiceCheckpoint";
+    return "dummyXdnServiceCheckpoint";
   }
 
   @Override
@@ -637,99 +645,13 @@ public class XdnGigapaxosApp
   }
 
   /**
-   * initContainerizedService initializes a containerized service, in idempotent manner.
+   * Create service instance from initial state. This method is invoked by the restore() method
+   * during replica-group creation. The service containers are not started yet, this method only
+   * assigns the port number in the ServiceInstance.
    *
-   * @param serviceName name of the to-be-initialized service.
-   * @param initialState the initial state with "init:" prefix.
-   * @return false if failed to initialized the service.
-   */
-  private boolean initContainerizedService(String serviceName, String initialState) {
-
-    // if the service is already initialized previously, in this active replica,
-    // then stop and remove the previous service.
-    if (activeServicePorts.containsKey(serviceName)) {
-      boolean isSuccess = false;
-      isSuccess = stopContainer(serviceName);
-      if (!isSuccess) {
-        return false;
-      }
-      isSuccess = removeContainer(serviceName);
-      if (!isSuccess) {
-        return false;
-      }
-    }
-
-    // it is possible to have the previous service still running, but the serviceName
-    // does not exist in our memory, this is possible when XDN crash while docker is still
-    // running.
-    if (isContainerRunning(serviceName)) {
-      boolean isSuccess = false;
-      isSuccess = stopContainer(serviceName);
-      if (!isSuccess) {
-        return false;
-      }
-      isSuccess = removeContainer(serviceName);
-      if (!isSuccess) {
-        return false;
-      }
-    }
-
-    // decode and validate the initial state
-    String[] decodedInitialState = initialState.split(":");
-    if (decodedInitialState.length < 7 || !initialState.startsWith("xdn:init:")) {
-      System.err.println(
-          "incorrect initial state, example of expected state is"
-              + " 'xdn:init:bookcatalog:8000:linearizable:true:/app/data'");
-      return false;
-    }
-    String dockerImageNames = decodedInitialState[2];
-    String dockerPortStr = decodedInitialState[3];
-    String consistencyModel = decodedInitialState[4];
-    boolean isDeterministic = decodedInitialState[5].equalsIgnoreCase("true");
-    String stateDir = decodedInitialState[6];
-    int dockerPort = 0;
-    try {
-      dockerPort = Integer.parseInt(dockerPortStr);
-    } catch (NumberFormatException e) {
-      System.err.println("incorrect docker port: " + e);
-      return false;
-    }
-
-    // TODO: assign port systematically to avoid port conflict
-    int publicPort = getRandomNumber(50000, 65000);
-
-    XdnServiceProperties prop = new XdnServiceProperties();
-    prop.serviceName = serviceName;
-    prop.dockerImages.addAll(List.of(dockerImageNames.split(",")));
-    prop.exposedPort = dockerPort;
-    prop.consistencyModel = consistencyModel;
-    prop.isDeterministic = isDeterministic;
-    prop.stateDir = stateDir;
-    prop.mappedPort = publicPort;
-
-    // create docker network, via command line
-    String networkName = String.format("net::%s:%s", myNodeId, prop.serviceName);
-    int exitCode = createDockerNetwork(networkName);
-    if (exitCode != 0) {
-      return false;
-    }
-
-    // actually start the containerized service, via command line
-    boolean isSuccess = startContainer(prop, networkName);
-    if (!isSuccess) {
-      return false;
-    }
-
-    // store the service's public port for request forwarding.
-    activeServicePorts.put(serviceName, publicPort);
-    // serviceProperties.put(serviceName, prop);
-
-    return true;
-  }
-
-  /**
-   * Create service instance from initial state. The service is not started and is assigned an empty
-   * port number.
+   * <p>Accepted valid initial state formats: - xdn:init:<servicePropertyJsonString> -
+   * xdn:final:<epoch>::<servicePropertyJsonString>::<finalState> -
+   * nondeter:create:<servicePropertyJsonString>
    *
    * @param serviceName name of the to-be-initialized service.
    * @param initialState the initial state with "xdn:init:", "xdn:final", or "nondeter:create"
@@ -762,13 +684,15 @@ public class XdnGigapaxosApp
     int initialPlacementEpoch = 0;
 
     if (isReconfiguration) {
-      // format: xdn:final:<epoch>::<serviceProperty>::<finalState>
+      // Format: xdn:final:<epoch>::<serviceProperty>::<finalState>
+      // Note that the <finalState> can either be a base64-encoded string (if small)
+      // or a URL to LargeCheckpointer (if large).
       String[] raw = initialState.split("::");
-      assert raw.length == 3;
+      assert raw.length == 3 : "Invalid reconfiguration initial state format";
       String encodedServiceProperty = raw[1];
       String encodedFinalState = raw[2]; // FIXME: handle if finalState has :: in it.
       String[] prefixRaw = raw[0].split(":");
-      assert prefixRaw.length == 3;
+      assert prefixRaw.length == 3 : "Invalid reconfiguration initial state format";
       int prevPlacementEpoch = Integer.parseInt(prefixRaw[2]);
       int newPlacementEpoch = prevPlacementEpoch + 1; // FIXME: this is prone to error!
       initialPlacementEpoch = newPlacementEpoch;
@@ -839,35 +763,34 @@ public class XdnGigapaxosApp
       service =
           new ServiceInstance(property, serviceName, networkName, allocatedPort, containerNames);
     } else {
-
+      // Create service instance for initialization
       try {
         property = ServiceProperty.createFromJsonString(initialState);
       } catch (JSONException e) {
         throw new RuntimeException("Invalid initial state as JSON: " + e);
       }
 
-      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
-      // Prepares container names for each service component.
+      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch, null);
+      // Prepare container names for each service component.
       // Format  : c<component-id>.e<reconfiguration-epoch>.<service-name>.<node-id>.xdn.io
       // Example : c0.e2.bookcatalog.ar2.xdn.io
       List<String> containerNames = new ArrayList<>();
-      int idx = 0;
-      int epoch = 0;
-      for (ServiceComponent c : property.getComponents()) {
+      int epoch = 0; // initial reconfiguration/placement epoch is 0
+      for (int idx = 0; idx < property.getComponents().size(); idx++) {
         String containerName =
             String.format("c%d.e%d.%s.%s.xdn.io", idx, epoch, serviceName, myNodeId);
         containerNames.add(containerName);
-        idx++;
       }
 
-      // prepare the initialized service
+      // Prepare the created ServiceInstance
       service = new ServiceInstance(property, serviceName, networkName, containerNames);
     }
 
-    // store service
+    // Store service instance metadata: serviceName => current placementEpoch.
     this.services.put(serviceName, service);
     this.servicePlacementEpoch.put(serviceName, initialPlacementEpoch);
 
+    // Store service instance metadata: (serviceName, placementEpoch) => serviceInstance.
     if (this.serviceInstances.containsKey(serviceName)) {
       this.serviceInstances.get(serviceName).put(initialPlacementEpoch, service);
     } else {
@@ -1828,10 +1751,7 @@ public class XdnGigapaxosApp
     return true;
   }
 
-  public boolean applyStatediff2(String serviceName, String statediff) {
-    return true;
-  }
-
+  @Deprecated
   private boolean applyStatediffWithFuse(String serviceName, String statediff) {
     // TODO: when applying statediff the service need to be stopped/paused, the filesystem need to
     // be stopped.
@@ -1959,7 +1879,7 @@ public class XdnGigapaxosApp
     int code = Shell.runCommand(removeCommand, true);
     assert code == 0;
 
-    // Create the directory to store the final state
+    // Create the directory to store the final state.
     String createDirCommand = String.format("mkdir -p %s", finalStateDirPath);
     code = Shell.runCommand(createDirCommand, true);
     assert code == 0;
