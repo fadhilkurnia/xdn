@@ -57,9 +57,10 @@ function parse_common_dist_args() {
     echo "Please specify the ssh key with '-ssh-key=<location>' argument." >&2
     return 1
   fi
+  # handle the case when ssh_key starts with '~/'.
   case "$ssh_key" in
   "~/"*)
-    ssh_key="${HOME}/${ssh_key#~/}"
+    ssh_key="${HOME}/${ssh_key:2}"
     ;;
   esac
   if [ ! -f "$ssh_key" ]; then
