@@ -176,8 +176,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     assert targetDir.endsWith("/") : "target mount directory should end with '/'";
     // remove the trailing '/' at the end of targetDir
     String targetDirPath = targetDir.substring(0, targetDir.length() - 1);
-    String cmd =
-        String.format("%s -o allow_other -o allow_root %s", FUSELOG_BIN_PATH, targetDirPath);
+
+    // Note: We need `allow_other` option so the containerized service can also
+    // access the mounted filesystem. This requires `user_allow_other` to be set in
+    // /etc/fuse.conf and the recorder to be run with root privilege.
+    // We do not use the `allow_root` that is more restrictive than `allow_other`.
+    String cmd = String.format("%s -o allow_other %s", FUSELOG_BIN_PATH, targetDirPath);
+
     Map<String, String> env = new HashMap<>();
     env.put("FUSELOG_SOCKET_FILE", socketFile);
     int exitCode = Shell.runCommand(cmd, false, env);
