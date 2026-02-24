@@ -11,6 +11,8 @@ import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -185,6 +187,8 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     Map<String, String> env = new HashMap<>();
     env.put("FUSELOG_SOCKET_FILE", socketFile);
+    env.put("FUSELOG_DAEMON_LOGS", "1");
+    env.put("RUST_LOG", "info");
     int exitCode = Shell.runCommand(cmd, false, env);
     if (exitCode != 0) {
       String errMessage =
@@ -228,8 +232,130 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   public boolean postInitialization(String serviceName, int placementEpoch) {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
-    // TODO: read initialization stateDiff and discard it
+
+    // Clear the accumulated init state diff so that subsequent captureStateDiff calls
+    // only capture incremental writes from user requests. Without this, the first
+    // captureStateDiff after a service like MySQL initializes would try to transfer
+    // all init writes (potentially hundreds of MB), blocking the PrimaryEpoch lock.
+    Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
+    if (epochToChannelMap != null) {
+      SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
+      if (socketChannel != null) {
+        try {
+          socketChannel.write(ByteBuffer.wrap("c".getBytes()));
+          logger.log(
+              Level.INFO,
+              String.format(
+                  "%s:%s - cleared init stateDiff for service=%s epoch=%d",
+                  this.nodeID,
+                  FuselogStateDiffRecorder.class.getSimpleName(),
+                  serviceName,
+                  placementEpoch));
+        } catch (IOException e) {
+          logger.log(
+              Level.WARNING,
+              String.format(
+                  "%s:%s - failed to clear init stateDiff for service=%s epoch=%d: %s",
+                  this.nodeID,
+                  FuselogStateDiffRecorder.class.getSimpleName(),
+                  serviceName,
+                  placementEpoch,
+                  e.getMessage()));
+        }
+      }
+    }
     return true;
+  }
+
+  // Maximum plausible state diff for a single HTTP request (100 MB).
+  // Values above this indicate protocol desynchronization (garbage size header).
+  private static final long MAX_STATEDIFF_BYTES = 100L * 1024 * 1024;
+
+  private static String toHexString(byte[] bytes) {
+    StringBuilder sb = new StringBuilder();
+    for (byte b : bytes) {
+      sb.append(String.format("%02X ", b));
+    }
+    return sb.toString().trim();
+  }
+
+  /**
+   * Closes the current socket channel for the given service/epoch and reconnects to the fuselog
+   * Unix domain socket. This restores protocol synchronization when the socket stream has become
+   * desynchronized (e.g., after a read timeout that left fuselog stuck in write_all).
+   *
+   * @return the new SocketChannel on success, or null on failure.
+   */
+  private SocketChannel reconnectSocket(String serviceName, int placementEpoch) {
+    String socketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
+    Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
+
+    // Close the old channel — this sends EOF to fuselog, causing its handle_client loop to exit.
+    if (epochToChannelMap != null) {
+      SocketChannel old = epochToChannelMap.get(placementEpoch);
+      if (old != null) {
+        try {
+          old.close();
+        } catch (IOException ignored) {
+        }
+        epochToChannelMap.remove(placementEpoch);
+      }
+    }
+
+    // Fuselog's start_listener polls accept() with a 100 ms sleep; give it time to cycle.
+    try {
+      Thread.sleep(300);
+    } catch (InterruptedException ignored) {
+      Thread.currentThread().interrupt();
+    }
+
+    // Retry connecting up to 10 times (2 seconds total).
+    for (int attempt = 1; attempt <= 10; attempt++) {
+      try {
+        SocketChannel newChannel = SocketChannel.open(StandardProtocolFamily.UNIX);
+        UnixDomainSocketAddress address = UnixDomainSocketAddress.of(Path.of(socketFile));
+        boolean connected = newChannel.connect(address);
+        if (connected) {
+          if (epochToChannelMap != null) {
+            epochToChannelMap.put(placementEpoch, newChannel);
+          }
+          logger.log(
+              Level.INFO,
+              String.format(
+                  "%s:%s - reconnected to fuselog socket for service=%s epoch=%d (attempt %d)",
+                  this.nodeID,
+                  FuselogStateDiffRecorder.class.getSimpleName(),
+                  serviceName,
+                  placementEpoch,
+                  attempt));
+          return newChannel;
+        }
+        newChannel.close();
+      } catch (IOException e) {
+        logger.log(
+            Level.WARNING,
+            String.format(
+                "%s:%s - reconnect attempt %d failed for service=%s epoch=%d: %s",
+                this.nodeID,
+                FuselogStateDiffRecorder.class.getSimpleName(),
+                attempt,
+                serviceName,
+                placementEpoch,
+                e.getMessage()));
+      }
+      try {
+        Thread.sleep(200);
+      } catch (InterruptedException ignored) {
+        Thread.currentThread().interrupt();
+      }
+    }
+
+    logger.log(
+        Level.SEVERE,
+        String.format(
+            "%s:%s - failed to reconnect to fuselog socket for service=%s epoch=%d after 10 attempts",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName, placementEpoch));
+    return null;
   }
 
   @Override
@@ -238,9 +364,24 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
 
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
-    assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
+    if (epochToChannelMap == null) {
+      logger.log(
+          Level.WARNING,
+          String.format(
+              "%s:%s - no socket map for service=%s, returning null",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
+      return null;
+    }
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
-    assert socketChannel != null : "unknown fs socket client for " + serviceName;
+    if (socketChannel == null) {
+      logger.log(
+          Level.WARNING,
+          String.format(
+              "%s:%s - no socket channel for service=%s epoch=%d, returning null",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName,
+              placementEpoch));
+      return null;
+    }
 
     long startTime = System.nanoTime();
 
@@ -265,38 +406,109 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         String.format(
             "%s:%s - reading FuselogFS response",
             this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
-    int numRead;
+    int numRead = 0;
     try {
-      numRead = socketChannel.read(sizeBuffer);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-    if (numRead < 8) {
-      logger.log(
-          Level.SEVERE,
-          String.format(
-              "%s:%s - failed to read stateDiff size from filesystem socket, expected 8 bytes but"
-                  + " got %d bytes",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
-      return null;
-    }
-    long stateDiffSize = sizeBuffer.getLong(0);
-    logger.log(
-        Level.FINER,
-        String.format(
-            "%s:%s - receiving stateDiff with size=%d bytes",
-            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
-    assert stateDiffSize >= 0 : "invalid stateDiff size received from filesystem socket";
-
-    // Read all the stateDiff based on the obtained size.
-    ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
-    numRead = 0;
-    try {
-      while (numRead < stateDiffSize) {
-        numRead += socketChannel.read(stateDiffBuffer);
+      int n;
+      while (numRead < 8) {
+        n = socketChannel.read(sizeBuffer);
+        if (n < 0) {
+          logger.log(
+              Level.SEVERE,
+              String.format(
+                  "%s:%s - filesystem socket closed while reading size header after %d bytes;"
+                      + " reconnecting",
+                  this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
+          reconnectSocket(serviceName, placementEpoch);
+          return null;
+        }
+        numRead += n;
       }
     } catch (IOException e) {
       throw new RuntimeException(e);
+    }
+    long stateDiffSize = sizeBuffer.getLong(0);
+    logger.log(
+        Level.INFO,
+        String.format(
+            "%s:%s - receiving stateDiff with size=%d bytes",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
+
+    // Sanity-check the size. If it is negative or implausibly large, the socket is
+    // desynchronized (leftover payload bytes from a previous incomplete read are being
+    // misinterpreted as a size header).  Close and reconnect to restore the protocol.
+    if (stateDiffSize < 0 || stateDiffSize > MAX_STATEDIFF_BYTES) {
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - garbage stateDiffSize=%d (raw LE bytes=[%s]); reconnecting socket",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              stateDiffSize,
+              toHexString(sizeBuffer.array())));
+      reconnectSocket(serviceName, placementEpoch);
+      return null;
+    }
+
+    // Read all the stateDiff based on the obtained size.
+    // Use a Selector-based read so we can detect if the fuselog process stops sending data
+    // mid-transfer (e.g., if serialized_data.len() doesn't match what is actually sent).
+    // Without a timeout the blocking read would hold PrimaryEpoch lock indefinitely.
+    final long PAYLOAD_READ_TIMEOUT_MS = 5000;
+    ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
+    numRead = 0;
+    try {
+      socketChannel.configureBlocking(false);
+      try (Selector selector = Selector.open()) {
+        SelectionKey key = socketChannel.register(selector, SelectionKey.OP_READ);
+        while (numRead < stateDiffSize) {
+          int ready = selector.select(PAYLOAD_READ_TIMEOUT_MS);
+          if (ready == 0) {
+            logger.log(
+                Level.SEVERE,
+                String.format(
+                    "%s:%s - timeout after %dms reading payload; received %d/%d bytes."
+                        + " Reconnecting socket to restore protocol sync"
+                        + " (fuselog may be stuck in write_all).",
+                    this.nodeID,
+                    FuselogStateDiffRecorder.class.getSimpleName(),
+                    PAYLOAD_READ_TIMEOUT_MS,
+                    numRead,
+                    stateDiffSize));
+            key.cancel();
+            // Reconnect: closing the old channel sends EOF to fuselog, unblocking its write_all.
+            // The finally block will attempt configureBlocking(true) on the closed channel, which
+            // is harmless (ClosedChannelException is caught and logged there).
+            reconnectSocket(serviceName, placementEpoch);
+            return null;
+          }
+          selector.selectedKeys().clear();
+          int n = socketChannel.read(stateDiffBuffer);
+          if (n < 0) {
+            logger.log(
+                Level.SEVERE,
+                String.format(
+                    "%s:%s - filesystem socket closed unexpectedly after reading %d/%d bytes",
+                    this.nodeID,
+                    FuselogStateDiffRecorder.class.getSimpleName(),
+                    numRead,
+                    stateDiffSize));
+            key.cancel();
+            return null;
+          }
+          numRead += n;
+        }
+        key.cancel();
+      }
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    } finally {
+      try {
+        socketChannel.configureBlocking(true);
+      } catch (IOException e) {
+        logger.log(Level.WARNING, String.format(
+            "%s:%s - failed to restore blocking mode: %s",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), e.getMessage()));
+      }
     }
 
     // Convert the stateDiff into String using Base64
@@ -453,7 +665,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         node ->
             backupIdToTargetPaths.put(
                 node,
-                String.format("%s%s/", FuselogStateDiffRecorder.defaultWorkingBasePath, node)));
+                String.format("%s%s/", FuselogStateDiffRecorder.workingBasePath, node)));
 
     String mntDir = String.format("mnt/%s/", serviceName);
     String username = Shell.runCommandWithOutput("whoami").stdout.trim();
@@ -464,8 +676,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     int numBackupReplicas = backupIdToTargetPaths.size();
     ExecutorService executor = Executors.newFixedThreadPool(numBackupReplicas);
-    String sshOption =
-        sshKey != null && !sshKey.trim().isEmpty() ? String.format("-e \"ssh -i %s\"", sshKey) : "";
 
     while (!allSyncSuccess) {
       if (++count > 10) {
@@ -487,7 +697,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
                         ipAddresses.get(replicaKey).getHostAddress(),
                         mntDir,
                         username,
-                        sshOption)));
+                        sshKey)));
       }
 
       for (Future<Boolean> future : futures) {
@@ -506,22 +716,52 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       } catch (InterruptedException e) {
         e.printStackTrace();
       }
-
-      executor.shutdown();
     }
 
+    executor.shutdown();
+
     Map<Integer, SocketChannel> epochToChannelMap = this.serviceFsSocket.get(serviceName);
-    assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
+    if (epochToChannelMap == null) {
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - no socket map for service=%s in initContainerSync",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
+      return;
+    }
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
-    assert socketChannel != null : "unknown fs socket client for " + serviceName;
+    if (socketChannel == null) {
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - no socket channel for service=%s epoch=%d in initContainerSync",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName,
+              placementEpoch));
+      return;
+    }
 
     // begin capturing statediff (c) in the filesystem
     try {
-      System.out.println(">> clear stateDiffs...");
+      logger.log(
+          Level.INFO,
+          String.format(
+              "%s:%s - clearing stateDiff log after rsync for service=%s epoch=%d",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName,
+              placementEpoch));
       socketChannel.write(ByteBuffer.wrap("c".getBytes()));
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+
+    // Reconnect the socket to ensure any stale bytes from previous protocol exchanges
+    // are flushed before captureStateDiff is called for the first time.
+    logger.log(
+        Level.INFO,
+        String.format(
+            "%s:%s - reconnecting socket after init clear for service=%s epoch=%d",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName,
+            placementEpoch));
+    reconnectSocket(serviceName, placementEpoch);
   }
 
   private boolean syncReplicaWithRsync(
@@ -530,30 +770,35 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       String hostAddr,
       String mntDir,
       String username,
-      String sshOption) {
+      String sshKey) {
     int exitCode;
+    // Use List<String> to pass args directly to ProcessBuilder without shell interpretation.
+    // This avoids quoting issues and lets us include multi-word SSH options correctly.
     if ("127.0.0.1".equals(hostAddr)) {
       exitCode =
           Shell.runCommand(
-              String.format(
-                  """
-                          rsync -avz --delete --human-readable \
-                          --include='mnt/' --include='%s' --include='%s***' \
-                          --exclude='*' \
-                          %s %s""",
-                  mntDir, mntDir, currentReplica, targetReplica),
+              List.of(
+                  "rsync", "-avz", "--delete", "--human-readable",
+                  "--omit-dir-times", "--omit-link-times",
+                  "--include=mnt/", "--include=" + mntDir, "--include=" + mntDir + "***",
+                  "--exclude=*",
+                  currentReplica, targetReplica),
               true);
     } else {
+      // Build SSH rsh command. StrictHostKeyChecking=no is required because the JVM runs as root
+      // and root may not have remote hosts in its known_hosts file.
+      String sshCmd = sshKey != null && !sshKey.trim().isEmpty()
+          ? "ssh -i " + sshKey + " -o StrictHostKeyChecking=no"
+          : "ssh -o StrictHostKeyChecking=no";
       exitCode =
           Shell.runCommand(
-              String.format(
-                  """
-                          rsync -avz --delete --human-readable \
-                          %s \
-                          --include='mnt/' --include='%s' --include='%s***' \
-                          --exclude='*' \
-                          %s %s@%s:%s""",
-                  sshOption, mntDir, mntDir, currentReplica, username, hostAddr, targetReplica),
+              List.of(
+                  "rsync", "-avz", "--delete", "--human-readable",
+                  "--omit-dir-times", "--omit-link-times",
+                  "-e", sshCmd,
+                  "--include=mnt/", "--include=" + mntDir, "--include=" + mntDir + "***",
+                  "--exclude=*",
+                  currentReplica, username + "@" + hostAddr + ":" + targetReplica),
               true);
     }
 

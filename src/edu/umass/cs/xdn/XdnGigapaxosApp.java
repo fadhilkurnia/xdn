@@ -770,7 +770,7 @@ public class XdnGigapaxosApp
         throw new RuntimeException("Invalid initial state as JSON: " + e);
       }
 
-      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch, null);
+      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
       // Prepare container names for each service component.
       // Format  : c<component-id>.e<reconfiguration-epoch>.<service-name>.<node-id>.xdn.io
       // Example : c0.e2.bookcatalog.ar2.xdn.io
@@ -1696,7 +1696,40 @@ public class XdnGigapaxosApp
   public String captureStatediff(String serviceName) {
     long startCaptureTimeNs = System.nanoTime();
     int currentPlacementEpoch = this.getEpoch(serviceName);
+
+    // Guard: skip captureStateDiff if service initialization is not yet complete.
+    // For non-deterministic services (e.g., MySQL+WordPress), ~213MB of init data
+    // accumulates in the fuselog buffer until initContainerSync sends 'c'.  If
+    // captureStateDiff is called before that, the 5-second payload timeout fires,
+    // leaving fuselog stuck in write_all and the socket protocol desynchronized.
+    // Also guard when svc == null (preInitialization not called yet) to prevent
+    // downstream AssertionError in FuselogStateDiffRecorder.
+    Map<Integer, ServiceInstance> epochs = this.serviceInstances.get(serviceName);
+    ServiceInstance svc = (epochs != null) ? epochs.get(currentPlacementEpoch) : null;
+    if (svc == null || !svc.initializationSucceed) {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} captureStatediff skipped: {2} epoch={3} init not yet complete (svc={4})",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            currentPlacementEpoch,
+            svc
+          });
+      return XDN_STATE_DIFF_PREFIX + "null";
+    }
+
     String stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
+    if (stateDiff == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} - recorder returned null for service={2} epoch={3}, treating as empty diff",
+          new Object[] {
+            this.myNodeId, this.getClass().getSimpleName(), serviceName, currentPlacementEpoch
+          });
+      return XDN_STATE_DIFF_PREFIX + "null";
+    }
     String finalStateDiff = XDN_STATE_DIFF_PREFIX + stateDiff;
     long endCaptureTimeNs = System.nanoTime();
 
@@ -1729,6 +1762,10 @@ public class XdnGigapaxosApp
 
     // apply the stateDiff
     String stateDiffContent = statediff.substring(XDN_STATE_DIFF_PREFIX.length());
+    if (stateDiffContent.equals("null")) {
+      // No-op: primary's captureStatediff was skipped because init was not yet complete.
+      return true;
+    }
     Integer currentPlacementEpoch = this.getEpoch(serviceName);
     assert currentPlacementEpoch != null;
     boolean isApplySuccess =

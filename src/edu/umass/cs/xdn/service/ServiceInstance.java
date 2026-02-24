@@ -13,7 +13,7 @@ public class ServiceInstance {
   /* Initialization Status.
    * Needed as indicator if non-deterministic initialization was successful or not.
    */
-  public Boolean initializationSucceed;
+  public volatile Boolean initializationSucceed;
 
   /** containerNames contains list of container names for each component in the service */
   public final List<String> containerNames;
