@@ -263,10 +263,13 @@ public class XdnGigapaxosApp
     }
 
     if (request instanceof XdnHttpRequestBatch xdnBatch) {
+      /*
       logger.log(
               Level.WARNING,
               "Batch size = {0}",
               new Object[] { xdnBatch.size() });
+
+       */
       long startTime = System.nanoTime();
       forwardHttpRequestBatchToContainerizedService(xdnBatch);
       releaseHttpResponsesOnNonEntryReplica(xdnBatch);

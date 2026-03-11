@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn;
 
 import com.lmax.disruptor.EventHandler;
+import edu.umass.cs.eventual.LazyReplicaCoordinator;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
@@ -11,24 +12,25 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.logging.Logger;
 
 public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
+    private final Logger logger = Logger.getLogger(XdnBatchHandler.class.getSimpleName());
+    private long lastFlushNs = 0;
+    private long totalBatches = 0;
+
     private final ActiveReplicaFunctions arFunctions;
     private final int maxBatchSize;
 
-    // Dedicated single-thread executor for dispatching batches to GigaPaxos.
-    // This decouples the Disruptor consumer thread from the blocking serialization
-    // and network I/O inside handRequestToAppForHttp(), allowing the consumer to keep
-    // draining the ring buffer while the previous batch is still in flight.
-    private final ExecutorService flushExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "xdn-batch-flush");
-        t.setDaemon(true);
-        return t;
-    });
+    // Limits how many batches can be in-flight inside GigaPaxos simultaneously.
+    // When the limit is reached, the Disruptor consumer blocks here instead of
+    // submitting more work — this is the back-pressure point that lets requests
+    // accumulate in the ring buffer so the next endOfBatch flush has a larger batch.
+    private static final int MAX_IN_FLIGHT_BATCHES = 4;
+    private final Semaphore inFlightPermits = new Semaphore(MAX_IN_FLIGHT_BATCHES);
 
-    // Pre-allocated, reused across flushes to avoid per-flush ArrayList allocation.
-    // Swapped with a fresh list in flushBatch() so the callback closure captures
-    // the correct snapshot without an extra copy.
+    // Pre-allocated list, swapped (not copied) in flushBatch() to avoid per-flush allocation.
     private List<XdnBatchEvent> currentBatch;
 
     // The service name for making sure requests of different
@@ -77,8 +79,6 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
             return;
         }
 
-        // Swap out the current batch so we can hand the snapshot to the callback closure
-        // without an extra ArrayList copy. A fresh list is pre-sized for the next batch.
         List<XdnBatchEvent> entriesForThisBatch = currentBatch;
         currentBatch = new ArrayList<>(maxBatchSize);
         batchServiceName = null;
@@ -112,24 +112,43 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
             }
         }
 
-        // Submit the flush asynchronously so the Disruptor consumer thread is free to keep
-        // draining the ring buffer while this batch is being serialized and sent to GigaPaxos.
-        flushExecutor.submit(() -> dispatchBatch(entriesForThisBatch, gpRequest));
-    }
+        // Block the Disruptor consumer until a slot is available.
+        // This is the back-pressure point: when MAX_IN_FLIGHT_BATCHES are already
+        // inside GigaPaxos, the consumer parks here and new requests pile up in the
+        // ring buffer, so the next flush will have a larger batch.
+        try {
+            inFlightPermits.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            for (XdnBatchEvent entry : entriesForThisBatch) entry.clear();
+            return;
+        }
 
-    private void dispatchBatch(List<XdnBatchEvent> entriesForThisBatch,
-                               ReplicableClientRequest gpRequest) {
+        // handRequestToAppForHttp returns immediately after handing the request to
+        // GigaPaxos — it does not block for coordination. The consumer thread is
+        // released as soon as GigaPaxos takes ownership, so it can drain the next
+        // batch while this one is being coordinated in the background.
+        // Diagnostic logging: batch size and gap since last flush.
+        // Log every 500 batches to avoid overwhelming output.
+        long now = System.nanoTime();
+        long gapMs = lastFlushNs == 0 ? 0 : (now - lastFlushNs) / 1_000_000;
+        lastFlushNs = now;
+        totalBatches++;
+        if (totalBatches % 500 == 0) {
+            logger.warning("Batch #" + totalBatches
+                    + " | size=" + entriesForThisBatch.size()
+                    + " | gap=" + gapMs + "ms"
+                    + " | permits=" + inFlightPermits.availablePermits());
+        }
+
         arFunctions.handRequestToAppForHttp(gpRequest, (executedRequestBatch, handled) -> {
             for (XdnBatchEvent entry : entriesForThisBatch) {
                 if (entry.completionHandler != null) {
                     entry.completionHandler.onComplete(entry.request, null);
                 }
-                entry.clear(); // Return the ring buffer slot to the pre-allocated pool
+                entry.clear();
             }
+            inFlightPermits.release();
         });
-    }
-
-    public void close() {
-        flushExecutor.shutdown();
     }
 }

@@ -55,6 +55,5 @@ public class XdnRingBufferBatcher implements Closeable {
     @Override
     public void close() {
         disruptor.shutdown();
-        batchHandler.close();
     }
 }

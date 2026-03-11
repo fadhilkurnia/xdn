@@ -64,6 +64,11 @@ public class XdnHttpRequest extends XdnRequest
   // Netty's pipeline has released the underlying buffer (refCnt → 0).
   private final ByteString requestBodyBytes;
 
+  // Eagerly captured response body bytes, populated in setHttpResponse().
+  // Same rationale as requestBodyBytes — the response ByteBuf may be released by Netty
+  // before toBytes() is called during GigaPaxos coordination.
+  private ByteString responseBodyBytes = null;
+
   // The set for BehavioralRequest interface that requires returning
   // the behaviors of this HttpRequest. Note that requestMatcher must
   // be set to know the behaviors of this HttpRequest.
@@ -332,11 +337,16 @@ public class XdnHttpRequest extends XdnRequest
     FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;
     this.httpResponse = fullHttpResponse;
     this.httpResponseBody = fullHttpResponse.content();
+    // Eagerly copy the response body out of the Netty ByteBuf while it is still live,
+    // for the same reason as requestBodyBytes — toBytes() may be called later from a
+    // different thread after Netty has released the underlying buffer.
+    this.responseBodyBytes = extractBodyByteString(this.httpResponseBody);
   }
 
   public void clearHttpResponse() {
     this.httpResponse = null;
     this.httpResponseBody = null;
+    this.responseBodyBytes = null;
   }
 
   @Override
@@ -414,9 +424,7 @@ public class XdnHttpRequest extends XdnRequest
 
   private XdnHttpRequestProto.XdnHttpRequest.Response buildResponseProto() {
     ByteString responseBody =
-        this.httpResponseBody != null
-            ? extractBodyByteString(this.httpResponseBody)
-            : ByteString.EMPTY;
+            this.responseBodyBytes != null ? this.responseBodyBytes : ByteString.EMPTY;
 
     return XdnHttpRequestProto.XdnHttpRequest.Response.newBuilder()
         .setProtocolVersion(getHttpVersionProto(this.httpResponse.protocolVersion()))
