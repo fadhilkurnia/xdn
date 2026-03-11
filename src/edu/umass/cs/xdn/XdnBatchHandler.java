@@ -17,18 +17,29 @@ import java.util.logging.Logger;
 
 public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
     private final Logger logger = Logger.getLogger(XdnBatchHandler.class.getSimpleName());
-    private long lastFlushNs = 0;
-    private long totalBatches = 0;
 
     private final ActiveReplicaFunctions arFunctions;
     private final int maxBatchSize;
 
-    // Limits how many batches can be in-flight inside GigaPaxos simultaneously.
-    // When the limit is reached, the Disruptor consumer blocks here instead of
-    // submitting more work — this is the back-pressure point that lets requests
-    // accumulate in the ring buffer so the next endOfBatch flush has a larger batch.
-    private static final int MAX_IN_FLIGHT_BATCHES = 4;
-    private final Semaphore inFlightPermits = new Semaphore(MAX_IN_FLIGHT_BATCHES);
+    // Separate semaphores for reads and writes so that writes are never queued
+    // behind in-flight read batches and vice versa.
+    //
+    // Reads: higher concurrency because reads execute locally with no peer replication.
+    // The consumer blocks after MAX_IN_FLIGHT_READ_BATCHES read batches are in-flight,
+    // giving the ring buffer time to accumulate more requests for the next flush.
+    //
+    // Writes: lower concurrency because each write must replicate to all peers via
+    // messenger.send(), which is synchronous and involves network I/O. Allowing too
+    // many writes in-flight simultaneously would saturate the network and slow each
+    // individual write further. A single in-flight write keeps the pipeline simple
+    // and predictable without stalling the read path.
+    private static final int MAX_IN_FLIGHT_READ_BATCHES = 4;
+    private static final int MAX_IN_FLIGHT_WRITE_BATCHES = 1;
+    private final Semaphore readPermits  = new Semaphore(MAX_IN_FLIGHT_READ_BATCHES);
+    private final Semaphore writePermits = new Semaphore(MAX_IN_FLIGHT_WRITE_BATCHES);
+
+    private long lastFlushNs = 0;
+    private long totalBatches = 0;
 
     // Pre-allocated list, swapped (not copied) in flushBatch() to avoid per-flush allocation.
     private List<XdnBatchEvent> currentBatch;
@@ -48,10 +59,10 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
         // Puts any non read_only requests into its own batch
         // Sends the previous batch first, then the new batch
         if (!event.request.isReadOnlyRequest()) {
-            if (!currentBatch.isEmpty()) flushBatch();
+            if (!currentBatch.isEmpty()) flushBatch(false);
             batchServiceName = event.request.getServiceName();
             currentBatch.add(event);
-            flushBatch();
+            flushBatch(false);
             return;
         }
 
@@ -59,7 +70,7 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
         // If different service, send previous batch
         String nextServiceName = event.request.getServiceName();
         if (!currentBatch.isEmpty() && !Objects.equals(batchServiceName, nextServiceName)) {
-            flushBatch();
+            flushBatch(true);
         }
 
         // Add request to batch, store the service name of that request
@@ -69,11 +80,11 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
         // Send batch if it's full or the ring buffer consumer
         // has caught up to latest published sequence number
         if (endOfBatch || currentBatch.size() >= maxBatchSize) {
-            flushBatch();
+            flushBatch(true);
         }
     }
 
-    private void flushBatch() {
+    private void flushBatch(boolean isReadBatch) {
         if (currentBatch.isEmpty()) {
             batchServiceName = null;
             return;
@@ -91,10 +102,7 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
         }
 
         if (requests.isEmpty()) {
-            // Nothing to send; clear slots and bail out
-            for (XdnBatchEvent entry : entriesForThisBatch) {
-                entry.clear();
-            }
+            for (XdnBatchEvent entry : entriesForThisBatch) entry.clear();
             return;
         }
 
@@ -112,33 +120,31 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
             }
         }
 
-        // Block the Disruptor consumer until a slot is available.
-        // This is the back-pressure point: when MAX_IN_FLIGHT_BATCHES are already
-        // inside GigaPaxos, the consumer parks here and new requests pile up in the
-        // ring buffer, so the next flush will have a larger batch.
+        // Acquire from the appropriate semaphore. Reads and writes never contend
+        // with each other — a surge of in-flight reads cannot delay a write and
+        // vice versa.
+        Semaphore permits = isReadBatch ? readPermits : writePermits;
         try {
-            inFlightPermits.acquire();
+            permits.acquire();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             for (XdnBatchEvent entry : entriesForThisBatch) entry.clear();
             return;
         }
 
-        // handRequestToAppForHttp returns immediately after handing the request to
-        // GigaPaxos — it does not block for coordination. The consumer thread is
-        // released as soon as GigaPaxos takes ownership, so it can drain the next
-        // batch while this one is being coordinated in the background.
         // Diagnostic logging: batch size and gap since last flush.
         // Log every 500 batches to avoid overwhelming output.
         long now = System.nanoTime();
         long gapMs = lastFlushNs == 0 ? 0 : (now - lastFlushNs) / 1_000_000;
         lastFlushNs = now;
         totalBatches++;
-        if (totalBatches % 500 == 0) {
-            logger.warning("Batch #" + totalBatches
-                    + " | size=" + entriesForThisBatch.size()
-                    + " | gap=" + gapMs + "ms"
-                    + " | permits=" + inFlightPermits.availablePermits());
+        if (totalBatches % 2 == 0) {
+        logger.warning("Batch #" + totalBatches
+                + " | " + (isReadBatch ? "READ" : "WRITE")
+                + " | size=" + entriesForThisBatch.size()
+                + " | gap=" + gapMs + "ms"
+                + " | readPermits=" + readPermits.availablePermits()
+                + " | writePermits=" + writePermits.availablePermits());
         }
 
         arFunctions.handRequestToAppForHttp(gpRequest, (executedRequestBatch, handled) -> {
@@ -148,7 +154,7 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
                 }
                 entry.clear();
             }
-            inFlightPermits.release();
+            permits.release();
         });
     }
 }

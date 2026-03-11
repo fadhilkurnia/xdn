@@ -18,10 +18,6 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.handler.codec.http.*;
-import io.netty.util.ReferenceCountUtil;
 
 import java.io.IOException;
 import java.util.HashSet;
@@ -29,6 +25,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -49,6 +47,16 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     }
 
     private final ConcurrentMap<String, LazyReplicaInstance<NodeIDType>> currentInstances;
+
+    // Dedicated executor for sending WRITE_AFTER packets to peers.
+    // This offloads messenger.send() — which involves serialization and network I/O —
+    // off the calling thread (the Disruptor consumer), so the write semaphore permit
+    // is released immediately after callback.executed() and the consumer can move on.
+    private final ExecutorService replicationExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "xdn-lazy-replication");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final Logger logger = Logger.getLogger(LazyReplicaCoordinator.class.getSimpleName());
 
@@ -131,32 +139,35 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                         "Expecting ReadOnly request or (Monotonic and WriteOnly) request " +
                                 "for LazyReplicaCoordinator");
             }
-
+//
             boolean isExecSuccess = this.app.execute(clientRequest);
 
             // for write request, send WRITE_AFTER packets to all replicas but myself
             // Response are removed in receiver side before execution.
             if (isWriteOnly && isMonotonic) {
-                retainRequestContent(clientRequest);
-                try {
-                    if (isExecSuccess) {
-                        callback.executed(clientRequest, true);
+                if (isExecSuccess) {
+                    // Return the response to the client immediately after local execution.
+                    // Replication to peers happens asynchronously and does not block the caller.
+                    callback.executed(clientRequest, true);
 
+                    Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                    myPeers.remove(myNodeId);
+
+                    if (!myPeers.isEmpty()) {
                         LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
                                 myNodeId.toString(), clientRequest);
-                        Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
-                        myPeers.remove(myNodeId);
-                        GenericMessagingTask<NodeIDType, LazyPacket> m =
-                                new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
-                        try {
-                            logger.log(Level.INFO, "Sending WRITE_AFTER packet ...");
-                            messenger.send(m);
-                        } catch (JSONException e) {
-                            throw new RuntimeException(e);
-                        }
+                        replicationExecutor.submit(() -> {
+                            try {
+                                logger.log(Level.INFO, "Sending WRITE_AFTER packet ...");
+                                GenericMessagingTask<NodeIDType, LazyPacket> m =
+                                        new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                                messenger.send(m);
+                            } catch (IOException | JSONException e) {
+                                logger.log(Level.WARNING,
+                                        "Failed to send WRITE_AFTER packet: " + e.getMessage(), e);
+                            }
+                        });
                     }
-                } finally {
-                    releaseRequestContent(clientRequest);
                 }
             } else {
                 if (isExecSuccess) {
@@ -224,43 +235,5 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     public Set<NodeIDType> getReplicaGroup(String serviceName) {
         LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
         return replicaInstance != null ? replicaInstance.nodes() : null;
-    }
-
-    private void retainRequestContent(ClientRequest request) {
-        if (request instanceof XdnHttpRequestBatch batch) {
-            for (XdnHttpRequest xhr : batch.getRequestList()) {
-                retainSingleRequestContent(xhr);
-            }
-        } else if (request instanceof XdnHttpRequest xhr) {
-            retainSingleRequestContent(xhr);
-        }
-    }
-
-    private void retainSingleRequestContent(XdnHttpRequest xhr) {
-        if (xhr.getHttpRequestContent() != null) {
-            ByteBuf content = xhr.getHttpRequestContent().content();
-            if (content != null && content.refCnt() > 0) {
-                ReferenceCountUtil.retain(content);
-            }
-        }
-    }
-
-    private void releaseRequestContent(ClientRequest request) {
-        if (request instanceof XdnHttpRequestBatch batch) {
-            for (XdnHttpRequest xhr : batch.getRequestList()) {
-                releaseSingleRequestContent(xhr);
-            }
-        } else if (request instanceof XdnHttpRequest xhr) {
-            releaseSingleRequestContent(xhr);
-        }
-    }
-
-    private void releaseSingleRequestContent(XdnHttpRequest xhr) {
-        if (xhr.getHttpRequestContent() != null) {
-            ByteBuf content = xhr.getHttpRequestContent().content();
-            if (content != null && content.refCnt() > 0) {
-                ReferenceCountUtil.release(content);
-            }
-        }
     }
 }
