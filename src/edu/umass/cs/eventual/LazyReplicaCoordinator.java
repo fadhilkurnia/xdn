@@ -19,6 +19,8 @@ import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.*;
 import io.netty.util.ReferenceCountUtil;
 
 import java.io.IOException;
@@ -85,8 +87,10 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
+        /*
         System.out.println(">> " + myNodeId + " LazyReplicaCoordinator -- receiving request " +
                 request.getClass().getSimpleName());
+         */
         if (!(request instanceof ReplicableClientRequest) && !(request instanceof LazyPacket)) {
             throw new RuntimeException("Unknown request/packet handled by LazyReplicaCoordinator");
         }

@@ -263,6 +263,10 @@ public class XdnGigapaxosApp
     }
 
     if (request instanceof XdnHttpRequestBatch xdnBatch) {
+      logger.log(
+              Level.WARNING,
+              "Batch size = {0}",
+              new Object[] { xdnBatch.size() });
       long startTime = System.nanoTime();
       forwardHttpRequestBatchToContainerizedService(xdnBatch);
       releaseHttpResponsesOnNonEntryReplica(xdnBatch);
@@ -2071,10 +2075,12 @@ public class XdnGigapaxosApp
     // Run with arbitrary user if the container is stateful
     // Only been tested on PostgreSQL, MySQL, MariaDb
     // --cap-add is for MySQL reconfiguration to allow it to handle errors silently
+    /*
     if (uid != 0 && mountDirTarget != null && !mountDirTarget.isEmpty()) {
       userSubCmd =
           String.format("-v /etc/passwd:/etc/passwd:ro --user=%d:%d --cap-add=sys_nice", uid, gid);
     }
+     */
 
     String clearCommand = String.format("docker container rm --force %s", containerName);
     Shell.runCommand(clearCommand, true);
@@ -2190,17 +2196,27 @@ public class XdnGigapaxosApp
       XdnHttpRequest httpRequest = requests.get(i);
       futures[i] =
           CompletableFuture.runAsync(
-              () -> {
-                forwardHttpRequestToContainerizedService(httpRequest);
-                assert httpRequest.getHttpResponse() != null
-                    : "Obtained null response after request execution";
-                assert ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()) == 1
-                    : String.format(
-                        "Unexpected refCnt of response after execution (%d!=1)",
-                        ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()));
-                // NOTE: we are not releasing the reference-counter response here because
-                //       it will be released in the HttpActiveReplica.
-              });
+                  () -> {
+                    // Debug: skip execution and return dummy response to emulate NoOp.
+                    if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_NO_OP_EXECUTION)) {
+                      ByteBuf content = Unpooled.copiedBuffer("NoOp".getBytes());
+                      FullHttpResponse dummyResponse =
+                              new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
+                      dummyResponse.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+                      httpRequest.setHttpResponse(dummyResponse);
+                    } else {
+                      forwardHttpRequestToContainerizedService(httpRequest);
+                    }
+
+                    assert httpRequest.getHttpResponse() != null
+                            : "Obtained null response after request execution";
+                    assert ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()) == 1
+                            : String.format(
+                            "Unexpected refCnt of response after execution (%d!=1)",
+                            ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()));
+                    // NOTE: we are not releasing the reference-counter response here because
+                    //       it will be released in the HttpActiveReplica.
+                  });
     }
     CompletableFuture.allOf(futures).join();
   }

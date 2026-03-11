@@ -59,6 +59,11 @@ public class XdnHttpRequest extends XdnRequest
   // node, and thus we can discard and release the httpResponse immediately.
   private final boolean isCreatedFromString;
 
+  // Eagerly captured body bytes from httpRequestContent.content(). We copy this out of the
+  // Netty ByteBuf immediately so that toBytes() is safe to call from any thread, even after
+  // Netty's pipeline has released the underlying buffer (refCnt → 0).
+  private final ByteString requestBodyBytes;
+
   // The set for BehavioralRequest interface that requires returning
   // the behaviors of this HttpRequest. Note that requestMatcher must
   // be set to know the behaviors of this HttpRequest.
@@ -103,6 +108,12 @@ public class XdnHttpRequest extends XdnRequest
             : defaultSingletonRequestMatchers;
 
     this.isCreatedFromString = isCreatedFromString;
+
+    // Eagerly copy the request body out of the Netty ByteBuf while we are still on the
+    // Netty pipeline thread and the buffer is guaranteed to be live (refCnt > 0).
+    // This makes toBytes() safe to call later from the Disruptor consumer thread or any
+    // other thread, even after Netty has released the underlying buffer.
+    this.requestBodyBytes = extractBodyByteString(content.content());
   }
 
   // In general, we infer the HTTP request ID based on these headers:
@@ -339,7 +350,7 @@ public class XdnHttpRequest extends XdnRequest
             .setRequestMethod(getHttpMethodProto(this.httpRequest.method()))
             .setRequestUri(this.httpRequest.uri())
             .addAllRequestHeaders(getHeaderList(this.httpRequest.headers()))
-            .setRequestBody(extractBodyByteString(this.httpRequestContent.content()));
+            .setRequestBody(this.requestBodyBytes);
 
     if (this.httpResponse != null) {
       builder.setResponse(buildResponseProto());

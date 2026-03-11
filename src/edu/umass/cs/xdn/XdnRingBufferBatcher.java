@@ -16,6 +16,7 @@ public class XdnRingBufferBatcher implements Closeable {
     public static final int BUFFER_SIZE = 2048;
     private final Disruptor<XdnBatchEvent> disruptor;
     private final RingBuffer<XdnBatchEvent> ringBuffer;
+    private final XdnBatchHandler batchHandler;
 
     public XdnRingBufferBatcher(ActiveReplicaFunctions arFunctions, int maxBatchSize) {
         // Initialize Disruptor with MULTI producer for multiple Netty worker threads
@@ -27,7 +28,8 @@ public class XdnRingBufferBatcher implements Closeable {
                 new YieldingWaitStrategy()
         );
 
-        this.disruptor.handleEventsWith(new XdnBatchHandler(arFunctions, maxBatchSize));
+        this.batchHandler = new XdnBatchHandler(arFunctions, maxBatchSize);
+        this.disruptor.handleEventsWith(this.batchHandler);
         this.ringBuffer = disruptor.start();
     }
 
@@ -37,6 +39,9 @@ public class XdnRingBufferBatcher implements Closeable {
         try {
             XdnBatchEvent event = ringBuffer.get(sequence);
             event.set(request, clientAddr, handler);
+        } catch (Throwable t) {
+            ringBuffer.get(sequence).clear();
+            throw t;  // or handle gracefully
         } finally {
             ringBuffer.publish(sequence);
         }
@@ -50,5 +55,6 @@ public class XdnRingBufferBatcher implements Closeable {
     @Override
     public void close() {
         disruptor.shutdown();
+        batchHandler.close();
     }
 }

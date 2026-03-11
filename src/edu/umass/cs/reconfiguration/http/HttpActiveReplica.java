@@ -637,6 +637,114 @@ public class HttpActiveReplica {
                 // Instrumenting the request for latency measurement
                 long startExecTimeNs = System.nanoTime();
 
+                XdnHttpRequest httpRequest =
+                        new XdnHttpRequest(this.request, this.requestContent);
+                if (isHttpFrontendBatchEnabled) {
+                    // Batching path: construct the request on the EventLoop thread.
+                    // Body bytes are eagerly copied in the constructor, so the ByteBuf
+                    // is safe to read here and does not need to be retained.
+                    this.request = null;
+                    this.requestContent = null;
+
+                    // Publish directly to the ring buffer from this thread and return immediately.
+                    // No pool thread is held. The completion callback fires when GigaPaxos finishes,
+                    // and we hop back to the channel's EventLoop only to write the response.
+                    requestBatching.submit(httpRequest, this.senderAddr,
+                            (completedRequest, error) -> ctx.executor().execute(() -> {
+                                try {
+                                    if (!ctx.channel().isActive()) return;
+                                    if (error != null) {
+                                        System.out.println(
+                                                "Writing error response: " + error.getMessage());
+                                        error.printStackTrace();
+                                        HttpActiveReplicaHandler.sendStringResponse(
+                                                error.getMessage(),
+                                                INTERNAL_SERVER_ERROR,
+                                                false,
+                                                ctx);
+                                        return;
+                                    }
+                                    HttpActiveReplicaHandler.writeHttpResponse(
+                                            httpRequest.getRequestID(),
+                                            completedRequest.getHttpResponse(),
+                                            ctx,
+                                            isKeepAlive,
+                                            startExecTimeNs);
+                                } finally {
+                                    // No explicit release needed: body bytes were copied eagerly
+                                    // in the XdnHttpRequest constructor and the HttpRequest /
+                                    // HttpContent ByteBufs are managed by SimpleChannelInboundHandler.
+                                }
+                            }));
+                } else {
+                    // Non-batching path: retain the Netty objects because coordination runs
+                    // off the EventLoop thread and SimpleChannelInboundHandler would otherwise
+                    // release them after this method returns.
+                    ReferenceCountUtil.retain(httpRequest.getHttpRequest());
+                    ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
+                    this.request = null;
+                    this.requestContent = null;
+
+                    // Thread pool selection is based on HTTP method heuristics:
+                    // GET, HEAD, OPTIONS, and TRACE are considered read-only/safe methods.
+                    ExecutorService selectedPool =
+                            isSafeMethod(httpRequest.getHttpRequest().method()) ? this.readPool : this.writePool;
+                    Future<HttpResponse> execFuture =
+                            selectedPool.submit(() -> executeXdnHttpRequest(httpRequest, this.senderAddr));
+
+                    // If channel closes before completion, cancel the task
+                    ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
+
+                    CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    return execFuture.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    throw new RuntimeException("Request execution interrupted", e);
+                                } catch (java.util.concurrent.TimeoutException e) {
+                                    execFuture.cancel(true);
+                                    throw new RuntimeException("Request execution timed out after 10s", e);
+                                } catch (ExecutionException e) {
+                                    throw new RuntimeException(
+                                            "Request execution failed: " + e.getCause().getMessage(), e);
+                                }
+                            }, selectedPool)
+                            .whenComplete((httpResponse, err) -> {
+                                if (!ctx.channel().isActive()) {
+                                    if (err != null && !(err instanceof CancellationException)) {
+                                        System.out.println(">>> HttpActiveReplica - original error: " +
+                                                err.getMessage());
+                                        err.printStackTrace();
+                                    }
+                                    return;
+                                }
+                                ctx.executor().execute(() -> {
+                                    try {
+                                        if (err != null) {
+                                            System.out.println(
+                                                    "Writing error response: " + err.getMessage());
+                                            err.printStackTrace();
+                                            HttpActiveReplicaHandler.sendStringResponse(
+                                                    err.getMessage(),
+                                                    INTERNAL_SERVER_ERROR,
+                                                    false,
+                                                    ctx);
+                                            return;
+                                        }
+                                        HttpActiveReplicaHandler.writeHttpResponse(
+                                                httpRequest.getRequestID(),
+                                                httpResponse,
+                                                ctx,
+                                                isKeepAlive,
+                                                startExecTimeNs);
+                                    } finally {
+                                        ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                        ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
+                                    }
+                                });
+                            });
+                }
+                /*
                 // For now, thread pool selection for each request is based on HTTP method heuristics,
                 // where GET, HEAD, OPTIONS, and TRACE are considered read-only/safe methods.
                 // TODO: Ideally, maybe, we should determine which pool this request should use based on
@@ -730,6 +838,7 @@ public class HttpActiveReplica {
                                 }
                             });
                         });
+                 */
             }
         }
 

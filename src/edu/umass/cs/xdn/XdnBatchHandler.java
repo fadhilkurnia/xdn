@@ -9,11 +9,27 @@ import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
-    private final List<XdnBatchEvent> currentBatch = new ArrayList<>();
     private final ActiveReplicaFunctions arFunctions;
     private final int maxBatchSize;
+
+    // Dedicated single-thread executor for dispatching batches to GigaPaxos.
+    // This decouples the Disruptor consumer thread from the blocking serialization
+    // and network I/O inside handRequestToAppForHttp(), allowing the consumer to keep
+    // draining the ring buffer while the previous batch is still in flight.
+    private final ExecutorService flushExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "xdn-batch-flush");
+        t.setDaemon(true);
+        return t;
+    });
+
+    // Pre-allocated, reused across flushes to avoid per-flush ArrayList allocation.
+    // Swapped with a fresh list in flushBatch() so the callback closure captures
+    // the correct snapshot without an extra copy.
+    private List<XdnBatchEvent> currentBatch;
 
     // The service name for making sure requests of different
     // XDN services aren't mixed in the same batch
@@ -22,14 +38,16 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
     public XdnBatchHandler(ActiveReplicaFunctions arFunctions, int maxBatchSize) {
         this.arFunctions = arFunctions;
         this.maxBatchSize = maxBatchSize;
+        this.currentBatch = new ArrayList<>(maxBatchSize);
     }
 
     @Override
-    public void onEvent(XdnBatchEvent event, long sequence, boolean endOfbatch) {
-        // Puts any non read-only requests into it's own batch
+    public void onEvent(XdnBatchEvent event, long sequence, boolean endOfBatch) {
+        // Puts any non read_only requests into its own batch
         // Sends the previous batch first, then the new batch
         if (!event.request.isReadOnlyRequest()) {
             if (!currentBatch.isEmpty()) flushBatch();
+            batchServiceName = event.request.getServiceName();
             currentBatch.add(event);
             flushBatch();
             return;
@@ -48,21 +66,21 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
 
         // Send batch if it's full or the ring buffer consumer
         // has caught up to latest published sequence number
-        if (endOfbatch || currentBatch.size() >= maxBatchSize) {
+        if (endOfBatch || currentBatch.size() >= maxBatchSize) {
             flushBatch();
         }
     }
 
     private void flushBatch() {
         if (currentBatch.isEmpty()) {
-            batchServiceName = null; // Ensure state is reset
+            batchServiceName = null;
             return;
         }
 
-        // Copy the requests out of the ring buffer
-        List<XdnBatchEvent> entriesForThisBatch = new ArrayList<>(currentBatch);
-
-        currentBatch.clear();
+        // Swap out the current batch so we can hand the snapshot to the callback closure
+        // without an extra ArrayList copy. A fresh list is pre-sized for the next batch.
+        List<XdnBatchEvent> entriesForThisBatch = currentBatch;
+        currentBatch = new ArrayList<>(maxBatchSize);
         batchServiceName = null;
 
         List<XdnHttpRequest> requests = new ArrayList<>(entriesForThisBatch.size());
@@ -72,25 +90,46 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
             }
         }
 
-        if (requests.isEmpty()) return;
-
-        // Create Gigapaxos' request, it is important to explicitly set the clientAddress,
-        // otherwise, down the pipeline, the RequestPacket's equals method will return false
-        // and our callback will not be called, leaving the client hanging
-        // waiting for response.
-        XdnHttpRequestBatch batch = new XdnHttpRequestBatch(requests);
-        ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(batch);
-        if (!entriesForThisBatch.isEmpty() && entriesForThisBatch.get(0).clientAddress != null) {
-            gpRequest.setClientAddress(entriesForThisBatch.get(0).clientAddress);
+        if (requests.isEmpty()) {
+            // Nothing to send; clear slots and bail out
+            for (XdnBatchEvent entry : entriesForThisBatch) {
+                entry.clear();
+            }
+            return;
         }
 
+        // Create GigaPaxos' request. It is important to explicitly set the clientAddress,
+        // otherwise, down the pipeline, the RequestPacket's equals method will return false
+        // and our callback will not be called, leaving the client hanging waiting for response.
+        // We use the first non-null address for the GigaPaxos wrapper; individual per-client
+        // responses are dispatched inside the callback via each entry's completionHandler.
+        XdnHttpRequestBatch batch = new XdnHttpRequestBatch(requests);
+        ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(batch);
+        for (XdnBatchEvent entry : entriesForThisBatch) {
+            if (entry.clientAddress != null) {
+                gpRequest.setClientAddress(entry.clientAddress);
+                break;
+            }
+        }
+
+        // Submit the flush asynchronously so the Disruptor consumer thread is free to keep
+        // draining the ring buffer while this batch is being serialized and sent to GigaPaxos.
+        flushExecutor.submit(() -> dispatchBatch(entriesForThisBatch, gpRequest));
+    }
+
+    private void dispatchBatch(List<XdnBatchEvent> entriesForThisBatch,
+                               ReplicableClientRequest gpRequest) {
         arFunctions.handRequestToAppForHttp(gpRequest, (executedRequestBatch, handled) -> {
             for (XdnBatchEvent entry : entriesForThisBatch) {
                 if (entry.completionHandler != null) {
                     entry.completionHandler.onComplete(entry.request, null);
                 }
-                entry.clear(); // Clear the Ring Buffer slot pre-allocated object
+                entry.clear(); // Return the ring buffer slot to the pre-allocated pool
             }
         });
+    }
+
+    public void close() {
+        flushExecutor.shutdown();
     }
 }
