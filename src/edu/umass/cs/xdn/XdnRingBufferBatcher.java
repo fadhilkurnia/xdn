@@ -1,5 +1,6 @@
 package edu.umass.cs.xdn;
 
+import com.lmax.disruptor.InsufficientCapacityException;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.YieldingWaitStrategy;
 import com.lmax.disruptor.dsl.Disruptor;
@@ -33,18 +34,28 @@ public class XdnRingBufferBatcher implements Closeable {
         this.ringBuffer = disruptor.start();
     }
 
-    public void submit(XdnHttpRequest request, InetSocketAddress clientAddr,
-                       RequestCompletionHandler handler) {
-        long sequence = ringBuffer.next();
+    // Returns false if the ring buffer is full. Callers should send a 503 rather
+    // than blocking — ringBuffer.next() would stall the Netty EventLoop thread,
+    // preventing responses from being written and making latency unbounded.
+    public boolean submit(XdnHttpRequest request, InetSocketAddress clientAddr,
+                          RequestCompletionHandler handler) {
+        long sequence;
+        try {
+            sequence = ringBuffer.tryNext();
+        } catch (InsufficientCapacityException e) {
+            return false;
+        }
+        request.stamp(XdnHttpRequest.TS_SUBMITTED);
         try {
             XdnBatchEvent event = ringBuffer.get(sequence);
             event.set(request, clientAddr, handler);
         } catch (Throwable t) {
             ringBuffer.get(sequence).clear();
-            throw t;  // or handle gracefully
+            throw t;
         } finally {
             ringBuffer.publish(sequence);
         }
+        return true;
     }
 
     @FunctionalInterface

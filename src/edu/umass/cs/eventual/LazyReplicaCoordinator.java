@@ -48,10 +48,9 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
 
     private final ConcurrentMap<String, LazyReplicaInstance<NodeIDType>> currentInstances;
 
-    // Dedicated executor for sending WRITE_AFTER packets to peers.
-    // This offloads messenger.send() — which involves serialization and network I/O —
-    // off the calling thread (the Disruptor consumer), so the write semaphore permit
-    // is released immediately after callback.executed() and the consumer can move on.
+    // Dedicated single-thread executor for sending WRITE_AFTER packets to peers.
+    // Single-threaded to preserve replication order. app.execute() and callback.executed()
+    // are now called on the calling thread, so this executor only handles messenger.send().
     private final ExecutorService replicationExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "xdn-lazy-replication");
         t.setDaemon(true);
@@ -111,9 +110,10 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         }
         LazyReplicaInstance<NodeIDType> currInstance = this.currentInstances.get(serviceName);
 
-        // unwrap the request if needed
+        // unwrap the request if needed — unwrap recursively because intermediate
+        // coordinators (XdnReplicaCoordinator, AbstractTransactor) may re-wrap.
         Request currRequestOrPacket = request;
-        if (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
+        while (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
             currRequestOrPacket = rcr.getRequest();
         }
 
@@ -139,26 +139,25 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                         "Expecting ReadOnly request or (Monotonic and WriteOnly) request " +
                                 "for LazyReplicaCoordinator");
             }
-//
-            boolean isExecSuccess = this.app.execute(clientRequest);
 
-            // for write request, send WRITE_AFTER packets to all replicas but myself
-            // Response are removed in receiver side before execution.
+            stampAll(clientRequest, XdnHttpRequest.TS_COORDINATE);
+
             if (isWriteOnly && isMonotonic) {
+                boolean isExecSuccess = this.app.execute(clientRequest);
                 if (isExecSuccess) {
-                    // Return the response to the client immediately after local execution.
-                    // Replication to peers happens asynchronously and does not block the caller.
+                    stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
                     callback.executed(clientRequest, true);
 
-                    Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                    // Offload replication to peers asynchronously — the client does not
+                    // wait for this and it does not need to be in order.
+                    final Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
                     myPeers.remove(myNodeId);
-
                     if (!myPeers.isEmpty()) {
                         LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
                                 myNodeId.toString(), clientRequest);
                         replicationExecutor.submit(() -> {
                             try {
-                                logger.log(Level.INFO, "Sending WRITE_AFTER packet ...");
+                                logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
                                 GenericMessagingTask<NodeIDType, LazyPacket> m =
                                         new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
                                 messenger.send(m);
@@ -169,13 +168,17 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                         });
                     }
                 }
+                return isExecSuccess;
             } else {
+                // Read path: execute synchronously. Reads have no replication step
+                // and are already batched upstream, so blocking here is acceptable.
+                boolean isExecSuccess = this.app.execute(clientRequest);
                 if (isExecSuccess) {
+                    stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
                     callback.executed(clientRequest, true);
                 }
+                return isExecSuccess;
             }
-
-            return isExecSuccess;
         }
 
         // handle peer-initiated packet (i.e., write-after)
@@ -202,7 +205,9 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
             return this.app.execute(clientRequest, true);
         }
 
-        throw new IllegalStateException("Unexpected LazyPacket/Request: " + request.getRequestType());
+        throw new IllegalStateException(
+                "Unexpected request type after unwrapping: " + currRequestOrPacket.getClass().getSimpleName()
+                        + " (original type: " + request.getRequestType() + ")");
     }
 
     @Override
@@ -236,4 +241,16 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
         return replicaInstance != null ? replicaInstance.nodes() : null;
     }
+
+    // Stamps the given timestamp stage on every XdnHttpRequest inside the request,
+    // whether it is a single request or a batch.
+    private void stampAll(Request request, int stage) {
+        if (!XdnHttpRequest.ENABLE_LATENCY_TRACING) return;
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) xhr.stamp(stage);
+        } else if (request instanceof XdnHttpRequest xhr) {
+            xhr.stamp(stage);
+        }
+    }
+
 }

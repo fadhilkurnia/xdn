@@ -32,17 +32,17 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class XdnHttpRequest extends XdnRequest
-    implements ClientRequest, BehavioralRequest, TimestampedRequest, TimestampedResponse, Byteable {
+        implements ClientRequest, BehavioralRequest, TimestampedRequest, TimestampedResponse, Byteable {
 
   public static final String XDN_HTTP_REQUEST_ID_HEADER = "XDN-Request-ID";
   public static final String XDN_TIMESTAMP_COOKIE_PREFIX = "XDN-CC-TS-";
 
   public static final List<RequestMatcher> defaultSingletonRequestMatchers =
-      ServiceProperty.createDefaultMatchers();
+          ServiceProperty.createDefaultMatchers();
 
   private static final Logger LOG = Logger.getLogger(XdnHttpRequest.class.getName());
   private static final ExtensionRegistryLite EMPTY_REGISTRY =
-      ExtensionRegistryLite.getEmptyRegistry();
+          ExtensionRegistryLite.getEmptyRegistry();
 
   private final long requestId;
   private final String serviceName;
@@ -69,6 +69,46 @@ public class XdnHttpRequest extends XdnRequest
   // before toBytes() is called during GigaPaxos coordination.
   private ByteString responseBodyBytes = null;
 
+  // ---------------------------------------------------------------------------
+  // Per-request latency timestamps. Each stage stamps System.nanoTime() here so
+  // that the full pipeline breakdown is available when the response is written.
+  // Only stamped when ENABLE_LATENCY_TRACING is true to avoid overhead in prod.
+  // ---------------------------------------------------------------------------
+  public static final boolean ENABLE_LATENCY_TRACING = true;
+  public static final int TS_SUBMITTED  = 0; // ringBuffer.tryNext() succeeded (Netty EventLoop)
+  public static final int TS_CONSUMER   = 1; // onEvent fired (Disruptor consumer thread)
+  public static final int TS_FLUSHED    = 2; // handRequestToAppForHttp called (batch flushed)
+  public static final int TS_COORDINATE = 3; // coordinateRequest entered
+  public static final int TS_CALLBACK   = 4; // callback.executed() called
+  public static final int TS_RESPONSE   = 5; // writeHttpResponse called (Netty EventLoop)
+  private static final int TS_COUNT = 6;
+  public final long[] timestamps = new long[TS_COUNT];
+
+  public void stamp(int stage) {
+    if (ENABLE_LATENCY_TRACING) timestamps[stage] = System.nanoTime();
+  }
+
+  // Logs the per-stage breakdown. Call from TS_RESPONSE stage once timestamps[TS_RESPONSE] is set.
+  // Only logs every `logEvery` requests; pass 1 to log all.
+  private static final java.util.concurrent.atomic.AtomicLong traceCounter =
+          new java.util.concurrent.atomic.AtomicLong();
+  public void logLatencyTrace(int logEvery) {
+    if (!ENABLE_LATENCY_TRACING) return;
+    long n = traceCounter.incrementAndGet();
+    if (n % logEvery != 0) return;
+    long[] ts = this.timestamps;
+    LOG.warning(String.format(
+            "latency id=%d | submit→consumer=%,d µs | consumer→flush=%,d µs" +
+                    " | flush→coord=%,d µs | coord→callback=%,d µs | callback→resp=%,d µs | total=%,d µs",
+            this.requestId,
+            (ts[TS_CONSUMER]   - ts[TS_SUBMITTED])  / 1_000,
+            (ts[TS_FLUSHED]    - ts[TS_CONSUMER])   / 1_000,
+            (ts[TS_COORDINATE] - ts[TS_FLUSHED])    / 1_000,
+            (ts[TS_CALLBACK]   - ts[TS_COORDINATE]) / 1_000,
+            (ts[TS_RESPONSE]   - ts[TS_CALLBACK])   / 1_000,
+            (ts[TS_RESPONSE]   - ts[TS_SUBMITTED])  / 1_000));
+  }
+
   // The set for BehavioralRequest interface that requires returning
   // the behaviors of this HttpRequest. Note that requestMatcher must
   // be set to know the behaviors of this HttpRequest.
@@ -80,11 +120,11 @@ public class XdnHttpRequest extends XdnRequest
   }
 
   private XdnHttpRequest(
-      Long providedRequestId,
-      HttpRequest request,
-      HttpContent content,
-      List<RequestMatcher> requestMatchers,
-      boolean isCreatedFromString) {
+          Long providedRequestId,
+          HttpRequest request,
+          HttpContent content,
+          List<RequestMatcher> requestMatchers,
+          boolean isCreatedFromString) {
     assert request != null : "HttpRequest must be specified";
     assert content != null : "HttpContent must be specified";
 
@@ -95,11 +135,11 @@ public class XdnHttpRequest extends XdnRequest
     // otherwise generates random ID.
     Long inferredRequestId = this.inferRequestId(request);
     this.requestId =
-        providedRequestId != null
-            ? providedRequestId
-            : inferredRequestId != null
-                ? inferredRequestId
-                : ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
+            providedRequestId != null
+                    ? providedRequestId
+                    : inferredRequestId != null
+                    ? inferredRequestId
+                    : ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
     this.httpRequest.headers().set(XDN_HTTP_REQUEST_ID_HEADER, this.requestId);
 
     // Infers service name from httpRequest.
@@ -108,9 +148,9 @@ public class XdnHttpRequest extends XdnRequest
 
     // Use the default request matcher if not specified
     this.requestMatchers =
-        (requestMatchers != null && !requestMatchers.isEmpty())
-            ? requestMatchers
-            : defaultSingletonRequestMatchers;
+            (requestMatchers != null && !requestMatchers.isEmpty())
+                    ? requestMatchers
+                    : defaultSingletonRequestMatchers;
 
     this.isCreatedFromString = isCreatedFromString;
 
@@ -186,7 +226,7 @@ public class XdnHttpRequest extends XdnRequest
   private Set<RequestBehaviorType> matchRequestBehaviors(List<RequestMatcher> svcReqMatchers) {
     assert svcReqMatchers != null : "request matcher must be set before calling this method";
     assert this.httpRequest.uri().startsWith("/")
-        : "unexpected path in the http request: " + httpRequest.uri();
+            : "unexpected path in the http request: " + httpRequest.uri();
     Set<RequestBehaviorType> types = new HashSet<>();
 
     // TODO: we should handle the hierarchy of paths and behaviors.
@@ -194,7 +234,7 @@ public class XdnHttpRequest extends XdnRequest
     //  then WRITE_ONLY should take the priority since it is more "specific".
     for (RequestMatcher matcher : svcReqMatchers) {
       if (matcher.getHttpMethods().contains(this.httpRequest.method().name())
-          && this.httpRequest.uri().startsWith(matcher.getPathPrefix())) {
+              && this.httpRequest.uri().startsWith(matcher.getPathPrefix())) {
         types.add(matcher.getBehavior());
       }
     }
@@ -260,14 +300,14 @@ public class XdnHttpRequest extends XdnRequest
 
     // Validate if we have cookie in the header
     String cookieRaw =
-        this.httpRequest.headers() != null ? this.httpRequest.headers().get("Cookie") : null;
+            this.httpRequest.headers() != null ? this.httpRequest.headers().get("Cookie") : null;
     if (cookieRaw == null) {
       return null;
     }
 
     // decode the cookie
     Set<io.netty.handler.codec.http.cookie.Cookie> cookies =
-        ServerCookieDecoder.STRICT.decode(cookieRaw);
+            ServerCookieDecoder.STRICT.decode(cookieRaw);
     if (cookies.isEmpty()) {
       return null;
     }
@@ -296,8 +336,8 @@ public class XdnHttpRequest extends XdnRequest
 
     final String timestampCookieKey = XDN_TIMESTAMP_COOKIE_PREFIX + timestampName;
     Cookie cookie =
-        new io.netty.handler.codec.http.cookie.DefaultCookie(
-            timestampCookieKey, timestamp.toString());
+            new io.netty.handler.codec.http.cookie.DefaultCookie(
+                    timestampCookieKey, timestamp.toString());
     cookie.setPath("/");
     cookie.setHttpOnly(true);
     this.httpResponse.headers().add("Set-Cookie", ServerCookieEncoder.STRICT.encode(cookie));
@@ -309,8 +349,8 @@ public class XdnHttpRequest extends XdnRequest
     if (o == null || getClass() != o.getClass()) return false;
     XdnHttpRequest that = (XdnHttpRequest) o;
     return Objects.equals(serviceName, that.serviceName)
-        && Objects.equals(httpRequest, that.httpRequest)
-        && Objects.equals(httpRequestContent, that.httpRequestContent);
+            && Objects.equals(httpRequest, that.httpRequest)
+            && Objects.equals(httpRequestContent, that.httpRequestContent);
   }
 
   @Override
@@ -333,7 +373,7 @@ public class XdnHttpRequest extends XdnRequest
   public void setHttpResponse(HttpResponse httpResponse) {
     assert httpRequest != null : "Expecting non null httpResponse";
     assert httpResponse instanceof FullHttpResponse
-        : "Expecting FullHttpResponse, but found " + httpResponse.getClass().getSimpleName();
+            : "Expecting FullHttpResponse, but found " + httpResponse.getClass().getSimpleName();
     FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;
     this.httpResponse = fullHttpResponse;
     this.httpResponseBody = fullHttpResponse.content();
@@ -354,13 +394,13 @@ public class XdnHttpRequest extends XdnRequest
     final int packetType = this.getRequestType().getInt();
 
     XdnHttpRequestProto.XdnHttpRequest.Builder builder =
-        XdnHttpRequestProto.XdnHttpRequest.newBuilder()
-            .setRequestId(this.requestId)
-            .setProtocolVersion(getHttpVersionProto(this.httpRequest.protocolVersion()))
-            .setRequestMethod(getHttpMethodProto(this.httpRequest.method()))
-            .setRequestUri(this.httpRequest.uri())
-            .addAllRequestHeaders(getHeaderList(this.httpRequest.headers()))
-            .setRequestBody(this.requestBodyBytes);
+            XdnHttpRequestProto.XdnHttpRequest.newBuilder()
+                    .setRequestId(this.requestId)
+                    .setProtocolVersion(getHttpVersionProto(this.httpRequest.protocolVersion()))
+                    .setRequestMethod(getHttpMethodProto(this.httpRequest.method()))
+                    .setRequestUri(this.httpRequest.uri())
+                    .addAllRequestHeaders(getHeaderList(this.httpRequest.headers()))
+                    .setRequestBody(this.requestBodyBytes);
 
     if (this.httpResponse != null) {
       builder.setResponse(buildResponseProto());
@@ -373,7 +413,7 @@ public class XdnHttpRequest extends XdnRequest
   }
 
   private XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion getHttpVersionProto(
-      HttpVersion httpVersion) {
+          HttpVersion httpVersion) {
     XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion version;
     if (httpVersion.equals(HttpVersion.HTTP_1_0)) {
       version = XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion.HTTP_1_0;
@@ -389,17 +429,17 @@ public class XdnHttpRequest extends XdnRequest
     while (it.hasNext()) {
       Map.Entry<String, String> e = it.next();
       XdnHttpRequestProto.XdnHttpRequest.Header header =
-          XdnHttpRequestProto.XdnHttpRequest.Header.newBuilder()
-              .setName(e.getKey())
-              .setValue(e.getValue())
-              .build();
+              XdnHttpRequestProto.XdnHttpRequest.Header.newBuilder()
+                      .setName(e.getKey())
+                      .setValue(e.getValue())
+                      .build();
       headerList.add(header);
     }
     return headerList;
   }
 
   private static XdnHttpRequestProto.XdnHttpRequest.HttpMethod getHttpMethodProto(
-      HttpMethod httpMethod) {
+          HttpMethod httpMethod) {
     return switch (httpMethod.name()) {
       case "GET" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.GET;
       case "HEAD" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.HEAD;
@@ -410,7 +450,7 @@ public class XdnHttpRequest extends XdnRequest
       case "OPTIONS" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.OPTIONS;
       case "PATCH" -> XdnHttpRequestProto.XdnHttpRequest.HttpMethod.PATCH;
       default -> throw new IllegalArgumentException(
-          "Unsupported HTTP method: " + httpMethod.name());
+              "Unsupported HTTP method: " + httpMethod.name());
     };
   }
 
@@ -427,17 +467,17 @@ public class XdnHttpRequest extends XdnRequest
             this.responseBodyBytes != null ? this.responseBodyBytes : ByteString.EMPTY;
 
     return XdnHttpRequestProto.XdnHttpRequest.Response.newBuilder()
-        .setProtocolVersion(getHttpVersionProto(this.httpResponse.protocolVersion()))
-        .setStatusCode(this.httpResponse.status().code())
-        .addAllHeaders(getHeaderList(this.httpResponse.headers()))
-        .setResponseBody(responseBody)
-        .build();
+            .setProtocolVersion(getHttpVersionProto(this.httpResponse.protocolVersion()))
+            .setStatusCode(this.httpResponse.status().code())
+            .addAllHeaders(getHeaderList(this.httpResponse.headers()))
+            .setResponseBody(responseBody)
+            .build();
   }
 
   public String getLogText() {
     Set<String> textContentTypes =
-        Set.of(
-            "text/javascript", "application/json", "application/text", "text/plain", "text/html");
+            Set.of(
+                    "text/javascript", "application/json", "application/text", "text/plain", "text/html");
     boolean isTextContent = false;
     StringBuilder headerStringListBuilder = new StringBuilder();
     Iterator<Map.Entry<String, String>> iter = this.httpRequest.headers().iteratorAsString();
@@ -448,7 +488,7 @@ public class XdnHttpRequest extends XdnRequest
       headerStringListBuilder.append(it.getValue());
       headerStringListBuilder.append(" ");
       if (it.getKey().equalsIgnoreCase("Content-Type")
-          && textContentTypes.contains(it.getValue().toLowerCase())) {
+              && textContentTypes.contains(it.getValue().toLowerCase())) {
         isTextContent = true;
       }
     }
@@ -473,13 +513,13 @@ public class XdnHttpRequest extends XdnRequest
     String contentString = contentStringBuilder.toString();
 
     return String.format(
-        "id=%d %s %s:%s hdr=%s body=%s",
-        this.requestId,
-        this.httpRequest.method(),
-        this.getServiceName(),
-        this.httpRequest.uri(),
-        headerStringList,
-        contentString);
+            "id=%d %s %s:%s hdr=%s body=%s",
+            this.requestId,
+            this.httpRequest.method(),
+            this.getServiceName(),
+            this.httpRequest.uri(),
+            headerStringList,
+            contentString);
   }
 
   @Override
@@ -495,30 +535,30 @@ public class XdnHttpRequest extends XdnRequest
 
     HttpHeaders headers = new DefaultHttpHeaders(true);
     for (XdnHttpRequestProto.XdnHttpRequest.Header headerProto :
-        decodedProto.getRequestHeadersList()) {
+            decodedProto.getRequestHeadersList()) {
       headers.add(headerProto.getName(), headerProto.getValue());
     }
 
     ByteString requestBodyBytes = decodedProto.getRequestBody();
     ByteBuf requestBodyBuf =
-        requestBodyBytes.isEmpty()
-            ? Unpooled.EMPTY_BUFFER
-            : Unpooled.wrappedBuffer(requestBodyBytes.asReadOnlyByteBuffer());
+            requestBodyBytes.isEmpty()
+                    ? Unpooled.EMPTY_BUFFER
+                    : Unpooled.wrappedBuffer(requestBodyBytes.asReadOnlyByteBuffer());
 
     HttpRequest httpRequest =
-        new DefaultHttpRequest(
-            getHttpVersionFromProto(decodedProto.getProtocolVersion()),
-            HttpMethod.valueOf(decodedProto.getRequestMethod().name()),
-            decodedProto.getRequestUri(),
-            headers);
+            new DefaultHttpRequest(
+                    getHttpVersionFromProto(decodedProto.getProtocolVersion()),
+                    HttpMethod.valueOf(decodedProto.getRequestMethod().name()),
+                    decodedProto.getRequestUri(),
+                    headers);
 
     HttpContent httpContent = new DefaultHttpContent(requestBodyBuf);
 
     HttpResponse httpResponse =
-        decodedProto.hasResponse() ? buildHttpResponse(decodedProto.getResponse()) : null;
+            decodedProto.hasResponse() ? buildHttpResponse(decodedProto.getResponse()) : null;
 
     XdnHttpRequest decodedRequest =
-        new XdnHttpRequest(decodedProto.getRequestId(), httpRequest, httpContent, null, true);
+            new XdnHttpRequest(decodedProto.getRequestId(), httpRequest, httpContent, null, true);
     if (httpResponse != null) {
       decodedRequest.setHttpResponse(httpResponse);
     }
@@ -535,7 +575,7 @@ public class XdnHttpRequest extends XdnRequest
 
     try {
       CodedInputStream stream =
-          CodedInputStream.newInstance(raw, Integer.BYTES, raw.length - Integer.BYTES);
+              CodedInputStream.newInstance(raw, Integer.BYTES, raw.length - Integer.BYTES);
       while (!stream.isAtEnd()) {
         int tag = stream.readTag();
         if (tag == 0) {
@@ -566,7 +606,7 @@ public class XdnHttpRequest extends XdnRequest
 
     try {
       CodedInputStream stream =
-          CodedInputStream.newInstance(raw, Integer.BYTES, raw.length - Integer.BYTES);
+              CodedInputStream.newInstance(raw, Integer.BYTES, raw.length - Integer.BYTES);
       while (!stream.isAtEnd()) {
         int tag = stream.readTag();
         if (tag == 0) {
@@ -575,8 +615,8 @@ public class XdnHttpRequest extends XdnRequest
         int fieldNumber = WireFormat.getTagFieldNumber(tag);
         if (fieldNumber == 7) {
           XdnHttpRequestProto.XdnHttpRequest.Response responseProto =
-              stream.readMessage(
-                  XdnHttpRequestProto.XdnHttpRequest.Response.parser(), EMPTY_REGISTRY);
+                  stream.readMessage(
+                          XdnHttpRequestProto.XdnHttpRequest.Response.parser(), EMPTY_REGISTRY);
           return buildHttpResponse(responseProto);
         }
         stream.skipField(tag);
@@ -617,7 +657,7 @@ public class XdnHttpRequest extends XdnRequest
   }
 
   private static HttpResponse buildHttpResponse(
-      XdnHttpRequestProto.XdnHttpRequest.Response responseProto) {
+          XdnHttpRequestProto.XdnHttpRequest.Response responseProto) {
     HttpHeaders responseHeaders = new DefaultHttpHeaders(true);
     for (XdnHttpRequestProto.XdnHttpRequest.Header headerProto : responseProto.getHeadersList()) {
       responseHeaders.add(headerProto.getName(), headerProto.getValue());
@@ -625,16 +665,16 @@ public class XdnHttpRequest extends XdnRequest
 
     ByteString responseBodyBytes = responseProto.getResponseBody();
     ByteBuf responseBodyBuf =
-        responseBodyBytes.isEmpty()
-            ? Unpooled.EMPTY_BUFFER
-            : Unpooled.wrappedBuffer(responseBodyBytes.asReadOnlyByteBuffer());
+            responseBodyBytes.isEmpty()
+                    ? Unpooled.EMPTY_BUFFER
+                    : Unpooled.wrappedBuffer(responseBodyBytes.asReadOnlyByteBuffer());
 
     return new DefaultFullHttpResponse(
-        getHttpVersionFromProto(responseProto.getProtocolVersion()),
-        HttpResponseStatus.valueOf(responseProto.getStatusCode()),
-        responseBodyBuf,
-        responseHeaders,
-        new DefaultHttpHeaders(true));
+            getHttpVersionFromProto(responseProto.getProtocolVersion()),
+            HttpResponseStatus.valueOf(responseProto.getStatusCode()),
+            responseBodyBuf,
+            responseHeaders,
+            new DefaultHttpHeaders(true));
   }
 
   /**
@@ -657,7 +697,7 @@ public class XdnHttpRequest extends XdnRequest
 
     byte[] protoBytes = Arrays.copyOfRange(raw, 4, raw.length);
     com.google.protobuf.CodedInputStream cis =
-        com.google.protobuf.CodedInputStream.newInstance(protoBytes);
+            com.google.protobuf.CodedInputStream.newInstance(protoBytes);
 
     try {
       int tag;
@@ -681,9 +721,9 @@ public class XdnHttpRequest extends XdnRequest
   }
 
   private static HttpVersion getHttpVersionFromProto(
-      XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion version) {
+          XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion version) {
     if (Objects.requireNonNull(version)
-        == XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion.HTTP_1_0) {
+            == XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion.HTTP_1_0) {
       return HttpVersion.HTTP_1_0;
     }
     return HttpVersion.HTTP_1_1;

@@ -34,7 +34,7 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
     // individual write further. A single in-flight write keeps the pipeline simple
     // and predictable without stalling the read path.
     private static final int MAX_IN_FLIGHT_READ_BATCHES = 4;
-    private static final int MAX_IN_FLIGHT_WRITE_BATCHES = 1;
+    private static final int MAX_IN_FLIGHT_WRITE_BATCHES = 64;
     private final Semaphore readPermits  = new Semaphore(MAX_IN_FLIGHT_READ_BATCHES);
     private final Semaphore writePermits = new Semaphore(MAX_IN_FLIGHT_WRITE_BATCHES);
 
@@ -56,6 +56,8 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
 
     @Override
     public void onEvent(XdnBatchEvent event, long sequence, boolean endOfBatch) {
+        event.request.stamp(XdnHttpRequest.TS_CONSUMER);
+
         // Puts any non read_only requests into its own batch
         // Sends the previous batch first, then the new batch
         if (!event.request.isReadOnlyRequest()) {
@@ -138,13 +140,17 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
         long gapMs = lastFlushNs == 0 ? 0 : (now - lastFlushNs) / 1_000_000;
         lastFlushNs = now;
         totalBatches++;
-        if (totalBatches % 2 == 0) {
+        if (false && totalBatches % 5000 == 0) {
         logger.warning("Batch #" + totalBatches
                 + " | " + (isReadBatch ? "READ" : "WRITE")
                 + " | size=" + entriesForThisBatch.size()
                 + " | gap=" + gapMs + "ms"
                 + " | readPermits=" + readPermits.availablePermits()
                 + " | writePermits=" + writePermits.availablePermits());
+        }
+
+        for (XdnBatchEvent entry : entriesForThisBatch) {
+            if (entry.request != null) entry.request.stamp(XdnHttpRequest.TS_FLUSHED);
         }
 
         arFunctions.handRequestToAppForHttp(gpRequest, (executedRequestBatch, handled) -> {
@@ -154,7 +160,8 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
                 }
                 entry.clear();
             }
-            permits.release();
         });
+
+        permits.release();
     }
 }

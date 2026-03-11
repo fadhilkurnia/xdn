@@ -664,6 +664,8 @@ public class HttpActiveReplica {
                                                 ctx);
                                         return;
                                     }
+                                    completedRequest.stamp(XdnHttpRequest.TS_RESPONSE);
+                                    completedRequest.logLatencyTrace(1000);
                                     HttpActiveReplicaHandler.writeHttpResponse(
                                             httpRequest.getRequestID(),
                                             completedRequest.getHttpResponse(),
