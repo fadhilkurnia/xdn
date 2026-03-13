@@ -32,6 +32,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.nio.channels.ClosedChannelException;
 import java.security.cert.CertificateException;
+import java.time.Duration;
 import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -80,6 +81,7 @@ public class HttpActiveReplica {
     static final String DBG_HDR_DUMMY_RESPONSE        = "___DDR";
     static final String DBG_HDR_BYPASS_COORDINATION   = "___DBC";
     static final String DBG_HDR_BYPASS_COORDINATION_PORT = "___DBCP";
+    static final String DBG_HDR_BYPASS_COORDINATION_USE_JDK = "___DBCJ";
     static final String DBG_HDR_DIRECT_EXECUTE        = "___DDE";
 
     // Pool of forwarder clients for DBG_HDR_BYPASS_COORDINATION.
@@ -89,13 +91,21 @@ public class HttpActiveReplica {
     static {
         for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
             debugHttpClients[i] = new XdnHttpForwarderClient.Builder()
-                    .maxConnections(512)
-                    .minConnections(8)
-                    .idleTimeoutMs(10_000)
-                    .queueTimeoutMs(5_000)
+                    .maxConnections(256)
+                    .minConnections(256)
+                    .idleTimeoutMs(60_000)
+                    .queueTimeoutMs(10_000)
                     .build();
         }
     }
+
+    // New HttpClient-based forwarder
+    private static final java.net.http.HttpClient debugHttpClientJdk =
+            java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .executor(Executors.newVirtualThreadPerTaskExecutor())
+                    .connectTimeout(Duration.ofSeconds(5))
+                    .build();
 
     // Set this reference before using DBG_HDR_DIRECT_EXECUTE.
     public static XdnGigapaxosApp debugAppReference = null;
@@ -549,12 +559,25 @@ public class HttpActiveReplica {
             msg.headers().remove(DBG_HDR_BYPASS_COORDINATION);
             msg.headers().remove(DBG_HDR_BYPASS_COORDINATION_PORT);
 
-            // Pick a forwarder client deterministically per remote address to avoid contention.
+            long startNs = System.nanoTime();
+
+            if (msg.headers().contains(DBG_HDR_BYPASS_COORDINATION_USE_JDK)) {
+                msg.headers().remove(DBG_HDR_BYPASS_COORDINATION_USE_JDK);
+                handleBypassCoordinationJdk(ctx, msg, isKeepAlive, targetPort, startNs);
+            } else {
+                handleBypassCoordinationNetty(ctx, msg, isKeepAlive, targetPort, startNs);
+            }
+        }
+
+        /** Netty-based bypass — uses XdnHttpForwarderClient connection pool. */
+        private void handleBypassCoordinationNetty(ChannelHandlerContext ctx,
+                                                   FullHttpRequest msg,
+                                                   boolean isKeepAlive,
+                                                   int targetPort,
+                                                   long startNs) {
             int idx = Math.floorMod(ctx.channel().remoteAddress().hashCode(),
                     DBG_NUM_FORWARDER_CLIENTS);
             XdnHttpForwarderClient client = debugHttpClients[idx];
-
-            long startNs = System.nanoTime();
 
             client.executeAsync("127.0.0.1", targetPort, msg)
                     .whenComplete((response, err) -> {
@@ -569,6 +592,37 @@ public class HttpActiveReplica {
                                 return;
                             }
                             writeHttpResponse(ctx, response, isKeepAlive, startNs, nodeId, -1L);
+                        });
+                    });
+        }
+
+        /** JDK HttpClient-based bypass — uses virtual threads, no manual pool management. */
+        private void handleBypassCoordinationJdk(ChannelHandlerContext ctx,
+                                                 FullHttpRequest msg,
+                                                 boolean isKeepAlive,
+                                                 int targetPort,
+                                                 long startNs) {
+            // Build the outbound JDK request from the Netty FullHttpRequest.
+            java.net.http.HttpRequest outbound =
+                    XdnGigapaxosApp.createOutboundHttpRequest(msg, msg, targetPort);
+
+            debugHttpClientJdk
+                    .sendAsync(outbound, java.net.http.HttpResponse.BodyHandlers.ofByteArray())
+                    .whenComplete((response, err) -> {
+                        if (!ctx.channel().isActive()) return;
+                        ctx.executor().execute(() -> {
+                            if (err != null) {
+                                sendResponse(ctx, INTERNAL_SERVER_ERROR,
+                                        err.getMessage(), isKeepAlive);
+                                return;
+                            }
+                            writeHttpResponse(
+                                    ctx,
+                                    XdnGigapaxosApp.toNettyHttpResponse(response),
+                                    isKeepAlive,
+                                    startNs,
+                                    nodeId,
+                                    -1L);
                         });
                     });
         }
