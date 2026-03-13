@@ -124,7 +124,12 @@ public class XdnGigapaxosApp
     this.services = new ConcurrentHashMap<>();
     this.fsSocketConnection = new HashMap<>();
     this.isServiceActive = new HashMap<>();
-    this.httpForwarderClient = new XdnHttpForwarderClient();
+    this.httpForwarderClient = new XdnHttpForwarderClient.Builder()
+            .minConnections(8)
+            .maxConnections(512)
+            .idleTimeoutMs(10_000)
+            .queueTimeoutMs(5_000)
+            .build();
     this.largeCheckpointer =
         new LargeCheckpointer(String.format("/tmp/xdn/final/%s/", this.myNodeId), this.myNodeId);
 
@@ -2143,85 +2148,72 @@ public class XdnGigapaxosApp
     assert targetPort != null;
     long endValidationTime = System.nanoTime();
 
-    String requestRcvTimestampStr =
-        xdnRequest.getHttpRequest().headers().get("X-S-EXC-TS-" + myNodeId);
-    if (requestRcvTimestampStr != null) {
-      long requestRcvTimestamp = Long.parseLong(requestRcvTimestampStr);
-      long preExecutionElapsedTime = System.nanoTime() - requestRcvTimestamp;
-      logger.log(
-          Level.FINE,
-          "{0}:{1} - HTTP pre-execution over {2}ms",
-          new Object[] {
-            this.myNodeId, this.getClass().getSimpleName(), (preExecutionElapsedTime / 1_000_000.0)
-          });
-    }
-
     FullHttpRequest forwardedHttpRequest = copyHttpRequest(xdnRequest);
     long endRequestCreationTime = System.nanoTime();
 
-    long endRequestResponseTime;
-    long endConversionTime;
-    long endResponseStoreTime;
     try {
-      // forward request to the underlying containerized service
-      FullHttpResponse httpResponse =
-          httpForwarderClient.execute("127.0.0.1", targetPort, forwardedHttpRequest);
-      endRequestResponseTime = System.nanoTime();
+      // executeAsync returns immediately. join() blocks this coordinator thread
+      // until the container responds — same net behaviour as execute(), but without
+      // tying up a thread pool slot inside XdnHttpForwarderClient.
+      FullHttpResponse httpResponse = httpForwarderClient
+              .executeAsync("127.0.0.1", targetPort, forwardedHttpRequest)
+              .join();
+      long endRequestResponseTime = System.nanoTime();
 
-      // store the response
       xdnRequest.setHttpResponse(httpResponse);
-      endConversionTime = System.nanoTime();
-      endResponseStoreTime = System.nanoTime();
+      long endResponseStoreTime = System.nanoTime();
+
+      logger.log(Level.FINE,
+              "{0}:{1} - docker proxy takes {2}ms (val={3}ms crt={4}ms exc={5}ms sto={6}ms)",
+              new Object[]{
+                      this.myNodeId,
+                      this.getClass().getSimpleName(),
+                      (endResponseStoreTime - startTime) / 1_000_000.0,
+                      (endValidationTime - startTime) / 1_000_000.0,
+                      (endRequestCreationTime - endValidationTime) / 1_000_000.0,
+                      (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0,
+                      (endResponseStoreTime - endRequestResponseTime) / 1_000_000.0
+              });
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
-
-    logger.log(
-        Level.FINE,
-        "{0}:{1} - docker proxy takes {2}ms (val={3}ms crt={4}ms "
-            + "exc={5}ms conv={6}ms sto={7}ms)",
-        new Object[] {
-          this.myNodeId,
-          this.getClass().getSimpleName(),
-          (endResponseStoreTime - startTime) / 1_000_000.0,
-          (endValidationTime - startTime) / 1_000_000.0,
-          (endRequestCreationTime - endValidationTime) / 1_000_000.0,
-          (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0,
-          (endConversionTime - endRequestResponseTime) / 1_000_000.0,
-          (endResponseStoreTime - endConversionTime) / 1_000_000.0
-        });
   }
 
   private void forwardHttpRequestBatchToContainerizedService(XdnHttpRequestBatch batch) {
     List<XdnHttpRequest> requests = batch.getRequestList();
-    CompletableFuture<?>[] futures = new CompletableFuture<?>[requests.size()];
-    for (int i = 0; i < requests.size(); i++) {
-      XdnHttpRequest httpRequest = requests.get(i);
-      futures[i] =
-          CompletableFuture.runAsync(
-                  () -> {
-                    // Debug: skip execution and return dummy response to emulate NoOp.
-                    if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_NO_OP_EXECUTION)) {
-                      ByteBuf content = Unpooled.copiedBuffer("NoOp".getBytes());
-                      FullHttpResponse dummyResponse =
-                              new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
-                      dummyResponse.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
-                      httpRequest.setHttpResponse(dummyResponse);
-                    } else {
-                      forwardHttpRequestToContainerizedService(httpRequest);
-                    }
+    List<CompletableFuture<?>> futures = new ArrayList<>(requests.size());
 
-                    assert httpRequest.getHttpResponse() != null
-                            : "Obtained null response after request execution";
-                    assert ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()) == 1
-                            : String.format(
-                            "Unexpected refCnt of response after execution (%d!=1)",
-                            ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()));
-                    // NOTE: we are not releasing the reference-counter response here because
-                    //       it will be released in the HttpActiveReplica.
-                  });
+    for (XdnHttpRequest httpRequest : requests) {
+      // Debug: skip execution and return dummy response to emulate NoOp.
+      if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_NO_OP_EXECUTION)) {
+        ByteBuf content = Unpooled.copiedBuffer("NoOp".getBytes());
+        FullHttpResponse dummyResponse = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, HttpResponseStatus.OK, content);
+        dummyResponse.headers().setInt(
+                HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+        httpRequest.setHttpResponse(dummyResponse);
+        continue;
+      }
+
+      String serviceName = httpRequest.getServiceName();
+      Integer targetPort = this.activeServicePorts.get(serviceName);
+      assert targetPort != null;
+
+      FullHttpRequest forwardedRequest = copyHttpRequest(httpRequest);
+
+      // executeAsync fires immediately without blocking a thread.
+      // All requests in the batch are in flight concurrently.
+      CompletableFuture<?> f = httpForwarderClient
+              .executeAsync("127.0.0.1", targetPort, forwardedRequest)
+              .thenAccept(httpResponse -> {
+                assert httpResponse != null : "Obtained null response after request execution";
+                httpRequest.setHttpResponse(httpResponse);
+              });
+      futures.add(f);
     }
-    CompletableFuture.allOf(futures).join();
+
+    // Wait for all concurrent container responses before returning to the coordinator.
+    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
   }
 
   private FullHttpRequest copyHttpRequest(XdnHttpRequest httpRequest) {

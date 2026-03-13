@@ -88,7 +88,12 @@ public class HttpActiveReplica {
             new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
     static {
         for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
-            debugHttpClients[i] = new XdnHttpForwarderClient();
+            debugHttpClients[i] = new XdnHttpForwarderClient.Builder()
+                    .maxConnections(512)
+                    .minConnections(8)
+                    .idleTimeoutMs(10_000)
+                    .queueTimeoutMs(5_000)
+                    .build();
         }
     }
 
@@ -551,28 +556,21 @@ public class HttpActiveReplica {
 
             long startNs = System.nanoTime();
 
-            // Retain the msg so the forwarder can read it off the EventLoop thread.
-            msg.retain();
-            CompletableFuture.supplyAsync(() -> {
-                try {
-                    return client.execute("127.0.0.1", targetPort, msg);
-                } catch (Exception e) {
-                    // Only release manually if execute() didn't run to completion,
-                    // meaning it never got a chance to release the buffer itself.
-                    ReferenceCountUtil.release(msg);
-                    throw new RuntimeException(e);
-                }
-            }).whenComplete((response, err) -> {
-                if (!ctx.channel().isActive()) return;
-                ctx.executor().execute(() -> {
-                    if (err != null) {
-                        sendResponse(ctx, INTERNAL_SERVER_ERROR,
-                                err.getMessage(), isKeepAlive);
-                        return;
-                    }
-                    writeHttpResponse(ctx, response, isKeepAlive, startNs, nodeId, -1L);
-                });
-            });
+            client.executeAsync("127.0.0.1", targetPort, msg)
+                    .whenComplete((response, err) -> {
+                        if (!ctx.channel().isActive()) {
+                            if (response != null) ReferenceCountUtil.release(response);
+                            return;
+                        }
+                        ctx.executor().execute(() -> {
+                            if (err != null) {
+                                sendResponse(ctx, INTERNAL_SERVER_ERROR,
+                                        err.getMessage(), isKeepAlive);
+                                return;
+                            }
+                            writeHttpResponse(ctx, response, isKeepAlive, startNs, nodeId, -1L);
+                        });
+                    });
         }
     }
 
