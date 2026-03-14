@@ -84,20 +84,14 @@ public class HttpActiveReplica {
     static final String DBG_HDR_BYPASS_COORDINATION_USE_JDK = "___DBCJ";
     static final String DBG_HDR_DIRECT_EXECUTE        = "___DDE";
 
-    // Pool of forwarder clients for DBG_HDR_BYPASS_COORDINATION.
-    private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
-    static final XdnHttpForwarderClient[] debugHttpClients =
-            new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
-    static {
-        for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
-            debugHttpClients[i] = new XdnHttpForwarderClient.Builder()
-                    .maxConnections(256)
-                    .minConnections(256)
+    // Forwarder client for DBG_HDR_BYPASS_COORDINATION.
+    static final XdnHttpForwarderClient debugHttpClient =
+            new XdnHttpForwarderClient.Builder()
+                    .minConnections(512)
+                    .maxConnections(512)
                     .idleTimeoutMs(60_000)
                     .queueTimeoutMs(10_000)
                     .build();
-        }
-    }
 
     // New HttpClient-based forwarder
     private static final java.net.http.HttpClient debugHttpClientJdk =
@@ -147,6 +141,7 @@ public class HttpActiveReplica {
         // Worker group: handles I/O. Size is tuned to CPU count for throughput.
         EventLoopGroup bossGroup  = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
+        System.out.println("workerGroup threads: " + ((NioEventLoopGroup)workerGroup).executorCount());
 
         try {
             ServerBootstrap b = new ServerBootstrap();
@@ -575,11 +570,8 @@ public class HttpActiveReplica {
                                                    boolean isKeepAlive,
                                                    int targetPort,
                                                    long startNs) {
-            int idx = Math.floorMod(ctx.channel().remoteAddress().hashCode(),
-                    DBG_NUM_FORWARDER_CLIENTS);
-            XdnHttpForwarderClient client = debugHttpClients[idx];
 
-            client.executeAsync("127.0.0.1", targetPort, msg)
+            debugHttpClient.executeAsync("127.0.0.1", targetPort, msg)
                     .whenComplete((response, err) -> {
                         if (!ctx.channel().isActive()) {
                             if (response != null) ReferenceCountUtil.release(response);
