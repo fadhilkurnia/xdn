@@ -75,13 +75,14 @@ public class XdnHttpRequest extends XdnRequest
   // Only stamped when ENABLE_LATENCY_TRACING is true to avoid overhead in prod.
   // ---------------------------------------------------------------------------
   public static final boolean ENABLE_LATENCY_TRACING = true;
-  public static final int TS_SUBMITTED  = 0; // ringBuffer.tryNext() succeeded (Netty EventLoop)
-  public static final int TS_CONSUMER   = 1; // onEvent fired (Disruptor consumer thread)
-  public static final int TS_FLUSHED    = 2; // handRequestToAppForHttp called (batch flushed)
-  public static final int TS_COORDINATE = 3; // coordinateRequest entered
-  public static final int TS_CALLBACK   = 4; // callback.executed() called
-  public static final int TS_RESPONSE   = 5; // writeHttpResponse called (Netty EventLoop)
-  private static final int TS_COUNT = 6;
+  public static final int TS_RECEIVED   = 0; // channelRead0 entered (Netty I/O thread)
+  public static final int TS_SUBMITTED  = 1; // ringBuffer.tryNext() succeeded
+  public static final int TS_CONSUMER   = 2; // onEvent fired (Disruptor consumer thread)
+  public static final int TS_FLUSHED    = 3; // handRequestToAppForHttp called
+  public static final int TS_COORDINATE = 4; // coordinateRequest entered
+  public static final int TS_CALLBACK   = 5; // callback.executed() called
+  public static final int TS_RESPONSE   = 6; // writeHttpResponse called
+  private static final int TS_COUNT = 7;
   public final long[] timestamps = new long[TS_COUNT];
 
   public void stamp(int stage) {
@@ -92,21 +93,24 @@ public class XdnHttpRequest extends XdnRequest
   // Only logs every `logEvery` requests; pass 1 to log all.
   private static final java.util.concurrent.atomic.AtomicLong traceCounter =
           new java.util.concurrent.atomic.AtomicLong();
+
   public void logLatencyTrace(int logEvery) {
     if (!ENABLE_LATENCY_TRACING) return;
     long n = traceCounter.incrementAndGet();
     if (n % logEvery != 0) return;
     long[] ts = this.timestamps;
     LOG.warning(String.format(
-            "latency id=%d | submit→consumer=%,d µs | consumer→flush=%,d µs" +
-                    " | flush→coord=%,d µs | coord→callback=%,d µs | callback→resp=%,d µs | total=%,d µs",
+            "latency id=%d | recv→submit=%,d µs | submit→consumer=%,d µs" +
+                    " | consumer→flush=%,d µs | flush→coord=%,d µs" +
+                    " | coord→callback=%,d µs | callback→resp=%,d µs | total=%,d µs",
             this.requestId,
-            (ts[TS_CONSUMER]   - ts[TS_SUBMITTED])  / 1_000,
-            (ts[TS_FLUSHED]    - ts[TS_CONSUMER])   / 1_000,
-            (ts[TS_COORDINATE] - ts[TS_FLUSHED])    / 1_000,
-            (ts[TS_CALLBACK]   - ts[TS_COORDINATE]) / 1_000,
-            (ts[TS_RESPONSE]   - ts[TS_CALLBACK])   / 1_000,
-            (ts[TS_RESPONSE]   - ts[TS_SUBMITTED])  / 1_000));
+            (ts[TS_SUBMITTED]  - ts[TS_RECEIVED])   / 1_000,
+            (ts[TS_CONSUMER]   - ts[TS_SUBMITTED])   / 1_000,
+            (ts[TS_FLUSHED]    - ts[TS_CONSUMER])    / 1_000,
+            (ts[TS_COORDINATE] - ts[TS_FLUSHED])     / 1_000,
+            (ts[TS_CALLBACK]   - ts[TS_COORDINATE])  / 1_000,
+            (ts[TS_RESPONSE]   - ts[TS_CALLBACK])    / 1_000,
+            (ts[TS_RESPONSE]   - ts[TS_RECEIVED])    / 1_000));
   }
 
   // The set for BehavioralRequest interface that requires returning

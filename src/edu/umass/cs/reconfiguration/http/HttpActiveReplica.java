@@ -316,6 +316,7 @@ public class HttpActiveReplica {
             // so the Netty ByteBuf can be released safely after this method returns.
             HttpContent content = new DefaultLastHttpContent(msg.content().retain());
             XdnHttpRequest xdnRequest = new XdnHttpRequest(msg, content);
+            xdnRequest.stamp(XdnHttpRequest.TS_RECEIVED);
 
             registerPendingRequest(ctx, xdnRequest, isKeepAlive);
 
@@ -646,14 +647,8 @@ public class HttpActiveReplica {
 
         @Override
         public void executed(Request response, boolean handled) {
-            // Remove the pending entry atomically — if null, the timeout already fired.
             PendingRequest pending = pendingRequests.remove(requestId);
-            if (pending == null) {
-                logger.log(Level.FINE,
-                        "{0}:HttpActiveReplica - response for {1} arrived after timeout, discarding",
-                        new Object[]{nodeId, requestId});
-                return;
-            }
+            if (pending == null) return;
 
             if (!handled || !(response instanceof XdnHttpRequest xdnRequest)) {
                 pending.ctx.executor().execute(() ->
@@ -665,7 +660,10 @@ public class HttpActiveReplica {
 
             HttpResponse httpResponse = xdnRequest.getHttpResponse();
 
-            // Write on the channel's EventLoop thread to avoid concurrency issues with Netty.
+            // Captures end of coordination
+            xdnRequest.stamp(XdnHttpRequest.TS_RESPONSE);
+            xdnRequest.logLatencyTrace(1000); // sample 1 in 1000
+
             pending.ctx.executor().execute(() ->
                     HttpActiveReplicaHandler.writeHttpResponse(
                             pending.ctx,
