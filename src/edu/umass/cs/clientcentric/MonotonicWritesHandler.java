@@ -59,169 +59,233 @@ public class MonotonicWritesHandler {
             Replicable app,
             Stringifiable<NodeIDType> nodeIdDeserializer,
             Messenger<NodeIDType, ?> messenger) {
+        try {
+            logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d",
+                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                    clientReplicableRequest.getClass().getSimpleName(),
+                    clientReplicableRequest.getRequestID()));
 
-        logger.log(Level.FINER, String.format("%s:%s - handling client request %s id=%d",
-                messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
-                clientReplicableRequest.getClass().getSimpleName(),
-                clientReplicableRequest.getRequestID()));
+            // Validates the client request
+            Request clientRequest = clientReplicableRequest.getRequest();
+            if (!(clientRequest instanceof ClientRequest) ||
+                    !(clientRequest instanceof TimestampedRequest) ||
+                    !(clientRequest instanceof TimestampedResponse)) {
+                throw new RuntimeException("ClientCentricReplicaCoordinator can only handle " +
+                        "ClientRequest with TimestampedRequest and TimestampedResponse");
+            }
+            if (!(clientRequest instanceof BehavioralRequest behavioralRequest)) {
+                throw new RuntimeException("ClientCentricReplicaCoordinator can only handle " +
+                        "BehavioralRequest");
+            }
+            if (!behavioralRequest.isReadOnlyRequest() &&
+                    !behavioralRequest.isWriteOnlyRequest() &&
+                    !behavioralRequest.isReadModifyWriteRequest()) {
+                throw new RuntimeException("ClientCentricReplicaCoordinator can only handle " +
+                        "ReadOnlyRequest,  WriteOnlyRequest, or ReadModifyWriteRequest.");
+            }
+            logger.log(Level.INFO, String.format("(1) %s:%s - client request id=%d is valid",
+                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                    clientReplicableRequest.getRequestID()));
 
-        // Validates the client request
-        Request clientRequest = clientReplicableRequest.getRequest();
-        if (!(clientRequest instanceof ClientRequest) ||
-                !(clientRequest instanceof TimestampedRequest) ||
-                !(clientRequest instanceof TimestampedResponse)) {
-            throw new RuntimeException("ClientCentricReplicaCoordinator can only handle " +
-                    "ClientRequest with TimestampedRequest and TimestampedResponse");
-        }
-        if (!(clientRequest instanceof BehavioralRequest behavioralRequest)) {
-            throw new RuntimeException("ClientCentricReplicaCoordinator can only handle " +
-                    "BehavioralRequest");
-        }
-        if (!behavioralRequest.isReadOnlyRequest() &&
-                !behavioralRequest.isWriteOnlyRequest() &&
-                !behavioralRequest.isReadModifyWriteRequest()) {
-            throw new RuntimeException("ClientCentricReplicaCoordinator can only handle " +
-                    "ReadOnlyRequest,  WriteOnlyRequest, or ReadModifyWriteRequest.");
-        }
-
-        // Gather the service's instance metadata
-        NodeIDType myNodeID = messenger.getMyID();
-        String serviceName = serviceInstance.name();
-        List<String> nodeIDs = new ArrayList<>();
-        for (NodeIDType nodeID : serviceInstance.nodeIDs()) {
-            nodeIDs.add(nodeID.toString());
-        }
-
-        // Obtain the service latest timestamp
-        VectorTimestamp serviceLastTimestamp = serviceInstance.currTimestamp();
-        assert serviceLastTimestamp != null :
-                "An active service=" + serviceName + " having null timestamp";
-
-        // Check the request's last write timestamp
-        VectorTimestamp requestLastWriteTimestamp =
-                ((TimestampedRequest) clientRequest).getLastTimestamp("W");
-        if (requestLastWriteTimestamp == null) {
-            // initialize a blank timestamp
-            requestLastWriteTimestamp = new VectorTimestamp(nodeIDs);
-        }
-
-        // Reset the client's write timestamp, if it is not comparable
-        boolean isTimestampComparable = requestLastWriteTimestamp.isComparableWith(serviceLastTimestamp);
-        if (!isTimestampComparable) {
-            // reset the client timestamp
-            logger.log(Level.WARNING,
-                    "An active service=" + serviceName + " having incomparable timestamp." +
-                            " req_timestamp=" + requestLastWriteTimestamp +
-                            " svc_timestamp=" + serviceLastTimestamp +
-                            ". This is possible if client is tampering with the timestamp, " +
-                            "or reconfiguration happened. We are resetting client timestamp.");
-            requestLastWriteTimestamp = new VectorTimestamp(nodeIDs);
-        }
-        assert requestLastWriteTimestamp.isComparableWith(serviceLastTimestamp);
-
-        // Handle read request, directly.
-        if (behavioralRequest.isReadOnlyRequest()) {
-            boolean isExecSuccess = app.execute(clientRequest, false);
-            if (!isExecSuccess) {
-                logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
-                return false;
+            // Gather the service's instance metadata
+            NodeIDType myNodeID = messenger.getMyID();
+            String serviceName = serviceInstance.name();
+            List<String> nodeIDs = new ArrayList<>();
+            for (NodeIDType nodeID : serviceInstance.nodeIDs()) {
+                nodeIDs.add(nodeID.toString());
             }
 
-            // Update the client's read timestamp, then send response back to client.
-            ((TimestampedResponse) clientRequest)
-                    .setLastTimestamp("R", serviceLastTimestamp);
-            callback.executed(clientRequest, true);
-        }
+            // Obtain the service latest timestamp
+            VectorTimestamp serviceLastTimestamp = serviceInstance.currTimestamp();
+            assert serviceLastTimestamp != null :
+                    "An active service=" + serviceName + " having null timestamp";
 
-        // Handle write request by first checking the timestamp.
-        if (behavioralRequest.isWriteOnlyRequest() ||
-                behavioralRequest.isReadModifyWriteRequest()) {
-            // Case-1: Handle write directly if this replica is "recent" enough.
-            if (requestLastWriteTimestamp.isLessThanOrEqualTo(serviceLastTimestamp)) {
+            logger.log(Level.INFO, String.format("(2) %s:%s - client request id=%d serviceLastTimestamp not null",
+                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                    clientReplicableRequest.getRequestID()));
+
+            // Check the request's last write timestamp
+            VectorTimestamp requestLastWriteTimestamp =
+                    ((TimestampedRequest) clientRequest).getLastTimestamp("W");
+            if (requestLastWriteTimestamp == null) {
+                // initialize a blank timestamp
+                requestLastWriteTimestamp = new VectorTimestamp(nodeIDs);
+            }
+
+            logger.log(Level.INFO, String.format("(3) %s:%s - client request id=%d has a valid requestLastWriteTimestamp",
+                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                    clientReplicableRequest.getRequestID()));
+
+            // Reset the client's write timestamp, if it is not comparable
+            boolean isTimestampComparable = requestLastWriteTimestamp.isComparableWith(serviceLastTimestamp);
+            logger.log(Level.INFO, String.format("(4) %s:%s - client request id=%d passed isComparableWith()",
+                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                    clientReplicableRequest.getRequestID()));
+
+            if (!isTimestampComparable) {
+                // reset the client timestamp
+                logger.log(Level.INFO,
+                        "An active service=" + serviceName + " having incomparable timestamp." +
+                                " req_timestamp=" + requestLastWriteTimestamp +
+                                " svc_timestamp=" + serviceLastTimestamp +
+                                ". This is possible if client is tampering with the timestamp, " +
+                                "or reconfiguration happened. We are resetting client timestamp.");
+                requestLastWriteTimestamp = new VectorTimestamp(nodeIDs);
+            }
+            assert requestLastWriteTimestamp.isComparableWith(serviceLastTimestamp);
+            logger.log(Level.INFO, String.format("(5) %s:%s - client request id=%d passed isComparableWith() assertion",
+                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                    clientReplicableRequest.getRequestID()));
+
+            // Handle read request, directly.
+            if (behavioralRequest.isReadOnlyRequest()) {
+                logger.log(Level.INFO, String.format("(6) %s:%s - client request id=%d is ReadOnly",
+                        messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                        clientReplicableRequest.getRequestID()));
                 boolean isExecSuccess = app.execute(clientRequest, false);
                 if (!isExecSuccess) {
-                    logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
+                    logger.log(Level.INFO, "Failed to execute request: " + clientRequest);
                     return false;
                 }
 
-                // Enqueue the executed request
-                synchronized (serviceInstance.executedRequests()) {
-                    serviceInstance.executedRequests().add(clientRequest.toBytes());
-                }
-
-                // Bump up our timestamp
-                serviceLastTimestamp = serviceInstance.currTimestamp()
-                        .increaseNodeTimestamp(myNodeID.toString());
-
-                // Update the client's write timestamp, then send response back to client.
+                // Update the client's read timestamp, then send response back to client.
                 ((TimestampedResponse) clientRequest)
-                        .setLastTimestamp("W", serviceLastTimestamp);
+                        .setLastTimestamp("R", serviceLastTimestamp);
                 callback.executed(clientRequest, true);
+            }
 
-                // Asynchronously send the writes to other replicas
-                Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
-                otherReplicas.remove(myNodeID);
-                ClientCentricWriteAfterPacket writeAfterPacket =
-                        new ClientCentricWriteAfterPacket(
-                                /*senderID=*/myNodeID.toString(),
-                                /*timestamp=*/serviceLastTimestamp,
-                                /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
-                GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                        new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
-                try {
-                    logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
-                            + writeAfterPacket.getServiceName());
-                    messenger.send(m);
-                } catch (JSONException | IOException e) {
-                    throw new RuntimeException(e);
-                }
-            } else {
-                // Case-2: We are not "recent" enough, thus sync is needed.
-                Long requestID = ((ClientRequest) clientRequest).getRequestID();
-                // First, we buffer the request.
-                serviceInstance.pendingRequests().put(
-                        requestID,
-                        new RequestAndCallback(
-                                clientRequest, requestLastWriteTimestamp, callback));
+            // Handle write request by first checking the timestamp.
+            if (behavioralRequest.isWriteOnlyRequest() ||
+                    behavioralRequest.isReadModifyWriteRequest()) {
+                logger.log(Level.INFO, String.format("(7) %s:%s - client request id=%d is WriteOnly. reqTs=%s, serTs=%s",
+                        messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                        clientReplicableRequest.getRequestID(), requestLastWriteTimestamp, serviceLastTimestamp));
 
-                // Prepare sync packets to other replicas that are more recent.
-                List<GenericMessagingTask<NodeIDType, ClientCentricPacket>> syncPackets =
-                        new ArrayList<>();
-                for (String nodeIdRaw : serviceLastTimestamp.getNodeIds()) {
-                    if (myNodeID.toString().equals(nodeIdRaw)) continue;
-                    long clientTs = requestLastWriteTimestamp.getNodeTimestamp(nodeIdRaw);
-                    long replicaTs = serviceLastTimestamp.getNodeTimestamp(nodeIdRaw);
-                    if (clientTs > replicaTs) {
-                        long startingSeqNum = replicaTs + 1;
-                        ClientCentricSyncRequestPacket syncPacket =
-                                new ClientCentricSyncRequestPacket(
-                                        /*senderId=*/messenger.getMyID().toString(),
-                                        /*serviceName=*/serviceInstance.name(),
-                                        /*fromSequenceNumber*/startingSeqNum);
-                        NodeIDType targetReplicaNodeId = nodeIdDeserializer.valueOf(nodeIdRaw);
-                        GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                                new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
-                        syncPackets.add(m);
+                // Case-1: Handle write directly if this replica is "recent" enough.
+                if (requestLastWriteTimestamp.isLessThanOrEqualTo(serviceLastTimestamp)) {
+                    logger.log(Level.INFO, String.format("(8.1) %s:%s - client request id=%d enters Case-1",
+                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                            clientReplicableRequest.getRequestID()));
 
-                        logger.log(Level.INFO,
-                                String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
-                                        messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
-                                        nodeIdRaw, clientTs, replicaTs));
+                    boolean isExecSuccess = app.execute(clientRequest, false);
+                    if (!isExecSuccess) {
+                        logger.log(Level.INFO, "Failed to execute request: " + clientRequest);
+                        return false;
                     }
-                }
 
-                // Send the sync packets
-                for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
+                    // Enqueue the executed request
+                    synchronized (serviceInstance.executedRequests()) {
+                        serviceInstance.executedRequests().add(clientRequest.toBytes());
+                    }
+
+                    // Bump up our timestamp
+                    serviceLastTimestamp = serviceInstance.currTimestamp()
+                            .increaseNodeTimestamp(myNodeID.toString());
+
+                    // Update the client's write timestamp, then send response back to client.
+                    ((TimestampedResponse) clientRequest)
+                            .setLastTimestamp("W", serviceLastTimestamp);
+                    callback.executed(clientRequest, true);
+
+                    // Asynchronously send the writes to other replicas
+                    Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
+                    otherReplicas.remove(myNodeID);
+                    ClientCentricWriteAfterPacket writeAfterPacket =
+                            new ClientCentricWriteAfterPacket(
+                                    /*senderID=*/myNodeID.toString(),
+                                    /*timestamp=*/serviceLastTimestamp,
+                                    /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
+                    GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                            new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
                     try {
+                        logger.log(Level.INFO, "Sending ClientCentricWriteAfterPacket: "
+                                + writeAfterPacket.getServiceName());
                         messenger.send(m);
-                    } catch (IOException | JSONException e) {
+                    } catch (JSONException | IOException e) {
                         throw new RuntimeException(e);
+                    }
+                } else {
+                    // Case-2: We are not "recent" enough, thus sync is needed.
+                    logger.log(Level.INFO, String.format("(8.2) %s:%s - client request id=%d enters Case-2",
+                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                            clientReplicableRequest.getRequestID()));
+                    Long requestID = ((ClientRequest) clientRequest).getRequestID();
+
+                    logger.log(Level.INFO, String.format("(8.2.1) %s:%s - Case-2 passed getRequestID() ",
+                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+
+                    // First, we buffer the request.
+                    serviceInstance.pendingRequests().put(
+                            requestID,
+                            new RequestAndCallback(
+                                    clientRequest, requestLastWriteTimestamp, callback));
+
+                    logger.log(Level.INFO, String.format("(8.2.2) %s:%s - Case-2 pendingRequests().put()",
+                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+
+                    // Prepare sync packets to other replicas that are more recent.
+                    List<GenericMessagingTask<NodeIDType, ClientCentricPacket>> syncPackets =
+                            new ArrayList<>();
+
+                    logger.log(Level.INFO, String.format("(8.2.3) %s:%s - Case-2 initialized syncPackets",
+                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+
+                    for (String nodeIdRaw : serviceLastTimestamp.getNodeIds()) {
+                        logger.log(Level.INFO, String.format("(8.2.4) %s:%s - Case-2 for serviceLastTimestamp.getNodeIds()",
+                                messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+                        if (myNodeID.toString().equals(nodeIdRaw)) {
+                            logger.log(Level.INFO, String.format("(8.2.4.1) %s:%s - Case-2 myNodeID.toString().equals(nodeIdRaw)",
+                                    messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+                            continue;
+                        }
+
+                        long clientTs = requestLastWriteTimestamp.getNodeTimestamp(nodeIdRaw);
+                        long replicaTs = serviceLastTimestamp.getNodeTimestamp(nodeIdRaw);
+
+                        logger.log(Level.INFO, String.format("(8.2.4.2) %s:%s - Case-2 clientTs=%d, replicaTs=%d",
+                                messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(), clientTs, replicaTs));
+
+                        if (clientTs > replicaTs) {
+                            long startingSeqNum = replicaTs + 1;
+                            ClientCentricSyncRequestPacket syncPacket =
+                                    new ClientCentricSyncRequestPacket(
+                                            /*senderId=*/messenger.getMyID().toString(),
+                                            /*serviceName=*/serviceInstance.name(),
+                                            /*fromSequenceNumber*/startingSeqNum);
+                            NodeIDType targetReplicaNodeId = nodeIdDeserializer.valueOf(nodeIdRaw);
+                            GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                                    new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
+                            syncPackets.add(m);
+
+                            logger.log(Level.INFO,
+                                    String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
+                                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
+                                            nodeIdRaw, clientTs, replicaTs));
+                        }
+                    }
+
+                    logger.log(Level.INFO, String.format("(8.2.5) %s:%s - Case-2 buffered request",
+                            messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+
+                    // Send the sync packets
+                    for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
+                        logger.log(Level.INFO, String.format("(8.2.6) %s:%s - Case-2 sending messenger...",
+                                messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName()));
+
+                        try {
+                            messenger.send(m);
+                        } catch (IOException | JSONException e) {
+                            throw new RuntimeException(e);
+                        }
                     }
                 }
             }
-        }
 
-        return true;
+            return true;
+        } catch (Throwable t) {
+            logger.log(Level.SEVERE, "Unexpected error in handleClientRequest", t);
+            throw t;  // or return false
+        }
     }
 
     private static <NodeIDType> void handleCoordinationPacket(
@@ -235,7 +299,7 @@ public class MonotonicWritesHandler {
         assert serviceName != null : "unspecified service name";
         NodeIDType myNodeID = messenger.getMyID();
 
-        logger.log(Level.FINER, String.format("%s:%s - handling coordination packet %s id=%d",
+        logger.log(Level.INFO, String.format("%s:%s - handling coordination packet %s id=%d",
                 messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
                 packet.getRequestType(),
                 packet.getRequestID()));
@@ -264,7 +328,7 @@ public class MonotonicWritesHandler {
             // Case-1: the propagated write is stale, or we are already "recent" enough.
             if (ourTs >= theirTs) {
                 // do-nothing, ignore the stale update
-                logger.log(Level.FINER,
+                logger.log(Level.INFO,
                         String.format("%s:%s - ignoring stale write request ourTs=%s theirTs=%s",
                                 messenger.getMyID(),
                                 MonotonicWritesHandler.class.getSimpleName(),
@@ -283,7 +347,7 @@ public class MonotonicWritesHandler {
                 // adjust the latest timestamp
                 serviceInstance.currTimestamp().updateNodeTimestamp(rawSenderID, theirTs);
 
-                logger.log(Level.FINER,
+                logger.log(Level.INFO,
                         String.format("%s:%s - executed the write after request, updating ts to %s",
                                 messenger.getMyID(),
                                 MonotonicWritesHandler.class.getSimpleName(),
@@ -406,7 +470,7 @@ public class MonotonicWritesHandler {
             //  For example, our sequence number is 0, but the given ops starts from seq number 5,
             //  making us missing seq num [1,4]. We do nothing for this case.
             if (respStartingSeqNum > ourLatestSeqNum + 1) {
-                logger.log(Level.WARNING,
+                logger.log(Level.INFO,
                         String.format("%s:%s - detecting missing operations from %s, theirSeqNum=%d ourSeqNum=%d",
                                 messenger.getMyID(), MonotonicWritesHandler.class.getSimpleName(),
                                 senderId, respStartingSeqNum, ourLatestSeqNum));
@@ -472,7 +536,7 @@ public class MonotonicWritesHandler {
 
             // validate the request and replica timestamp
             if (!serviceLastTimestamp.isComparableWith(clientLastWriteTimestamp)) {
-                logger.log(Level.WARNING,
+                logger.log(Level.INFO,
                         "Incomparable client and replica timestamp: " +
                                 clientLastWriteTimestamp + " vs. " + serviceLastTimestamp);
                 continue;
@@ -492,7 +556,7 @@ public class MonotonicWritesHandler {
                     "is buffered in MonotonicWritesHandler";
             boolean isExecSuccess = app.execute(clientReadRequest, false);
             if (!isExecSuccess) {
-                logger.log(Level.WARNING,
+                logger.log(Level.INFO,
                         "Failed to execute write request: " + clientReadRequest);
                 continue;
             }
