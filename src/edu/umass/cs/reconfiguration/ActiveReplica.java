@@ -404,7 +404,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	protected ActiveReplica(AbstractReplicaCoordinator<NodeIDType> appC,
 			ReconfigurableNodeConfig<NodeIDType> nodeConfig,
 			SSLMessenger<NodeIDType, ?> messenger) {
-		this(appC, nodeConfig, messenger, false);
+		this(appC, nodeConfig, messenger, true);
 	}
 
 	class SenderAndRequest implements ExecutedCallback {

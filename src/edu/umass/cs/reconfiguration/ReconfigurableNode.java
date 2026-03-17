@@ -323,7 +323,7 @@ public abstract class ReconfigurableNode<NodeIDType> {
                         (pd = new ReconfigurationPacketDemultiplexer(nodeConfig)
                                 .setThreadName(ReconfigurableNode.this.myID
                                         .toString())), true,
-                        ReconfigurationConfig.getServerSSLMode()))));
+                        ReconfigurationConfig.getServerSSLMode())), 4));
         if (!niot.getListeningSocketAddress().equals(isa)
                 && Config.getGlobalBoolean(PC.STRICT_ADDRESS_CHECKS)) {
             ReconfigurationConfig
@@ -479,6 +479,7 @@ public abstract class ReconfigurableNode<NodeIDType> {
         PaxosConfig.ensureFileHandlerDirExists();
         Config.register(args);
         NIOTransport.setMaxPayloadSize(Config.getGlobalInt(PC.NIO_MAX_PAYLOAD_SIZE));
+	NIOTransport.setUseSenderTask(true);
         ReconfigurationConfig.setConsoleHandler();
 
         Set<ReconfigurableNode> rcNodes = new HashSet<ReconfigurableNode>();

@@ -317,7 +317,6 @@ public class HttpActiveReplica {
             HttpContent content = new DefaultLastHttpContent(msg.content().retain());
             XdnHttpRequest xdnRequest = new XdnHttpRequest(msg, content);
             xdnRequest.stamp(XdnHttpRequest.TS_RECEIVED);
-
             registerPendingRequest(ctx, xdnRequest, isKeepAlive);
 
             // Hand off to the Coordinator. This returns immediately; the callback
@@ -325,6 +324,7 @@ public class HttpActiveReplica {
             ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(xdnRequest);
             gpRequest.setClientAddress(senderAddr);
 
+            xdnRequest.stamp(XdnHttpRequest.TS_FLUSHED);
             boolean accepted = arf.handRequestToAppForHttp(gpRequest,
                     new XdnExecutedCallback(nodeId, xdnRequest.getRequestID(),
                             pendingRequests));

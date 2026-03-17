@@ -51,11 +51,13 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     // Dedicated single-thread executor for sending WRITE_AFTER packets to peers.
     // Single-threaded to preserve replication order. app.execute() and callback.executed()
     // are now called on the calling thread, so this executor only handles messenger.send().
-    private final ExecutorService replicationExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "xdn-lazy-replication");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ExecutorService replicationExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            r -> {
+                Thread t = new Thread(r, "xdn-lazy-replication");
+                t.setDaemon(true);
+                return t;
+            });
 
     private final Logger logger = Logger.getLogger(LazyReplicaCoordinator.class.getSimpleName());
 
@@ -153,10 +155,10 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                     final Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
                     myPeers.remove(myNodeId);
                     if (!myPeers.isEmpty()) {
-                        LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
-                                myNodeId.toString(), clientRequest);
                         replicationExecutor.submit(() -> {
                             try {
+                                LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
+                                        myNodeId.toString(), clientRequest);
                                 logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
                                 GenericMessagingTask<NodeIDType, LazyPacket> m =
                                         new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
