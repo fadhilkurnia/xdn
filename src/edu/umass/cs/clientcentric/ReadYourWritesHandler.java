@@ -99,7 +99,7 @@ public class ReadYourWritesHandler {
             requestLastWriteTimestamp = new VectorTimestamp(nodeIDs);
         }
 
-        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientWriteTs=%s ourTs=%s",
+        logger.log(Level.FINE, String.format("%s:%s - handling client request %s id=%d clientWriteTs=%s ourTs=%s",
                 messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
                 clientReplicableRequest.getClass().getSimpleName(),
                 clientReplicableRequest.getRequestID(),
@@ -110,7 +110,7 @@ public class ReadYourWritesHandler {
         boolean isTimestampComparable = requestLastWriteTimestamp.isComparableWith(serviceLastTimestamp);
         if (!isTimestampComparable) {
             // reset the client timestamp
-            logger.log(Level.WARNING,
+            logger.log(Level.FINE,
                     "An active service=" + serviceName + " having incomparable timestamp." +
                             " req_timestamp=" + requestLastWriteTimestamp +
                             " svc_timestamp=" + serviceLastTimestamp +
@@ -127,7 +127,7 @@ public class ReadYourWritesHandler {
             if (requestLastWriteTimestamp.isLessThanOrEqualTo(serviceLastTimestamp)) {
                 boolean isExecSuccess = app.execute(clientRequest, false);
                 if (!isExecSuccess) {
-                    logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
+                    logger.log(Level.FINE, "Failed to execute request: " + clientRequest);
                     return false;
                 }
 
@@ -169,7 +169,7 @@ public class ReadYourWritesHandler {
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
 
-                        logger.log(Level.INFO,
+                        logger.log(Level.FINE,
                                 String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
                                         messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
                                         nodeIdRaw, clientTs, replicaTs));
@@ -193,7 +193,7 @@ public class ReadYourWritesHandler {
             // execute the write request
             boolean isExecSuccess = app.execute(clientRequest, false);
             if (!isExecSuccess) {
-                logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
+                logger.log(Level.FINE, "Failed to execute request: " + clientRequest);
                 return false;
             }
 
@@ -390,7 +390,7 @@ public class ReadYourWritesHandler {
             long respStartingSeqNum = syncResponse.getStartingSequenceNumber(); // inclusive
             long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            logger.log(Level.INFO,
+            logger.log(Level.FINE,
                     String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
                             messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
                             senderId, respStartingSeqNum, ourLatestSeqNum));
@@ -399,7 +399,7 @@ public class ReadYourWritesHandler {
             //  For example, our sequence number is 0, but the given ops starts from seq number 5,
             //  making us missing seq num [1,4]. We do nothing for this case.
             if (respStartingSeqNum > ourLatestSeqNum + 1) {
-                logger.log(Level.WARNING,
+                logger.log(Level.FINE,
                         String.format("%s:%s - detecting missing operations from %s, theirSeqNum=%d ourSeqNum=%d",
                                 messenger.getMyID(), ReadYourWritesHandler.class.getSimpleName(),
                                 senderId, respStartingSeqNum, ourLatestSeqNum));
@@ -467,7 +467,7 @@ public class ReadYourWritesHandler {
 
             // validate the request and replica timestamp
             if (!serviceLastTimestamp.isComparableWith(lastWriteTimestamp)) {
-                logger.log(Level.WARNING,
+                logger.log(Level.FINE,
                         "Incomparable client and replica timestamp: " +
                                 lastWriteTimestamp + " vs. " + serviceLastTimestamp);
                 continue;
@@ -485,7 +485,7 @@ public class ReadYourWritesHandler {
                     : "Unexpected non ReadOnlyRequest is buffered in ReadYourWritesHandler";
             boolean isExecSuccess = app.execute(clientReadRequest, false);
             if (!isExecSuccess) {
-                logger.log(Level.WARNING,
+                logger.log(Level.FINE,
                         "Failed to execute read request: " + clientReadRequest);
                 continue;
             }
