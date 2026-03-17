@@ -100,7 +100,7 @@ public class MonotonicReadsHandler {
         assert serviceLastTimestamp != null :
                 "An active service=" + serviceName + " having null timestamp";
 
-        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
+        logger.log(Level.FINE, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
                 messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
                 clientReplicableRequest.getClass().getSimpleName(),
                 clientReplicableRequest.getRequestID(),
@@ -172,7 +172,7 @@ public class MonotonicReadsHandler {
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
 
-                        logger.log(Level.INFO,
+                        logger.log(Level.FINE,
                                 String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
                                         messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
                                         nodeIdRaw, clientTs, replicaTs));
@@ -248,7 +248,7 @@ public class MonotonicReadsHandler {
 
         NodeIDType myNodeId = messenger.getMyID();
 
-        logger.log(Level.INFO, String.format("%s:%s - handling coordination packet %s",
+        logger.log(Level.FINE, String.format("%s:%s - handling coordination packet %s",
                 myNodeId, MonotonicReadsHandler.class.getSimpleName(), packet.getRequestType()));
 
         // handle WriteAfterPacket
@@ -401,7 +401,7 @@ public class MonotonicReadsHandler {
             long respStartingSeqNum = syncResponse.getStartingSequenceNumber(); // inclusive
             long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            logger.log(Level.INFO,
+            logger.log(Level.FINE,
                     String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
                             messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
                             senderId, respStartingSeqNum, ourLatestSeqNum));
