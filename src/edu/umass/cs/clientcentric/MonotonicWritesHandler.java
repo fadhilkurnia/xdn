@@ -175,12 +175,10 @@ public class MonotonicWritesHandler {
                 } catch (JSONException | IOException e) {
                     throw new RuntimeException(e);
                 }
-            }
-
-            // Case-2: We are not "recent" enough, thus sync is needed.
-            {
-                // First, we buffer the request.
+            } else {
+                // Case-2: We are not "recent" enough, thus sync is needed.
                 Long requestID = ((ClientRequest) clientRequest).getRequestID();
+                // First, we buffer the request.
                 serviceInstance.pendingRequests().put(
                         requestID,
                         new RequestAndCallback(
