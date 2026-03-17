@@ -111,12 +111,36 @@ public class HttpActiveReplica {
     private final ConcurrentHashMap<Long, PendingRequest> pendingRequests =
             new ConcurrentHashMap<>();
 
+    // AFTER
     private final ScheduledExecutorService timeoutScheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "har-timeout-scheduler");
                 t.setDaemon(true);
                 return t;
             });
+
+    // Sweeper: checks once per second for requests that have exceeded the timeout.
+    // replaces per-request schedule() calls
+    {
+        timeoutScheduler.scheduleAtFixedRate(() -> {
+            long now = System.nanoTime();
+            long timeoutNs = REQUEST_TIMEOUT_SECONDS * 1_000_000_000L;
+            pendingRequests.forEach((id, pending) -> {
+                if (now - pending.startNs > timeoutNs) {
+                    PendingRequest timedOut = pendingRequests.remove(id);
+                    if (timedOut != null) {
+                        logger.log(Level.WARNING,
+                                "HttpActiveReplica - request {0} timed out after {1}s",
+                                new Object[]{id, REQUEST_TIMEOUT_SECONDS});
+                        timedOut.ctx.executor().execute(() ->
+                                HttpActiveReplicaHandler.sendResponse(
+                                        timedOut.ctx, GATEWAY_TIMEOUT,
+                                        "Request timed out", timedOut.isKeepAlive));
+                    }
+                }
+            });
+        }, 1, 1, TimeUnit.SECONDS);
+    }
 
     // ---------------------------------------------------------------------------
 
@@ -154,7 +178,7 @@ public class HttpActiveReplica {
                     // AUTO_READ left true; flow control can be added later if needed.
                     .childOption(ChannelOption.AUTO_READ, true)
                     .childHandler(new HttpActiveReplicaInitializer(
-                            nodeId, arf, sslCtx, pendingRequests, timeoutScheduler));
+                            nodeId, arf, sslCtx, pendingRequests));
 
             if (sockAddr == null) {
                 String addr = System.getProperty(HTTP_ADDR_ENV_KEY, DEFAULT_HTTP_ADDR);
@@ -206,18 +230,15 @@ public class HttpActiveReplica {
         private final ActiveReplicaFunctions arf;
         private final SslContext sslCtx;
         private final ConcurrentHashMap<Long, PendingRequest> pendingRequests;
-        private final ScheduledExecutorService timeoutScheduler;
 
         HttpActiveReplicaInitializer(String nodeId,
                                      ActiveReplicaFunctions arf,
                                      SslContext sslCtx,
-                                     ConcurrentHashMap<Long, PendingRequest> pendingRequests,
-                                     ScheduledExecutorService timeoutScheduler) {
+                                     ConcurrentHashMap<Long, PendingRequest> pendingRequests) {
             this.nodeId           = nodeId;
             this.arf              = arf;
             this.sslCtx           = sslCtx;
             this.pendingRequests  = pendingRequests;
-            this.timeoutScheduler = timeoutScheduler;
         }
 
         @Override
@@ -241,7 +262,7 @@ public class HttpActiveReplica {
 
             // Main business-logic handler.
             p.addLast(new HttpActiveReplicaHandler(
-                    nodeId, arf, pendingRequests, timeoutScheduler, ch.remoteAddress()));
+                    nodeId, arf, pendingRequests, ch.remoteAddress()));
         }
     }
 
@@ -256,18 +277,15 @@ public class HttpActiveReplica {
         private final String nodeId;
         private final ActiveReplicaFunctions arf;
         private final ConcurrentHashMap<Long, PendingRequest> pendingRequests;
-        private final ScheduledExecutorService timeoutScheduler;
         private final InetSocketAddress senderAddr;
 
         HttpActiveReplicaHandler(String nodeId,
                                  ActiveReplicaFunctions arf,
                                  ConcurrentHashMap<Long, PendingRequest> pendingRequests,
-                                 ScheduledExecutorService timeoutScheduler,
                                  InetSocketAddress senderAddr) {
             this.nodeId           = nodeId;
             this.arf              = arf;
             this.pendingRequests  = pendingRequests;
-            this.timeoutScheduler = timeoutScheduler;
             this.senderAddr       = senderAddr;
         }
 
@@ -376,29 +394,13 @@ public class HttpActiveReplica {
         // ------------------------------------------------------------------
 
         /**
-         * Registers the request in the pending map and schedules a timeout that fires
-         * if no response arrives within REQUEST_TIMEOUT_SECONDS.
+         * Registers the request in the pending map
          */
         private void registerPendingRequest(ChannelHandlerContext ctx,
                                             XdnHttpRequest xdnRequest,
                                             boolean isKeepAlive) {
-            long requestId = xdnRequest.getRequestID();
-            pendingRequests.put(requestId, new PendingRequest(ctx, isKeepAlive));
-
-            timeoutScheduler.schedule(() -> {
-                PendingRequest timedOut = pendingRequests.remove(requestId);
-                if (timedOut == null) {
-                    // Response already arrived — nothing to do.
-                    return;
-                }
-                logger.log(Level.WARNING,
-                        "{0}:HttpActiveReplica - request {1} timed out after {2}s",
-                        new Object[]{nodeId, requestId, REQUEST_TIMEOUT_SECONDS});
-                // Schedule the write back on the channel's EventLoop thread.
-                timedOut.ctx.executor().execute(() ->
-                        sendResponse(timedOut.ctx, GATEWAY_TIMEOUT,
-                                "Request timed out", timedOut.isKeepAlive));
-            }, REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            pendingRequests.put(xdnRequest.getRequestID(), new PendingRequest(ctx, isKeepAlive));
+            // Timeout is handled by the class-level sweeper — no per-request schedule() call.
         }
 
         // ------------------------------------------------------------------

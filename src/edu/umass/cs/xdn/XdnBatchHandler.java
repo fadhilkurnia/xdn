@@ -10,8 +10,6 @@ import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.logging.Logger;
 
@@ -56,8 +54,6 @@ public class XdnBatchHandler implements EventHandler<XdnBatchEvent> {
 
     @Override
     public void onEvent(XdnBatchEvent event, long sequence, boolean endOfBatch) {
-        event.request.stamp(XdnHttpRequest.TS_CONSUMER);
-
         // Puts any non read_only requests into its own batch
         // Sends the previous batch first, then the new batch
         if (!event.request.isReadOnlyRequest()) {

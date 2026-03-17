@@ -45,7 +45,6 @@ public class XdnRingBufferBatcher implements Closeable {
         } catch (InsufficientCapacityException e) {
             return false;
         }
-        request.stamp(XdnHttpRequest.TS_SUBMITTED);
         try {
             XdnBatchEvent event = ringBuffer.get(sequence);
             event.set(request, clientAddr, handler);

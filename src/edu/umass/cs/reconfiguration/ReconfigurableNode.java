@@ -323,7 +323,7 @@ public abstract class ReconfigurableNode<NodeIDType> {
                         (pd = new ReconfigurationPacketDemultiplexer(nodeConfig)
                                 .setThreadName(ReconfigurableNode.this.myID
                                         .toString())), true,
-                        ReconfigurationConfig.getServerSSLMode())), 4));
+                        ReconfigurationConfig.getServerSSLMode()))));
         if (!niot.getListeningSocketAddress().equals(isa)
                 && Config.getGlobalBoolean(PC.STRICT_ADDRESS_CHECKS)) {
             ReconfigurationConfig
