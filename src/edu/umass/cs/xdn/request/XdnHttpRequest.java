@@ -11,6 +11,7 @@ import edu.umass.cs.clientcentric.interfaces.TimestampedResponse;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.reconfiguration.http.HttpActiveReplica;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.proto.XdnHttpRequestProto;
@@ -33,6 +34,8 @@ import java.util.logging.Logger;
 
 public class XdnHttpRequest extends XdnRequest
         implements ClientRequest, BehavioralRequest, TimestampedRequest, TimestampedResponse, Byteable {
+
+  private static final Logger logger = Logger.getLogger(XdnHttpRequestProto.XdnHttpRequest.class.getName());
 
   public static final String XDN_HTTP_REQUEST_ID_HEADER = "XDN-Request-ID";
   public static final String XDN_TIMESTAMP_COOKIE_PREFIX = "XDN-CC-TS-";
@@ -300,6 +303,11 @@ public class XdnHttpRequest extends XdnRequest
     // Validate if we have cookie in the header
     String cookieRaw =
             this.httpRequest.headers() != null ? this.httpRequest.headers().get("Cookie") : null;
+
+    logger.log(Level.FINE, "XdnHttpRequest timeStampName={0}, cookieRaw={1}", new Object[]{
+            timestampName, cookieRaw
+    });
+
     if (cookieRaw == null) {
       return null;
     }
