@@ -101,7 +101,7 @@ public class WritesFollowReadsHandler {
             requestLastReadTimestamp = new VectorTimestamp(nodeIDs);
         }
 
-        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
+        logger.log(Level.FINE, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
                 messenger.getMyID(), WritesFollowReadsHandler.class.getSimpleName(),
                 clientReplicableRequest.getClass().getSimpleName(),
                 clientReplicableRequest.getRequestID(),
@@ -173,7 +173,7 @@ public class WritesFollowReadsHandler {
                 GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                         new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
                 try {
-                    logger.log(Level.INFO,
+                    logger.log(Level.FINE,
                             String.format("%s:%s - sending WriteAfterPacket for reqId=%d",
                                     myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
                                     ((ClientRequest) clientRequest).getRequestID()));
@@ -211,7 +211,7 @@ public class WritesFollowReadsHandler {
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
 
-                        logger.log(Level.INFO,
+                        logger.log(Level.FINE,
                                 String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
                                         messenger.getMyID(), WritesFollowReadsHandler.class.getSimpleName(),
                                         nodeIdRaw, clientTs, replicaTs));
@@ -244,7 +244,7 @@ public class WritesFollowReadsHandler {
         String serviceName = packet.getServiceName();
         assert serviceName != null : "unspecified service name";
 
-        logger.log(Level.INFO, String.format("%s:%s - handling coordination packet %s for name=%s",
+        logger.log(Level.FINE, String.format("%s:%s - handling coordination packet %s for name=%s",
                 myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
                 packet.getRequestType(), packet.getServiceName()));
 
@@ -315,7 +315,7 @@ public class WritesFollowReadsHandler {
                 serviceInstance.peerLastSyncRequestSeqNum().put(senderNodeId, peerFromSeqNum);
 
                 try {
-                    logger.log(Level.INFO,
+                    logger.log(Level.FINE,
                             String.format(
                                     "%s:%s - sending SyncRequestPacket to %s fromSeqNum=%d ourTs=%d",
                                     myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
@@ -376,7 +376,7 @@ public class WritesFollowReadsHandler {
             GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                     new GenericMessagingTask<>(senderId, responsePacket);
             try {
-                logger.log(Level.INFO,
+                logger.log(Level.FINE,
                         String.format(
                                 "%s:%s - sending SyncResponsePacket to %s fromSeqNum=%d ourTs=%d",
                                 myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
@@ -403,7 +403,7 @@ public class WritesFollowReadsHandler {
             long respStartingSeqNum = syncResponse.getStartingSequenceNumber();
             long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            logger.log(Level.INFO,
+            logger.log(Level.FINE,
                     String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
                             messenger.getMyID(), WritesFollowReadsHandler.class.getSimpleName(),
                             senderId, respStartingSeqNum, ourLatestSeqNum));
@@ -506,7 +506,7 @@ public class WritesFollowReadsHandler {
                 continue;
             }
 
-            logger.log(Level.INFO,
+            logger.log(Level.FINE,
                     String.format("%s:%s - just executed a pending write request with id=%d",
                             myNodeId, WritesFollowReadsHandler.class.getSimpleName(),
                             ((ClientRequest) clientWriteRequest).getRequestID()));
