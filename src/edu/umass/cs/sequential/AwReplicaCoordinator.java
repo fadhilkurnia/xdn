@@ -77,7 +77,7 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         } else {
             requestLogText = clientRequest.getRequestType().toString();
         }
-        logger.log(Level.INFO, String.format("%s:AwReplicaCoordinator -- coordinateRequest %s\n",
+        logger.log(Level.FINE, String.format("%s:AwReplicaCoordinator -- coordinateRequest %s\n",
                 this.myNodeID, requestLogText));
 
         // We handle read-only request locally, with no coordination.
