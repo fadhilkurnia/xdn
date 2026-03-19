@@ -1,6 +1,7 @@
 package edu.umass.cs.causal.dag;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class DirectedAcyclicGraph {
     private final List<GraphVertex> startingVertices;
@@ -17,7 +18,7 @@ public class DirectedAcyclicGraph {
 
     private DirectedAcyclicGraph(List<GraphVertex> startingVertices) {
         this.startingVertices = new ArrayList<>();
-        this.idToVertexMapper = new HashMap<>();
+        this.idToVertexMapper = new ConcurrentHashMap<>();
         this.startingVertices.addAll(startingVertices);
         for (GraphVertex n : startingVertices) {
             this.idToVertexMapper.put(n.getTimestamp(), n);

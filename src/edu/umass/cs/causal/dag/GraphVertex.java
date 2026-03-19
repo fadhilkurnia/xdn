@@ -2,8 +2,8 @@ package edu.umass.cs.causal.dag;
 
 import edu.umass.cs.gigapaxos.interfaces.Request;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class GraphVertex {
     private final VectorTimestamp timestamp;
@@ -13,7 +13,7 @@ public class GraphVertex {
     public GraphVertex(VectorTimestamp timestamp, List<Request> requests) {
         this.timestamp = timestamp;
         this.requests = requests;
-        this.children = new ArrayList<>();
+        this.children = new CopyOnWriteArrayList<>();
     }
 
     public void addChildVertex(GraphVertex child) {
