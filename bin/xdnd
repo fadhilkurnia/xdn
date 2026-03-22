@@ -433,7 +433,7 @@ function install_dependencies() {
   CMD_DESC+=("extract golang")
   CMD+=("sudo tar -C /usr/local -xzf $golang_tar_name")
   CMD_DESC+=("add golang to PATH var")
-  CMD+=('echo "export PATH=$PATH:/usr/local/go/bin" | sudo tee -a /etc/environment')
+  CMD+=('grep -q "/usr/local/go/bin" /etc/environment || sudo sed -i '\''s|^PATH="\(.*\)"|PATH="\1:/usr/local/go/bin"|'\'' /etc/environment')
 
   # install docker
   CMD_DESC+=("install docker - (0) preparation")
@@ -480,7 +480,7 @@ function install_dependencies() {
   CMD_DESC+=("extract rqlite")
   CMD+=("tar xvfz $rqlite_tar_name && rm -rf rqlite && mv $rqlite_folder_name rqlite")
   CMD_DESC+=("add rqlite to PATH var")
-  CMD+=('echo "export PATH=$PATH:$PWD/rqlite" | sudo tee -a /etc/environment')
+  CMD+=('grep -q "/rqlite" /etc/environment || sudo sed -i '\''s|^PATH="\(.*\)"|PATH="\1:'"$PWD"'/rqlite"|'\'' /etc/environment')
 
   # install node for the durable object baseline
   CMD_DESC+=("install npm")
@@ -931,7 +931,7 @@ function do_init_driver() {
   sudo rm -rf /usr/local/go
   sudo tar -C /usr/local -xzf "$golang_tar_name"
   export PATH=$PATH:/usr/local/go/bin
-  echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee -a /etc/environment
+  grep -q "/usr/local/go/bin" /etc/environment || sudo sed -i 's|^PATH="\(.*\)"|PATH="\1:/usr/local/go/bin"|' /etc/environment
   curl https://sh.rustup.rs -sSf | sh -s -- -y
   source $HOME/.cargo/env
   python -m pip install -U pip
