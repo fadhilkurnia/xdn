@@ -11,10 +11,10 @@
 //   apt install pkg-config libfuse3-dev libzstd-dev
 //
 // How to compile:
-//   g++ -Wall fuselogv2.cpp -o fuselog -D_FILE_OFFSET_BITS=64 \
-//       $(pkg-config fuse3 --cflags --libs) \
-//       $(pkg-config libzstd --cflags --libs) \
-//       -pthread -O3 -std=c++11
+//   g++ -Wall fuselogv2.cpp -o fuselog -D_FILE_OFFSET_BITS=64
+//   $(pkg-config fuse3 --cflags --libs)
+//   $(pkg-config libzstd --cflags --libs)
+//   -pthread -O3 -std=c++11
 //
 // How to use:
 //   ./fuselog <mount_point>
