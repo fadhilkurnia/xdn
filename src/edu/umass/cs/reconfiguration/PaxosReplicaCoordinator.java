@@ -192,7 +192,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		ExecutedCallback loggedCallback = callback;
         if (callback != null) {
             loggedCallback = (response, handled) -> {
-		stampAll(response, XdnHttpRequest.TS_CALLBACK);
+				stampAll(response, XdnHttpRequest.TS_CALLBACK);
                 callback.executed(response, handled);
                 long elapsedTime = System.nanoTime() - startProcessingTime;
                 logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
