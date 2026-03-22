@@ -142,8 +142,6 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                                 "for LazyReplicaCoordinator");
             }
 
-            stampAll(clientRequest, XdnHttpRequest.TS_COORDINATE);
-
             if (isWriteOnly && isMonotonic) {
                 boolean isExecSuccess = this.app.execute(clientRequest);
                 if (isExecSuccess) {

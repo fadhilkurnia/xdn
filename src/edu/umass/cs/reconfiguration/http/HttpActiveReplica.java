@@ -343,6 +343,7 @@ public class HttpActiveReplica {
             gpRequest.setClientAddress(senderAddr);
 
             xdnRequest.stamp(XdnHttpRequest.TS_FLUSHED);
+            xdnRequest.stamp(XdnHttpRequest.TS_COORDINATE);
             boolean accepted = arf.handRequestToAppForHttp(gpRequest,
                     new XdnExecutedCallback(nodeId, xdnRequest.getRequestID(),
                             pendingRequests));
