@@ -35,8 +35,9 @@ WORDPRESS_YAML = "../xdn-cli/examples/wordpress.yaml"
 XDN_BINARY = "../bin/xdn"
 GP_CONFIG = "../conf/gigapaxos.xdn.wordpress-pb.cloudlab.properties"
 GP_JVM_ARGS = (
+    "-DSYNC=true "                        # fsync Paxos proposals to disk for durability
     "-DPB_N_PARALLEL_WORKERS=32 "
-    "-DPB_CAPTURE_ACCUMULATION_MS=10 "  # 10ms window: batches ~10-20 requests per statediff at 1000+ rps
+    "-DPB_CAPTURE_ACCUMULATION_US=100 "  # 0.1ms window: low-latency capture with minimal batching delay
     "-DHTTP_FORCE_KEEPALIVE=true "       # prevent Apache Connection:close from killing pooled channels
     "-DFUSELOG_DISABLE_COALESCING=true"   # skip read-before-write in fuselog (saves ~1ms per MySQL write)
 )
@@ -365,8 +366,8 @@ def check_rest_api(host, port, service, timeout_sec=120):
             if r.status_code in (200, 201):
                 print(f"   REST API available (HTTP {r.status_code})")
                 return True
-            if r.status_code == 503:
-                print(f"   REST API 503 (maintenance mode), retrying ...")
+            if r.status_code in (500, 503):
+                print(f"   REST API {r.status_code} (transient), retrying ...")
                 time.sleep(5)
                 continue
             # Any other non-success is a real failure
@@ -654,7 +655,6 @@ if __name__ == '__main__':
     if not ok:
         print("ERROR: WordPress installation failed.")
         sys.exit(1)
-
     # Phase 9
     print("\n[Phase 9] Enabling REST API Basic Auth and checking availability ...")
     if not enable_rest_auth(primary):

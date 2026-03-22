@@ -83,7 +83,13 @@ spec:
   storageClassName: openebs-3-replica
 """
 
-MYSQL_STATEFULSET_YAML = f"""
+def _mysql_statefulset_yaml(kube_node_name=None):
+    """Generate MySQL StatefulSet YAML, optionally pinned to a specific K8s node."""
+    node_selector = ""
+    if kube_node_name:
+        node_selector = f"""      nodeSelector:
+        kubernetes.io/hostname: {kube_node_name}"""
+    return f"""
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -99,6 +105,7 @@ spec:
       labels:
         app: mysql
     spec:
+{node_selector}
       containers:
         - name: mysql
           image: mysql:8.4.0
@@ -147,6 +154,13 @@ spec:
       labels:
         app: wordpress
     spec:
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: mysql
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: wordpress
           image: wordpress:6.5.4-apache
@@ -159,6 +173,8 @@ spec:
               value: "{MYSQL_ROOT_PASS}"
             - name: WORDPRESS_DB_NAME
               value: "{MYSQL_DB}"
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: "define('DISABLE_WP_CRON', true); define('AUTOMATIC_UPDATER_DISABLED', true); define('WP_AUTO_UPDATE_CORE', false);"
           ports:
             - containerPort: 80
 """
@@ -201,6 +217,36 @@ def disable_wp_cron_k8s():
         print(f"   WARNING: failed to disable WP-Cron: {result.stderr.strip()}")
 
 
+def tune_mysql_k8s():
+    """Tune MySQL InnoDB settings in the K8s MySQL pod for write-heavy workloads.
+
+    Increases buffer pool to 1GB (from default 128MB) to avoid page eviction
+    during sustained high write rates, and reduces background I/O to minimize
+    interference with foreground queries.
+    """
+    print("   Tuning MySQL InnoDB settings ...")
+    tune_sql = (
+        "SET GLOBAL innodb_buffer_pool_size=1073741824; "       # 1 GB
+        "SET GLOBAL innodb_change_buffer_max_size=50; "          # allow more change buffering
+        "SET GLOBAL innodb_max_dirty_pages_pct=90; "             # delay page flush
+        "SET GLOBAL innodb_max_dirty_pages_pct_lwm=80; "         # high-water mark before eager flush
+        "SET GLOBAL innodb_io_capacity=200; "                    # limit background I/O
+        "SET GLOBAL innodb_io_capacity_max=400; "                # cap burst I/O
+        "SET GLOBAL innodb_lru_scan_depth=256; "                 # reduce per-second page cleaner work
+    )
+    cmd = f"kubectl exec statefulset/mysql -- mysql -p{MYSQL_ROOT_PASS} -e \"{tune_sql}\""
+    result = subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no", K8S_CONTROL_PLANE, cmd],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode == 0:
+        print("   MySQL InnoDB tuned successfully")
+    else:
+        print(f"   WARNING: MySQL tuning failed: {result.stderr.strip()}")
+    # Give InnoDB a moment to resize the buffer pool
+    time.sleep(2)
+
+
 def enable_rest_auth_k8s():
     """Install mu-plugin + create WP Application Password in the K8s WordPress pod."""
     mu_plugin = (
@@ -233,18 +279,33 @@ def enable_rest_auth_k8s():
         "  $user->ID, ['name' => 'xdn-bench']); "
         "echo $new_password;"
     )
-    result = subprocess.run(
-        ["ssh", "-o", "StrictHostKeyChecking=no", K8S_CONTROL_PLANE,
-         "kubectl exec -i deploy/wordpress -- php"],
-        input=php_script, text=True, capture_output=True,
-    )
-    app_password = result.stdout.strip()
-    if result.returncode != 0 or not app_password or app_password.startswith("ERROR"):
-        print(f"   ERROR creating app password: {result.stdout[:200]} {result.stderr[:100]}")
-        return False
-    _wpmod.ADMIN_APP_PASSWORD = app_password
-    print(f"   WP Application Password created (first 5 chars: {app_password[:5]}...)")
-    return True
+    import re as _re
+
+    def _is_valid_app_password(pw):
+        if not pw or len(pw) < 10:
+            return False
+        if "<" in pw or "ERROR" in pw or "Fatal" in pw:
+            return False
+        return bool(_re.match(r'^[A-Za-z0-9 ]+$', pw))
+
+    for attempt in range(1, 6):
+        result = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", K8S_CONTROL_PLANE,
+             "kubectl exec -i deploy/wordpress -- php"],
+            input=php_script, text=True, capture_output=True,
+        )
+        app_password = result.stdout.strip()
+        if result.returncode == 0 and _is_valid_app_password(app_password):
+            _wpmod.ADMIN_APP_PASSWORD = app_password
+            print(f"   WP Application Password created (first 5 chars: {app_password[:5]}...)")
+            return True
+        snippet = (app_password or result.stderr or "(empty)")[:150]
+        print(f"   Attempt {attempt}/5: invalid response: {snippet}")
+        if attempt < 5:
+            print(f"   Retrying in 10s ...")
+            time.sleep(10)
+    print(f"   ERROR creating app password after 5 attempts")
+    return False
 
 
 # ── Load test helpers ──────────────────────────────────────────────────────────
@@ -899,10 +960,13 @@ def cleanup_wordpress_k8s():
 
 def deploy_wordpress_k8s():
     """Apply K8s manifests for MySQL + WordPress and wait for rollout."""
+    # Pin MySQL to WORKER_NODES[0] so it colocates with Mayastor nexus
+    kube_node = _get_kube_node_name(WORKER_NODES[0])
+    print(f"   Pinning MySQL to node {kube_node} ({WORKER_NODES[0]})")
     print("   Applying MySQL manifests ...")
     for name, yaml in [
         ("mysql-pvc",         MYSQL_PVC_YAML),
-        ("mysql-statefulset", MYSQL_STATEFULSET_YAML),
+        ("mysql-statefulset", _mysql_statefulset_yaml(kube_node)),
         ("mysql-svc",         MYSQL_SVC_YAML),
     ]:
         print(f"     Applying {name} ...")
@@ -967,6 +1031,46 @@ if __name__ == "__main__":
     print("=" * 60)
     print("WordPress OpenEBS 3-Replica Benchmark")
     print("=" * 60)
+
+    # Phase 0 — Restart kubelet on all nodes and verify readiness
+    all_k8s_nodes = WORKER_NODES + [K8S_CONTROL_PLANE]
+    print(f"\n[Phase 0] Restarting kubelet on all {len(all_k8s_nodes)} nodes ...")
+    for host in all_k8s_nodes:
+        result = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", host, "sudo systemctl restart kubelet"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            print(f"   ERROR: failed to restart kubelet on {host}: {result.stderr.strip()}")
+            sys.exit(1)
+        print(f"   Restarted kubelet on {host}")
+
+    print("   Waiting for all nodes to become Ready ...")
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        result = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", K8S_CONTROL_PLANE,
+             "kubectl get nodes --no-headers"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+            not_ready = [l for l in lines if " Ready " not in l]
+            if len(lines) == len(all_k8s_nodes) and not not_ready:
+                print(f"   All {len(lines)} nodes are Ready")
+                break
+            ready_count = len(lines) - len(not_ready)
+            print(f"   {ready_count}/{len(all_k8s_nodes)} nodes Ready, waiting ...")
+        time.sleep(5)
+    else:
+        print("ERROR: not all K8s nodes became Ready within 120s")
+        result = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", K8S_CONTROL_PLANE,
+             "kubectl get nodes -o wide"],
+            capture_output=True, text=True, timeout=15,
+        )
+        print(result.stdout)
+        sys.exit(1)
 
     # Phase 1 — K8s cluster setup
     if args.skip_k8s:
@@ -1038,6 +1142,10 @@ if __name__ == "__main__":
         if not check_rest_api(wp_host, WP_NODEPORT, "wordpress"):
             print("ERROR: REST API not available.")
             sys.exit(1)
+
+        # Phase 6c — Tune MySQL InnoDB
+        print("\n[Phase 6c] Tuning MySQL InnoDB settings ...")
+        tune_mysql_k8s()
 
         # Phase 7 — Seed posts for editPost workload
         if args.skip_seed:

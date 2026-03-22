@@ -113,6 +113,11 @@ public class XdnGigapaxosApp
   // This is used mainly for measuring the coordination, not execution, overhead.
   private static final String DBG_HDR_NO_OP_EXECUTION = "___DNO";
 
+  // When true, adds X-XDN-Timing, X-XDN-Forward, and X-XDN-Pipeline response headers
+  // with per-request latency breakdown. Enable via -DXDN_TIMING_HEADERS=true.
+  public static final boolean TIMING_HEADERS_ENABLED =
+      Boolean.getBoolean("XDN_TIMING_HEADERS");
+
   // Maximum number of requests forwarded to the container in parallel within a single
   // batch execution. Limits tail-latency amplification when the backend serializes writes
   // (e.g., SQLite WAL). Requests beyond this limit are processed in sequential chunks.
@@ -257,20 +262,41 @@ public class XdnGigapaxosApp
       long endRmCacheTimeNs = System.nanoTime();
 
       long endTime = System.nanoTime();
+      double fwdMs = (endFwdTimeNs - preFwdTimeNs) / 1_000_000.0;
+      double totalExecMs = (endTime - startExecuteTimeNs) / 1_000_000.0;
       logger.log(
           Level.INFO,
           "{0}:{1} - execution within {2}ms, {3} {4}:{5} " + "(fwd={6}ms rmc={7}ms) [id: {8}]",
           new Object[] {
             this.myNodeId.toLowerCase(),
             this.getClass().getSimpleName(),
-            (endTime - startExecuteTimeNs) / 1_000_000.0,
+            totalExecMs,
             xdnHttpRequest.getHttpRequest().method(),
             serviceName,
             xdnHttpRequest.getHttpRequest().uri(),
-            (endFwdTimeNs - preFwdTimeNs) / 1_000_000.0,
+            fwdMs,
             (endRmCacheTimeNs - endFwdTimeNs) / 1_000_000.0,
             String.valueOf(xdnHttpRequest.getRequestID())
           });
+
+      // Instrumentation: add timing breakdown as response header for latency analysis.
+      if (TIMING_HEADERS_ENABLED && xdnHttpRequest.getHttpResponse() != null) {
+        xdnHttpRequest
+            .getHttpResponse()
+            .headers()
+            .set(
+                "X-XDN-Timing",
+                String.format("exec=%.2fms;fwd=%.2fms", totalExecMs, fwdMs));
+      }
+      // Post-execution timestamp for HttpActiveReplica to measure callback→response delay.
+      if (xdnHttpRequest.getHttpResponse() != null) {
+        String headerKey = String.format("X-E-EXC-TS-%s", this.myNodeId);
+        xdnHttpRequest
+            .getHttpResponse()
+            .headers()
+            .set(headerKey, String.valueOf(System.nanoTime()));
+      }
+
       return true;
     }
 
@@ -2312,6 +2338,10 @@ public class XdnGigapaxosApp
       return;
     }
 
+    double proxyTotalMs = (endResponseStoreTime - startTime) / 1_000_000.0;
+    double containerMs = (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0;
+    double copyReqMs = (endRequestCreationTime - endValidationTime) / 1_000_000.0;
+
     logger.log(
         Level.FINE,
         "{0}:{1} - docker proxy takes {2}ms (val={3}ms crt={4}ms "
@@ -2319,13 +2349,25 @@ public class XdnGigapaxosApp
         new Object[] {
           this.myNodeId,
           this.getClass().getSimpleName(),
-          (endResponseStoreTime - startTime) / 1_000_000.0,
+          proxyTotalMs,
           (endValidationTime - startTime) / 1_000_000.0,
-          (endRequestCreationTime - endValidationTime) / 1_000_000.0,
-          (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0,
+          copyReqMs,
+          containerMs,
           (endConversionTime - endRequestResponseTime) / 1_000_000.0,
           (endResponseStoreTime - endConversionTime) / 1_000_000.0
         });
+
+    // Instrumentation: add forwarding breakdown as response header.
+    if (TIMING_HEADERS_ENABLED && xdnRequest.getHttpResponse() != null) {
+      xdnRequest
+          .getHttpResponse()
+          .headers()
+          .set(
+              "X-XDN-Forward",
+              String.format(
+                  "container=%.2fms;proxy=%.2fms;copyreq=%.2fms",
+                  containerMs, proxyTotalMs, copyReqMs));
+    }
   }
 
   private void forwardHttpRequestBatchToContainerizedService(XdnHttpRequestBatch batch) {
@@ -2686,6 +2728,7 @@ public class XdnGigapaxosApp
         new Object[] {
           this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
         });
+    System.out.println("Completed initContainerSync for " + serviceName);
     service.initializationSucceed = true;
   }
 

@@ -502,6 +502,13 @@ public class HttpActiveReplica {
                         HttpActiveReplicaHandler.sendStringResponse(
                                 msg, status, false, ctx);
                     } else {
+                        // Instrumentation: add pipeline timing header before writing response.
+                        if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
+                                && httpResponse != null) {
+                            httpResponse.headers().set("X-XDN-Pipeline",
+                                    String.format("callback=%dms;qdelay=%dms",
+                                            callbackElapsedMs, queueDelayMs));
+                        }
                         HttpActiveReplicaHandler.writeHttpResponse(
                                 httpRequest.getRequestID(),
                                 httpResponse,

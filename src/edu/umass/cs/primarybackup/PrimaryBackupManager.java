@@ -99,13 +99,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private static final long BATCH_ACCUMULATION_MS =
         Long.getLong("PB_BATCH_ACCUMULATION_MS", 0);
 
-    // Accumulation window for the CAPTURE THREAD (done queue), in milliseconds.
-    // After the first completed batch arrives, the capture thread waits up to this many ms
+    // Accumulation window for the CAPTURE THREAD (done queue), in microseconds.
+    // After the first completed batch arrives, the capture thread waits up to this many µs
     // for additional completions before calling captureStateDiff + propose.  A larger window
     // amortizes the ~1-2ms captureStateDiff and ~12ms Paxos commit across more requests.
     // Set to 0 to disable (original take+drainTo behaviour).
-    private static final long CAPTURE_ACCUMULATION_MS =
-        Long.getLong("PB_CAPTURE_ACCUMULATION_MS", 0);
+    private static final long CAPTURE_ACCUMULATION_US =
+        Long.getLong("PB_CAPTURE_ACCUMULATION_US",
+            // Backwards compat: if the old MS flag is set, convert to µs
+            Long.getLong("PB_CAPTURE_ACCUMULATION_MS", 0L) * 1000);
 
     // Debug flag: skip captureStateDiff + Paxos propose in the capture thread.
     // When enabled, callbacks fire immediately after workers finish execution,
@@ -446,7 +448,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
         // Submit to the per-service batch worker; the worker drains the queue and executes
         // requests in parallel batches before proposing a single stateDiff per batch.
-        ensureBatchWorker(serviceName).offer(new RequestAndCallback(packet, callback));
+        RequestAndCallback rc = new RequestAndCallback(packet, callback);
+        rc.setPbmEntryNs(System.nanoTime());
+        ensureBatchWorker(serviceName).offer(rc);
         return true;
     }
 
@@ -589,11 +593,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 drained = new ArrayList<>();
                 drained.add(first);
 
-                // Accumulation window: wait up to CAPTURE_ACCUMULATION_MS for more
+                // Accumulation window: wait up to CAPTURE_ACCUMULATION_US for more
                 // completions so we can batch them into a single captureStateDiff + propose.
-                if (CAPTURE_ACCUMULATION_MS > 0) {
+                if (CAPTURE_ACCUMULATION_US > 0) {
                     long deadlineNs = System.nanoTime()
-                            + CAPTURE_ACCUMULATION_MS * 1_000_000L;
+                            + CAPTURE_ACCUMULATION_US * 1_000L;
                     CompletedBatch next;
                     while ((next = doneQueue.poll(
                             Math.max(0, deadlineNs - System.nanoTime()),
@@ -691,6 +695,26 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                             List<RequestAndCallback> cbs =
                                     pendingBatchCallbacks.remove(batchId);
                             if (cbs != null) {
+                                // Pipeline timing summary (gated by XDN_TIMING_HEADERS)
+                                if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
+                                        && !cbs.isEmpty()) {
+                                    long callbackNs = System.nanoTime();
+                                    RequestAndCallback sample = cbs.get(0);
+                                    if (sample.pbmEntryNs() > 0) {
+                                        System.out.printf(
+                                            "PBM_TIMING: queueWait=%.2fms exec=%.2fms "
+                                            + "captureWait=%.2fms capture=%.2fms propose=%.2fms "
+                                            + "total=%.2fms batchSize=%d diffSize=%d%n",
+                                            (sample.workerPickupNs() - sample.pbmEntryNs()) / 1e6,
+                                            (sample.executeEndNs() - sample.workerPickupNs()) / 1e6,
+                                            (sdStart - sample.doneQueueNs()) / 1e6,
+                                            (sdEnd - sdStart) / 1e6,
+                                            elapsedMs,
+                                            (callbackNs - sample.pbmEntryNs()) / 1e6,
+                                            cbs.size(),
+                                            stateDiff != null ? stateDiff.length : 0);
+                                    }
+                                }
                                 cbs.forEach(rc -> rc.callback()
                                         .executed(rc.requestPacket(), handled));
                             }
@@ -728,6 +752,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             try {
                 // Block until the first request arrives.
                 RequestAndCallback first = queue.take();
+                first.setWorkerPickupNs(System.nanoTime());
                 batch = new ArrayList<>();
                 batch.add(first);
 
@@ -920,6 +945,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             }
         }
 
+        // Stamp execute end + doneQueue time for pipeline instrumentation.
+        long nowNs = System.nanoTime();
+        for (RequestAndCallback rc : batch) {
+            rc.setExecuteEndNs(nowNs);
+            rc.setDoneQueueNs(nowNs);
+        }
+
         // Enqueue completion for the capture thread — worker does NOT wait.
         // The capture thread will call captureStateDiff() + propose() for us.
         serviceDoneQueues.get(serviceName).offer(new CompletedBatch(
@@ -971,6 +1003,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             XdnHttpRequestBatch xdnBatch = xdnBatches.get(i);
             ClientRequest resp = xdnBatch.getResponse();
             if (resp != null) batch.get(i).requestPacket().setResponse(resp);
+        }
+
+        // Stamp execute end + doneQueue time for pipeline instrumentation.
+        long nowNs = System.nanoTime();
+        for (RequestAndCallback rc : batch) {
+            rc.setExecuteEndNs(nowNs);
+            rc.setDoneQueueNs(nowNs);
         }
 
         // Enqueue completion for the capture thread — worker does NOT wait.
