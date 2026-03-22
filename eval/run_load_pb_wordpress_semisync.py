@@ -125,12 +125,12 @@ def _run_load(url, rate, output_file, duration_sec):
     return _parse_go_output(output_file)
 
 
-def run_load_point(url, rate):
-    return _run_load(url, rate, RESULTS_DIR / f"rate{rate}.txt", LOAD_DURATION_SEC)
+def run_load_point(url, rate, duration_sec=LOAD_DURATION_SEC):
+    return _run_load(url, rate, RESULTS_DIR / f"rate{rate}.txt", duration_sec)
 
 
-def warmup_rate_point(url, rate):
-    m = _run_load(url, rate, RESULTS_DIR / f"warmup_rate{rate}.txt", WARMUP_DURATION_SEC)
+def warmup_rate_point(url, rate, warmup_duration_sec=WARMUP_DURATION_SEC):
+    m = _run_load(url, rate, RESULTS_DIR / f"warmup_rate{rate}.txt", warmup_duration_sec)
     print(f"     [warmup] tput={m['throughput_rps']:.2f} rps  avg={m['avg_ms']:.1f}ms")
     return m
 
@@ -306,6 +306,31 @@ def wait_for_replicas_sync(timeout_sec=120):
         print(f"   Semi-sync status:\n{result.stdout}")
 
 
+def tune_mysql_semisync():
+    """Tune MySQL InnoDB settings on the primary for write-heavy workloads.
+
+    Increases buffer pool to 1GB (from default 128MB) to avoid page eviction
+    during sustained high write rates, and reduces background I/O to minimize
+    interference with foreground queries.
+    """
+    print("   Tuning MySQL InnoDB settings on primary ...")
+    tune_sql = (
+        "SET GLOBAL innodb_buffer_pool_size=1073741824; "       # 1 GB
+        "SET GLOBAL innodb_change_buffer_max_size=50; "          # allow more change buffering
+        "SET GLOBAL innodb_max_dirty_pages_pct=90; "             # delay page flush
+        "SET GLOBAL innodb_max_dirty_pages_pct_lwm=80; "         # high-water mark before eager flush
+        "SET GLOBAL innodb_io_capacity=200; "                    # limit background I/O
+        "SET GLOBAL innodb_io_capacity_max=400; "                # cap burst I/O
+        "SET GLOBAL innodb_lru_scan_depth=256; "                 # reduce per-second page cleaner work
+    )
+    result = _mysql(PRIMARY_HOST, tune_sql)
+    if result.returncode == 0:
+        print("   MySQL InnoDB tuned successfully")
+    else:
+        print(f"   WARNING: MySQL tuning failed: {result.stderr.strip()}")
+    time.sleep(2)
+
+
 def start_wordpress():
     """Start WordPress 6.5.4-apache on 10.10.1.1 connected to local MySQL primary."""
     print(f"   Starting WordPress on {PRIMARY_HOST}:{WP_PORT} ...")
@@ -313,12 +338,18 @@ def start_wordpress():
     _ssh(PRIMARY_HOST, "docker rm -f wordpress 2>/dev/null || true", check=False)
     # Use PRIMARY_HOST IP (not 127.0.0.1) so the container can reach MySQL
     # published on the host's external interface.
+    wp_config_extra = (
+        "define('DISABLE_WP_CRON', true); "
+        "define('AUTOMATIC_UPDATER_DISABLED', true); "
+        "define('WP_AUTO_UPDATE_CORE', false);"
+    )
     cmd = (
         "docker run -d --name wordpress "
         f"-e WORDPRESS_DB_HOST={PRIMARY_HOST}:{MYSQL_PORT} "
         "-e WORDPRESS_DB_USER=root "
         f"-e WORDPRESS_DB_PASSWORD={MYSQL_ROOT_PASS} "
         f"-e WORDPRESS_DB_NAME={MYSQL_DB} "
+        f"-e WORDPRESS_CONFIG_EXTRA=\"{wp_config_extra}\" "
         f"-p {WP_PORT}:80 "
         "wordpress:6.5.4-apache"
     )
@@ -347,6 +378,10 @@ def parse_args():
                    help="Skip seeding warmup posts (assume already seeded)")
     p.add_argument("--rates", type=str, default=None,
                    help="Comma-separated list of offered rates (req/s) to override default")
+    p.add_argument("--duration", type=int, default=LOAD_DURATION_SEC,
+                   help=f"Measurement duration per rate point in seconds (default: {LOAD_DURATION_SEC})")
+    p.add_argument("--warmup-duration", type=int, default=WARMUP_DURATION_SEC,
+                   help=f"Warmup duration per rate point in seconds (default: {WARMUP_DURATION_SEC})")
     return p.parse_args()
 
 
@@ -418,6 +453,10 @@ if __name__ == "__main__":
         print("ERROR: REST API not available.")
         sys.exit(1)
 
+    # Phase 8b — Tune MySQL InnoDB
+    print("\n[Phase 8b] Tuning MySQL InnoDB settings ...")
+    tune_mysql_semisync()
+
     # Phase 9 — Seed posts for editPost workload
     if args.skip_seed:
         print(f"\n[Phase 9] Skipping post seeding (--skip-seed)")
@@ -452,16 +491,18 @@ if __name__ == "__main__":
                 fh.write(_xmlrpc_editpost_payload(pid) + "\n")
         print(f"   Done: {len(seed_ids)} payloads written.")
 
-    # Determine rate list
+    # Determine rate list and durations
     if args.rates:
         rates = [int(r.strip()) for r in args.rates.split(",")]
     else:
         rates = BOTTLENECK_RATES
+    load_duration = args.duration
+    warmup_duration = args.warmup_duration
 
     # Phase 10 — Load sweep
     print(f"\n[Phase 10] Load sweep at {rates} req/s ...")
     print(f"   URL      : {wp_url}")
-    print(f"   Duration : {LOAD_DURATION_SEC}s per rate (warmup {WARMUP_DURATION_SEC}s)")
+    print(f"   Duration : {load_duration}s per rate (warmup {warmup_duration}s)")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     results = []
@@ -470,8 +511,8 @@ if __name__ == "__main__":
             print(f"   Pausing {INTER_RATE_PAUSE_SEC}s between rate points ...")
             time.sleep(INTER_RATE_PAUSE_SEC)
 
-        print(f"\n   -> rate={rate} req/s (warmup {WARMUP_DURATION_SEC}s) ...")
-        wm = warmup_rate_point(wp_url, rate)
+        print(f"\n   -> rate={rate} req/s (warmup {warmup_duration}s) ...")
+        wm = warmup_rate_point(wp_url, rate, warmup_duration)
         if wm["throughput_rps"] < 0.1 * rate:
             print(
                 f"   SKIP: warmup tput={wm['throughput_rps']:.2f} rps "
@@ -491,8 +532,8 @@ if __name__ == "__main__":
             if line:
                 print(f"   Semi-sync: {line[0]}")
 
-        print(f"   -> rate={rate} req/s (measuring {LOAD_DURATION_SEC}s) ...")
-        m = run_load_point(wp_url, rate)
+        print(f"   -> rate={rate} req/s (measuring {load_duration}s) ...")
+        m = run_load_point(wp_url, rate, load_duration)
         row = {"rate_rps": rate, **m}
         results.append(row)
         print(

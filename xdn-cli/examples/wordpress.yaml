@@ -21,6 +21,9 @@ components:
         - WORDPRESS_CONFIG_EXTRA:
             define('FORCE_SSL_ADMIN', false);
             define('FORCE_SSL_LOGIN', false);
+            define('DISABLE_WP_CRON', true);
+            define('AUTOMATIC_UPDATER_DISABLED', true);
+            define('WP_AUTO_UPDATE_CORE', false);
 deterministic: false
 state: database:/var/lib/mysql/
 consistency: linearizability

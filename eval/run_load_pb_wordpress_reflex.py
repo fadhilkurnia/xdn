@@ -218,8 +218,8 @@ def tune_mysql(primary):
     """Tune MySQL InnoDB settings on the primary for write-heavy workloads.
 
     Increases buffer pool to 1GB (from default 128MB) to avoid page eviction
-    during sustained high write rates, and sets flush mode to async to reduce
-    fsync overhead.
+    during sustained high write rates, and reduces background I/O to minimize
+    interference with foreground queries.
     """
     print("   [setup] Tuning MySQL InnoDB settings ...")
     # Find the MySQL container (the one running the mysql image)
@@ -235,7 +235,6 @@ def tune_mysql(primary):
 
     tune_sql = (
         "SET GLOBAL innodb_buffer_pool_size=1073741824; "       # 1 GB
-        "SET GLOBAL innodb_flush_log_at_trx_commit=2; "         # async flush to OS buffer
         "SET GLOBAL innodb_change_buffer_max_size=50; "          # allow more change buffering
         "SET GLOBAL innodb_max_dirty_pages_pct=90; "             # delay page flush (reduce background statediff)
         "SET GLOBAL innodb_max_dirty_pages_pct_lwm=80; "         # high-water mark before eager flush
@@ -340,24 +339,26 @@ def setup_fresh_wordpress_cluster():
     # WordPress MySQL state can be 100-200MB; rsync takes ~60-120s.
     # Without this wait, statediff captures are skipped and requests stall.
     print("   [setup] Waiting for PB init sync to complete ...")
-    init_sync_deadline = time.time() + 300
+    init_sync_deadline = time.time() + 600
     while time.time() < init_sync_deadline:
-        # Check if the screen log shows postInitialization on backup replicas
+        # Wait for initContainerSync to complete on the primary — this is what
+        # sets initializationSucceed=true and enables captureStateDiff.
+        # "Running postInitialization() in backup" is NOT sufficient: it fires
+        # before the primary's initContainerSync (rsync of MySQL data) finishes.
         try:
             with open(SCREEN_LOG, "r") as f:
                 log_content = f.read()
-            backup_init_count = log_content.count("Running postInitialization() in backup")
-            if backup_init_count >= 2:
-                print(f"   [setup] PB init sync complete ({backup_init_count} backups initialized)")
+            if "Completed initContainerSync" in log_content:
+                print(f"   [setup] initContainerSync completed on primary")
                 break
         except FileNotFoundError:
             pass
-        elapsed = int(time.time() - (init_sync_deadline - 300))
+        elapsed = int(time.time() - (init_sync_deadline - 600))
         if elapsed % 30 == 0:
-            print(f"   [setup] ... {elapsed}s elapsed, waiting for backup init sync ...")
+            print(f"   [setup] ... {elapsed}s elapsed, waiting for initContainerSync ...")
         time.sleep(5)
     else:
-        print("   WARNING: PB init sync may not have completed after 300s — proceeding anyway")
+        print("   WARNING: initContainerSync may not have completed after 600s — proceeding anyway")
     # Extra settle time after init sync
     time.sleep(10)
 
