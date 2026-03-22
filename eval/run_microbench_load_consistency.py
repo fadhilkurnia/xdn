@@ -466,6 +466,28 @@ def main():
     ret = os.system(f"{XDN_BINARY} --help > /dev/null 2>&1")
     assert ret == 0, f"Cannot find {XDN_BINARY}"
 
+    # Ensure the Docker image is present on all nodes to avoid pulling from
+    # Docker Hub on every run (which hits rate limits).
+    all_hosts = AR_HOSTS + [CONTROL_PLANE_HOST]
+    log.info("  Ensuring Docker image '%s' is present on all nodes ...", TODO_IMAGE)
+    for host in all_hosts:
+        check = subprocess.run(
+            ["ssh", host, "docker", "image", "inspect", TODO_IMAGE],
+            capture_output=True,
+        )
+        if check.returncode != 0:
+            log.info("    Pulling '%s' on %s ...", TODO_IMAGE, host)
+            pull = subprocess.run(
+                ["ssh", host, "docker", "pull", TODO_IMAGE],
+                capture_output=True, text=True,
+            )
+            if pull.returncode != 0:
+                log.error("    Failed to pull image on %s: %s", host, pull.stderr.strip())
+                sys.exit(1)
+            log.info("    Pulled successfully on %s", host)
+        else:
+            log.info("    Image already present on %s", host)
+
     # Open CSV
     csv_fh = open(csv_path, "w", newline="", encoding="utf-8")
     csv_writer = csv.DictWriter(csv_fh, fieldnames=CSV_FIELDNAMES)
