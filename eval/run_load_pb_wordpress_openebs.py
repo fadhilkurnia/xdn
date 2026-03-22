@@ -180,6 +180,27 @@ spec:
 
 # ── REST API auth (K8s) ────────────────────────────────────────────────────────
 
+def disable_wp_cron_k8s():
+    """Disable WP-Cron and auto-updates in the K8s WordPress pod."""
+    cmd = (
+        "kubectl exec deploy/wordpress -- bash -c "
+        "\"grep -q DISABLE_WP_CRON /var/www/html/wp-config.php || "
+        "sed -i '/That.*stop editing/i "
+        "define('\\''DISABLE_WP_CRON'\\'', true);\\n"
+        "define('\\''AUTOMATIC_UPDATER_DISABLED'\\'', true);\\n"
+        "define('\\''WP_AUTO_UPDATE_CORE'\\'', false);' "
+        "/var/www/html/wp-config.php\""
+    )
+    result = subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no", K8S_CONTROL_PLANE, cmd],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("   WP-Cron and auto-updates disabled in wp-config.php")
+    else:
+        print(f"   WARNING: failed to disable WP-Cron: {result.stderr.strip()}")
+
+
 def enable_rest_auth_k8s():
     """Install mu-plugin + create WP Application Password in the K8s WordPress pod."""
     mu_plugin = (
@@ -253,12 +274,12 @@ def _run_load(url, rate, output_file, duration_sec):
     return _parse_go_output(output_file)
 
 
-def run_load_point(url, rate):
-    return _run_load(url, rate, RESULTS_DIR / f"rate{rate}.txt", LOAD_DURATION_SEC)
+def run_load_point(url, rate, duration_sec=LOAD_DURATION_SEC):
+    return _run_load(url, rate, RESULTS_DIR / f"rate{rate}.txt", duration_sec)
 
 
-def warmup_rate_point(url, rate):
-    m = _run_load(url, rate, RESULTS_DIR / f"warmup_rate{rate}.txt", WARMUP_DURATION_SEC)
+def warmup_rate_point(url, rate, warmup_duration_sec=WARMUP_DURATION_SEC):
+    m = _run_load(url, rate, RESULTS_DIR / f"warmup_rate{rate}.txt", warmup_duration_sec)
     print(f"     [warmup] tput={m['throughput_rps']:.2f} rps  avg={m['avg_ms']:.1f}ms")
     return m
 
@@ -866,10 +887,9 @@ def cleanup_wordpress_k8s():
     # Wait for pods to terminate
     deadline = time.time() + 60
     while time.time() < deadline:
-        result = subprocess.run(
-            ["kubectl", "get", "pods", "-l", "app in (wordpress,mysql)",
-             "--no-headers"],
-            capture_output=True, text=True,
+        result = _kubectl(
+            ["get", "pods", "-l", "app in (wordpress,mysql)", "--no-headers"],
+            check=False, capture=True,
         )
         if not result.stdout.strip():
             break
@@ -927,6 +947,10 @@ def parse_args():
                    help="Skip seeding warmup posts (assume already seeded)")
     p.add_argument("--rates", type=str, default=None,
                    help="Comma-separated list of offered rates (req/s) to override default")
+    p.add_argument("--duration", type=int, default=LOAD_DURATION_SEC,
+                   help=f"Measurement duration per rate point in seconds (default: {LOAD_DURATION_SEC})")
+    p.add_argument("--warmup-duration", type=int, default=WARMUP_DURATION_SEC,
+                   help=f"Warmup duration per rate point in seconds (default: {WARMUP_DURATION_SEC})")
     return p.parse_args()
 
 
@@ -965,17 +989,19 @@ if __name__ == "__main__":
         print("\n[Phase 3] Installing OpenEBS Mayastor ...")
         setup_openebs()
 
-    # Determine rate list
+    # Determine rate list and durations
     if args.rates:
         rates = [int(r.strip()) for r in args.rates.split(",")]
     else:
         rates = BOTTLENECK_RATES
+    load_duration = args.duration
+    warmup_duration = args.warmup_duration
 
     wp_host = WORKER_NODES[0]
     wp_url  = f"http://{wp_host}:{WP_NODEPORT}/xmlrpc.php"
 
     print(f"  Rates       : {rates} req/s")
-    print(f"  Duration    : {LOAD_DURATION_SEC}s per rate (warmup {WARMUP_DURATION_SEC}s)")
+    print(f"  Duration    : {load_duration}s per rate (warmup {warmup_duration}s)")
     print(f"  Results     : {RESULTS_DIR}")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1007,6 +1033,8 @@ if __name__ == "__main__":
         if not enable_rest_auth_k8s():
             print("ERROR: REST API auth setup failed.")
             sys.exit(1)
+        print("\n[Phase 6b] Disabling WP-Cron and auto-updates ...")
+        disable_wp_cron_k8s()
         if not check_rest_api(wp_host, WP_NODEPORT, "wordpress"):
             print("ERROR: REST API not available.")
             sys.exit(1)
@@ -1048,15 +1076,15 @@ if __name__ == "__main__":
         # Phase 8 — Load sweep
         print(f"\n[Phase 8] Load sweep at {rates} req/s ...")
         print(f"   URL      : {wp_url}")
-        print(f"   Duration : {LOAD_DURATION_SEC}s per rate (warmup {WARMUP_DURATION_SEC}s)")
+        print(f"   Duration : {load_duration}s per rate (warmup {warmup_duration}s)")
 
         for i, rate in enumerate(rates):
             if i > 0 and INTER_RATE_PAUSE_SEC > 0:
                 print(f"   Pausing {INTER_RATE_PAUSE_SEC}s between rate points ...")
                 time.sleep(INTER_RATE_PAUSE_SEC)
 
-            print(f"\n   -> rate={rate} req/s (warmup {WARMUP_DURATION_SEC}s) ...")
-            wm = warmup_rate_point(wp_url, rate)
+            print(f"\n   -> rate={rate} req/s (warmup {warmup_duration}s) ...")
+            wm = warmup_rate_point(wp_url, rate, warmup_duration)
             if wm["throughput_rps"] < 0.1 * rate:
                 print(
                     f"   SKIP: warmup tput={wm['throughput_rps']:.2f} rps "
@@ -1066,8 +1094,8 @@ if __name__ == "__main__":
             print("   Settling 5s after warmup ...")
             time.sleep(5)
 
-            print(f"   -> rate={rate} req/s (measuring {LOAD_DURATION_SEC}s) ...")
-            m = run_load_point(wp_url, rate)
+            print(f"   -> rate={rate} req/s (measuring {load_duration}s) ...")
+            m = run_load_point(wp_url, rate, load_duration)
             row = {"rate_rps": rate, **m}
             results.append(row)
             print(

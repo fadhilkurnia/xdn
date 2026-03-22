@@ -296,6 +296,42 @@ def enable_rest_auth(primary):
     return False
 
 
+def disable_wp_cron(primary):
+    """Disable WP-Cron and auto-updates to prevent 503 maintenance mode during benchmarks."""
+    r = subprocess.run(
+        ["ssh", primary, "docker ps -q --filter ancestor=wordpress:6.5.4-apache"],
+        capture_output=True, text=True,
+    )
+    cid = r.stdout.strip().split("\n")[0]
+    if not cid:
+        print(f"   WARNING: no running wordpress container on {primary}, skipping WP cron disable")
+        return
+
+    php_snippet = (
+        "define('DISABLE_WP_CRON', true);\n"
+        "define('AUTOMATIC_UPDATER_DISABLED', true);\n"
+        "define('WP_AUTO_UPDATE_CORE', false);\n"
+    )
+    # Insert before the "That's all, stop editing!" marker in wp-config.php
+    cmd = (
+        f"docker exec {cid} bash -c "
+        "\"grep -q DISABLE_WP_CRON /var/www/html/wp-config.php || "
+        "sed -i '/That.*stop editing/i "
+        "define('\\''DISABLE_WP_CRON'\\'', true);\\n"
+        "define('\\''AUTOMATIC_UPDATER_DISABLED'\\'', true);\\n"
+        "define('\\''WP_AUTO_UPDATE_CORE'\\'', false);' "
+        "/var/www/html/wp-config.php\""
+    )
+    result = subprocess.run(
+        ["ssh", primary, cmd],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print("   WP-Cron and auto-updates disabled in wp-config.php")
+    else:
+        print(f"   WARNING: failed to disable WP-Cron: {result.stderr.strip()}")
+
+
 # Phase 9 — Check REST API Availability
 
 def _rest_auth_header():
@@ -624,6 +660,7 @@ if __name__ == '__main__':
     if not enable_rest_auth(primary):
         print("ERROR: REST API auth setup failed.")
         sys.exit(1)
+    disable_wp_cron(primary)
     ok = check_rest_api(primary, HTTP_PROXY_PORT, SERVICE_NAME)
     if not ok:
         print("ERROR: REST API not available.")
