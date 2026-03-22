@@ -1621,6 +1621,7 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 					DelayProfiler.updateDelay(AbstractPaxosLogger.appName
 							+ ".execute", t, inorderDecision.batchSize() + 1);
 
+
 				// getState must be atomic with the execution
 				if (shouldCheckpoint(inorderDecision)
 						&& !inorderDecision.isRecovery())
@@ -1735,13 +1736,15 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 					 * RequestPacket in PaxosManager and then convert the string
 					 * back to InterfaceRequest using the app's getRequest
 					 * method. */
+					long deserStartNs = System.nanoTime();
 					Request request =
 					// don't convert to and from string unnecessarily
-					!requestPacket.shouldReturnRequestValue() 
+					!requestPacket.shouldReturnRequestValue()
 					|| requestPacket.requestValue.equals(Request.NO_OP) ? requestPacket
 					// ask app to translate string to InterfaceRequest
 							: getInterfaceRequest(app,
 									requestPacket.getRequestValue());
+					long deserEndNs = System.nanoTime();
 					Level level = Level.FINE;
 					log.log(level,
 							"{0} executing (in-order) decision {1}",
@@ -1760,6 +1763,7 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 										RTTEstimator.print() });
 					}
 
+					long execStartNs = System.nanoTime();
 					// TESTPaxosApp tracks noops, so it needs to be fed them
 					executed = (requestPacket.requestValue
 							.equals(Request.NO_OP) && !(app instanceof TESTPaxosApp))
@@ -1768,11 +1772,22 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 									(recoveryMode || (requestPacket
 											.getEntryReplica() != paxosManager
 											.getMyID())));
+					long execEndNs = System.nanoTime();
 					paxosManager.executed(requestPacket,
 							request,
 							// send response if entry replica and !recovery
 							requestPacket.getEntryReplica() == paxosManager
 									.getMyID() && !recoveryMode);
+					long callbackEndNs = System.nanoTime();
+					boolean isEntryReplica = requestPacket.getEntryReplica() == paxosManager.getMyID();
+					long deserMs = (deserEndNs - deserStartNs) / 1_000_000;
+					long execMs = (execEndNs - execStartNs) / 1_000_000;
+					long cbMs = (callbackEndNs - execEndNs) / 1_000_000;
+					long totalMs = (callbackEndNs - deserStartNs) / 1_000_000;
+					log.log(Level.INFO,
+							"PISM.execute total={0}ms deser={1}ms exec={2}ms cb={3}ms entry={4} req={5}",
+							new Object[]{totalMs, deserMs, execMs, cbMs,
+									isEntryReplica, request != null ? request.getClass().getSimpleName() : "null"});
 					assert (requestPacket.getEntryReplica() > 0) : requestPacket;
 
 					// don't try any more if stopped

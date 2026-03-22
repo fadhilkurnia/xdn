@@ -2,14 +2,18 @@
 name: simple-llm
 components:
    - ollama:
-        image: simple-ollama:1
+        image: fadhilkurnia/xdn-llama:latest
         expose: 11434
         stateful: false
-   - server:
-        image: simple-llm:1
+   - mongodb:
+        image: mongo:8.0
+        expose: 27017
         stateful: true
+   - server:
+        image: fadhilkurnia/xdn-simple-llm:latest
+        stateful: false
         port: 3000
         entry: true
-state: server:/usr/src/app/data/
+state: mongodb:/data/db/
 deterministic: false
 consistency: linearizability

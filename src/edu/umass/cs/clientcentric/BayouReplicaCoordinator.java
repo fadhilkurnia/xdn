@@ -94,9 +94,11 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        logger.log(Level.INFO, String.format("%s:%s - Coordinating request %s name=%s",
-                this.myNodeID, this.getClass().getSimpleName(),
-                request.getClass().getSimpleName(), request.getServiceName()));
+        if (logger.isLoggable(Level.FINE)) {
+            logger.log(Level.FINE, "{0}:{1} - Coordinating request {2} name={3}",
+                    new Object[]{this.myNodeID, this.getClass().getSimpleName(),
+                            request.getClass().getSimpleName(), request.getServiceName()});
+        }
 
         String serviceName = request.getServiceName();
         ReplicaInstance<NodeIDType> serviceInstance = instances.get(serviceName);

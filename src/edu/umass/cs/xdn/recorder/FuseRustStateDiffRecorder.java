@@ -15,7 +15,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -271,7 +270,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
     Map<Integer, SocketPair> epochToChannelMap = this.serviceFsSocket.get(serviceName);
     assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch).getCaptureSocket();
@@ -335,12 +334,11 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
     byte[] resultBytes = new byte[stateDiffBuffer.remaining()];
     stateDiffBuffer.get(resultBytes);
-    String stateDiff = Base64.getEncoder().encodeToString(resultBytes);
-    return stateDiff;
+    return resultBytes;
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
+  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
     // TODO: directly apply stateDiff from the obtained byte[], not via
     //  the fuselog-apply program, which we currently use.
 
@@ -352,12 +350,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
             FuseRustStateDiffRecorder.class.getSimpleName(),
             serviceName,
             placementEpoch,
-            encodedState.length()));
-    logger.log(
-        Level.FINEST,
-        String.format(
-            "%s:%s - applying stateDiff: %s",
-            this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), encodedState));
+            encodedState.length));
 
     String applySocketFile =
         this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
@@ -369,8 +362,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
               "%s:%s - connecting to %s",
               this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), applySocketFile));
 
-      byte[] base64Bytes = Base64.getDecoder().decode(encodedState);
-      ByteBuffer buffer = ByteBuffer.wrap(base64Bytes);
+      ByteBuffer buffer = ByteBuffer.wrap(encodedState);
       while (buffer.hasRemaining()) {
         channel.write(buffer);
       }

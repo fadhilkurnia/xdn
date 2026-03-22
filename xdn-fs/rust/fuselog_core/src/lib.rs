@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, UNIX_EPOCH, SystemTime};
 use std::io::{Read, Seek, SeekFrom, Write, ErrorKind};
 use std::fs::{File, OpenOptions};
@@ -25,16 +25,65 @@ const O_DIRECT_FLAG: i32 = libc::O_DIRECT as i32;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 const O_DIRECT_FLAG: i32 = 0;
 
-static STATEDIFF_LOG: once_cell::sync::Lazy<Arc<Mutex<StateDiffLog>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(StateDiffLog::default())));
+/// FID mapping state — separate mutex from actions for fine-grained locking.
+/// Uses bidirectional maps for O(1) lookup in both directions.
+struct FidState {
+    fid_to_path: HashMap<u64, String>,
+    path_to_fid: HashMap<String, u64>,
+    next_fid: u64,
+}
 
-fn get_fid(log: &mut StateDiffLog, path: &str) -> u64 {
-    if let Some((fid, _)) = log.fid_map.iter().find(|(_, p)| p == &path) {
-        return *fid;
+impl Default for FidState {
+    fn default() -> Self {
+        Self {
+            fid_to_path: HashMap::new(),
+            path_to_fid: HashMap::new(),
+            next_fid: 1,
+        }
     }
-    
-    let new_fid = log.fid_map.len() as u64 + 1;
-    log.fid_map.insert(new_fid, path.to_string());
-    new_fid
+}
+
+/// Fid mapping — locked briefly for O(1) path→fid lookup/creation.
+static FID_STATE: once_cell::sync::Lazy<Mutex<FidState>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(FidState::default()));
+
+/// Action accumulation — locked briefly for O(1) push, O(1) harvest via mem::take.
+static ACTIONS: once_cell::sync::Lazy<Mutex<Vec<StateDiffAction>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
+
+fn get_fid(state: &mut FidState, path: &str) -> u64 {
+    if let Some(&fid) = state.path_to_fid.get(path) {
+        return fid;
+    }
+    let fid = state.next_fid;
+    state.next_fid += 1;
+    state.fid_to_path.insert(fid, path.to_string());
+    state.path_to_fid.insert(path.to_string(), fid);
+    fid
+}
+
+/// Atomically harvest all accumulated actions and fid mappings.
+/// Lock hold time: O(1) for actions (mem::take), O(n) for fid_map clone+clear.
+/// All serialization/pruning happens on the returned local copy — no lock held.
+pub fn harvest_and_clear() -> StateDiffLog {
+    let actions = std::mem::take(&mut *ACTIONS.lock().unwrap());
+    let fid_map = {
+        let mut guard = FID_STATE.lock().unwrap();
+        let map = std::mem::take(&mut guard.fid_to_path);
+        guard.path_to_fid.clear();
+        guard.next_fid = 1;
+        map
+    };
+    StateDiffLog { fid_map, actions }
+}
+
+/// Clear all accumulated state without returning it.
+pub fn clear_all() {
+    ACTIONS.lock().unwrap().clear();
+    let mut guard = FID_STATE.lock().unwrap();
+    guard.fid_to_path.clear();
+    guard.path_to_fid.clear();
+    guard.next_fid = 1;
 }
 
 fn metadata_to_file_attr(ino: u64, metadata: &std::fs::Metadata) -> FileAttr {
@@ -307,10 +356,10 @@ impl Filesystem for FuseLogFS {
                 let ino = inodes.get_or_create_ino(&dir_path);
                 
                 {
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let fid = get_fid(&mut log, &relative_path);
-                    log.actions.push(StateDiffAction::Mkdir { fid });
-                    log.actions.push(StateDiffAction::Chown { fid, uid: req.uid(), gid: req.gid() });
+                    let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                    let mut actions = ACTIONS.lock().unwrap();
+                    actions.push(StateDiffAction::Mkdir { fid });
+                    actions.push(StateDiffAction::Chown { fid, uid: req.uid(), gid: req.gid() });
                 }
                 info!("Created and logged directory: {:?} with owner {}:{}", dir_path, req.uid(), req.gid());
 
@@ -348,9 +397,8 @@ impl Filesystem for FuseLogFS {
                      debug!("Removed inode {} for path {:?}", ino, dir_path);
                 }
                 {
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let fid = get_fid(&mut log, &relative_path);
-                    log.actions.push(StateDiffAction::Rmdir { fid });
+                    let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                    ACTIONS.lock().unwrap().push(StateDiffAction::Rmdir { fid });
                 }
                 info!("Removed and logged directory: {:?}", dir_path);
                 reply.ok();
@@ -386,9 +434,8 @@ impl Filesystem for FuseLogFS {
                 let ino = inodes.get_or_create_ino(&link_path);
                 
                 {
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let link_fid = get_fid(&mut log, &relative_link_path);
-                    log.actions.push(StateDiffAction::Symlink {
+                    let link_fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_link_path);
+                    ACTIONS.lock().unwrap().push(StateDiffAction::Symlink {
                         link_fid,
                         target_path: target_path_str,
                         uid: req.uid(),
@@ -468,11 +515,10 @@ impl Filesystem for FuseLogFS {
                 let ino = inodes.get_or_create_ino(&file_path);
                 
                 {
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let fid = get_fid(&mut log, &relative_path);
-                    log.actions.push(StateDiffAction::Create { 
-                        fid, 
-                        uid: req.uid(), 
+                    let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                    ACTIONS.lock().unwrap().push(StateDiffAction::Create {
+                        fid,
+                        uid: req.uid(),
                         gid: req.gid(),
                         mode,
                     });
@@ -586,8 +632,7 @@ impl Filesystem for FuseLogFS {
 
                             // Compute per action overhead using an empty write action
                             let fid_for_overhead = {
-                                let mut log = STATEDIFF_LOG.lock().unwrap();
-                                get_fid(&mut log, &self.get_relative_path(&path))
+                                get_fid(&mut FID_STATE.lock().unwrap(), &self.get_relative_path(&path))
                             };
                             let overhead_probe = StateDiffAction::Write {
                                 fid: fid_for_overhead,
@@ -660,15 +705,16 @@ impl Filesystem for FuseLogFS {
                                 );
 
                                 let relative_path = self.get_relative_path(&path);
-                                let mut log = STATEDIFF_LOG.lock().unwrap();
-                                let fid = get_fid(&mut log, &relative_path);
-
-                                for (chunk_offset, chunk_data) in coalesced_writes {
-                                    log.actions.push(StateDiffAction::Write {
-                                        fid,
-                                        offset: chunk_offset,
-                                        data: chunk_data,
-                                    });
+                                let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                                {
+                                    let mut actions = ACTIONS.lock().unwrap();
+                                    for (chunk_offset, chunk_data) in coalesced_writes {
+                                        actions.push(StateDiffAction::Write {
+                                            fid,
+                                            offset: chunk_offset,
+                                            data: chunk_data,
+                                        });
+                                    }
                                 }
                             } else {
                                 info!("Redundant write to {:?} (no changes detected), not logging.", &path);
@@ -694,10 +740,8 @@ impl Filesystem for FuseLogFS {
                     match file.write_all(data) {
                         Ok(_) => {
                             let relative_path = self.get_relative_path(&path);
-                            let mut log = STATEDIFF_LOG.lock().unwrap();
-                            let fid = get_fid(&mut log, &relative_path);
-                            
-                            log.actions.push(StateDiffAction::Write {
+                            let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                            ACTIONS.lock().unwrap().push(StateDiffAction::Write {
                                 fid,
                                 offset: offset as u64,
                                 data: data.to_vec(),
@@ -734,9 +778,8 @@ impl Filesystem for FuseLogFS {
                 if let Some(ino) = inodes.remove_path(&file_path) {
                     debug!("Removed inode {} for path {:?}", ino, file_path);
                 }
-                let mut log = STATEDIFF_LOG.lock().unwrap();
-                let fid = get_fid(&mut log, &relative_path);
-                log.actions.push(StateDiffAction::Unlink { fid });
+                let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                ACTIONS.lock().unwrap().push(StateDiffAction::Unlink { fid });
                 info!("Unlinked and logged file: {:?}", file_path);
                 reply.ok();
             }
@@ -760,9 +803,8 @@ impl Filesystem for FuseLogFS {
         if let Some(new_mode) = mode {
             match std::fs::set_permissions(&path, std::fs::Permissions::from_mode(new_mode)) {
                 Ok(_) => {
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let fid = get_fid(&mut log, &relative_path);
-                    log.actions.push(StateDiffAction::Chmod { fid, mode: new_mode });
+                    let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                    ACTIONS.lock().unwrap().push(StateDiffAction::Chmod { fid, mode: new_mode });
                     info!("Logged chmod for {:?} to {:o}", path, new_mode);
                 }
                 Err(e) => {
@@ -780,9 +822,8 @@ impl Filesystem for FuseLogFS {
                         reply.error(e.raw_os_error().unwrap_or(EIO));
                         return;
                     }
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let fid = get_fid(&mut log, &relative_path);
-                    log.actions.push(StateDiffAction::Truncate { fid, size: new_size });
+                    let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                    ACTIONS.lock().unwrap().push(StateDiffAction::Truncate { fid, size: new_size });
                     info!("Logged truncate for {:?} to {}", path, new_size);
                 }
                 Err(e) => {
@@ -812,9 +853,8 @@ impl Filesystem for FuseLogFS {
 
             match chown_result {
                 Ok(_) => {
-                    let mut log = STATEDIFF_LOG.lock().unwrap();
-                    let fid = get_fid(&mut log, &relative_path);
-                    log.actions.push(StateDiffAction::Chown { fid, uid: final_uid, gid: final_gid });
+                    let fid = get_fid(&mut FID_STATE.lock().unwrap(), &relative_path);
+                    ACTIONS.lock().unwrap().push(StateDiffAction::Chown { fid, uid: final_uid, gid: final_gid });
                     info!("Logged chown for {:?} to {}:{}", path, final_uid, final_gid);
                 }
                 Err(e) => {
@@ -872,11 +912,11 @@ impl Filesystem for FuseLogFS {
                 let relative_from_path = self.get_relative_path(&from_path);
                 let relative_to_path = self.get_relative_path(&to_path);
 
-                let mut log = STATEDIFF_LOG.lock().unwrap();
-                let from_fid = get_fid(&mut log, &relative_from_path);
-                let to_fid = get_fid(&mut log, &relative_to_path);
-
-                log.actions.push(StateDiffAction::Rename { from_fid, to_fid });
+                let (from_fid, to_fid) = {
+                    let mut state = FID_STATE.lock().unwrap();
+                    (get_fid(&mut state, &relative_from_path), get_fid(&mut state, &relative_to_path))
+                };
+                ACTIONS.lock().unwrap().push(StateDiffAction::Rename { from_fid, to_fid });
                 info!("Renamed {:?} to {:?}, logging action", from_path, to_path);
 
                 reply.ok();
@@ -911,11 +951,11 @@ impl Filesystem for FuseLogFS {
                 let relative_source_path = self.get_relative_path(&source_path);
                 let relative_dest_path = self.get_relative_path(&dest_path);
                 
-                let mut log = STATEDIFF_LOG.lock().unwrap();
-                let source_fid = get_fid(&mut log, &relative_source_path);
-                let new_link_fid = get_fid(&mut log, &relative_dest_path);
-                
-                log.actions.push(StateDiffAction::Link { source_fid, new_link_fid });
+                let (source_fid, new_link_fid) = {
+                    let mut state = FID_STATE.lock().unwrap();
+                    (get_fid(&mut state, &relative_source_path), get_fid(&mut state, &relative_dest_path))
+                };
+                ACTIONS.lock().unwrap().push(StateDiffAction::Link { source_fid, new_link_fid });
 
                 match std::fs::metadata(&dest_path) {
                     Ok(metadata) => {

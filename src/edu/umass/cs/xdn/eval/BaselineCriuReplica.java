@@ -52,6 +52,14 @@ public class BaselineCriuReplica implements AutoCloseable {
   private static final int DEFAULT_LISTEN_PORT = Integer.getInteger("criu.listen.port", 2300);
   private static final boolean IS_SYNC_CHECKPOINT =
       Boolean.parseBoolean(System.getProperty("criu.checkpoint.sync", "true"));
+  private static final boolean IS_INCREMENTAL_CHECKPOINT =
+      Boolean.parseBoolean(System.getProperty("criu.incremental", "true"));
+  private static final String CRIU_IMAGES_DIR = "/dev/shm/criu-inc";
+  // If set, CRIU checkpoints this container instead of the forwarding container.
+  // Useful for multi-container services like WordPress where the HTTP frontend
+  // (Apache) is stateless and only the database (MySQL) needs checkpointing.
+  private static final String CHECKPOINT_CONTAINER_OVERRIDE =
+      System.getProperty("criu.checkpoint.container", "");
   private static final List<String> DEFAULT_REPLICA_ADDRESSES =
       List.of("10.10.1.1", "10.10.1.2", "10.10.1.3");
   private static final String DEFAULT_SSH_KEY_PATH =
@@ -62,7 +70,8 @@ public class BaselineCriuReplica implements AutoCloseable {
   private final int listenPort;
   private final int forwardPort;
   private final String forwardHost;
-  private final String containerName;
+  private final String containerName;       // container to forward HTTP requests to
+  private final String checkpointContainer; // container to CRIU checkpoint (may differ for multi-container apps)
   private final List<String> replicaAddresses;
   private final BlockingQueue<PendingRequest> queue;
   private final ExecutorService batchExecutor;
@@ -76,6 +85,11 @@ public class BaselineCriuReplica implements AutoCloseable {
   private EventLoopGroup bossGroup;
   private EventLoopGroup workerGroup;
   private Channel serverChannel;
+
+  // Incremental CRIU state
+  private volatile String prevImagesDir;
+  private volatile int criuSnapIdx;
+  private volatile int containerPid = -1;
 
   public BaselineCriuReplica(int port, String containerName) {
     this(port, containerName, DEFAULT_REPLICA_ADDRESSES);
@@ -105,6 +119,8 @@ public class BaselineCriuReplica implements AutoCloseable {
     this.forwardPort = forwardPort;
     this.forwardHost = Objects.requireNonNull(forwardHost, "forwardHost");
     this.containerName = Objects.requireNonNull(containerName, "containerName");
+    this.checkpointContainer = CHECKPOINT_CONTAINER_OVERRIDE.isEmpty()
+        ? containerName : CHECKPOINT_CONTAINER_OVERRIDE;
     this.replicaAddresses = normalizeReplicaAddresses(replicaAddresses);
     this.queue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
     this.batchExecutor =
@@ -245,9 +261,14 @@ public class BaselineCriuReplica implements AutoCloseable {
                 + forwardHost
                 + ":"
                 + forwardPort
-                + " checkpointing container="
-                + containerName);
+                + " container="
+                + containerName
+                + " checkpointContainer="
+                + checkpointContainer
+                + " incremental="
+                + IS_INCREMENTAL_CHECKPOINT);
 
+    initIncrementalCheckpoint();
     batchExecutor.submit(this::drainQueue);
   }
 
@@ -382,6 +403,14 @@ public class BaselineCriuReplica implements AutoCloseable {
   }
 
   private void checkpointContainer() {
+    if (IS_INCREMENTAL_CHECKPOINT) {
+      checkpointContainerIncremental();
+      return;
+    }
+    checkpointContainerFull();
+  }
+
+  private void checkpointContainerFull() {
     String checkpointName = "checkpoint-" + System.currentTimeMillis();
     boolean checkpointCreated = false;
     ProcessBuilder pb =
@@ -391,7 +420,7 @@ public class BaselineCriuReplica implements AutoCloseable {
             "create",
             "--leave-running=true",
             "--checkpoint-dir=/dev/shm/chk",
-            containerName,
+            checkpointContainer,
             checkpointName);
     try {
       Process process = pb.start();
@@ -402,7 +431,7 @@ public class BaselineCriuReplica implements AutoCloseable {
           errOutput = new String(err.readAllBytes(), StandardCharsets.UTF_8).trim();
         }
         if (errOutput.isEmpty()) {
-          LOG.warning("Docker checkpoint exited with " + exit + " for container " + containerName);
+          LOG.warning("Docker checkpoint exited with " + exit + " for container " + checkpointContainer);
         } else {
           LOG.warning(
               "Docker checkpoint exited with "
@@ -413,7 +442,7 @@ public class BaselineCriuReplica implements AutoCloseable {
                   + errOutput);
         }
       } else {
-        LOG.fine("Created checkpoint " + checkpointName + " for container " + containerName);
+        LOG.fine("Created checkpoint " + checkpointName + " for container " + checkpointContainer);
         checkpointCreated = true;
       }
     } catch (Exception e) {
@@ -422,6 +451,120 @@ public class BaselineCriuReplica implements AutoCloseable {
 
     if (IS_SYNC_CHECKPOINT && checkpointCreated) {
       syncCheckpoint(checkpointName);
+    }
+  }
+
+  /**
+   * Initialize incremental CRIU by getting the container PID and doing an initial pre-dump. Must be
+   * called after the container is started and before the first request.
+   */
+  private void initIncrementalCheckpoint() {
+    if (!IS_INCREMENTAL_CHECKPOINT) {
+      return;
+    }
+    // Get checkpoint container PID
+    try {
+      ProcessBuilder pb =
+          new ProcessBuilder(
+              "docker", "inspect", "--format", "{{.State.Pid}}", checkpointContainer);
+      pb.redirectErrorStream(true);
+      Process proc = pb.start();
+      String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+      proc.waitFor();
+      containerPid = Integer.parseInt(output);
+      LOG.info("Container PID for incremental CRIU: " + containerPid);
+    } catch (Exception e) {
+      LOG.log(Level.SEVERE, "Failed to get container PID for incremental CRIU", e);
+      return;
+    }
+
+    // Create images directory and do initial pre-dump
+    criuSnapIdx = 0;
+    String preDir = CRIU_IMAGES_DIR + "/pre";
+    try {
+      new ProcessBuilder("sudo", "rm", "-rf", CRIU_IMAGES_DIR).start().waitFor();
+      new ProcessBuilder("sudo", "mkdir", "-p", preDir).start().waitFor();
+      ProcessBuilder pb =
+          new ProcessBuilder(
+              "sudo", "criu", "pre-dump",
+              "--tree", String.valueOf(containerPid),
+              "--images-dir", preDir,
+              "--leave-running",
+              "--shell-job",
+              "--tcp-established");
+      pb.redirectErrorStream(true);
+      Process proc = pb.start();
+      String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+      int exit = proc.waitFor();
+      if (exit != 0) {
+        LOG.warning("CRIU pre-dump failed with exit " + exit + ": " + output);
+      } else {
+        prevImagesDir = preDir;
+        LOG.info("CRIU incremental pre-dump complete: " + preDir);
+      }
+    } catch (Exception e) {
+      LOG.log(Level.SEVERE, "Failed to run CRIU pre-dump", e);
+    }
+  }
+
+  /**
+   * Incremental checkpoint using CRIU pre-dump with --prev-images-dir. Only dumps pages dirtied
+   * since the last pre-dump (soft-dirty tracking).
+   */
+  private void checkpointContainerIncremental() {
+    if (containerPid <= 0 || prevImagesDir == null) {
+      LOG.warning("Incremental CRIU not initialized, falling back to full checkpoint");
+      checkpointContainerFull();
+      return;
+    }
+
+    criuSnapIdx++;
+    String curDir = CRIU_IMAGES_DIR + "/inc_" + criuSnapIdx;
+    try {
+      new ProcessBuilder("sudo", "mkdir", "-p", curDir).start().waitFor();
+      ProcessBuilder pb =
+          new ProcessBuilder(
+              "sudo", "criu", "pre-dump",
+              "--tree", String.valueOf(containerPid),
+              "--images-dir", curDir,
+              "--prev-images-dir", prevImagesDir,
+              "--leave-running",
+              "--shell-job",
+              "--tcp-established",
+              "--track-mem");
+      pb.redirectErrorStream(true);
+      Process proc = pb.start();
+      String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+      int exit = proc.waitFor();
+      if (exit != 0) {
+        LOG.warning(
+            "CRIU incremental pre-dump failed with exit "
+                + exit
+                + ": "
+                + output
+                + " (falling back to full)");
+        checkpointContainerFull();
+        return;
+      }
+
+      // Clean up previous dump asynchronously to avoid blocking the critical path
+      String oldDir = prevImagesDir;
+      prevImagesDir = curDir;
+      if (oldDir != null && !oldDir.equals(curDir)) {
+        final String dirToRemove = oldDir;
+        syncExecutor.submit(() -> {
+          try {
+            new ProcessBuilder("sudo", "rm", "-rf", dirToRemove).start().waitFor();
+          } catch (Exception e) {
+            LOG.log(Level.FINE, "Failed to clean up old CRIU dump dir: " + dirToRemove, e);
+          }
+        });
+      }
+
+      LOG.fine("CRIU incremental checkpoint " + criuSnapIdx + " complete: " + curDir);
+    } catch (Exception e) {
+      LOG.log(Level.WARNING, "Failed incremental CRIU checkpoint", e);
+      checkpointContainerFull();
     }
   }
 

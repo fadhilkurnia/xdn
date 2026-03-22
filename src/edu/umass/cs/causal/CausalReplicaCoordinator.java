@@ -119,8 +119,8 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        this.logger.log(Level.INFO, "node=" + this.myNodeID + " coordinating request " +
-                request.getClass().getSimpleName());
+        this.logger.log(Level.FINE, "node={0} coordinating request {1}",
+                new Object[]{this.myNodeID, request.getClass().getSimpleName()});
 
         if (request instanceof ReplicableClientRequest r) {
             return this.handleClientRequest(r, callback);
@@ -246,6 +246,8 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
         // Handle write-only request by forwarding it to the write-quorum
         if (behavioralRequest.isWriteOnlyRequest()) {
+            long t0 = System.nanoTime();
+
             // Get the current leaf vector timestamps
             List<GraphVertex> leafOpNodes = serviceInstance.dag.getLeafVertices();
             List<VectorTimestamp> leafTimestamp = new ArrayList<>();
@@ -261,13 +263,16 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             VectorTimestamp dominantTimestamp = maxTimestamp.increaseNodeTimestamp(myNodeIdStr);
             GraphVertex newOpNode = new GraphVertex(dominantTimestamp, List.of(clientRequest));
             serviceInstance.dag.addChildOf(leafOpNodes, newOpNode);
+            long t1 = System.nanoTime();
 
             // execute the request
             boolean isExecSuccess = this.app.execute(clientRequest);
             assert isExecSuccess : "failed to execute request " + clientRequest;
+            long t2 = System.nanoTime();
 
             // Send response back to client
             callback.executed(clientRequest, true);
+            long t3 = System.nanoTime();
 
             // Asynchronously broadcast the write request, containing the dependencies.
             serviceInstance.graphNodeQuorumRecord.put(
@@ -292,6 +297,17 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);
             }
+            long t4 = System.nanoTime();
+
+            long dagUs = (t1 - t0) / 1000;
+            long execUs = (t2 - t1) / 1000;
+            long cbUs = (t3 - t2) / 1000;
+            long bcastUs = (t4 - t3) / 1000;
+            long totalUs = (t4 - t0) / 1000;
+            this.logger.log(Level.INFO,
+                    "{0}:CausalRC write total={1}us dag={2}us exec={3}us cb={4}us bcast={5}us leaves={6}",
+                    new Object[]{this.myNodeID, totalUs, dagUs, execUs, cbUs, bcastUs,
+                            leafOpNodes.size()});
 
             return true;
         }

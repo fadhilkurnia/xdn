@@ -8,9 +8,12 @@ and install OpenEBS Mayastor via Helm.
 NODE_PREP_CMDS = [
     "modinfo nvme-tcp",
     "sudo modprobe nvme-tcp",               # enable nvme-tcp module
-    "sudo sysctl -w vm.nr_hugepages=1024",  # allocate hugepages
+    # CloudLab R6525 nodes have 8 NUMA nodes with 128 hugepages each at 1024 total.
+    # SPDK iobuf pool allocation needs ≥256 hugepages per NUMA node to succeed.
+    # Use 2048 so each of the 8 NUMA nodes gets 256 × 2MB = 512MB headroom.
+    "sudo sysctl -w vm.nr_hugepages=2048",  # allocate hugepages
     # ensure hugepages are allocated on (re)boot
-    "echo 'vm.nr_hugepages=1024' | sudo tee -a /etc/sysctl.conf",
+    "echo 'vm.nr_hugepages=2048' | sudo tee -a /etc/sysctl.conf",
     "sudo sysctl --system",                 # reload sysctl settings
 ]
 
@@ -209,6 +212,22 @@ def install_openebs_mayastor(ssh_nodes: list[str]) -> None:
         )
 
     # Ensure Mayastor CRDs are registered before creating DiskPools.
+    # The CRD may not exist immediately after Helm install, so poll until
+    # kubectl can see it, then wait for it to be Established.
+    print("Waiting for diskpools.openebs.io CRD to appear ...")
+    crd_deadline = time.time() + 300
+    while time.time() < crd_deadline:
+        check = subprocess.run(
+            ["kubectl", "get", "crd", "diskpools.openebs.io"],
+            check=False,
+            capture_output=True,
+        )
+        if check.returncode == 0:
+            break
+        time.sleep(10)
+    else:
+        raise RuntimeError("diskpools.openebs.io CRD not found after 300s")
+
     subprocess.run(
         [
             "kubectl",

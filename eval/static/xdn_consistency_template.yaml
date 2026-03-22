@@ -13,6 +13,3 @@ requests:
   - path_prefix: "/"
     methods: "PUT,POST,DELETE"
     behavior: write_only
-  - path_prefix: "/"
-    methods: "PUT,POST,DELETE"
-    behavior: monotonic

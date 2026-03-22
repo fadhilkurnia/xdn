@@ -21,3 +21,6 @@ output.txt
 .pycache
 jars/google-java-format-*.jar
 bin/xdn
+screen_logs
+merge-review
+*-paper/

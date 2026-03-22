@@ -29,6 +29,7 @@ import io.netty.handler.codec.http.cors.CorsHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.netty.handler.timeout.ReadTimeoutException;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
@@ -48,6 +49,8 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -130,9 +133,14 @@ public class HttpActiveReplica {
             new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
     
     // Direct reference to the app for debugging purpose, needed for DBG_HDR_DIRECT_EXECUTE.
-    // In normal execution, the app should be interacted with through the replica coordinator, 
+    // In normal execution, the app should be interacted with through the replica coordinator,
     // and this reference should not be used.
     public static XdnGigapaxosApp debugAppReference = null;
+
+    // Debug flag: bypass coordinator/PBM but still use the async response path.
+    // Tests whether the bottleneck is the coordinator/PBM pipeline or the async mechanism.
+    private static final boolean BYPASS_COORDINATOR =
+            Boolean.getBoolean("PB_BYPASS_COORDINATOR");
 
     static {
         // Initialize HTTP clients for debugging purposes.
@@ -166,19 +174,37 @@ public class HttpActiveReplica {
         // Initializing boss and worker event loops.
         // The boss workers are accepting connections, which then will be passed to the child
         // worker group (i.e., `workerGroup`).
-        EventLoopGroup bossGroup = new NioEventLoopGroup();
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        int bossThreads = Config.getGlobalInt(ReconfigurationConfig.RC.HTTP_AR_BOSS_THREADS);
+        int workerThreads = Config.getGlobalInt(ReconfigurationConfig.RC.HTTP_AR_WORKER_THREADS);
+        EventLoopGroup bossGroup = bossThreads > 0
+                ? new NioEventLoopGroup(bossThreads) : new NioEventLoopGroup();
+        EventLoopGroup workerGroup = workerThreads > 0
+                ? new NioEventLoopGroup(workerThreads) : new NioEventLoopGroup();
 
-        // Dedicated executor group for long-running application execution and coordination.
+        // Dedicated executor group for dispatching requests.
         int threads = Math.max(4, Runtime.getRuntime().availableProcessors());
-        
-        // Pool 1: Writes
-        DefaultEventExecutorGroup writePool =
-                new DefaultEventExecutorGroup((int) (threads * 0.6));
 
-        // Pool 2: Reads 
+        // Pool 1: Writes — each thread only runs for microseconds (async dispatch setup),
+        // so we need far fewer threads than the old blocking model.
+        int writePoolMultiplier = Config.getGlobalInt(
+                ReconfigurationConfig.RC.HTTP_AR_WRITE_POOL_MULTIPLIER);
+        int writePoolSize = writePoolMultiplier > 0
+                ? threads * writePoolMultiplier : threads;
+        DefaultEventExecutorGroup writePool =
+                new DefaultEventExecutorGroup(writePoolSize);
+
+        // Pool 2: Reads
         DefaultEventExecutorGroup readPool =
                 new DefaultEventExecutorGroup((int) (threads * 0.4));
+
+        logger.log(Level.INFO,
+                "HttpActiveReplica pools: bossThreads={0} workerThreads={1} "
+                        + "writePool={2} readPool={3}",
+                new Object[]{
+                        bossThreads > 0 ? bossThreads : "default(2*cores)",
+                        workerThreads > 0 ? workerThreads : "default(2*cores)",
+                        writePoolSize,
+                        (int) (threads * 0.4)});
 
         try {
             ServerBootstrap b = new ServerBootstrap();
@@ -256,8 +282,13 @@ public class HttpActiveReplica {
             if (sslCtx != null)
                 p.addLast(sslCtx.newHandler(channel.alloc()));
 
-            // avoid stuck connections
-            p.addLast(new ReadTimeoutHandler(30));
+            // Timeout for truly stuck/abandoned connections.
+            // Must be longer than the longest legitimate request processing time
+            // (httpFrontendRequestTimeoutMs = 120s) because HTTP/1.1 clients send
+            // no data while waiting for a response, and ReadTimeoutHandler fires
+            // on absence of inbound data. A too-short value (e.g. 30s) kills
+            // connections during normal PB replication under load.
+            p.addLast(new ReadTimeoutHandler(180));
 
             // (de)serialize bytes to http
             p.addLast(new HttpServerCodec());
@@ -368,9 +399,32 @@ public class HttpActiveReplica {
             SimpleChannelInboundHandler<Object> {
 
         private static String nodeId = null;
+        private static final AtomicInteger asyncInFlight = new AtomicInteger();
+        private static final int MAX_ASYNC_IN_FLIGHT = 4096;
+
+        /** Single daemon thread for enforcing request timeouts without blocking writePool. */
+        private static final ScheduledExecutorService timeoutScheduler =
+                Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "xdn-async-timeout");
+                    t.setDaemon(true);
+                    return t;
+                });
+
+        /**
+         * Captures all state needed to write a response asynchronously from any thread
+         * (callback, timeout, or channel-close listener).
+         */
+        private record ResponseContext(
+                XdnHttpRequest httpRequest,
+                ChannelHandlerContext ctx,
+                boolean isKeepAlive,
+                long startExecTimeNs,
+                AtomicBoolean responded
+        ) {}
+
         private final ActiveReplicaFunctions arFunctions;
-        private final ExecutorService readPool;
-        private final ExecutorService writePool;        
+        private final MultithreadEventExecutorGroup readPool;
+        private final MultithreadEventExecutorGroup writePool;
         private final XdnHttpRequestBatcher requestBatching;
         private final InetSocketAddress senderAddr; // client's inet address
 
@@ -394,14 +448,106 @@ public class HttpActiveReplica {
         }
 
         /**
+         * Thread-safe helper that writes an HTTP response (or error) to the Netty channel
+         * from whichever thread fires first: the async callback, the timeout scheduler,
+         * or the channel-close listener.  Exactly one caller succeeds via the AtomicBoolean
+         * gate in ResponseContext.
+         */
+        private static void sendAsyncResponse(
+                ResponseContext rctx,
+                HttpResponse httpResponse,
+                ScheduledFuture<?> timeoutTask,
+                Throwable error) {
+            if (!rctx.responded().compareAndSet(false, true)) {
+                // Another path already handled this request (e.g., timeout fired first).
+                // Release the response ByteBuf if provided, to prevent leaks.
+                safeRelease(httpResponse);
+                return;
+            }
+
+            // Cancel timeout if it hasn't fired yet
+            if (timeoutTask != null) {
+                timeoutTask.cancel(false);
+            }
+
+            asyncInFlight.decrementAndGet();
+
+            XdnHttpRequest httpRequest = rctx.httpRequest();
+            ChannelHandlerContext ctx = rctx.ctx();
+
+            // Channel already closed — just release ByteBufs
+            if (!ctx.channel().isActive()) {
+                safeRelease(httpResponse);
+                safeRelease(httpRequest.getHttpRequest());
+                safeRelease(httpRequest.getHttpRequestContent());
+                return;
+            }
+
+            // Dispatch response write to the channel's EventLoop
+            long sendAsyncStartNs = System.nanoTime();
+            long callbackElapsedMs = (sendAsyncStartNs - rctx.startExecTimeNs()) / 1_000_000;
+            ctx.executor().execute(() -> {
+                long eventLoopStartNs = System.nanoTime();
+                long queueDelayMs = (eventLoopStartNs - sendAsyncStartNs) / 1_000_000;
+                try {
+                    if (error != null) {
+                        String msg = error.getMessage() != null
+                                ? error.getMessage() : error.getClass().getSimpleName();
+                        logger.log(Level.WARNING,
+                                "Async request error: {0}", new Object[]{msg});
+                        HttpResponseStatus status =
+                                (error instanceof TimeoutException)
+                                        ? SERVICE_UNAVAILABLE
+                                        : INTERNAL_SERVER_ERROR;
+                        HttpActiveReplicaHandler.sendStringResponse(
+                                msg, status, false, ctx);
+                    } else {
+                        HttpActiveReplicaHandler.writeHttpResponse(
+                                httpRequest.getRequestID(),
+                                httpResponse,
+                                ctx,
+                                rctx.isKeepAlive(),
+                                rctx.startExecTimeNs());
+                    }
+                    long writeEndNs = System.nanoTime();
+                    long writeMs = (writeEndNs - eventLoopStartNs) / 1_000_000;
+                    long totalMs = (writeEndNs - rctx.startExecTimeNs()) / 1_000_000;
+                    if (totalMs > 10) {
+                        logger.log(Level.INFO,
+                                "SLOW_RESPONSE total={0}ms callback={1}ms eventLoopQueue={2}ms write={3}ms method={4} uri={5}",
+                                new Object[]{totalMs, callbackElapsedMs, queueDelayMs, writeMs,
+                                        httpRequest.getHttpRequest().method(),
+                                        httpRequest.getHttpRequest().uri()});
+                    }
+                } finally {
+                    safeRelease(httpRequest.getHttpRequest());
+                    safeRelease(httpRequest.getHttpRequestContent());
+                }
+            });
+        }
+
+        /**
+         * Safely releases a reference-counted object, ignoring if already released.
+         */
+        private static void safeRelease(Object obj) {
+            try {
+                if (obj != null && ReferenceCountUtil.refCnt(obj) > 0) {
+                    ReferenceCountUtil.release(obj);
+                }
+            } catch (Exception e) {
+                // Already released or not ref-counted — ignore
+            }
+        }
+
+        /**
          * Buffer that stores the response content
          */
         private final StringBuilder buf = new StringBuilder();
 
         HttpActiveReplicaHandler(String nodeId,
                                  ActiveReplicaFunctions arFunctions,
-                                 ExecutorService readPool,
-                                 ExecutorService writePool,
+                                 MultithreadEventExecutorGroup readPool,
+                                 MultithreadEventExecutorGroup writePool,
                                  XdnHttpRequestBatcher requestBatching,
                                  InetSocketAddress addr) {
             HttpActiveReplicaHandler.nodeId = nodeId;
@@ -635,10 +781,18 @@ public class HttpActiveReplica {
                 }
 
                 // Handle debug requests, for measurement purposes.
+                // Retain the netty objects because DBC and DDE execute off the event loop and
+                // SimpleChannelInboundHandler will otherwise release them after this method returns.
                 if (this.request.headers().contains(DBG_HDR_DUMMY_RESPONSE) ||
                         this.request.headers().contains(DBG_HDR_BYPASS_COORDINATION) ||
                         this.request.headers().contains(DBG_HDR_DIRECT_EXECUTE)) {
-                    handleDebugRequests(new XdnHttpRequest(this.request, this.requestContent), ctx);
+                    XdnHttpRequest debugRequest =
+                            new XdnHttpRequest(this.request, this.requestContent);
+                    ReferenceCountUtil.retain(debugRequest.getHttpRequest());
+                    ReferenceCountUtil.retain(debugRequest.getHttpRequestContent());
+                    this.request = null;
+                    this.requestContent = null;
+                    handleDebugRequests(debugRequest, ctx);
                     return;
                 }
 
@@ -649,7 +803,7 @@ public class HttpActiveReplica {
                 // where GET, HEAD, OPTIONS, and TRACE are considered read-only/safe methods.
                 // TODO: Ideally, maybe, we should determine which pool this request should use based on
                 // the behavior of the request instead of relying on HTTP method heuristics.
-                ExecutorService selectedPool =
+                MultithreadEventExecutorGroup selectedPool =
                         isSafeMethod(this.request.method()) ? this.readPool : this.writePool;
 
                 XdnHttpRequest httpRequest =
@@ -661,92 +815,84 @@ public class HttpActiveReplica {
                 this.request = null;
                 this.requestContent = null;
 
-                // Submit long-running request coordination and execution off the event loop
-                Future<HttpResponse> execFuture =
-                        isHttpFrontendBatchEnabled
-                                ? selectedPool.submit(() -> executeXdnHttpRequestViaBatching(
-                                        httpRequest, this.senderAddr))
-                                : selectedPool.submit(() ->
-                                        executeXdnHttpRequest(httpRequest, this.senderAddr));
+                // Backpressure: reject if too many async requests are in flight.
+                int inFlight = asyncInFlight.incrementAndGet();
+                if (inFlight > MAX_ASYNC_IN_FLIGHT) {
+                    asyncInFlight.decrementAndGet();
+                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                    ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
+                    HttpActiveReplicaHandler.sendStringResponse(
+                            "Server overloaded (" + inFlight + " requests in flight)",
+                            SERVICE_UNAVAILABLE, false, ctx);
+                    return;
+                }
 
-                // If channel closes before completion, cancel the task
-                ctx.channel().closeFuture().addListener(cf -> execFuture.cancel(true));
+                AtomicBoolean responded = new AtomicBoolean(false);
+                ResponseContext rctx = new ResponseContext(
+                        httpRequest, ctx, isKeepAlive, startExecTimeNs, responded);
 
-                // When done, switch back to the channel's EventLoop to write the response
-                CompletableFuture.supplyAsync(() -> {
-                            try {
-                                // Add timeout to prevent indefinite blocking
-                                return execFuture.get(httpFrontendRequestTimeoutMs,
-                                        java.util.concurrent.TimeUnit.MILLISECONDS);
-                            } catch (InterruptedException e) {
-                                // Restore interrupt status
-                                Thread.currentThread().interrupt();
-                                throw new RuntimeException("Request execution interrupted", e);
-                            } catch (java.util.concurrent.TimeoutException e) {
-                                // Cancel the future if it times out
-                                execFuture.cancel(true);
-                                throw new RuntimeException(
-                                        "Request execution timed out after "
-                                                + httpFrontendRequestTimeoutMs + "ms",
-                                        e
-                                );
-                            } catch (ExecutionException e) {
-                                throw new RuntimeException(
-                                        "Request execution failed: " + e.getCause().getMessage(),
-                                        e
-                                );
-                            }
-                        }, selectedPool)
-                        .whenComplete((httpResponse, err) -> {
-                            // Check channel state, do nothing if the channel is inactive
-                            // (e.g., closed by client).
-                            if (!ctx.channel().isActive()) {
-                                if (err != null && !(err instanceof CancellationException)) {
-                                    System.out.println(">>> HttpActiveReplica - original error: " +
-                                            err.getMessage());
-                                    err.printStackTrace();
-                                }
-                                return;
-                            }
+                // Schedule a timeout — replaces the old future.get(timeout)
+                ScheduledFuture<?> timeoutTask = timeoutScheduler.schedule(() -> {
+                    sendAsyncResponse(rctx, null, null,
+                            new TimeoutException("Request timed out after "
+                                    + httpFrontendRequestTimeoutMs + "ms"));
+                }, httpFrontendRequestTimeoutMs, TimeUnit.MILLISECONDS);
 
-                            // Finally, handle the error or send the response
-                            ctx.executor().execute(() -> {
-                                try {
-                                    // Error handling, send string message
-                                    if (err != null) {
-                                        System.out.println(
-                                                "Writing error response: " + err.getMessage());
-                                        err.printStackTrace();
-                                        HttpActiveReplicaHandler.sendStringResponse(
-                                                err.getMessage(),
-                                                INTERNAL_SERVER_ERROR,
-                                                false,
-                                                ctx
-                                        );
-                                        return;
-                                    }
+                // If channel closes before completion, clean up
+                ctx.channel().closeFuture().addListener(cf -> {
+                    if (responded.compareAndSet(false, true)) {
+                        timeoutTask.cancel(false);
+                        asyncInFlight.decrementAndGet();
+                        safeRelease(httpRequest.getHttpRequest());
+                        safeRelease(httpRequest.getHttpRequestContent());
+                    }
+                });
 
-                                    // Success handling
-                                    HttpActiveReplicaHandler.writeHttpResponse(
-                                            httpRequest.getRequestID(),
-                                            httpResponse,
-                                            ctx,
-                                            isKeepAlive,
-                                            startExecTimeNs);
-                                } finally {
-                                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
-                                    ReferenceCountUtil.release(
-                                            httpRequest.getHttpRequestContent());
-                                }
-                            });
-                        });
+                // Lightweight dispatch — writePool thread returns in microseconds
+                InetSocketAddress senderAddr = this.senderAddr;
+                selectedPool.execute(() -> {
+                    try {
+                        if (isHttpFrontendBatchEnabled)
+                            dispatchXdnHttpRequestViaBatching(
+                                    httpRequest, senderAddr, rctx, timeoutTask);
+                        else
+                            dispatchXdnHttpRequest(
+                                    httpRequest, senderAddr, rctx, timeoutTask);
+                    } catch (Throwable t) {
+                        sendAsyncResponse(rctx, null, timeoutTask, t);
+                    }
+                });
             }
         }
 
-        // executeXdnHttpRequest synchronously executes the provided httpRequest. It converts
-        // callback-based mechanism provided by Gigapaxos into blocking future.
-        private HttpResponse executeXdnHttpRequest(XdnHttpRequest httpRequest,
-                                                   InetSocketAddress clientInetSocketAddress) {
+        /**
+         * Non-blocking dispatch: hands the request to the replica coordinator via
+         * callback. The writePool thread returns immediately after this call.
+         */
+        private void dispatchXdnHttpRequest(
+                XdnHttpRequest httpRequest,
+                InetSocketAddress clientInetSocketAddress,
+                ResponseContext rctx,
+                ScheduledFuture<?> timeoutTask) {
+
+            // Debug bypass: execute directly via XdnGigapaxosApp, skip coordinator/PBM,
+            // but still use the async response path (sendAsyncResponse).
+            if (BYPASS_COORDINATOR && debugAppReference != null) {
+                try {
+                    boolean ok = debugAppReference.execute(httpRequest);
+                    if (ok && httpRequest.getHttpResponse() != null) {
+                        sendAsyncResponse(rctx, httpRequest.getHttpResponse(),
+                                timeoutTask, null);
+                    } else {
+                        sendAsyncResponse(rctx, null, timeoutTask,
+                                new RuntimeException("Bypass execute failed"));
+                    }
+                } catch (Throwable t) {
+                    sendAsyncResponse(rctx, null, timeoutTask, t);
+                }
+                return;
+            }
+
             // Create Gigapaxos' request, it is important to explicitly set the clientAddress,
             // otherwise, down the pipeline, the RequestPacket's equals method will return false
             // and our callback will not be called, leaving the client hanging
@@ -754,83 +900,43 @@ public class HttpActiveReplica {
             ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(httpRequest);
             gpRequest.setClientAddress(clientInetSocketAddress);
 
-            // Convert callback-based execution into future so that we can execute it synchronously.
-            CompletableFuture<Request> future = new CompletableFuture<>();
             this.arFunctions.handRequestToAppForHttp(gpRequest, (request, handled) -> {
-                if (handled) {
-                    if (request == null) {
-                        future.completeExceptionally(
-                                new RuntimeException("Request was handled but returned null"));
-                    } else {
-                        future.complete(request);
-                    }
+                if (handled && request instanceof XdnHttpRequest xdnReq) {
+                    sendAsyncResponse(rctx, xdnReq.getHttpResponse(), timeoutTask, null);
+                } else if (handled) {
+                    sendAsyncResponse(rctx, null, timeoutTask,
+                            new RuntimeException(request == null
+                                    ? "Request was handled but returned null"
+                                    : "Unexpected response type: "
+                                            + request.getClass().getSimpleName()));
                 } else {
-                    future.completeExceptionally(new RuntimeException("Request was not handled"));
+                    sendAsyncResponse(rctx, null, timeoutTask,
+                            new RuntimeException("Request was not handled"));
                 }
             });
-
-            // Wait until the future complete with timeout,
-            // i.e., the httpRequest is already coordinated and executed.
-            Request executedRequest;
-            try {
-                executedRequest = future.get(httpFrontendRequestTimeoutMs,
-                        java.util.concurrent.TimeUnit.MILLISECONDS);
-                if (executedRequest == null) {
-                    throw new RuntimeException("Executed request is null after future completion");
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Request execution was interrupted", e);
-            } catch (java.util.concurrent.TimeoutException e) {
-                throw new RuntimeException("Request execution timed out after "
-                        + httpFrontendRequestTimeoutMs + "ms", e);
-            } catch (ExecutionException e) {
-                throw new RuntimeException(
-                        "Request execution failed: " + e.getCause().getMessage(), e);
-            }
-
-            // Validate the executed Http request
-            if (!(executedRequest instanceof XdnHttpRequest xdnRequest)) {
-                String exceptionMessage = "Unexpected executed request (" +
-                        executedRequest.getClass().getSimpleName() +
-                        "), it must be a " + XdnHttpRequest.class.getSimpleName();
-                throw new RuntimeException(exceptionMessage);
-            }
-
-            // Get the response
-            return xdnRequest.getHttpResponse();
         }
 
-        private HttpResponse executeXdnHttpRequestViaBatching(
-                XdnHttpRequest httpRequest, InetSocketAddress clientInetSocketAddress) {
-            CompletableFuture<XdnHttpRequest> future = new CompletableFuture<>();
+        /**
+         * Non-blocking dispatch via batching: submits the request to the batcher which
+         * fires the completion handler asynchronously. The writePool thread returns
+         * immediately after this call.
+         */
+        private void dispatchXdnHttpRequestViaBatching(
+                XdnHttpRequest httpRequest,
+                InetSocketAddress clientInetSocketAddress,
+                ResponseContext rctx,
+                ScheduledFuture<?> timeoutTask) {
             requestBatching.submit(
                     httpRequest,
                     clientInetSocketAddress,
                     (completedRequest, error) -> {
-                        // TODO: the batched request should consider the clientInetSocketAddress
                         if (error != null) {
-                            System.out.println(
-                                    "Error completing execution via batching: " +
-                                            error.getMessage());
-                            error.printStackTrace();
-                            future.completeExceptionally(error);
+                            sendAsyncResponse(rctx, null, timeoutTask, error);
                         } else {
-                            future.complete(completedRequest);
+                            sendAsyncResponse(
+                                    rctx, completedRequest.getHttpResponse(), timeoutTask, null);
                         }
                     });
-
-            XdnHttpRequest executedRequest;
-            try {
-                executedRequest = future.get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-
-            assert httpRequest.getRequestID() == executedRequest.getRequestID() :
-                    "Mismatch between the received and the executed request";
-
-            return executedRequest.getHttpResponse();
         }
 
         private void handleCoordinatorRequest(Request p, ChannelHandlerContext context) {
@@ -868,7 +974,7 @@ public class HttpActiveReplica {
         private void handleDebugRequests(XdnHttpRequest httpRequest, ChannelHandlerContext ctx) {
             boolean isKeepAlive = HttpUtil.isKeepAlive(httpRequest.getHttpRequest());
 
-            ExecutorService selectedPool =
+            MultithreadEventExecutorGroup selectedPool =
                     isSafeMethod(httpRequest.getHttpRequest().method())
                             ? this.readPool
                             : this.writePool;
@@ -888,6 +994,8 @@ public class HttpActiveReplica {
                         ctx,
                         isKeepAlive,
                         startExecTimeNs);
+                ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
                 return;
             }
 
@@ -922,26 +1030,35 @@ public class HttpActiveReplica {
                         }, selectedPool)
                         .whenComplete((httpResponse, err) -> {
                             // do nothing when the channel is inactive
-                            if (!ctx.channel().isActive()) return;
+                            if (!ctx.channel().isActive()) {
+                                ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
+                                return;
+                            }
 
                             // finally, handle the error or send the response
                             ctx.executor().execute(() -> {
-                                // Error handling, send string message
-                                if (err != null) {
-                                    System.out.println("Writing error response: " + err.getMessage());
-                                    err.printStackTrace();
-                                    HttpActiveReplicaHandler.sendStringResponse(
-                                            err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
-                                    return;
-                                }
+                                try {
+                                    // Error handling, send string message
+                                    if (err != null) {
+                                        System.out.println("Writing error response: " + err.getMessage());
+                                        err.printStackTrace();
+                                        HttpActiveReplicaHandler.sendStringResponse(
+                                                err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
+                                        return;
+                                    }
 
-                                // Success handling
-                                HttpActiveReplicaHandler.writeHttpResponse(
-                                        httpRequest.getRequestID(),
-                                        httpResponse,
-                                        ctx,
-                                        isKeepAlive,
-                                        startExecTimeNs);
+                                    // Success handling
+                                    HttpActiveReplicaHandler.writeHttpResponse(
+                                            httpRequest.getRequestID(),
+                                            httpResponse,
+                                            ctx,
+                                            isKeepAlive,
+                                            startExecTimeNs);
+                                } finally {
+                                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                    ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
+                                }
                             });
                         });
 
@@ -979,24 +1096,19 @@ public class HttpActiveReplica {
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION);
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION_PORT);
 
-                int forwarderClientIdx = (int) (ctx.channel().remoteAddress().hashCode() % DBG_NUM_FORWARDER_CLIENTS);
+                int forwarderClientIdx = Math.abs(ctx.channel().remoteAddress().hashCode() % DBG_NUM_FORWARDER_CLIENTS);
                 XdnHttpForwarderClient debugHttpClient = debugHttpClients[forwarderClientIdx];
 
                 // Send and execute possibly long-running request in offload executor.
-                ReferenceCountUtil.retain(httpRequest.getHttpRequest());
-                ReferenceCountUtil.retain(httpRequest.getHttpRequestContent());
+                // Note: the caller (handleReceivedXdnRequest) already retains the request objects.
                 Future<FullHttpResponse> execFuture = selectedPool.submit(() -> {
                     try {
-                        httpRequest.getHttpRequestContent().retain();
                         return debugHttpClient.execute(
                                 "127.0.0.1",
                                 detectedTargetPort,
                                 (FullHttpRequest) httpRequest.getHttpRequest());
-                    } catch (IOException | InterruptedException e) {
+                    } catch (Exception e) {
                         throw new RuntimeException(e);
-                    } finally {
-                        ReferenceCountUtil.release(httpRequest.getHttpRequest());
-                        ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
                     }
                 });
 
@@ -1012,30 +1124,36 @@ public class HttpActiveReplica {
                             }
                         }, selectedPool)
                         .whenComplete((httpResponse, err) -> {
-                            // release buffer of http request's content
-                            httpRequest.getHttpRequestContent().content().release();
-
                             // do nothing when the channel is inactive
-                            if (!ctx.channel().isActive()) return;
+                            if (!ctx.channel().isActive()) {
+                                ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
+                                return;
+                            }
 
                             // finally, handle the error or send the response
                             ctx.executor().execute(() -> {
-                                // Error handling, send string message
-                                if (err != null) {
-                                    System.out.println("Writing error response: " + err.getMessage());
-                                    err.printStackTrace();
-                                    HttpActiveReplicaHandler.sendStringResponse(
-                                            err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
-                                    return;
-                                }
+                                try {
+                                    // Error handling, send string message
+                                    if (err != null) {
+                                        System.out.println("Writing error response: " + err.getMessage());
+                                        err.printStackTrace();
+                                        HttpActiveReplicaHandler.sendStringResponse(
+                                                err.getMessage(), INTERNAL_SERVER_ERROR, false, ctx);
+                                        return;
+                                    }
 
-                                // Success handling
-                                HttpActiveReplicaHandler.writeHttpResponse(
-                                        httpRequest.getRequestID(),
-                                        httpResponse,
-                                        ctx,
-                                        isKeepAlive,
-                                        startExecTimeNs);
+                                    // Success handling
+                                    HttpActiveReplicaHandler.writeHttpResponse(
+                                            httpRequest.getRequestID(),
+                                            httpResponse,
+                                            ctx,
+                                            isKeepAlive,
+                                            startExecTimeNs);
+                                } finally {
+                                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
+                                    ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
+                                }
                             });
                         });
             }
@@ -1043,6 +1161,15 @@ public class HttpActiveReplica {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            // ReadTimeoutException fires on idle keep-alive connections with no
+            // pending request.  Just close silently — sending an error response
+            // on an idle channel causes Go/curl clients to log "Unsolicited
+            // response received on idle HTTP channel".
+            if (cause instanceof ReadTimeoutException) {
+                ctx.close();
+                return;
+            }
+
             String message = cause.getMessage();
             if (message == null) {
                 message = cause.getClass().getSimpleName();
@@ -1155,6 +1282,18 @@ public class HttpActiveReplica {
                                 HttpActiveReplica.class.getSimpleName(),
                                 (postExecElapsedTime / 1_000_000.0)});
                 httpResponse.headers().remove(postExecTimestampHeaderKey);
+            }
+
+            // Override the container's Connection header with the client's keep-alive
+            // preference. Without this, containers that send "Connection: close" cause
+            // the client to close TCP connections after every request, exhausting
+            // ephemeral ports under load.
+            if (isKeepAlive) {
+                httpResponse.headers().set(HttpHeaderNames.CONNECTION,
+                        HttpHeaderValues.KEEP_ALIVE);
+            } else {
+                httpResponse.headers().set(HttpHeaderNames.CONNECTION,
+                        HttpHeaderValues.CLOSE);
             }
 
             long preResponseWriteTsNs = System.nanoTime();

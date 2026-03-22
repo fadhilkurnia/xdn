@@ -294,7 +294,9 @@ public class Deprecated_PrimaryBackupReplicaCoordinator<NodeIDType>
         this.app.execute(primaryRequest);
 
         PrimaryEpoch epoch = currentEpoch.get(request.getServiceName());
-        String statediff = this.backupableApplication.captureStatediff(request.getServiceName());
+        byte[] statediffBytes = this.backupableApplication.captureStatediff(request.getServiceName());
+        String statediff = statediffBytes != null
+                ? new String(statediffBytes, java.nio.charset.StandardCharsets.UTF_8) : "";
         XDNStatediffApplyRequest statediffApplyRequest =
                 new XDNStatediffApplyRequest(
                         request.getServiceName(),

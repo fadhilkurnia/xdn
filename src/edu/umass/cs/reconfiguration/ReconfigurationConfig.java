@@ -484,7 +484,26 @@ public class ReconfigurationConfig {
          * Enable reporting demand profile into the Reconfigurators (i.e. Control Plane)
          * upon executing HTTP request in the HttpActiveReplica.
          */
-        HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER(false)
+        HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER(false),
+
+        /**
+         * Number of Netty boss group threads (accepting connections) in HttpActiveReplica.
+         * 0 means use Netty default (2 * availableProcessors).
+         */
+        HTTP_AR_BOSS_THREADS(0),
+
+        /**
+         * Number of Netty worker group threads (I/O handling) in HttpActiveReplica.
+         * 0 means use Netty default (2 * availableProcessors).
+         */
+        HTTP_AR_WORKER_THREADS(0),
+
+        /**
+         * Multiplier for the write pool size relative to available processors.
+         * writePool = max(4, availableProcessors) * this value.
+         * 0 means use default (4).
+         */
+        HTTP_AR_WRITE_POOL_MULTIPLIER(4)
 
         ;
 

@@ -224,21 +224,26 @@ public class MonotonicApp implements Replicable, Reconfigurable, BackupableAppli
     // from sequence. Applying statediff then simply adding number at the end of sequence.
     //==============================================================================================
     @Override
-    public String captureStatediff(String serviceName) {
+    public byte[] captureStatediff(String serviceName) {
         Number last = null;
         synchronized (sequence) {
             last = sequence.getLast();
         }
         if (last == null) {
-            return "";
+            return new byte[0];
         }
-        return String.format("%d:%d", last.timestamp, last.number);
+        return String.format("%d:%d", last.timestamp, last.number)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     @Override
-    public boolean applyStatediff(String serviceName, String statediff) {
-        System.out.println(">> applying stateDiff: " + statediff);
-        String[] lastNumber = statediff.split(":");
+    public boolean applyStatediff(String serviceName, byte[] statediff) {
+        if (statediff == null || statediff.length == 0) {
+            return true;
+        }
+        String statediffStr = new String(statediff, java.nio.charset.StandardCharsets.UTF_8);
+        System.out.println(">> applying stateDiff: " + statediffStr);
+        String[] lastNumber = statediffStr.split(":");
         int timestamp = Integer.parseInt(lastNumber[0]);
         int number = Integer.parseInt(lastNumber[1]);
         synchronized (sequence) {

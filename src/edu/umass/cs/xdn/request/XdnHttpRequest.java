@@ -315,7 +315,7 @@ public class XdnHttpRequest extends XdnRequest
   }
 
   public void setHttpResponse(HttpResponse httpResponse) {
-    assert httpRequest != null : "Expecting non null httpResponse";
+    assert httpResponse != null : "Expecting non null httpResponse";
     assert httpResponse instanceof FullHttpResponse
         : "Expecting FullHttpResponse, but found " + httpResponse.getClass().getSimpleName();
     FullHttpResponse fullHttpResponse = (FullHttpResponse) httpResponse;

@@ -7,17 +7,14 @@
 // service execution: receiving http request, updating data in database, and
 // sending the http response).
 //
-// Other than the fuselib library, we intentionally do not use other third party
-// libraries (e.g., boost, abseil, etc) so the compilation process is simple:
-// it is only this single file. We might revisit this in the future if this
-// research prototype becomes more complex.
-//
 // Install dependencies:
-//   apt install pkg-config libfuse3-dev
+//   apt install pkg-config libfuse3-dev libzstd-dev
 //
 // How to compile:
 //   g++ -Wall fuselogv2.cpp -o fuselog -D_FILE_OFFSET_BITS=64 \
-//       `pkg-config fuse3 --cflags --libs` -pthread -O3 -std=c++11
+//       $(pkg-config fuse3 --cflags --libs) \
+//       $(pkg-config libzstd --cflags --libs) \
+//       -pthread -O3 -std=c++11
 //
 // How to use:
 //   ./fuselog <mount_point>
@@ -43,10 +40,13 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <zstd.h>
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <iostream>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -61,7 +61,7 @@ using namespace std;
  ******************************************************************************/
 static char *mount_point; // the file system mount point
 static int   safe_fd;     // file description of the mount point directory
-static mutex sd_mutex;    // mutex to prevents concurrent update of statediff
+static mutex fid_mutex;   // protects filename_to_fid only
 
 // configurations for logging purposes
 #define LOG_DEBUG    0
@@ -70,28 +70,64 @@ static mutex sd_mutex;    // mutex to prevents concurrent update of statediff
 #define LOG_ERROR    3
 const int log_level = LOG_INFO;
 
-// important variables for storing statediff
-const bool is_sd_capture  = true;
-const bool is_sd_coalesce = true;
-const bool is_sd_prune    = true;
-const bool is_sd_compress = false;
+// helper to read boolean environment variables with a default value
+static bool getenv_bool(const char* name, bool default_val) {
+  const char* val = getenv(name);
+  if (!val) return default_val;
+  return strcmp(val, "1") == 0 || strcmp(val, "true") == 0 ||
+         strcmp(val, "TRUE") == 0 || strcmp(val, "yes") == 0;
+}
+
+// important variables for storing statediff (configurable via env vars)
+static bool is_sd_capture  = true;   // set from FUSELOG_CAPTURE
+static bool is_sd_coalesce = true;   // set from WRITE_COALESCING
+static bool is_sd_prune    = true;   // set from FUSELOG_PRUNE
+static bool is_sd_compress = false;  // set from FUSELOG_COMPRESSION
+static ZSTD_CCtx* zstd_cctx = nullptr;
+static const int ZSTD_COMPRESS_LEVEL = 1;
 static unordered_map<string, uint64_t> filename_to_fid;
 struct statediff_action {
-  uint8_t                sd_type;
-  uint64_t               fid;
-  uint64_t               offset;
-  vector<unsigned char>  buffer;
+  uint8_t               sd_type;
+  uint64_t              fid;
+  uint64_t              offset;
+  vector<unsigned char> buffer;
+  uint32_t              uid;
+  uint32_t              gid;
+  uint32_t              mode;
+  statediff_action*     next = nullptr;  // intrusive linked list pointer
 };
-vector<struct statediff_action> statediffs;  // per-request statediffs
+
+// Lock-free singly-linked list (prepend via CAS). Order is commutative.
+static atomic<statediff_action*> statediff_head{nullptr};
 struct statediff_write_unit {                // for coalescing
   uint64_t               offset;
   vector<unsigned char>  buffer;
 };
+// Per-action serialization overhead: 1 (type) + 8 (fid) + 8 (count) + 8 (offset) = 25 bytes.
+// When merging coalesced chunks, including a gap of identical bytes is cheaper than
+// emitting two separate actions if the gap is smaller than this overhead.
+static const uint32_t COALESCE_ACTION_OVERHEAD = 25;
 const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
 #define SD_TYPE_WRITE    0
 #define SD_TYPE_UNLINK   1
 #define SD_TYPE_RENAME   2
 #define SD_TYPE_TRUNCATE 3
+#define SD_TYPE_CREATE   4
+#define SD_TYPE_LINK     5
+#define SD_TYPE_CHOWN    6
+#define SD_TYPE_CHMOD    7
+#define SD_TYPE_MKDIR    8
+#define SD_TYPE_RMDIR    9
+#define SD_TYPE_SYMLINK  10
+
+// Lock-free prepend. Safe for concurrent callers because write order is commutative.
+static void push_statediff(statediff_action* sd) {
+  statediff_action* old_head = statediff_head.load(memory_order_relaxed);
+  do {
+    sd->next = old_head;
+  } while (!statediff_head.compare_exchange_weak(
+      old_head, sd, memory_order_release, memory_order_relaxed));
+}
 
 // configurations for notify socket
 const  bool        enable_notify_socket = true;
@@ -162,9 +198,17 @@ int main(int argc, char *argv[]) {
   if (char* env_p = getenv("FUSELOG_SOCKET_FILE")) {
     fuselog_socket_file = env_p;
   }
+  is_sd_capture  = getenv_bool("FUSELOG_CAPTURE", true);
+  is_sd_coalesce = getenv_bool("WRITE_COALESCING", true);
+  is_sd_prune    = getenv_bool("FUSELOG_PRUNE", true);
+  is_sd_compress = getenv_bool("FUSELOG_COMPRESSION", false);
 
   logging(LOG_INFO, " Welcome to the FuselogFS for XDN\n");
   logging(LOG_INFO, " - fuselog socket file : %s\n", fuselog_socket_file);
+  logging(LOG_INFO, " - sd_capture          : %s\n", is_sd_capture  ? "true" : "false");
+  logging(LOG_INFO, " - sd_coalesce         : %s\n", is_sd_coalesce ? "true" : "false");
+  logging(LOG_INFO, " - sd_prune            : %s\n", is_sd_prune    ? "true" : "false");
+  logging(LOG_INFO, " - sd_compress         : %s\n", is_sd_compress ? "true" : "false");
   
   // initialize fuse handlers
   fuse_operations ops;
@@ -268,6 +312,17 @@ static void logging(const int level, const char *format, ...) {
   va_end(args);
 }
 
+// Reliable send: loops until all bytes are sent or an error occurs.
+static int send_all(int fd, const char* buf, size_t len) {
+  size_t sent = 0;
+  while (sent < len) {
+    ssize_t n = send(fd, buf + sent, len - sent, 0);
+    if (n == -1) { perror("send_all"); return -1; }
+    sent += (size_t)n;
+  }
+  return 0;
+}
+
 // send_gathered_statediffs serializes and sends all the statediffs, from
 // the last send, into a socket of `conn_fd`.
 static int send_gathered_statediffs(int conn_fd) {
@@ -292,298 +347,309 @@ static int send_gathered_statediffs(int conn_fd) {
   //   - from_fid  8 bytes
   //   - to_fid    8 bytes
 
-  sd_mutex.lock();
+  // Atomically harvest the entire statediff list — O(1), no mutex.
+  statediff_action* head = statediff_head.exchange(nullptr, memory_order_acq_rel);
+
+  // Snapshot filename_to_fid under fid_mutex — brief hold.
+  unordered_map<string, uint64_t> local_filename_to_fid;
+  {
+    lock_guard<mutex> lk(fid_mutex);
+    local_filename_to_fid = std::move(filename_to_fid);
+  }
 
   /* Counting the required space */
-  uint64_t num_file = filename_to_fid.size();
   uint64_t sum_len_path = 0;
   uint64_t num_statediffs = 0;
   uint64_t num_unlink = 0;
   uint64_t num_write = 0;
   uint64_t num_rename = 0;
+  uint64_t num_create = 0;
+  uint64_t num_link = 0;
+  uint64_t num_truncate = 0;
+  uint64_t num_chown = 0;
+  uint64_t num_chmod = 0;
+  uint64_t num_mkdir = 0;
+  uint64_t num_rmdir = 0;
+  uint64_t num_symlink = 0;
   uint64_t sum_len_wr_buf = 0;
+  uint64_t sum_len_symlink_target = 0;
 
-  // prunning: remove writes to a deleted file
+  statediff_action* serialized = head;
   if (is_sd_prune) {
-    vector<struct statediff_action> pruned_statediffs;
-    unordered_set<uint64_t> removed_files;
-    for (ssize_t i = statediffs.size()-1; i >= 0; i--) {
-      auto sd = statediffs[i];
-      if (sd.sd_type == SD_TYPE_UNLINK) {
-        removed_files.insert(sd.fid);
-        pruned_statediffs.push_back(sd);
-        continue;
-      }
-      if (sd.sd_type == SD_TYPE_WRITE || sd.sd_type == SD_TYPE_TRUNCATE) {
-        if (removed_files.count(sd.fid) == 0) {
-          pruned_statediffs.push_back(sd);
-        }
-        continue;
-      }
-      if (sd.sd_type == SD_TYPE_RENAME) {
-        uint64_t from_fid = sd.fid;
-        uint64_t to_fid = sd.offset;
-        if (removed_files.count(to_fid) == 1) {
-          removed_files.insert(from_fid);
-        }
-        pruned_statediffs.push_back(sd);
-        continue;
-      }
+    // Pruning: O(n) two-pass scan to remove writes to deleted files.
+    // Pass 1: collect unlinked/rmdir'd fids.
+    unordered_set<uint64_t> removed_fids;
+    for (statediff_action* p = head; p; p = p->next) {
+      if (p->sd_type == SD_TYPE_UNLINK || p->sd_type == SD_TYPE_RMDIR)
+        removed_fids.insert(p->fid);
     }
-    /* remove the removed file from the `filename_to_fid` map */
-    // unordered_set<string> removed_filenames;
-    // for (auto f : filename_to_fid) {
-    //   if (removed_files.count(f.second) > 0) {
-    //     removed_filenames.insert(f.first);
-    //   }
-    // }
-    // for (auto f : removed_filenames) {
-    //   filename_to_fid.erase(f);
-    // }
-    statediffs.clear();
-    reverse(pruned_statediffs.begin(), pruned_statediffs.end());
-    statediffs = pruned_statediffs; // reinitialize the statediffs
+    // Pass 2: filter writes/truncates/metadata for deleted files; rebuild pruned list.
+    statediff_action* pruned = nullptr;
+    for (statediff_action* p = head; p; ) {
+      statediff_action* nxt = p->next;
+      bool is_prunable = (p->sd_type == SD_TYPE_WRITE ||
+                          p->sd_type == SD_TYPE_TRUNCATE ||
+                          p->sd_type == SD_TYPE_CHMOD ||
+                          p->sd_type == SD_TYPE_CHOWN ||
+                          p->sd_type == SD_TYPE_CREATE);
+      bool keep = !(is_prunable && removed_fids.count(p->fid));
+      if (keep) {
+        p->next = pruned;
+        pruned = p;
+      } else {
+        delete p;
+      }
+      p = nxt;
+    }
+    serialized = pruned;
   }
-  
-  for (auto m : filename_to_fid) {
+
+  for (statediff_action* p = serialized; p; p = p->next) {
+    switch (p->sd_type) {
+      case SD_TYPE_WRITE:    num_write++;    break;
+      case SD_TYPE_UNLINK:   num_unlink++;   break;
+      case SD_TYPE_RENAME:   num_rename++;   break;
+      case SD_TYPE_CREATE:   num_create++;   break;
+      case SD_TYPE_LINK:     num_link++;     break;
+      case SD_TYPE_TRUNCATE: num_truncate++; break;
+      case SD_TYPE_CHOWN:    num_chown++;    break;
+      case SD_TYPE_CHMOD:    num_chmod++;    break;
+      case SD_TYPE_MKDIR:    num_mkdir++;    break;
+      case SD_TYPE_RMDIR:    num_rmdir++;    break;
+      case SD_TYPE_SYMLINK:  num_symlink++;  break;
+    }
+  }
+
+  uint64_t num_file = local_filename_to_fid.size();
+  for (auto& m : local_filename_to_fid) {
     sum_len_path += m.first.size();
   }
-  for (auto sd : statediffs) {
-    if (sd.sd_type == SD_TYPE_UNLINK) {
-      num_unlink += 1;
+  for (statediff_action* p = serialized; p; p = p->next) {
+    if (p->sd_type == SD_TYPE_WRITE) {
+      sum_len_wr_buf += p->buffer.size();
     }
-    if (sd.sd_type == SD_TYPE_RENAME) {
-      num_rename += 1;
-    }
-    if (sd.sd_type == SD_TYPE_WRITE) {
-      num_write += 1;
-      sum_len_wr_buf += sd.buffer.size();
+    if (p->sd_type == SD_TYPE_SYMLINK) {
+      sum_len_symlink_target += p->buffer.size();
     }
   }
-  num_statediffs = num_write + num_unlink + num_rename;
+  num_statediffs = num_write + num_unlink + num_rename +
+                   num_create + num_link + num_truncate + num_chown + num_chmod +
+                   num_mkdir + num_rmdir + num_symlink;
 
   uint64_t data_size_head = 8 +                                // num_file
                             (num_file * 16) + sum_len_path;    // fid to filename
   uint64_t data_size_all =  data_size_head +
                             8 +                                // num_statediff
-                            (num_unlink * 9) +                 // unlink statediff
-                            (num_write * 25) + sum_len_wr_buf+ // write statediff
-                            (num_rename * 17);                 // rename statediff
-  printf(">>>>>> overall size %lu\n", data_size_all);
-  printf(">>>>>> # write %lu\n", num_write);
-  printf(">>>>>> # unlink %lu\n", num_unlink);
-  printf(">>>>>> # rename %lu\n", num_rename);
-
-  /* allocating the space */
-  char *buffer = (char *) malloc(8 + (data_size_head * sizeof(char)));
+                            (num_unlink * 9) +                 // unlink: type+fid
+                            (num_write * 25) + sum_len_wr_buf+ // write: type+fid+count+offset+buf
+                            (num_rename * 17) +                // rename: type+from_fid+to_fid
+                            (num_truncate * 17) +              // truncate: type+fid+size
+                            (num_create * 21) +                // create: type+fid+uid+gid+mode
+                            (num_link * 17) +                  // link: type+src_fid+new_fid
+                            (num_chown * 17) +                 // chown: type+fid+uid+gid
+                            (num_chmod * 13) +                 // chmod: type+fid+mode
+                            (num_mkdir * 13) +                 // mkdir: type+fid+mode
+                            (num_rmdir * 9) +                  // rmdir: type+fid
+                            (num_symlink * 21) +               // symlink: type+fid+target_len+uid+gid
+                            sum_len_symlink_target;            // symlink target data
+  /* Serialize everything into one contiguous buffer */
+  char *buffer = (char *) malloc(data_size_all);
   if (buffer == NULL) {
-    printf("error: failed to get memory space\n");
-    sd_mutex.unlock();
+    logging(LOG_ERROR, "failed to get memory space for %lu bytes\n", data_size_all);
     return -1;
   }
 
-  printf(">>>>>> filling up space\n");
-  /* filling up the overall size */
-  memcpy(buffer, (void *)&data_size_all, sizeof(uint64_t));  // size overall
-  
+  uint64_t pos = 0;
+
   /* filling up the filename to fid mapping */
-  printf(">>>>>> filename-to-fid map\n");
-  memcpy(buffer + 8, (void *)&num_file, sizeof(uint64_t));   // num_file
-  uint64_t cur_offset = 16;
-  for (auto m : filename_to_fid) {
+  memcpy(buffer + pos, (void *)&num_file, sizeof(uint64_t));   // num_file
+  pos += 8;
+  for (auto& m : local_filename_to_fid) {
     uint64_t fid = m.second;
     uint64_t len_path = m.first.size();
-    string path = m.first;
-    memcpy(buffer + cur_offset, (void*)&fid, sizeof(uint64_t));           // fid
-    memcpy(buffer + cur_offset + 8, (void*)&len_path, sizeof(uint64_t));  // len_path
-    memcpy(buffer + cur_offset + 16 , path.c_str(), len_path);            // len_path
-    cur_offset += 16 + len_path;
+    memcpy(buffer + pos, (void*)&fid, sizeof(uint64_t));
+    memcpy(buffer + pos + 8, (void*)&len_path, sizeof(uint64_t));
+    memcpy(buffer + pos + 16, m.first.c_str(), len_path);
+    pos += 16 + len_path;
   }
 
-  /* sending the overall size and header mapping */
-  ssize_t send_err = send(conn_fd, buffer, cur_offset, 0);
-  if (send_err == -1) {
-    printf("error: failed to send size and header mapping\n");
-    perror(" reason: ");
-    sd_mutex.unlock();
-    return -1;
-  }
-  if (send_err != (ssize_t) cur_offset) {
-    printf("error: failed to send all header\n");
-    sd_mutex.unlock();
-    return -1;
-  }
-  free(buffer);
+  /* filling up the number of statediffs */
+  memcpy(buffer + pos, (void*)&num_statediffs, sizeof(uint64_t));
+  pos += 8;
 
-  /* sending the number of statediffs */
-  printf(">>>>>> statdiffs size \n");
-  send_err = send(conn_fd, (char*)&num_statediffs, sizeof(uint64_t), 0);
-    if (send_err == -1) {
-    printf("error: failed to send number of statediffs\n");
-    perror(" reason: ");
-    sd_mutex.unlock();
-    return -1;
-  }
-  if (send_err != (ssize_t) sizeof(uint64_t)) {
-    printf("error: failed to send all #statediffs\n");
-    sd_mutex.unlock();
-    return -1;
-  }
-  
-  /* sending the actual statediffs */
+  /* filling up the actual statediffs */
   uint64_t write_diff_sz = 0;
-  printf(">>>>>> statdiffs \n");
-  char *sd_buffer = NULL; uint64_t max_data_sz = 0;
-  for (auto sd : statediffs) {
+  for (statediff_action* sdp = serialized; sdp; sdp = sdp->next) {
+    auto& sd = *sdp;
     uint8_t sd_type = sd.sd_type;
     uint64_t fid = sd.fid;
 
-    if (sd_type != SD_TYPE_UNLINK && 
-        sd_type != SD_TYPE_WRITE && 
-        sd_type != SD_TYPE_RENAME && 
-        sd_type != SD_TYPE_TRUNCATE) {
-        printf("error: unknown statediff type (%d)! \n", sd_type);
-        continue;
-    }
+    switch (sd_type) {
+    case SD_TYPE_UNLINK:
+    case SD_TYPE_RMDIR:
+      // [1:type][8:fid]
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      pos += 9;
+      break;
 
-    /* get the required size and allocate the buffer (sd_buffer), if needed */
-    uint64_t sd_buf_len = 9;           // default: size for unlink statediff = 9
-    if (sd_type == SD_TYPE_WRITE) {    // size for write depends on the buffer
-      sd_buf_len = 25 + sd.buffer.size();
-      if (sd.buffer.size() == 0) {
-        printf("error: found write with empty buffer!\n");
-        sd_mutex.unlock();
-        return -1;
-      }
-    }
-    if (sd_type == SD_TYPE_RENAME || sd_type == SD_TYPE_TRUNCATE) {
-      sd_buf_len = 17;
-    }
-    if (max_data_sz < sd_buf_len) {
-      if (sd_buffer != NULL) free(sd_buffer);
-      sd_buffer = (char *) malloc(sd_buf_len * sizeof(char));
-      if (sd_buffer == NULL) {
-        printf("error: failed to allocate mem for statediffs\n");
-        sd_mutex.unlock();
-        return -1;
-      }
-      max_data_sz = sd_buf_len;
-    }
-    
-    /* send the actual statediffs */
-    if (sd_type == SD_TYPE_UNLINK) {
-      memcpy(sd_buffer, (void*)&sd_type, sizeof(uint8_t));     // sd_type
-      memcpy(sd_buffer + 1, (void*)&fid, sizeof(uint64_t));    // fid
-      size_t num_sent = 0;
-      while (num_sent < sd_buf_len) {
-        send_err = send(conn_fd, sd_buffer + num_sent, 
-                       (size_t) sd_buf_len - num_sent, 0);
-        if (send_err == -1) {
-          printf("error: failed to send an unlink statediff\n");
-          perror(" reason");
-          sd_mutex.unlock();
-          break;
-        }
-        num_sent = num_sent + (size_t) send_err;
-      }
-      if (num_sent != (size_t) sd_buf_len) {
-        printf("error: failed to send an unlink statediff. %ld!=%ld\n",
-                num_sent, sd_buf_len);
-        sd_mutex.unlock();
-        return -1;
-      }
-    }
-    if (sd_type == SD_TYPE_WRITE) {
+    case SD_TYPE_WRITE: {
+      // [1:type][8:fid][8:count][8:offset][count:buffer]
       uint64_t count = sd.buffer.size();
       uint64_t offset = sd.offset;
-      unsigned char *wbuffer = sd.buffer.data();
-      memcpy(sd_buffer, (void*)&sd_type, sizeof(uint8_t));              // sd_type
-      memcpy(sd_buffer + 1, (void*)&fid, sizeof(uint64_t));             // fid
-      memcpy(sd_buffer + 1 + 8, (void*)&count, sizeof(uint64_t));       // count
-      memcpy(sd_buffer + 1 + 8 + 8, (void*)&offset, sizeof(uint64_t));  // offset
-      memcpy(sd_buffer + 1 + 8 + 8 + 8, (void *) wbuffer, count);       // write buffer
-      size_t num_sent = 0;
-      while (num_sent < sd_buf_len) {
-        send_err = send(conn_fd, sd_buffer + num_sent, 
-                       (size_t) sd_buf_len - num_sent, 0);
-        if (send_err == -1) {
-          printf("error: failed to send a write statediff\n");
-          perror(" reason");
-          break;
-        }
-        num_sent = num_sent + (size_t) send_err;
-      }
-      if (num_sent != (size_t) sd_buf_len) {
-        printf("error: failed to send a write statediff. %ld!=%ld\n",
-                num_sent, sd_buf_len);
-        sd_mutex.unlock();
+      if (count == 0) {
+        logging(LOG_ERROR, "found write with empty buffer!\n");
+        free(buffer);
         return -1;
       }
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&count, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8 + 8, (void*)&offset, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer.data(), count);
+      pos += 25 + count;
       write_diff_sz += count;
+      break;
     }
-    if (sd_type == SD_TYPE_RENAME) {
+
+    case SD_TYPE_RENAME:
+    case SD_TYPE_LINK: {
+      // [1:type][8:from_fid][8:to_fid]
       uint64_t from_fid = sd.fid;
       uint64_t to_fid = sd.offset;
-      memcpy(sd_buffer, (void*)&sd_type, sizeof(uint8_t));         // sd_type
-      memcpy(sd_buffer + 1, (void*)&from_fid, sizeof(uint64_t));   // from_fid
-      memcpy(sd_buffer + 1 + 8, (void*)&to_fid, sizeof(uint64_t)); // to_fid
-      size_t num_sent = 0;
-      while (num_sent < sd_buf_len) {
-        send_err = send(conn_fd, sd_buffer + num_sent, 
-                       (size_t) sd_buf_len - num_sent, 0);
-        if (send_err == -1) {
-          printf("error: failed to send a rename statediff\n");
-          perror(" reason");
-          sd_mutex.unlock();
-          break;
-        }
-        num_sent = num_sent + (size_t) send_err;
-      }
-      if (num_sent != (size_t) sd_buf_len) {
-        printf("error: failed to send a rename statediff. %ld!=%ld\n",
-                num_sent, sd_buf_len);
-        sd_mutex.unlock();
-        return -1;
-      }
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&from_fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&to_fid, sizeof(uint64_t));
+      pos += 17;
+      break;
     }
-    if (sd_type == SD_TYPE_TRUNCATE) {
-      uint64_t fid = sd.fid;
+
+    case SD_TYPE_TRUNCATE: {
+      // [1:type][8:fid][8:size]
       uint64_t truncate_size = sd.offset;
-      memcpy(sd_buffer, (void*)&sd_type, sizeof(uint8_t));                // sd_type
-      memcpy(sd_buffer + 1, (void*)&fid, sizeof(uint64_t));               // fid
-      memcpy(sd_buffer + 1 + 8, (void*)&truncate_size, sizeof(uint64_t)); // size
-      size_t num_sent = 0;
-      while (num_sent < sd_buf_len) {
-        send_err = send(conn_fd, sd_buffer + num_sent, 
-                       (size_t) sd_buf_len - num_sent, 0);
-        if (send_err == -1) {
-          printf("error: failed to send a truncate statediff\n");
-          perror(" reason");
-          sd_mutex.unlock();
-          break;
-        }
-        num_sent = num_sent + (size_t) send_err;
-      }
-      if (num_sent != (size_t) sd_buf_len) {
-        printf("error: failed to send a truncate statediff. %ld!=%ld\n",
-                num_sent, sd_buf_len);
-        sd_mutex.unlock();
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&truncate_size, sizeof(uint64_t));
+      pos += 17;
+      break;
+    }
+
+    case SD_TYPE_CREATE: {
+      // [1:type][8:fid][4:uid][4:gid][4:mode]
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&sd.uid, sizeof(uint32_t));
+      memcpy(buffer + pos + 1 + 8 + 4, (void*)&sd.gid, sizeof(uint32_t));
+      memcpy(buffer + pos + 1 + 8 + 4 + 4, (void*)&sd.mode, sizeof(uint32_t));
+      pos += 21;
+      break;
+    }
+
+    case SD_TYPE_CHOWN: {
+      // [1:type][8:fid][4:uid][4:gid]
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&sd.uid, sizeof(uint32_t));
+      memcpy(buffer + pos + 1 + 8 + 4, (void*)&sd.gid, sizeof(uint32_t));
+      pos += 17;
+      break;
+    }
+
+    case SD_TYPE_CHMOD:
+    case SD_TYPE_MKDIR: {
+      // [1:type][8:fid][4:mode]
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&sd.mode, sizeof(uint32_t));
+      pos += 13;
+      break;
+    }
+
+    case SD_TYPE_SYMLINK: {
+      // [1:type][8:fid][4:target_len][target_len:target][4:uid][4:gid]
+      uint32_t target_len = sd.buffer.size();
+      memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
+      memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
+      memcpy(buffer + pos + 1 + 8, (void*)&target_len, sizeof(uint32_t));
+      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer.data(), target_len);
+      memcpy(buffer + pos + 1 + 8 + 4 + target_len, (void*)&sd.uid, sizeof(uint32_t));
+      memcpy(buffer + pos + 1 + 8 + 4 + target_len + 4, (void*)&sd.gid, sizeof(uint32_t));
+      pos += 21 + target_len;
+      break;
+    }
+
+    default:
+      logging(LOG_ERROR, "unknown statediff type (%d)!\n", sd_type);
+      break;
+    } // end switch
+  }
+
+  // Free the pruned linked list nodes (no longer needed after serialization).
+  while (serialized) { statediff_action* nxt = serialized->next; delete serialized; serialized = nxt; }
+
+  // Sanity check: serialized size must match expected size.
+  if (pos != data_size_all) {
+    logging(LOG_ERROR, "serialized size %lu != expected %lu\n", pos, data_size_all);
+    free(buffer);
+    return -1;
+  }
+
+  // Determine what to send: compressed or uncompressed payload.
+  char *payload = buffer;
+  uint64_t payload_size = data_size_all;
+
+  char *compressed = NULL;
+  if (is_sd_compress && data_size_all > 0) {
+    // Lazily initialize the compression context (reused across calls).
+    if (zstd_cctx == NULL) {
+      zstd_cctx = ZSTD_createCCtx();
+      if (zstd_cctx == NULL) {
+        logging(LOG_ERROR, "failed to create ZSTD_CCtx\n");
+        free(buffer);
         return -1;
       }
     }
 
+    size_t compress_bound = ZSTD_compressBound(data_size_all);
+    compressed = (char *) malloc(compress_bound);
+    if (compressed == NULL) {
+      logging(LOG_ERROR, "failed to allocate compression buffer (%lu bytes)\n", compress_bound);
+      free(buffer);
+      return -1;
+    }
+
+    size_t compressed_size = ZSTD_compressCCtx(
+        zstd_cctx, compressed, compress_bound,
+        buffer, data_size_all, ZSTD_COMPRESS_LEVEL);
+    if (ZSTD_isError(compressed_size)) {
+      logging(LOG_ERROR, "zstd compression failed: %s\n", ZSTD_getErrorName(compressed_size));
+      free(compressed);
+      free(buffer);
+      return -1;
+    }
+
+    payload = compressed;
+    payload_size = (uint64_t) compressed_size;
   }
-  if (sd_buffer != NULL) free(sd_buffer);
 
-  printf(">>>>>> total write statediff buffer size: %ld bytes\n", write_diff_sz);
-  printf(">>>>>> reset global\n");
-  filename_to_fid.clear();
-  statediffs.clear();
-  printf(">>>>>> reset global %ld %ld\n", filename_to_fid.size(), statediffs.size());
+  /* Send: [8-byte payload_size] [payload] */
+  if (send_all(conn_fd, (const char*)&payload_size, sizeof(uint64_t)) != 0) {
+    logging(LOG_ERROR, "failed to send payload size\n");
+    free(buffer);
+    if (compressed) free(compressed);
+    return -1;
+  }
+  if (payload_size > 0 && send_all(conn_fd, payload, payload_size) != 0) {
+    logging(LOG_ERROR, "failed to send payload\n");
+    free(buffer);
+    if (compressed) free(compressed);
+    return -1;
+  }
 
-  printf(">>>>>> send\n");
-  sd_mutex.unlock();
-  return 0; //send(conn_fd, buffer, data_size, 0);
+  free(buffer);
+  if (compressed) free(compressed);
+
+  return 0;
 }
 
 static bool initialize_unix_socket() {
@@ -628,11 +694,10 @@ static bool initialize_unix_socket() {
       
       conn_fd = accept(socket_fd, (struct sockaddr*)&address, &socket_len);
       if (conn_fd == -1) {
-        printf("failed to accept a connection\n");
+        logging(LOG_ERROR, "failed to accept a connection\n");
         continue;
       }
       
-      printf("received a connection.\n");
       int  data_recv = 0;
       int  send_err  = 0;
       char recv_buf[100];
@@ -648,19 +713,16 @@ static bool initialize_unix_socket() {
         }
         
         if (strstr(recv_buf, "y") != 0) {
-          printf("  proxy is going to do execution\n");
-          printf("  ------------------------------\n");
+          // proxy is going to do execution — nothing to do
         } else if (strstr(recv_buf, "g") != 0) {
-          printf("  XDN: send the gathered statediff\n");
-          printf("  ------------------------------\n");
           send_err = send_gathered_statediffs(conn_fd);
           if (send_err == -1) {
-            printf("error failed send statediffs to proxy\n");
+            logging(LOG_ERROR, "failed send statediffs to proxy\n");
             continue;
           }
           continue;
         } else {
-          printf("  unknown notification: '%s' (%d bytes)\n", 
+          logging(LOG_WARNING, "unknown notification: '%s' (%d bytes)\n",
             recv_buf, data_recv);
           is_waiting = false;
         }
@@ -668,7 +730,7 @@ static bool initialize_unix_socket() {
         strcpy(send_buf, "y\n");
         send_err = send(conn_fd, send_buf, strlen(send_buf)*sizeof(char), 0);
         if (send_err == -1) {
-          printf("failed send ack to proxy\n");
+          logging(LOG_ERROR, "failed send ack to proxy\n");
           continue;
         }
         
@@ -745,12 +807,16 @@ static void fuselog_destroy(void *private_data) {
     logging(LOG_INFO, "closing socket and statediff sender ...\n");
     int err = close(socket_fd);
     if (err != 0) {
-      logging(LOG_ERROR, 
+      logging(LOG_ERROR,
               "  + failed to close fd of the statediff sender's socket \n");
       perror("reason: ");
       return;
     }
   }
+
+  // Drain any remaining statediff nodes to avoid memory leaks at teardown.
+  statediff_action* p = statediff_head.exchange(nullptr, memory_order_acq_rel);
+  while (p) { statediff_action* nxt = p->next; delete p; p = nxt; }
 
   return;
 }
@@ -877,6 +943,27 @@ static int fuselog_mknod(const char *orig_path, mode_t mode, dev_t rdev) {
            fuse_get_context()->gid);
   }
 
+  if (is_sd_capture && fuse_get_context()->pid > 0) {
+    string path_str(path);
+    uint64_t cur_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(path_str)) {
+      cur_fid = filename_to_fid[path_str];
+    } else {
+      cur_fid = filename_to_fid.size();
+      filename_to_fid[path_str] = cur_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_CREATE;
+    sd->fid     = cur_fid;
+    sd->uid     = fuse_get_context()->uid;
+    sd->gid     = fuse_get_context()->gid;
+    sd->mode    = mode;
+    push_statediff(sd);
+  }
+
   free(path);
   return 0;
 }
@@ -900,6 +987,25 @@ static int fuselog_mkdir(const char *orig_path, mode_t mode) {
     }
     logging(LOG_INFO, "  + lchown uid:%d gid:%d\n", fuse_get_context()->uid,
            fuse_get_context()->gid);
+  }
+
+  if (is_sd_capture && fuse_get_context()->pid > 0) {
+    string path_str(path);
+    uint64_t cur_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(path_str)) {
+      cur_fid = filename_to_fid[path_str];
+    } else {
+      cur_fid = filename_to_fid.size();
+      filename_to_fid[path_str] = cur_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_MKDIR;
+    sd->fid     = cur_fid;
+    sd->mode    = mode;
+    push_statediff(sd);
   }
 
   free(path);
@@ -927,6 +1033,29 @@ static int fuselog_symlink(const char *from, const char *orig_to) {
            fuse_get_context()->gid);
   }
 
+  if (is_sd_capture && fuse_get_context()->pid > 0) {
+    string to_str(to);
+    uint64_t link_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(to_str)) {
+      link_fid = filename_to_fid[to_str];
+    } else {
+      link_fid = filename_to_fid.size();
+      filename_to_fid[to_str] = link_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_SYMLINK;
+    sd->fid     = link_fid;
+    sd->uid     = fuse_get_context()->uid;
+    sd->gid     = fuse_get_context()->gid;
+    // store symlink target path in buffer
+    string from_str(from);
+    sd->buffer.assign(from_str.begin(), from_str.end());
+    push_statediff(sd);
+  }
+
   free(to);
   return 0;
 }
@@ -949,25 +1078,21 @@ static int fuselog_unlink(const char *orig_path) {
       // get the file id (fid)
       uint64_t cur_fid = 0;
       string path_str(path);
-      sd_mutex.lock();
+      fid_mutex.lock();
       if (filename_to_fid.count(path_str)) {
         cur_fid = filename_to_fid[path_str];
       } else {
         cur_fid = filename_to_fid.size();
         filename_to_fid[path_str] = cur_fid;
       }
-      sd_mutex.unlock();
+      fid_mutex.unlock();
 
-      // capture the statediff
-      struct statediff_action cur_sd;
-      cur_sd.sd_type = SD_TYPE_UNLINK;
-      cur_sd.fid     = cur_fid;
-      cur_sd.offset  = 0;
-
-      // gather the statediff
-      sd_mutex.lock();
-      statediffs.push_back(cur_sd);
-      sd_mutex.unlock();
+      // capture and gather the statediff
+      auto* sd = new statediff_action{};
+      sd->sd_type = SD_TYPE_UNLINK;
+      sd->fid     = cur_fid;
+      sd->offset  = 0;
+      push_statediff(sd);
     }
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
@@ -988,9 +1113,30 @@ static int fuselog_rmdir(const char *orig_path) {
   char *path = get_relative_path(orig_path);
   int   res  = rmdir(path);
 
-  free(path);
-  if (res == -1)
+  if (res == -1) {
+    free(path);
     return -errno;
+  }
+
+  if (is_sd_capture && fuse_get_context()->pid > 0) {
+    string path_str(path);
+    uint64_t cur_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(path_str)) {
+      cur_fid = filename_to_fid[path_str];
+    } else {
+      cur_fid = filename_to_fid.size();
+      filename_to_fid[path_str] = cur_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_RMDIR;
+    sd->fid     = cur_fid;
+    push_statediff(sd);
+  }
+
+  free(path);
   return 0;
 }
 
@@ -1015,7 +1161,7 @@ static int fuselog_rename(const char *orig_from, const char *orig_to,
       string   from_path_str(from);
       uint64_t to_fid = 0;
       string   to_path_str(to);
-      sd_mutex.lock();
+      fid_mutex.lock();
       if (filename_to_fid.count(from_path_str)) {
         from_fid = filename_to_fid[from_path_str];
       } else {
@@ -1028,18 +1174,14 @@ static int fuselog_rename(const char *orig_from, const char *orig_to,
         to_fid = filename_to_fid.size();
         filename_to_fid[to_path_str] = to_fid;
       }
-      sd_mutex.unlock();
+      fid_mutex.unlock();
 
-      // capture the statediff
-      struct statediff_action cur_sd;
-      cur_sd.sd_type = SD_TYPE_RENAME;
-      cur_sd.fid     = from_fid;
-      cur_sd.offset  = to_fid;          // TODO: use another field!!!
-
-      // gather the statediff
-      sd_mutex.lock();
-      statediffs.push_back(cur_sd);
-      sd_mutex.unlock();
+      // capture and gather the statediff
+      auto* sd = new statediff_action{};
+      sd->sd_type = SD_TYPE_RENAME;
+      sd->fid     = from_fid;
+      sd->offset  = to_fid;          // TODO: use another field!!!
+      push_statediff(sd);
     }
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
@@ -1081,6 +1223,32 @@ static int fuselog_link(const char *orig_from, const char *orig_to) {
             fuse_get_context()->gid);
   }
 
+  if (is_sd_capture && fuse_get_context()->pid > 0) {
+    string from_str(from);
+    string to_str(to);
+    uint64_t from_fid = 0, to_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(from_str)) {
+      from_fid = filename_to_fid[from_str];
+    } else {
+      from_fid = filename_to_fid.size();
+      filename_to_fid[from_str] = from_fid;
+    }
+    if (filename_to_fid.count(to_str)) {
+      to_fid = filename_to_fid[to_str];
+    } else {
+      to_fid = filename_to_fid.size();
+      filename_to_fid[to_str] = to_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_LINK;
+    sd->fid     = from_fid;
+    sd->offset  = to_fid;
+    push_statediff(sd);
+  }
+
   free(from);
   free(to);
 
@@ -1095,12 +1263,31 @@ static int fuselog_chmod(const char *orig_path, mode_t mode,
   char *path = get_relative_path(orig_path);
   int   res  = chmod(path, mode);
 
-  free(path);
-
   if (res == -1) {
+    free(path);
     return -errno;
   }
 
+  if (is_sd_capture && fuse_get_context()->pid > 0) {
+    string path_str(path);
+    uint64_t cur_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(path_str)) {
+      cur_fid = filename_to_fid[path_str];
+    } else {
+      cur_fid = filename_to_fid.size();
+      filename_to_fid[path_str] = cur_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_CHMOD;
+    sd->fid     = cur_fid;
+    sd->mode    = mode;
+    push_statediff(sd);
+  }
+
+  free(path);
   return 0;
 }
 
@@ -1116,6 +1303,26 @@ static int fuselog_chown(const char *orig_path, uid_t uid, gid_t gid,
   char *groupname = get_groupname(gid);
   if (username != NULL && groupname != NULL) {
     logging(LOG_INFO, "  + username:%s groupname:%s\n", username, groupname);
+  }
+
+  if (res == 0 && is_sd_capture && fuse_get_context()->pid > 0) {
+    string path_str(path);
+    uint64_t cur_fid = 0;
+    fid_mutex.lock();
+    if (filename_to_fid.count(path_str)) {
+      cur_fid = filename_to_fid[path_str];
+    } else {
+      cur_fid = filename_to_fid.size();
+      filename_to_fid[path_str] = cur_fid;
+    }
+    fid_mutex.unlock();
+
+    auto* sd = new statediff_action{};
+    sd->sd_type = SD_TYPE_CHOWN;
+    sd->fid     = cur_fid;
+    sd->uid     = uid;
+    sd->gid     = gid;
+    push_statediff(sd);
   }
 
   free(path);
@@ -1140,25 +1347,21 @@ static int fuselog_truncate(const char *orig_path, off_t size,
       // get the file id (fid)
       uint64_t fid = 0;
       string   path_str(path);
-      sd_mutex.lock();
+      fid_mutex.lock();
       if (filename_to_fid.count(path_str)) {
         fid = filename_to_fid[path_str];
       } else {
         fid = filename_to_fid.size();
         filename_to_fid[path_str] = fid;
       }
-      sd_mutex.unlock();
+      fid_mutex.unlock();
 
-      // capture the statediff
-      struct statediff_action cur_sd;
-      cur_sd.sd_type = SD_TYPE_TRUNCATE;
-      cur_sd.fid     = fid;
-      cur_sd.offset  = size;          // TODO: use another field!!!
-
-      // gather the statediff
-      sd_mutex.lock();
-      statediffs.push_back(cur_sd);
-      sd_mutex.unlock();
+      // capture and gather the statediff
+      auto* sd = new statediff_action{};
+      sd->sd_type = SD_TYPE_TRUNCATE;
+      sd->fid     = fid;
+      sd->offset  = size;          // TODO: use another field!!!
+      push_statediff(sd);
     }
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
@@ -1272,7 +1475,6 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
 
   /* Capturing the actual differences by getting the diff between existing data
    * and the to-be-written data.
-   * WARNING: Current implementation assumes single-threaded FUSE!
   */
   int64_t num_diff = -1;            // the number of actual differences
   vector<struct statediff_write_unit> coalesced_write;
@@ -1389,40 +1591,80 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
       // get the file id (fid)
       uint64_t cur_fid = 0;
       string path_str(path);
-      sd_mutex.lock();
+      fid_mutex.lock();
       if (filename_to_fid.count(path_str)) {
         cur_fid = filename_to_fid[path_str];
       } else {
         cur_fid = filename_to_fid.size();
         filename_to_fid[path_str] = cur_fid;
       }
-      sd_mutex.unlock();
-      
-      // gather all the coallesced write
-      if (is_sd_coalesce) {
-        for (auto sd_coalesce : coalesced_write) {
-          struct statediff_action cur_sd;
-          cur_sd.sd_type = SD_TYPE_WRITE;
-          cur_sd.fid = cur_fid;
-          cur_sd.offset = sd_coalesce.offset;
-          cur_sd.buffer = sd_coalesce.buffer;
-          sd_mutex.lock();
-          statediffs.push_back(cur_sd);
-          sd_mutex.unlock();
+      fid_mutex.unlock();
+
+      if (is_sd_coalesce && coalesced_write.size() > 0) {
+        // Phase 1: Merge adjacent chunks whose gap < COALESCE_ACTION_OVERHEAD.
+        // Including a small gap of identical bytes in one chunk is cheaper
+        // than paying 25 bytes of per-action overhead for a separate chunk.
+        vector<statediff_write_unit> merged;
+        merged.push_back(std::move(coalesced_write[0]));
+        for (size_t ci = 1; ci < coalesced_write.size(); ci++) {
+          auto& prev = merged.back();
+          auto& cur  = coalesced_write[ci];
+          uint64_t prev_end = prev.offset + prev.buffer.size();
+          uint64_t gap = (cur.offset > prev_end) ? (cur.offset - prev_end) : 0;
+          if (gap < COALESCE_ACTION_OVERHEAD) {
+            // Merge: fill the gap with original bytes from buf, then append cur
+            for (uint64_t g = 0; g < gap; g++) {
+              uint64_t buf_idx = (prev_end + g) - offset;
+              prev.buffer.push_back((unsigned char) buf[buf_idx]);
+            }
+            prev.buffer.insert(prev.buffer.end(), cur.buffer.begin(), cur.buffer.end());
+          } else {
+            merged.push_back(std::move(cur));
+          }
         }
+
+        // Phase 2: Compare coalesced cost vs raw cost. Use whichever is smaller.
+        // Coalesced cost: N * 25 + D (N actions, D total diff bytes)
+        // Raw cost:       1 * 25 + size (one action, full write buffer)
+        uint64_t coalesced_data = 0;
+        for (auto& m : merged) coalesced_data += m.buffer.size();
+        uint64_t coalesced_cost = merged.size() * COALESCE_ACTION_OVERHEAD + coalesced_data;
+        uint64_t raw_cost       = COALESCE_ACTION_OVERHEAD + size;
+
+        if (coalesced_cost < raw_cost) {
+          // Coalescing wins: push merged chunks
+          for (auto& m : merged) {
+            auto* sd = new statediff_action{};
+            sd->sd_type = SD_TYPE_WRITE;
+            sd->fid     = cur_fid;
+            sd->offset  = m.offset;
+            sd->buffer  = std::move(m.buffer);
+            push_statediff(sd);
+          }
+        } else {
+          // Raw wins: push the full write buffer as one action
+          auto* sd = new statediff_action{};
+          sd->sd_type = SD_TYPE_WRITE;
+          sd->fid     = cur_fid;
+          sd->offset  = offset;
+          for (size_t i = 0; i < size; i++) {
+            sd->buffer.push_back(buf[i]);
+          }
+          push_statediff(sd);
+        }
+      } else if (is_sd_coalesce) {
+        // Coalescing produced no diff chunks — no data changed, nothing to push.
       }
 
       if (!is_sd_coalesce) {
-        struct statediff_action cur_sd;
-        cur_sd.sd_type = SD_TYPE_WRITE;
-        cur_sd.fid = cur_fid;
-        cur_sd.offset = offset;
+        auto* sd = new statediff_action{};
+        sd->sd_type = SD_TYPE_WRITE;
+        sd->fid     = cur_fid;
+        sd->offset  = offset;
         for (size_t i = 0; i < size; i++) {
-          cur_sd.buffer.push_back(buf[i]);
+          sd->buffer.push_back(buf[i]);
         }
-        sd_mutex.lock();
-        statediffs.push_back(cur_sd);
-        sd_mutex.unlock();
+        push_statediff(sd);
       }
     }
 

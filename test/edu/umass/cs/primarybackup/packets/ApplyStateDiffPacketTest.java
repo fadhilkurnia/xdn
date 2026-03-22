@@ -2,7 +2,6 @@ package edu.umass.cs.primarybackup.packets;
 
 import edu.umass.cs.primarybackup.PrimaryEpoch;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Random;
 import org.junit.Test;
@@ -15,9 +14,8 @@ public class ApplyStateDiffPacketTest {
 
     String serviceName = "dummyServiceName";
     PrimaryEpoch<String> zero = new PrimaryEpoch<>("0:0");
-    String stateDiffString = new String(stateDiff, StandardCharsets.ISO_8859_1);
 
-    ApplyStateDiffPacket p1 = new ApplyStateDiffPacket(serviceName, zero, stateDiffString);
+    ApplyStateDiffPacket p1 = new ApplyStateDiffPacket(serviceName, zero, stateDiff);
     byte[] encodedPacket = p1.toBytes();
 
     // ensure the first four bytes represent the packet type

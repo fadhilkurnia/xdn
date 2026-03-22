@@ -16,7 +16,6 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.logging.Level;
@@ -132,9 +131,7 @@ public class PrimaryBackupReplicaCoordinator<NodeIDType>
 
             if (isEndUserRequest) {
                 ClientRequest appRequest = (ClientRequest) rcr.getRequest();
-                request = new RequestPacket(
-                        rcr.getServiceName(),
-                        appRequest.toString().getBytes(StandardCharsets.ISO_8859_1));
+                request = new RequestPacket(rcr.getServiceName(), (Request) appRequest);
                 chainedCallback = (executedRequestPacket, handled) -> {
                     assert executedRequestPacket instanceof RequestPacket;
                     RequestPacket response = (RequestPacket) executedRequestPacket;

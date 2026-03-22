@@ -13,12 +13,16 @@ import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.Future;
 import java.io.Closeable;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -27,25 +31,20 @@ import java.util.logging.Logger;
  * origin (host + port) reuses a {@link FixedChannelPool} so requests of the same origin avoid
  * repeated TCP handshakes.
  *
- * <p>Usage example:
- *
- * <pre>{@code
- * try (XdnHttpForwarderClient client = new XdnHttpForwarderClient()) {
- *     FullHttpRequest request = new DefaultFullHttpRequest(
- *             HttpVersion.HTTP_1_1, HttpMethod.GET, "/health");
- *     request.headers().set(HttpHeaderNames.HOST, "127.0.0.1");
- *     FullHttpResponse response = client.execute("127.0.0.1", 8080, request);
- *     System.out.println(response.status());
- *     response.release();
- * }
- * }</pre>
+ * <p>Supports HTTP/1.1 pipelining via {@link #executePipelined(String, int, List)} for batched
+ * requests: all requests are written to a single channel before waiting for any response, reducing
+ * round-trip overhead from N sequential forwards to a single pipelined exchange.
  */
 public final class XdnHttpForwarderClient implements Closeable {
 
   private static final Logger LOG = Logger.getLogger(XdnHttpForwarderClient.class.getName());
 
   private static final int MAX_CONTENT_LENGTH = 16 * 1024 * 1024;
-  private static final int DEFAULT_MAX_POOL_SIZE = 8;
+  private static final int DEFAULT_MAX_POOL_SIZE = 128;
+  private static final String POOL_SIZE_PROP = "XDN_HTTP_MAX_POOL_SIZE";
+
+  private static final AtomicLong REQUEST_COUNTER = new AtomicLong();
+  private static final int LOG_SAMPLE_INTERVAL = 100;
 
   private final EventLoopGroup eventLoopGroup;
   private final boolean manageEventLoopGroup;
@@ -61,13 +60,223 @@ public final class XdnHttpForwarderClient implements Closeable {
     this.manageEventLoopGroup = manageGroup;
   }
 
+  private static final int MAX_RETRIES = 1;
+
+  /** When true, force Connection: keep-alive on all outgoing requests to prevent
+   *  upstream containers (e.g. Apache) from closing pooled connections.
+   *  Enable with -DHTTP_FORCE_KEEPALIVE=true */
+  private static final boolean FORCE_KEEPALIVE =
+      Boolean.parseBoolean(System.getProperty("HTTP_FORCE_KEEPALIVE", "false"));
+
   /**
    * Sends the given HTTP request and returns a detached response. The caller is responsible for
    * releasing the returned {@link FullHttpResponse} to avoid leaking pooled buffers.
+   *
+   * <p>Retries once on transient connection-pool errors (inactive channel, closed channel) which
+   * happen when the remote server closes an idle keep-alive connection between the pool health
+   * check and the actual write.
    */
   public FullHttpResponse execute(String host, int port, FullHttpRequest request) throws Exception {
     Objects.requireNonNull(host, "host");
     Objects.requireNonNull(request, "request");
+    if (MAX_RETRIES <= 0) {
+      return executeOnce(host, port, request);
+    }
+    // Extra retain so the request survives a failed attempt where writeAndFlush consumed
+    // the ByteBuf content.  Released in the finally block below.
+    ReferenceCountUtil.retain(request);
+    Exception lastException = null;
+    try {
+      for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          return executeOnce(host, port, request);
+        } catch (IllegalStateException e) {
+          // Retry on transient pool errors (inactive/closed channels)
+          String msg = e.getMessage();
+          if (msg != null
+              && (msg.contains("inactive")
+                  || msg.contains("closed")
+                  || msg.contains("in flight"))) {
+            lastException = e;
+            LOG.log(
+                Level.WARNING, "HTTP fwd retry attempt {0}: {1}", new Object[] {attempt + 1, msg});
+            continue;
+          }
+          throw e;
+        } catch (java.nio.channels.ClosedChannelException e) {
+          lastException = e;
+          LOG.log(
+              Level.WARNING,
+              "HTTP fwd retry attempt {0}: ClosedChannelException",
+              new Object[] {attempt + 1});
+          continue;
+        }
+      }
+      throw lastException;
+    } finally {
+      // Release the extra retain; skip if refCnt is already 0 (both attempts wrote)
+      if (request.refCnt() > 0) {
+        ReferenceCountUtil.release(request);
+      }
+    }
+  }
+
+  /**
+   * Sends multiple HTTP requests over a single connection using HTTP/1.1 pipelining. All requests
+   * are written to the channel before waiting for any response, reducing latency from N sequential
+   * round-trips to approximately 1 round-trip + N × server processing time.
+   *
+   * <p>Responses are returned in the same order as the requests. The caller is responsible for
+   * releasing each returned {@link FullHttpResponse}.
+   *
+   * <p>Falls back to sequential {@link #execute} if only one request is provided.
+   *
+   * @param host the target host (e.g., "127.0.0.1")
+   * @param port the target port
+   * @param requests the list of HTTP requests to pipeline
+   * @return list of responses in the same order as requests
+   */
+  public List<FullHttpResponse> executePipelined(
+      String host, int port, List<FullHttpRequest> requests) throws Exception {
+    Objects.requireNonNull(host, "host");
+    Objects.requireNonNull(requests, "requests");
+    if (requests.isEmpty()) {
+      return List.of();
+    }
+    // Single request: use the normal path (no pipelining overhead).
+    if (requests.size() == 1) {
+      return List.of(execute(host, port, requests.get(0)));
+    }
+
+    final int n = requests.size();
+    final long t0 = System.nanoTime();
+
+    Origin origin = new Origin(host, port);
+    FixedChannelPool pool = poolFor(origin);
+
+    // One CompletableFuture per request, completed in order by the handler.
+    List<CompletableFuture<FullHttpResponse>> responseFutures = new ArrayList<>(n);
+    for (int i = 0; i < n; i++) {
+      responseFutures.add(new CompletableFuture<>());
+    }
+
+    // Retain all requests so they survive writeAndFlush.
+    for (FullHttpRequest req : requests) {
+      ReferenceCountUtil.retain(req);
+    }
+
+    pool.acquire()
+        .addListener(
+            (Future<Channel> acquireFuture) -> {
+              if (!acquireFuture.isSuccess()) {
+                Throwable cause = acquireFuture.cause();
+                for (CompletableFuture<FullHttpResponse> f : responseFutures) {
+                  f.completeExceptionally(cause);
+                }
+                return;
+              }
+
+              Channel channel = acquireFuture.getNow();
+              if (channel == null || !channel.isActive()) {
+                IllegalStateException ex =
+                    new IllegalStateException("Acquired inactive channel for pipelining");
+                for (CompletableFuture<FullHttpResponse> f : responseFutures) {
+                  f.completeExceptionally(ex);
+                }
+                if (channel != null) {
+                  releaseQuietly(pool, channel);
+                }
+                return;
+              }
+
+              ClientResponseHandler handler =
+                  channel.pipeline().get(ClientResponseHandler.class);
+              if (handler == null) {
+                IllegalStateException ex =
+                    new IllegalStateException("Missing response handler in pipeline");
+                for (CompletableFuture<FullHttpResponse> f : responseFutures) {
+                  f.completeExceptionally(ex);
+                }
+                releaseQuietly(pool, channel);
+                return;
+              }
+
+              // Register all response futures in order before writing any request.
+              // The handler will complete them in FIFO order as responses arrive.
+              PipelineContext pctx = new PipelineContext(channel, pool, responseFutures);
+              if (!handler.registerPipeline(pctx)) {
+                IllegalStateException ex =
+                    new IllegalStateException("Channel busy, cannot start pipelining");
+                for (CompletableFuture<FullHttpResponse> f : responseFutures) {
+                  f.completeExceptionally(ex);
+                }
+                releaseQuietly(pool, channel);
+                return;
+              }
+
+              // Write all requests without waiting for responses (pipelining).
+              for (int i = 0; i < n; i++) {
+                FullHttpRequest req = requests.get(i);
+                if (FORCE_KEEPALIVE) {
+                  HttpUtil.setKeepAlive(req, true);
+                }
+                if (i < n - 1) {
+                  channel.write(req);
+                } else {
+                  // Flush on the last write.
+                  channel.writeAndFlush(req)
+                      .addListener(
+                          (ChannelFutureListener)
+                              wf -> {
+                                if (!wf.isSuccess()) {
+                                  handler.failAll(wf.cause());
+                                }
+                              });
+                }
+              }
+            });
+
+    // Wait for all responses.
+    List<FullHttpResponse> responses = new ArrayList<>(n);
+    try {
+      for (int i = 0; i < n; i++) {
+        responses.add(responseFutures.get(i).get());
+      }
+    } catch (ExecutionException e) {
+      // Release any already-received responses on failure.
+      for (FullHttpResponse resp : responses) {
+        ReferenceCountUtil.release(resp);
+      }
+      Throwable cause = e.getCause();
+      if (cause instanceof Exception) {
+        throw (Exception) cause;
+      }
+      throw new RuntimeException(cause);
+    } finally {
+      for (FullHttpRequest req : requests) {
+        if (req.refCnt() > 0) {
+          ReferenceCountUtil.release(req);
+        }
+      }
+    }
+
+    if (LOG.isLoggable(Level.FINE)) {
+      double totalMs = (System.nanoTime() - t0) / 1_000_000.0;
+      LOG.fine(
+          String.format(
+              "HTTP pipelined fwd: %d requests in %.2fms (%.2fms/req)",
+              n, totalMs, totalMs / n));
+    }
+
+    return responses;
+  }
+
+  private FullHttpResponse executeOnce(String host, int port, FullHttpRequest request)
+      throws Exception {
+    final long t0 = System.nanoTime();
+    final long reqNum = REQUEST_COUNTER.incrementAndGet();
+    // ts[0] = acquire complete, ts[1] = write complete
+    final long[] ts = new long[2];
 
     Origin origin = new Origin(host, port);
     FixedChannelPool pool = poolFor(origin);
@@ -81,6 +290,8 @@ public final class XdnHttpForwarderClient implements Closeable {
     pool.acquire()
         .addListener(
             (Future<Channel> acquireFuture) -> {
+              ts[0] = System.nanoTime();
+
               if (!acquireFuture.isSuccess()) {
                 responseFuture.completeExceptionally(acquireFuture.cause());
                 return;
@@ -112,10 +323,19 @@ public final class XdnHttpForwarderClient implements Closeable {
                 return;
               }
 
+              // When enabled, force keep-alive to prevent the upstream (e.g. Apache)
+              // from closing the connection after the response. Without this,
+              // containers that send "Connection: close" cause pooled channels
+              // to go inactive, triggering retry overhead.
+              if (FORCE_KEEPALIVE) {
+                HttpUtil.setKeepAlive(outbound, true);
+              }
+
               ChannelFuture writeFuture = channel.writeAndFlush(outbound);
               writeFuture.addListener(
                   (ChannelFutureListener)
                       wf -> {
+                        ts[1] = System.nanoTime();
                         if (!wf.isSuccess()) {
                           handler.fail(wf.cause());
                         }
@@ -123,7 +343,19 @@ public final class XdnHttpForwarderClient implements Closeable {
             });
 
     try {
-      return responseFuture.get();
+      FullHttpResponse response = responseFuture.get();
+      if (reqNum % LOG_SAMPLE_INTERVAL == 0) {
+        long tEnd = System.nanoTime();
+        double totalMs = (tEnd - t0) / 1_000_000.0;
+        double acqMs = (ts[0] - t0) / 1_000_000.0;
+        double writeMs = (ts[1] - ts[0]) / 1_000_000.0;
+        double respMs = (tEnd - ts[1]) / 1_000_000.0;
+        LOG.info(
+            String.format(
+                "HTTP fwd: total=%.2fms acq=%.2fms write=%.2fms resp=%.2fms",
+                totalMs, acqMs, writeMs, respMs));
+      }
+      return response;
     } catch (ExecutionException e) {
       Throwable cause = e.getCause();
       if (cause instanceof Exception) {
@@ -149,7 +381,18 @@ public final class XdnHttpForwarderClient implements Closeable {
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
             .remoteAddress(new InetSocketAddress(origin.host(), origin.port()));
 
-    return new FixedChannelPool(bootstrap, new PoolHandler(), DEFAULT_MAX_POOL_SIZE);
+    return new FixedChannelPool(bootstrap, new PoolHandler(), getMaxPoolSize());
+  }
+
+  private int getMaxPoolSize() {
+    String val = System.getProperty(POOL_SIZE_PROP);
+    if (val != null) {
+      try {
+        return Integer.parseInt(val.trim());
+      } catch (NumberFormatException ignored) {
+      }
+    }
+    return DEFAULT_MAX_POOL_SIZE;
   }
 
   private static FullHttpRequest copyRequest(FullHttpRequest request) {
@@ -251,35 +494,82 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
+  /**
+   * Channel handler that supports both single-request mode and pipelined mode. In pipelined mode,
+   * incoming responses are matched to requests in FIFO order.
+   */
   private static final class ClientResponseHandler
       extends SimpleChannelInboundHandler<FullHttpResponse> {
 
-    private final AtomicReference<RequestContext> inFlight = new AtomicReference<>();
+    // Single-request mode: exactly one in-flight request.
+    private final Queue<RequestContext> singleQueue = new ConcurrentLinkedQueue<>();
+
+    // Pipelined mode: multiple in-flight requests, completed in FIFO order.
+    private volatile PipelineContext pipelineContext;
 
     ClientResponseHandler() {
-      // We use autoRelease==false, enabling this Client's user to
-      // manage the reference counted FullHttpResponse.
       super(false);
     }
 
+    /** Register a single request context (non-pipelined mode). */
     boolean register(RequestContext context) {
-      return inFlight.compareAndSet(null, context);
+      if (pipelineContext != null) {
+        return false; // Channel is in pipelined mode.
+      }
+      if (!singleQueue.isEmpty()) {
+        return false; // Another request is already in flight.
+      }
+      singleQueue.add(context);
+      return true;
+    }
+
+    /** Register a pipeline context for pipelined mode. */
+    boolean registerPipeline(PipelineContext pctx) {
+      if (pipelineContext != null || !singleQueue.isEmpty()) {
+        return false; // Channel is busy.
+      }
+      this.pipelineContext = pctx;
+      return true;
     }
 
     void fail(Throwable throwable) {
-      RequestContext context = inFlight.getAndSet(null);
+      RequestContext context = singleQueue.poll();
       if (context != null) {
         context.fail(throwable);
       }
     }
 
+    void failAll(Throwable throwable) {
+      PipelineContext pctx = this.pipelineContext;
+      if (pctx != null) {
+        pctx.failAll(throwable);
+        this.pipelineContext = null;
+      }
+      RequestContext ctx;
+      while ((ctx = singleQueue.poll()) != null) {
+        ctx.fail(throwable);
+      }
+    }
+
     void clear() {
-      inFlight.set(null);
+      singleQueue.clear();
+      pipelineContext = null;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpResponse msg) {
-      RequestContext context = inFlight.getAndSet(null);
+      // Check pipelined mode first.
+      PipelineContext pctx = this.pipelineContext;
+      if (pctx != null) {
+        boolean done = pctx.completeNext(msg);
+        if (done) {
+          this.pipelineContext = null;
+        }
+        return;
+      }
+
+      // Single-request mode.
+      RequestContext context = singleQueue.poll();
       if (context == null) {
         ReferenceCountUtil.release(msg);
         LOG.warning("Received response with no context; dropping");
@@ -290,13 +580,13 @@ public final class XdnHttpForwarderClient implements Closeable {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-      fail(new IllegalStateException("Backend channel closed"));
+      failAll(new IllegalStateException("Backend channel closed"));
       ctx.fireChannelInactive();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-      fail(cause);
+      failAll(cause);
       ctx.close();
     }
   }
@@ -331,6 +621,68 @@ public final class XdnHttpForwarderClient implements Closeable {
                 });
       } catch (Throwable t) {
         LOG.log(Level.WARNING, "Exception releasing channel to pool", t);
+        channel.close();
+      }
+    }
+  }
+
+  /**
+   * Tracks multiple in-flight pipelined requests on a single channel. Responses are completed in
+   * FIFO order. The channel is released back to the pool only after all responses are received.
+   */
+  private static final class PipelineContext {
+    private final Channel channel;
+    private final FixedChannelPool pool;
+    private final List<CompletableFuture<FullHttpResponse>> futures;
+    private int nextIndex = 0;
+
+    PipelineContext(
+        Channel channel,
+        FixedChannelPool pool,
+        List<CompletableFuture<FullHttpResponse>> futures) {
+      this.channel = channel;
+      this.pool = pool;
+      this.futures = futures;
+    }
+
+    /** Complete the next pending future. Returns true if all futures are now complete. */
+    boolean completeNext(FullHttpResponse response) {
+      if (nextIndex >= futures.size()) {
+        ReferenceCountUtil.release(response);
+        LOG.warning("Pipelined response received but all futures already completed");
+        return true;
+      }
+      CompletableFuture<FullHttpResponse> future = futures.get(nextIndex++);
+      if (!future.complete(response)) {
+        ReferenceCountUtil.release(response);
+      }
+      boolean allDone = nextIndex >= futures.size();
+      if (allDone) {
+        releaseChannel();
+      }
+      return allDone;
+    }
+
+    void failAll(Throwable throwable) {
+      for (int i = nextIndex; i < futures.size(); i++) {
+        futures.get(i).completeExceptionally(throwable);
+      }
+      nextIndex = futures.size();
+      releaseChannel();
+    }
+
+    private void releaseChannel() {
+      try {
+        pool.release(channel)
+            .addListener(
+                f -> {
+                  if (!f.isSuccess()) {
+                    LOG.log(Level.WARNING, "Failed to release pipelined channel", f.cause());
+                    channel.close();
+                  }
+                });
+      } catch (Throwable t) {
+        LOG.log(Level.WARNING, "Exception releasing pipelined channel", t);
         channel.close();
       }
     }

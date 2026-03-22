@@ -29,6 +29,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <zstd.h>
 
 #include <iostream>
 #include <string>
@@ -46,6 +47,7 @@ static string                target_dir_path;
 static char                  target_path[256];
 const bool                   is_dry_run = false;
 const int                    version = 2;
+static const uint32_t        ZSTD_MAGIC = 0xFD2FB528;
 
 // configurations for logging purposes
 #define LOG_DEBUG   1
@@ -59,6 +61,13 @@ static int log_level = LOG_INFO;
 #define SD_TYPE_UNLINK   1
 #define SD_TYPE_RENAME   2
 #define SD_TYPE_TRUNCATE 3
+#define SD_TYPE_CREATE   4
+#define SD_TYPE_LINK     5
+#define SD_TYPE_CHOWN    6
+#define SD_TYPE_CHMOD    7
+#define SD_TYPE_MKDIR    8
+#define SD_TYPE_RMDIR    9
+#define SD_TYPE_SYMLINK  10
 
 /*******************************************************************************
  *                           FUNCTIONS DECLARATION                             *
@@ -266,288 +275,380 @@ void apply(char *target_root) {
 
 void apply2(char *target_root) {
   logging(LOG_INFO, "running apply v2 ...\n");
-  
-  FILE    *fd;
-  uint64_t sd_count;
-  size_t   rw_count;
-  // char    *sd_buffer;
-  // uint8_t  sd_type;
 
-  // get the size of the file
-  fd = fopen(statediff_file_path.c_str(), "rb");
-  fseek(fd, 0L, SEEK_END);
-  size_t sz = ftell(fd);
-  fseek(fd, 0L, SEEK_SET);
-  size_t cur_byte = 0;
-  sd_count        = 0;
-  logging(LOG_INFO, "  filesize: %lu bytes\n", sz);
-
-  // read the fid to filename mapping in the header
-  unordered_map<uint64_t, string> fid_to_filename;
-
-  // first, read the number of files
-  uint64_t num_file;
-  rw_count = fread(&num_file, sizeof(uint64_t), 1, fd);
-  if (rw_count != 1) {
-    logging(LOG_ERROR, 
-            "error: fread.num_file failed to read %ld bytes (%ld)\n",
-            sizeof(uint64_t), rw_count);
+  // Read entire file into memory.
+  FILE *fd = fopen(statediff_file_path.c_str(), "rb");
+  if (!fd) {
+    logging(LOG_ERROR, "error: cannot open statediff file %s\n",
+            statediff_file_path.c_str());
     return;
   }
-  cur_byte += 8;
-  logging(LOG_INFO, "  #files: %lu\n", num_file);
+  fseek(fd, 0L, SEEK_END);
+  size_t file_sz = ftell(fd);
+  fseek(fd, 0L, SEEK_SET);
+  logging(LOG_INFO, "  filesize: %lu bytes\n", file_sz);
 
-  // then, read all files
-  char uint64_buffer[8];
-  char path_buffer[256];
-  for (size_t i = 0; i < num_file; i++) {
-    uint64_t fid = 0;
-    uint64_t path_len = 0;
-    
-    // read the file id (fid)
-    memset(uint64_buffer, 0, 8); // reset
-    rw_count = fread(uint64_buffer, sizeof(uint64_t), 1, fd);
-    if (rw_count != 1) {
-      logging(LOG_ERROR, "error: fread.fid failed to read %ld bytes (%ld)\n",
-              sizeof(uint64_t), rw_count);
-      return;
-    }
-    memcpy(&fid, uint64_buffer, sizeof(uint64_t));
-    cur_byte += 8;
-
-    // read the path len
-    memset(uint64_buffer, 0, 8); // reset
-    rw_count = fread(uint64_buffer, sizeof(uint64_t), 1, fd);
-    if (rw_count != 1) {
-      logging(LOG_ERROR, 
-              "error: fread.path_len failed to read %ld bytes (%ld)\n", 
-              sizeof(uint64_t), rw_count);
-      return;
-    }
-    memcpy(&path_len, uint64_buffer, sizeof(uint64_t));
-    cur_byte += 8;
-
-    // read the whole path
-    memset(uint64_buffer, 0, 8); // reset
-    rw_count = fread(path_buffer, sizeof(char), path_len, fd);
-    if (rw_count != path_len) {
-      logging(LOG_ERROR, "error: fread.path failed to read %ld bytes (%ld)\n",
-              sizeof(char), rw_count);
-      return;
-    }
-    cur_byte += path_len;
-    
-    fid_to_filename[fid] = string(path_buffer);
-
-    logging(LOG_INFO, ">> fid: %lu, len:%lu, path: %s\n",
-            fid, path_len, path_buffer);
+  if (file_sz == 0) {
+    logging(LOG_INFO, "  empty statediff file, nothing to apply\n");
+    fclose(fd);
+    return;
   }
 
-  for (auto m : fid_to_filename) {
+  char *raw_data = (char *) malloc(file_sz);
+  if (!raw_data) {
+    logging(LOG_ERROR, "error: failed to allocate %lu bytes\n", file_sz);
+    fclose(fd);
+    return;
+  }
+  size_t rw_count = fread(raw_data, 1, file_sz, fd);
+  fclose(fd);
+  if (rw_count != file_sz) {
+    logging(LOG_ERROR, "error: short read %lu/%lu bytes\n", rw_count, file_sz);
+    free(raw_data);
+    return;
+  }
+
+  // Auto-detect zstd compression by checking the magic number.
+  char *data = raw_data;
+  size_t data_sz = file_sz;
+  char *decompressed = NULL;
+
+  if (file_sz >= 4) {
+    uint32_t magic;
+    memcpy(&magic, raw_data, sizeof(uint32_t));
+    if (magic == ZSTD_MAGIC) {
+      logging(LOG_INFO, "  detected zstd-compressed statediff\n");
+      unsigned long long decompressed_sz = ZSTD_getFrameContentSize(raw_data, file_sz);
+      if (decompressed_sz == ZSTD_CONTENTSIZE_UNKNOWN ||
+          decompressed_sz == ZSTD_CONTENTSIZE_ERROR) {
+        logging(LOG_ERROR, "error: cannot determine decompressed size\n");
+        free(raw_data);
+        return;
+      }
+      decompressed = (char *) malloc((size_t) decompressed_sz);
+      if (!decompressed) {
+        logging(LOG_ERROR, "error: failed to allocate %llu bytes for decompression\n",
+                decompressed_sz);
+        free(raw_data);
+        return;
+      }
+      size_t result = ZSTD_decompress(decompressed, (size_t) decompressed_sz,
+                                      raw_data, file_sz);
+      if (ZSTD_isError(result)) {
+        logging(LOG_ERROR, "error: zstd decompression failed: %s\n",
+                ZSTD_getErrorName(result));
+        free(decompressed);
+        free(raw_data);
+        return;
+      }
+      logging(LOG_INFO, "  decompressed %lu -> %lu bytes\n", file_sz, result);
+      data = decompressed;
+      data_sz = result;
+      free(raw_data);
+      raw_data = NULL;
+    }
+  }
+
+  // Parse from in-memory buffer using cursor.
+  size_t cur = 0;
+  uint64_t sd_count = 0;
+
+  // Helper macro to safely read from buffer.
+  #define READ_BUF(dst, n) do { \
+    if (cur + (n) > data_sz) { \
+      logging(LOG_ERROR, "error: unexpected end of data at offset %lu (need %lu)\n", cur, (size_t)(n)); \
+      goto cleanup; \
+    } \
+    memcpy((dst), data + cur, (n)); \
+    cur += (n); \
+  } while(0)
+
+  // Read the fid to filename mapping in the header.
+  unordered_map<uint64_t, string> fid_to_filename;
+  {
+    uint64_t num_file;
+    READ_BUF(&num_file, sizeof(uint64_t));
+    logging(LOG_INFO, "  #files: %lu\n", num_file);
+
+    char path_buffer[256];
+    for (size_t i = 0; i < num_file; i++) {
+      uint64_t fid = 0;
+      uint64_t path_len = 0;
+      READ_BUF(&fid, sizeof(uint64_t));
+      READ_BUF(&path_len, sizeof(uint64_t));
+      if (path_len >= sizeof(path_buffer)) {
+        logging(LOG_ERROR, "error: path_len %lu too large\n", path_len);
+        goto cleanup;
+      }
+      memset(path_buffer, 0, sizeof(path_buffer));
+      READ_BUF(path_buffer, path_len);
+      fid_to_filename[fid] = string(path_buffer);
+      logging(LOG_INFO, ">> fid: %lu, len:%lu, path: %s\n",
+              fid, path_len, path_buffer);
+    }
+  }
+
+  for (auto& m : fid_to_filename) {
     logging(LOG_INFO, ">> fid: %lu, path: %s\n", m.first, m.second.c_str());
   }
-  
-  // read and apply all the statediff updates
 
-  // read the file id (fid)
-  uint64_t num_statediff = 0;
-  memset(uint64_buffer, 0, 8); // reset
-  rw_count = fread(uint64_buffer, sizeof(uint64_t), 1, fd);
-  if (rw_count != 1) {
-    logging(LOG_ERROR, "error: fread.fid failed to read %ld bytes (%ld)\n",
-            sizeof(uint64_t), rw_count);
-    return;
-  }
-  memcpy(&num_statediff, uint64_buffer, sizeof(uint64_t));
-  cur_byte += 8;
-  logging(LOG_INFO, "  #statediff: %lu\n", num_statediff);
+  // Read and apply all statediff updates.
+  {
+    uint64_t num_statediff = 0;
+    READ_BUF(&num_statediff, sizeof(uint64_t));
+    logging(LOG_INFO, "  #statediff: %lu\n", num_statediff);
 
-  for (size_t i = 0; i < num_statediff; i++) {
-    uint8_t sd_type = SD_TYPE_UNLINK;
+    for (size_t i = 0; i < num_statediff; i++) {
+      uint8_t sd_type;
+      READ_BUF(&sd_type, sizeof(uint8_t));
 
-    logging(LOG_DEBUG, "current byte offset: %ld\n", cur_byte);
+      logging(LOG_DEBUG, "current byte offset: %ld\n", cur);
 
-    // read the statediff type
-    rw_count = fread(&sd_type, sizeof(uint8_t), 1, fd);
-    if (rw_count != 1) {
-      logging(LOG_ERROR, "error: failed to read %ld byte\ns", sizeof(uint8_t));
-      return;
+      if (sd_type == SD_TYPE_WRITE) {
+        sd_count += 1;
+        uint64_t sd_fid, sd_size, sd_offset;
+        READ_BUF(&sd_fid, sizeof(uint64_t));
+        READ_BUF(&sd_size, sizeof(uint64_t));
+        READ_BUF(&sd_offset, sizeof(uint64_t));
+
+        string filename = fid_to_filename[sd_fid];
+        uint64_t path_len = filename.size();
+
+        // Build sd_buffer in the format apply_write expects.
+        char *sd_buffer = (char *) malloc(1 + 8 + path_len + 8 + 8 + sd_size);
+        // Copy the write data from the in-memory buffer.
+        if (cur + sd_size > data_sz) {
+          logging(LOG_ERROR, "error: unexpected end of data reading write buffer\n");
+          free(sd_buffer);
+          goto cleanup;
+        }
+        memcpy(sd_buffer + 1 + 8 + path_len + 16, data + cur, sd_size);
+        cur += sd_size;
+
+        logging(LOG_INFO, ">>> write size:%lu offset:%lu path:%s\n",
+                sd_size, sd_offset, filename.c_str());
+
+        memcpy(sd_buffer, (void *) &sd_type, sizeof(uint8_t));
+        memcpy(sd_buffer + 1, (void *) &path_len, sizeof(uint64_t));
+        memcpy(sd_buffer + 1 + 8, filename.c_str(), path_len);
+        memcpy(sd_buffer + 1 + 8 + path_len, (void *) &sd_offset, sizeof(uint64_t));
+        memcpy(sd_buffer + 1 + 8 + path_len + 8, (void *) &sd_size, sizeof(uint64_t));
+
+        apply_write(sd_buffer, target_root);
+        free(sd_buffer);
+
+      } else if (sd_type == SD_TYPE_UNLINK) {
+        uint64_t sd_fid;
+        READ_BUF(&sd_fid, sizeof(uint64_t));
+        string filename = fid_to_filename[sd_fid];
+        uint64_t path_len = filename.size();
+
+        logging(LOG_INFO, ">>> unlink %s\n", filename.c_str());
+
+        char *sd_buffer = (char *) malloc(1 + 8 + path_len);
+        memcpy(sd_buffer, (void *) &sd_type, sizeof(uint8_t));
+        memcpy(sd_buffer + 1, (void *) &path_len, sizeof(uint64_t));
+        memcpy(sd_buffer + 1 + 8, filename.c_str(), path_len);
+        apply_unlink(sd_buffer, target_root);
+        free(sd_buffer);
+
+      } else if (sd_type == SD_TYPE_RENAME) {
+        uint64_t from_fid, to_fid;
+        READ_BUF(&from_fid, sizeof(uint64_t));
+        READ_BUF(&to_fid, sizeof(uint64_t));
+
+        string from_filename = fid_to_filename[from_fid];
+        string to_filename = fid_to_filename[to_fid];
+
+        char from_abs_path[512], to_abs_path[512];
+        strcpy(from_abs_path, target_root);
+        strcat(from_abs_path, from_filename.c_str());
+        strcpy(to_abs_path, target_root);
+        strcat(to_abs_path, to_filename.c_str());
+
+        logging(LOG_INFO, ">>> rename \n      from: %s\n      to: %s\n",
+               from_abs_path, to_abs_path);
+        int err = rename(from_abs_path, to_abs_path);
+        if (err == -1) {
+          logging(LOG_ERROR, "error: failed to rename file %s -> %s\n",
+                  from_filename.c_str(), to_filename.c_str());
+          perror("reason");
+          goto cleanup;
+        }
+        logging(LOG_INFO, "\n\n");
+
+      } else if (sd_type == SD_TYPE_TRUNCATE) {
+        uint64_t fid, truncate_size;
+        READ_BUF(&fid, sizeof(uint64_t));
+        READ_BUF(&truncate_size, sizeof(uint64_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> truncate \n      path: %s\n      size: %ld\n",
+          abs_path, truncate_size);
+        int err = truncate(abs_path, truncate_size);
+        if (err == -1) {
+          logging(LOG_ERROR, "error: failed to truncate file %s (%ld)\n",
+                  filename.c_str(), truncate_size);
+          perror("reason");
+          goto cleanup;
+        }
+        logging(LOG_INFO, "\n\n");
+
+      } else if (sd_type == SD_TYPE_CREATE) {
+        uint64_t fid;
+        uint32_t sd_uid, sd_gid, sd_mode;
+        READ_BUF(&fid, sizeof(uint64_t));
+        READ_BUF(&sd_uid, sizeof(uint32_t));
+        READ_BUF(&sd_gid, sizeof(uint32_t));
+        READ_BUF(&sd_mode, sizeof(uint32_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> create path:%s uid:%u gid:%u mode:%o\n",
+                abs_path, sd_uid, sd_gid, sd_mode);
+
+        int tfd = open(abs_path, O_CREAT | O_EXCL | O_WRONLY, sd_mode);
+        if (tfd >= 0) {
+          close(tfd);
+          if (lchown(abs_path, sd_uid, sd_gid) == -1) {
+            logging(LOG_ERROR, "error: failed to chown created file %s\n", abs_path);
+          }
+          chmod(abs_path, sd_mode);
+        } else if (errno != EEXIST) {
+          logging(LOG_ERROR, "error: failed to create %s\n", abs_path);
+          perror("reason");
+        }
+
+      } else if (sd_type == SD_TYPE_LINK) {
+        uint64_t src_fid, new_fid;
+        READ_BUF(&src_fid, sizeof(uint64_t));
+        READ_BUF(&new_fid, sizeof(uint64_t));
+
+        string src_filename = fid_to_filename[src_fid];
+        string new_filename = fid_to_filename[new_fid];
+        char src_path[512], new_path[512];
+        strcpy(src_path, target_root); strcat(src_path, src_filename.c_str());
+        strcpy(new_path, target_root); strcat(new_path, new_filename.c_str());
+
+        logging(LOG_INFO, ">>> link from:%s to:%s\n", src_path, new_path);
+        int err = link(src_path, new_path);
+        if (err == -1) {
+          logging(LOG_ERROR, "error: failed to link %s -> %s\n", src_path, new_path);
+          perror("reason");
+        }
+
+      } else if (sd_type == SD_TYPE_CHOWN) {
+        uint64_t fid;
+        uint32_t sd_uid, sd_gid;
+        READ_BUF(&fid, sizeof(uint64_t));
+        READ_BUF(&sd_uid, sizeof(uint32_t));
+        READ_BUF(&sd_gid, sizeof(uint32_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> chown path:%s uid:%u gid:%u\n", abs_path, sd_uid, sd_gid);
+        int err = lchown(abs_path, sd_uid, sd_gid);
+        if (err == -1) {
+          logging(LOG_ERROR, "error: failed to chown %s\n", abs_path);
+          perror("reason");
+        }
+
+      } else if (sd_type == SD_TYPE_CHMOD) {
+        uint64_t fid;
+        uint32_t sd_mode;
+        READ_BUF(&fid, sizeof(uint64_t));
+        READ_BUF(&sd_mode, sizeof(uint32_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> chmod path:%s mode:%o\n", abs_path, sd_mode);
+        int err = chmod(abs_path, sd_mode);
+        if (err == -1) {
+          logging(LOG_ERROR, "error: failed to chmod %s\n", abs_path);
+          perror("reason");
+        }
+
+      } else if (sd_type == SD_TYPE_MKDIR) {
+        uint64_t fid;
+        uint32_t sd_mode;
+        READ_BUF(&fid, sizeof(uint64_t));
+        READ_BUF(&sd_mode, sizeof(uint32_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> mkdir path:%s mode:%o\n", abs_path, sd_mode);
+        int err = mkdir(abs_path, sd_mode);
+        if (err == -1 && errno != EEXIST) {
+          logging(LOG_ERROR, "error: failed to mkdir %s\n", abs_path);
+          perror("reason");
+        }
+
+      } else if (sd_type == SD_TYPE_RMDIR) {
+        uint64_t fid;
+        READ_BUF(&fid, sizeof(uint64_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> rmdir path:%s\n", abs_path);
+        int err = rmdir(abs_path);
+        if (err == -1 && errno != ENOENT) {
+          logging(LOG_ERROR, "error: failed to rmdir %s\n", abs_path);
+          perror("reason");
+        }
+
+      } else if (sd_type == SD_TYPE_SYMLINK) {
+        uint64_t fid;
+        uint32_t target_len, sd_uid, sd_gid;
+        READ_BUF(&fid, sizeof(uint64_t));
+        READ_BUF(&target_len, sizeof(uint32_t));
+
+        char target_buf[512];
+        memset(target_buf, 0, 512);
+        READ_BUF(target_buf, target_len);
+
+        READ_BUF(&sd_uid, sizeof(uint32_t));
+        READ_BUF(&sd_gid, sizeof(uint32_t));
+
+        string filename = fid_to_filename[fid];
+        char abs_path[512];
+        strcpy(abs_path, target_root);
+        strcat(abs_path, filename.c_str());
+
+        logging(LOG_INFO, ">>> symlink link:%s -> target:%s uid:%u gid:%u\n",
+                abs_path, target_buf, sd_uid, sd_gid);
+        int err = symlink(target_buf, abs_path);
+        if (err == -1 && errno != EEXIST) {
+          logging(LOG_ERROR, "error: failed to symlink %s -> %s\n", abs_path, target_buf);
+          perror("reason");
+        }
+        if (lchown(abs_path, sd_uid, sd_gid) == -1) {
+          logging(LOG_ERROR, "error: failed to chown symlink %s\n", abs_path);
+        }
+
+      } else {
+        logging(LOG_ERROR, "undefined statediff type %u\n", sd_type);
+        goto cleanup;
+      }
     }
-    cur_byte += 1;
-
-    // prepare the statediff buffer
-    if (sd_type == SD_TYPE_WRITE) {
-      sd_count += 1;
-      uint64_t sd_fid;
-      uint64_t sd_size;
-      uint64_t sd_offset;
-      char *sd_buffer;
-
-      // read fid
-      rw_count = fread(&sd_fid, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: failed to read %ld bytes\n", sizeof(uint64_t));
-        return;
-      }
-      string filename = fid_to_filename[sd_fid];
-      uint64_t path_len = filename.size();
-      cur_byte += 8;
-
-      // read count
-      rw_count = fread(&sd_size, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: failed to read %ld bytes\n", sizeof(uint64_t));
-        return;
-      }
-      cur_byte += 8;
-
-      // read offset
-      rw_count = fread(&sd_offset, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: failed to read %ld bytes\n", sizeof(uint64_t));
-        return;
-      }
-      cur_byte += 8;
-
-      // read buffer
-      sd_buffer = (char *) malloc(1 + 8 + path_len + 8 + 8 + sd_size);
-      rw_count = fread(sd_buffer + 1 + 8 + path_len + 16 , 
-                       sizeof(char), sd_size, fd);
-      if (rw_count != sd_size) {
-        logging(LOG_ERROR, "error: failed to read %ld bytes\n", sizeof(char));
-        return;
-      }
-      cur_byte += sd_size;
-      
-      logging(LOG_INFO, ">>> write size:%lu offset:%lu path:%s\n",
-              sd_size, sd_offset, filename.c_str());
-
-      // prepare the statediff buffer
-      memcpy(sd_buffer, (void *) &sd_type, sizeof(uint8_t));
-      memcpy(sd_buffer + 1, (void *) &path_len, sizeof(uint64_t));
-      memcpy(sd_buffer + 1 + 8, filename.c_str(), path_len * sizeof(char));
-      memcpy(sd_buffer + 1 + 8 + path_len, (void *) &sd_offset,
-             sizeof(uint64_t));
-      memcpy(sd_buffer + 1 + 8 + path_len + 8, (void *) &sd_size,
-             sizeof(uint64_t));
-      
-      apply_write(sd_buffer, target_root);
-
-      free(sd_buffer);
-    } else if (sd_type == SD_TYPE_UNLINK) {
-      uint64_t sd_fid;
-
-      // read the fid
-      rw_count = fread(&sd_fid, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: failed to read %ld bytes\n", sizeof(uint64_t));
-        return;
-      }
-      string filename = fid_to_filename[sd_fid];
-      uint64_t path_len = filename.size();
-      cur_byte += 8;
-
-      logging(LOG_INFO, ">>> unlink %s\n", filename.c_str());
-
-      // prepare the statediff buffer
-      char *sd_buffer = (char *) malloc(1 + 8 + path_len);
-      memcpy(sd_buffer, (void *) &sd_type, sizeof(uint8_t));
-      memcpy(sd_buffer + 1, (void *) &path_len, sizeof(uint64_t));
-      memcpy(sd_buffer + 1 + 8, filename.c_str(), path_len * sizeof(char));
-      
-      apply_unlink(sd_buffer, target_root);
-      
-      free(sd_buffer);
-    } else if (sd_type == SD_TYPE_RENAME) {
-      uint64_t from_fid;
-      uint64_t to_fid;
-
-      // read the from and to fid
-      rw_count = fread(&from_fid, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: failed to read %ld bytes\n", sizeof(uint64_t));
-        return;
-      }
-      rw_count = fread(&to_fid, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: failed to read %ld bytes\n", sizeof(uint64_t));
-        return;
-      }
-      string from_filename = fid_to_filename[from_fid];
-      string to_filename = fid_to_filename[to_fid];
-      cur_byte += 16;
-
-      // get the absolute path
-      char from_abs_path[512];
-      strcpy(from_abs_path, target_root);
-      strcat(from_abs_path, from_filename.c_str());
-      char to_abs_path[512];
-      strcpy(to_abs_path, target_root);
-      strcat(to_abs_path, to_filename.c_str());
-
-      logging(LOG_INFO, ">>> rename \n      from: %s\n      to: %s\n", 
-             from_abs_path, to_abs_path);
-      int err = rename(from_abs_path, to_abs_path);
-      if (err == -1) {
-        logging(LOG_ERROR, "error: failed to rename file %s -> %s\n",
-                from_filename.c_str(), to_filename.c_str());
-        perror("reason");
-        return;
-      }
-
-      logging(LOG_INFO, "\n\n");
-
-    } else if (sd_type == SD_TYPE_TRUNCATE) {
-      uint64_t fid;
-      uint64_t truncate_size;
-
-      // read the fid and size
-      rw_count = fread(&fid, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: fread.truncate_fid failed to read %ld bytes (%ld)\n",
-                sizeof(uint64_t), rw_count);
-        return;
-      }
-      rw_count = fread(&truncate_size, sizeof(uint64_t), 1, fd);
-      if (rw_count != 1) {
-        logging(LOG_ERROR,
-                "error: fread.truncate_size failed to read %ld bytes (%ld)\n",
-                sizeof(uint64_t), rw_count);
-        return;
-      }
-      cur_byte += 16;
-
-      // get the absolute path
-      string filename = fid_to_filename[fid];
-      char abs_path[512];
-      strcpy(abs_path, target_root);
-      strcat(abs_path, filename.c_str());
-
-      logging(LOG_INFO, ">>> truncate \n      path: %s\n      size: %ld\n", 
-        abs_path, truncate_size);
-      int err = truncate(abs_path, truncate_size);
-      if (err == -1) {
-        logging(LOG_ERROR, "error: failed to truncate file %s (%ld)\n",
-                filename.c_str(), truncate_size);
-        perror("reason");
-        return;
-      }
-
-      logging(LOG_INFO, "\n\n");
-
-    } else {
-      logging(LOG_ERROR, "undefined statediff type %u\n", sd_type);
-      fclose(fd);
-      return;
-    }
-
   }
 
   logging(LOG_INFO, "applying %lu write updates in these files:\n", sd_count);
@@ -555,7 +656,11 @@ void apply2(char *target_root) {
     logging(LOG_INFO, "   - %s\n", p.c_str());
   }
 
-  fclose(fd);
+  #undef READ_BUF
+
+cleanup:
+  if (raw_data) free(raw_data);
+  if (decompressed) free(decompressed);
   return;
 }
 

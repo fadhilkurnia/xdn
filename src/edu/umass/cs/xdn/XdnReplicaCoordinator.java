@@ -170,6 +170,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     return requestTypes;
   }
 
+  public boolean usesPrimaryBackup(String serviceName) {
+    var coordinator = this.serviceCoordinator.get(serviceName);
+    return coordinator != null && coordinator == this.primaryBackupCoordinator;
+  }
+
+  public List<RequestMatcher> getRequestMatchersForService(String serviceName) {
+    ServiceProperty sp = this.serviceProperties.get(serviceName);
+    return sp != null ? sp.getRequestMatchers() : null;
+  }
+
   @Override
   public boolean coordinateRequest(Request request, ExecutedCallback callback)
       throws IOException, RequestParseException {
@@ -453,6 +463,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
           containerStatus);
     }
 
+    request.setRequestBehaviors(currServiceProperty.getRequestMatchers());
     request.setResponse(
         this.myNodeID, protocolName, requestedConsistency, offeredConsistency, roleName);
     callback.executed(request, true);
@@ -477,6 +488,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     }
     if (coordinator instanceof BayouReplicaCoordinator<NodeIDType> bayou) {
       return bayou.getServiceConsistencyModel(serviceName);
+    }
+    if (coordinator instanceof LazyReplicaCoordinator<NodeIDType>) {
+      return ConsistencyModel.EVENTUAL.toString();
     }
     return "?";
   }

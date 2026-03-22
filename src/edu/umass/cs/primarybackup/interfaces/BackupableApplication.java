@@ -15,6 +15,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  */
 public interface BackupableApplication {
-    String captureStatediff(String serviceName);
-    boolean applyStatediff(String serviceName, String statediff);
+    byte[] captureStatediff(String serviceName);
+    boolean applyStatediff(String serviceName, byte[] statediff);
 }

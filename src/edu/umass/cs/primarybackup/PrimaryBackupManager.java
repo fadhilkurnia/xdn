@@ -12,9 +12,11 @@ import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.primarybackup.packets.*;
+import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
+import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
@@ -28,13 +30,19 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -72,6 +80,143 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private static final int START_EPOCH_PROPOSAL_MAX_RETRIES = 50;
     private static final long START_EPOCH_PROPOSAL_TIMEOUT_MS = 500;
     private static final long START_EPOCH_PROPOSAL_RETRY_DELAY_MS = 200;
+
+    private static final int PB_BATCH_SIZE = 128;
+    private static final int N_PARALLEL_WORKERS =
+        Integer.getInteger("PB_N_PARALLEL_WORKERS", 16);
+
+    // After receiving the first queued request, wait up to this many milliseconds for
+    // additional requests to accumulate before executing the batch.  A larger window
+    // allows more requests to be combined into a single parallel-execute + single
+    // Paxos proposal at the cost of a small fixed latency addition at low load.
+    // Set to 0 to drain only what is already queued (original drainTo behaviour).
+    // History:
+    //   run9 (WordPress, rate=10): 5ms → WORSE (100ms inter-arrival, window too short).
+    //   capture-thread (bookcatalog, 1ms): WORSE — peak dropped from 1445 to 1197 rps.
+    //     With 8 workers competing on take(), poll(1ms) loses the race and wastes 1ms
+    //     idle. Batch-size-2 increased (3.2% → 15.9%) but doesn't offset the idle cost.
+    //     Accumulation windows only help with fewer workers (1-2) where queue can build.
+    private static final long BATCH_ACCUMULATION_MS =
+        Long.getLong("PB_BATCH_ACCUMULATION_MS", 0);
+
+    // Accumulation window for the CAPTURE THREAD (done queue), in milliseconds.
+    // After the first completed batch arrives, the capture thread waits up to this many ms
+    // for additional completions before calling captureStateDiff + propose.  A larger window
+    // amortizes the ~1-2ms captureStateDiff and ~12ms Paxos commit across more requests.
+    // Set to 0 to disable (original take+drainTo behaviour).
+    private static final long CAPTURE_ACCUMULATION_MS =
+        Long.getLong("PB_CAPTURE_ACCUMULATION_MS", 0);
+
+    // Debug flag: skip captureStateDiff + Paxos propose in the capture thread.
+    // When enabled, callbacks fire immediately after workers finish execution,
+    // isolating the PBM worker pipeline from the Paxos consensus overhead.
+    private static final boolean SKIP_REPLICATION =
+        Boolean.getBoolean("PB_SKIP_REPLICATION");
+
+    // Maximum number of concurrent execute() calls per service.
+    // Limits how many PBM workers can simultaneously execute requests against
+    // the containerized service. This prevents database lock contention (e.g.,
+    // PostgreSQL row-level locks on TPC-C hot rows) from causing a convoy effect
+    // where increasing concurrency leads to exponentially longer exec times.
+    // Set to 0 (default) to disable the limit (all workers can execute concurrently).
+    private static final int MAX_CONCURRENT_EXECUTE =
+        Integer.getInteger("PB_MAX_CONCURRENT_EXECUTE", 0);
+
+    // Per-service semaphore for limiting concurrent execute() calls.
+    // Only populated when MAX_CONCURRENT_EXECUTE > 0.
+    private final ConcurrentHashMap<String, Semaphore> serviceExecuteSemaphores =
+        new ConcurrentHashMap<>();
+
+    // ── Execution Pipelining with Single Capture Thread ─────────────────
+    //
+    // Primary-backup allows pipelined execution: multiple workers execute
+    // requests against the containerized service concurrently. State diff
+    // capture and Paxos propose are handled by a SINGLE DEDICATED THREAD
+    // per service (the "capture thread").
+    //
+    // The pipeline:
+    //
+    //   Worker1: take(queue) → execute → enqueue(done) → wait → copy response → loop
+    //   Worker2:    take(queue) → execute → enqueue(done) → wait → copy response → loop
+    //   Worker3:       take(queue) → execute → enqueue(done) → wait → copy response → loop
+    //   Capture:                               drain → captureStateDiff → propose → signal all
+    //
+    // Why this is correct for primary-backup:
+    //
+    //   captureStateDiff() returns ALL filesystem changes since the last
+    //   capture, regardless of which worker caused them. When the capture
+    //   thread drains N completed batches, it captures ONCE and proposes
+    //   ONCE — the single diff covers all N batches' state changes.
+    //   Backups apply diffs in Paxos-commit order, reaching the same final
+    //   state as the primary.
+    //
+    //   The capture thread provides natural serialization of
+    //   captureStateDiff() + propose() without any synchronized block.
+    //   Paxos slot order matches capture order because both happen
+    //   sequentially on the same thread.
+    //
+    // Performance benefits:
+    //   - Workers never contend on a shared lock — pure parallel execution.
+    //   - captureStateDiff() called once per drain cycle instead of once
+    //     per worker, reducing Fuselog socket round-trips.
+    //   - propose() called once per drain cycle instead of once per worker,
+    //     reducing Paxos overhead.
+    //   - Workers are fully async: execute, copy responses, enqueue for
+    //     capture, and immediately loop back without blocking.
+    //
+    // ──────────────────────────────────────────────────────────────────────
+
+    // Per-service batch queue: requests waiting to be executed as a batch
+    private final ConcurrentHashMap<String, LinkedBlockingQueue<RequestAndCallback>>
+        serviceBatchQueues = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Thread> batchWorkerThreads =
+        new ConcurrentHashMap<>();
+
+    // Maps ApplyStateDiffPacket.requestID → the N (packet, callback) pairs it represents
+    private final ConcurrentHashMap<Long, List<RequestAndCallback>>
+        pendingBatchCallbacks = new ConcurrentHashMap<>();
+
+    // Per-service single-threaded executor for async backup statediff application.
+    // Single-threaded per service preserves application order without blocking the Paxos thread.
+    private final ConcurrentHashMap<String, ExecutorService>
+        backupApplyExecutors = new ConcurrentHashMap<>();
+
+    // ── Single Capture Thread ──────────────────────────────────────────────
+    //
+    // Workers enqueue completed batches here after execution. A dedicated
+    // capture thread drains this queue, calls captureStateDiff() once for
+    // all accumulated completions, proposes the combined diff via Paxos,
+    // and signals each waiting worker.
+    //
+    // Why a single capture thread?
+    //   - captureStateDiff() does atomic get-and-clear: it returns ALL
+    //     filesystem changes since the last call, regardless of which
+    //     worker caused them. Calling it once per drain cycle is sufficient.
+    //   - propose() must be serialized with captureStateDiff() to ensure
+    //     Paxos slot order matches statediff capture order. A single thread
+    //     provides this naturally without any synchronized block.
+    //   - Workers no longer contend on synchronized(currentEpoch). They
+    //     execute, copy responses, enqueue, and return — fully parallel.
+
+    // Enum to distinguish the three execution paths when the capture thread
+    // needs to copy responses back to the original RequestPackets.
+    enum BatchType { XDN_HTTP, XDN_HTTP_BATCH, SINGLE }
+
+    // Represents a completed execution awaiting capture+propose.
+    record CompletedBatch(
+        BatchType type,
+        List<RequestAndCallback> batch,
+        List<XdnHttpRequest> xdnRequests,         // non-null for XDN_HTTP
+        List<XdnHttpRequestBatch> xdnBatches,     // non-null for XDN_HTTP_BATCH
+        Request singleAppReq,                     // non-null for SINGLE
+        PrimaryEpoch<?> epoch
+    ) {}
+
+    // Per-service done queue: completed executions waiting for capture
+    private final ConcurrentHashMap<String, LinkedBlockingQueue<CompletedBatch>>
+        serviceDoneQueues = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Thread> captureThreads =
+        new ConcurrentHashMap<>();
 
     private final Logger logger = Logger.getLogger(PrimaryBackupManager.class.getName());
 
@@ -174,10 +319,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 String.format("%s=%b", PaxosConfig.PC.FORWARD_PREEMPTED_REQUESTS, false),
                 String.format("%s=%d", PaxosConfig.PC.PACKET_DEMULTIPLEXER_THREADS, 0),
                 String.format("%s=%b", PaxosConfig.PC.HIBERNATE_OPTION, false),
-                String.format("%s=%b", PaxosConfig.PC.BATCHING_ENABLED, false),
+                String.format("%s=%b", PaxosConfig.PC.BATCHING_ENABLED, true),
         };
         Config.register(args);
-        // TODO: investigate how to enable batching without stateDiff reordering
     }
 
     private void validatePaxosConfiguration() {
@@ -186,7 +330,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         assert !Config.getGlobalBoolean(PaxosConfig.PC.FORWARD_PREEMPTED_REQUESTS);
         assert Config.getGlobalInt(PaxosConfig.PC.PACKET_DEMULTIPLEXER_THREADS) == 0;
         assert !Config.getGlobalBoolean(PaxosConfig.PC.HIBERNATE_OPTION);
-        assert !Config.getGlobalBoolean(PaxosConfig.PC.BATCHING_ENABLED);
+        assert Config.getGlobalBoolean(PaxosConfig.PC.BATCHING_ENABLED);
     }
 
 
@@ -286,7 +430,6 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 currentServiceRole, serviceName));
     }
 
-    // TODO: handle a batch of request from outstanding queue, instead of handling it one by one.
     private boolean executeRequestCoordinateStateDiff(RequestPacket packet,
                                                       ExecutedCallback callback) {
         String serviceName = packet.getServiceName();
@@ -301,133 +444,589 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             this.paxosManager.tryToBePaxosCoordinator(serviceName);
         }
 
-        // RequestPacket -> AppRequest -> execute() -> AppResponse -> RequestPacket (with response)
-        Request appRequest = null;
-        try {
-            // parse the encapsulated application request
-            String encodedServiceRequest = new String(packet.getEncodedServiceRequest(),
-                    StandardCharsets.ISO_8859_1);
-            appRequest = replicableApp.getRequest(encodedServiceRequest);
-        } catch (RequestParseException e) {
-            throw new RuntimeException(e);
-        }
+        // Submit to the per-service batch worker; the worker drains the queue and executes
+        // requests in parallel batches before proposing a single stateDiff per batch.
+        ensureBatchWorker(serviceName).offer(new RequestAndCallback(packet, callback));
+        return true;
+    }
 
-        logger.log(Level.FINER,
-                String.format(
-                        "%s:%s - handling request on primary name=%s request=%s reqSize=%d bytes",
+    private LinkedBlockingQueue<RequestAndCallback> ensureBatchWorker(String serviceName) {
+        return serviceBatchQueues.computeIfAbsent(serviceName, svc -> {
+            LinkedBlockingQueue<RequestAndCallback> q = new LinkedBlockingQueue<>();
+
+            // Create done queue + single capture thread for this service.
+            LinkedBlockingQueue<CompletedBatch> doneQ = new LinkedBlockingQueue<>();
+            serviceDoneQueues.put(svc, doneQ);
+            Thread captureThread = Thread.ofVirtual()
+                    .name("pb-capture-" + svc)
+                    .start(() -> captureThreadLoop(svc, doneQ));
+            captureThreads.put(svc, captureThread);
+
+            // Create N worker threads.
+            for (int i = 0; i < N_PARALLEL_WORKERS; i++) {
+                final int workerId = i;
+                Thread worker = Thread.ofVirtual()
+                        .name("pb-batch-" + svc + "-" + workerId)
+                        .start(() -> batchWorkerLoop(svc, q));
+                batchWorkerThreads.put(svc + "-" + workerId, worker);
+            }
+            return q;
+        });
+    }
+
+    // ── Capture Thread Loop ────────────────────────────────────────────────
+    //
+    // Dedicated thread that serializes captureStateDiff() + propose() for
+    // a single service. Drains all completed executions, captures state
+    // once, proposes once, then signals all waiting workers.
+    //
+    // This thread provides the same ordering guarantee as the old
+    // synchronized(currentEpoch) block: captureStateDiff() and propose()
+    // happen atomically in sequence, ensuring Paxos slot order matches
+    // statediff capture order.
+    //
+    // Safety arguments:
+    //
+    //   1. SERIALIZATION: Only this thread calls captureStateDiff() and
+    //      propose() for this service. No synchronized block needed —
+    //      single-threaded execution provides mutual exclusion naturally.
+    //
+    //   2. SLOT ORDERING: Each drain cycle produces exactly one
+    //      captureStateDiff() → one propose(). The diff includes ALL
+    //      filesystem changes from all workers' executions that completed
+    //      before this drain. The next drain's diff covers the next batch.
+    //      Paxos slots are assigned in drain order = capture order. ✓
+    //
+    //   3. FUSELOG IDEMPOTENCY: Fuselog's get-and-clear is atomic — it
+    //      returns accumulated diffs and clears the buffer in one operation.
+    //      A single caller (this thread) means no risk of two callers
+    //      splitting or duplicating the diff.
+    //
+    //   4. EPOCH TRANSITIONS: If the epoch changes between a worker's
+    //      execute and this thread's drain, the CompletedBatch carries the
+    //      worker's epoch snapshot. This thread checks currentPrimaryEpoch
+    //      before capture+propose and drops stale batches (same as before).
+    //
+    //   5. FULLY ASYNC WORKERS: Workers copy HTTP responses from XdnHttpRequest
+    //      objects to RequestPackets BEFORE enqueuing. Workers then return
+    //      immediately without blocking — no CompletableFuture.join(). The
+    //      Paxos propose callback reads responses via requestPacket.getResponse()
+    //      and invokes client callbacks asynchronously. This eliminates worker
+    //      blocking on capture+propose latency, enabling faster queue draining.
+    //
+    //   7. NULL/EMPTY DIFFS: If no filesystem changes occurred (e.g., all
+    //      requests were reads), captureStateDiff() returns null or empty.
+    //      This is still proposed (as empty byte[]) — same as current code.
+    //      Backups apply the no-op diff harmlessly.
+    //
+    // Maximum time the capture thread waits on doneQueue before draining the
+    // FUSELOG socket anyway.  Prevents a deadlock where workers block on
+    // PostgreSQL writes that go through FUSELOG → socket fills up → capture
+    // thread is stuck on take() → nobody reads the socket → deadlock.
+    private static final long CAPTURE_POLL_TIMEOUT_MS =
+            Long.getLong("PB_CAPTURE_POLL_TIMEOUT_MS", 100);
+
+    private void captureThreadLoop(
+            String serviceName, LinkedBlockingQueue<CompletedBatch> doneQueue) {
+        while (!Thread.currentThread().isInterrupted()) {
+            List<CompletedBatch> drained = null;
+            try {
+                // Poll (not take!) so we periodically drain the FUSELOG socket
+                // even when no completions are arriving.  Without this, a deadlock
+                // can occur: workers block on PostgreSQL writes through FUSELOG,
+                // the FUSELOG socket fills up because the capture thread isn't
+                // reading it, and the capture thread is stuck waiting here.
+                long cycleStart = System.nanoTime();
+                long takeStart = System.nanoTime();
+                CompletedBatch first = doneQueue.poll(
+                        CAPTURE_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                long takeEnd = System.nanoTime();
+
+                if (first == null) {
+                    // No completions arrived within the timeout.  Capture the
+                    // state diff AND propose it to keep the FUSELOG socket
+                    // drained AND ensure backups receive all state changes.
+                    // Without this, a deadlock occurs: workers block on
+                    // PostgreSQL writes through FUSELOG, the socket fills up
+                    // because nobody is reading it, and this thread is stuck
+                    // waiting on poll() — nobody reads the socket.
+                    PrimaryEpoch<NodeIDType> epoch =
+                            this.currentPrimaryEpoch.get(serviceName);
+                    if (epoch == null) continue;
+                    try {
+                        byte[] diff = backupableApp.captureStatediff(serviceName);
+                        if (diff != null && diff.length > 0) {
+                            ApplyStateDiffPacket pkt = new ApplyStateDiffPacket(
+                                    serviceName, epoch,
+                                    diff);
+                            ReplicableClientRequest gpPkt =
+                                    ReplicableClientRequest.wrap(pkt);
+                            gpPkt.setClientAddress(
+                                    messenger.getListeningSocketAddress());
+                            this.paxosManager.propose(serviceName, gpPkt,
+                                    (p, h) -> {
+                                        logger.log(Level.FINE, String.format(
+                                                "%s:%s - no-op diff committed "
+                                                + "(size=%d)",
+                                                myNodeID,
+                                                PrimaryBackupManager.class
+                                                        .getSimpleName(),
+                                                diff.length));
+                                    });
+                            logger.log(Level.FINE, String.format(
+                                    "%s:%s - capture thread: proposed no-op "
+                                    + "diff (size=%d) to keep socket drained",
+                                    myNodeID,
+                                    PrimaryBackupManager.class.getSimpleName(),
+                                    diff.length));
+                        }
+                    } catch (Exception e) {
+                        // Ignore — service might not be initialized yet.
+                    }
+                    continue;
+                }
+
+                drained = new ArrayList<>();
+                drained.add(first);
+
+                // Accumulation window: wait up to CAPTURE_ACCUMULATION_MS for more
+                // completions so we can batch them into a single captureStateDiff + propose.
+                if (CAPTURE_ACCUMULATION_MS > 0) {
+                    long deadlineNs = System.nanoTime()
+                            + CAPTURE_ACCUMULATION_MS * 1_000_000L;
+                    CompletedBatch next;
+                    while ((next = doneQueue.poll(
+                            Math.max(0, deadlineNs - System.nanoTime()),
+                            TimeUnit.NANOSECONDS)) != null) {
+                        drained.add(next);
+                    }
+                }
+
+                // Non-blocking drain of any additional completions that
+                // arrived while we were processing the previous cycle.
+                doneQueue.drainTo(drained);
+
+                logger.log(Level.INFO, String.format(
+                        "%s:%s - capture thread: drained=%d doneQueueRemaining=%d takeWait=%.3fms",
                         myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                        packet.getServiceName(),
-                        appRequest.getClass().getSimpleName(),
-                        packet.getEncodedServiceRequest().length));
+                        drained.size(), doneQueue.size(),
+                        (takeEnd - takeStart) / 1_000_000.0));
+
+                // Validate epoch: drop completions from stale epochs.
+                PrimaryEpoch<NodeIDType> currentEpoch =
+                        this.currentPrimaryEpoch.get(serviceName);
+                List<CompletedBatch> valid = new ArrayList<>();
+                for (CompletedBatch cb : drained) {
+                    if (currentEpoch != null && currentEpoch.equals(cb.epoch())) {
+                        valid.add(cb);
+                    } else {
+                        // Epoch changed — fail these requests so the client retries.
+                        logger.log(Level.WARNING, String.format(
+                                "%s:%s - epoch changed, dropping %d requests from capture queue",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                cb.batch().size()));
+                        cb.batch().forEach(rc ->
+                                rc.callback().executed(rc.requestPacket(), false));
+                    }
+                }
+
+                if (valid.isEmpty()) continue;
+
+                // Collect ALL RequestAndCallbacks from all valid completions
+                // into a single flat list for the Paxos callback.
+                List<RequestAndCallback> allCallbacks = new ArrayList<>();
+                for (CompletedBatch cb : valid) {
+                    allCallbacks.addAll(cb.batch());
+                }
+
+                // BYPASS: skip capture+propose, fire callbacks immediately.
+                // This isolates the PBM worker pipeline from Paxos overhead.
+                if (SKIP_REPLICATION) {
+                    double cycleMs = (System.nanoTime() - cycleStart) / 1_000_000.0;
+                    logger.log(Level.INFO, String.format(
+                            "%s:%s - capture thread BYPASS: %d requests, cycle=%.3fms",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            allCallbacks.size(), cycleMs));
+                    allCallbacks.forEach(rc ->
+                            rc.callback().executed(rc.requestPacket(), true));
+                    continue;
+                }
+
+                // ONE captureStateDiff() for ALL completed executions in this cycle.
+                long sdStart = System.nanoTime();
+                byte[] stateDiff = backupableApp.captureStatediff(serviceName);
+                long sdEnd = System.nanoTime();
+                logger.log(Level.INFO, String.format(
+                        "%s:%s - capture thread: stateDiff in %.3f ms, size=%d bytes, "
+                        + "covering %d completed batches (%d requests)",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        (sdEnd - sdStart) / 1_000_000.0,
+                        stateDiff != null ? stateDiff.length : 0,
+                        valid.size(), allCallbacks.size()));
+
+                // ONE propose() for the combined diff.
+                ApplyStateDiffPacket applyPkt = new ApplyStateDiffPacket(
+                        serviceName, currentEpoch,
+                        stateDiff != null ? stateDiff : new byte[0]);
+                ReplicableClientRequest gpPacket =
+                        ReplicableClientRequest.wrap(applyPkt);
+                gpPacket.setClientAddress(messenger.getListeningSocketAddress());
+
+                List<RequestAndCallback> callbackSnapshot = new ArrayList<>(allCallbacks);
+                pendingBatchCallbacks.put(applyPkt.getRequestID(), callbackSnapshot);
+
+                long proposeStart = System.nanoTime();
+                this.paxosManager.propose(
+                        serviceName,
+                        gpPacket,
+                        (proposedPacket, handled) -> {
+                            double elapsedMs = (System.nanoTime() - proposeStart) / 1_000_000.0;
+                            logger.log(Level.INFO, String.format(
+                                    "%s:%s - capture thread: %d requests committed in %.3f ms (diffSize=%d)",
+                                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                    callbackSnapshot.size(), elapsedMs,
+                                    stateDiff != null ? stateDiff.length : 0));
+                            Long batchId = ((ApplyStateDiffPacket) proposedPacket)
+                                    .getRequestID();
+                            List<RequestAndCallback> cbs =
+                                    pendingBatchCallbacks.remove(batchId);
+                            if (cbs != null) {
+                                cbs.forEach(rc -> rc.callback()
+                                        .executed(rc.requestPacket(), handled));
+                            }
+                        });
+                double proposeCallMs = (System.nanoTime() - proposeStart) / 1_000_000.0;
+                double cycleMs = (System.nanoTime() - cycleStart) / 1_000_000.0;
+                logger.log(Level.INFO, String.format(
+                        "%s:%s - capture thread: cycle=%.3fms propose=%.3fms drained=%d requests=%d",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        cycleMs, proposeCallMs, valid.size(), allCallbacks.size()));
+
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, String.format(
+                        "%s:%s - uncaught exception in capture thread for %s: %s",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        serviceName, e.getMessage()), e);
+                // Fail all drained requests so clients can retry.
+                if (drained != null) {
+                    for (CompletedBatch cb : drained) {
+                        cb.batch().forEach(rc ->
+                                rc.callback().executed(rc.requestPacket(), false));
+                    }
+                }
+            }
+        }
+    }
+
+    private void batchWorkerLoop(
+            String serviceName, LinkedBlockingQueue<RequestAndCallback> queue) {
+        while (!Thread.currentThread().isInterrupted()) {
+            List<RequestAndCallback> batch = null;
+            try {
+                // Block until the first request arrives.
+                RequestAndCallback first = queue.take();
+                batch = new ArrayList<>();
+                batch.add(first);
+
+                // Do NOT drain additional items from the queue.  Let each of
+                // the N_PARALLEL_WORKERS grab one item via take() so that
+                // execution fans out across workers (pipelined) instead of
+                // one worker bursting N concurrent writes to the container
+                // (which causes SQLite WAL lock contention and a positive
+                // feedback loop that collapses throughput).
+                //
+                // The capture thread already batches completions from all
+                // workers into a single captureStateDiff + Paxos propose,
+                // so the replication-amortisation benefit is preserved.
+
+                int queueDepthAfterDrain = queue.size();
+                logger.log(Level.FINE, String.format(
+                        "%s:%s - worker pickup: batchSize=%d queueRemaining=%d",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        batch.size(), queueDepthAfterDrain));
+
+                if (MAX_CONCURRENT_EXECUTE > 0) {
+                    Semaphore sem = serviceExecuteSemaphores.computeIfAbsent(
+                        serviceName, k -> new Semaphore(MAX_CONCURRENT_EXECUTE));
+                    sem.acquire();
+                    try {
+                        executeRequestBatchCoordinateStateDiff(serviceName, batch);
+                    } finally {
+                        sem.release();
+                    }
+                } else {
+                    executeRequestBatchCoordinateStateDiff(serviceName, batch);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                // Catch-all to prevent virtual thread death from unchecked exceptions
+                // (e.g. CompletionException wrapping CancellationException from Netty pool).
+                // Log, fail the batch, and continue — do NOT let the thread die.
+                logger.log(Level.SEVERE, String.format(
+                        "%s:%s - uncaught exception in batch worker for %s, dropping %d requests: %s",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        serviceName, batch != null ? batch.size() : 0, e.getMessage()), e);
+                if (batch != null) {
+                    batch.forEach(rc -> rc.callback().executed(rc.requestPacket(), false));
+                }
+            }
+        }
+    }
+
+    private void executeRequestBatchCoordinateStateDiff(
+            String serviceName, List<RequestAndCallback> batch) {
+
+        // Re-check role: requests were enqueued when PRIMARY but role may have changed
+        // by the time the batch worker picks them up.
+        Role currentServiceRole = this.currentRole.get(serviceName);
+        if (currentServiceRole == Role.PRIMARY_CANDIDATE) {
+            // Re-queue; will be drained again by processOutstandingRequests() on PRIMARY promotion
+            batch.forEach(rc -> outstandingRequests.add(rc));
+            return;
+        }
+        if (currentServiceRole == Role.BACKUP) {
+            // Forward each request to the current primary
+            batch.forEach(rc -> handRequestToPrimary(rc.requestPacket(), rc.callback()));
+            return;
+        }
+        if (currentServiceRole != Role.PRIMARY) {
+            logger.log(Level.WARNING,
+                    String.format("%s:%s - unexpected role %s for %s, dropping %d requests",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            currentServiceRole, serviceName, batch.size()));
+            batch.forEach(rc -> rc.callback().executed(rc.requestPacket(), false));
+            return;
+        }
 
         PrimaryEpoch<NodeIDType> currentEpoch = this.currentPrimaryEpoch.get(serviceName);
         if (currentEpoch == null) {
             logger.log(Level.WARNING,
                     String.format(
-                            "%s:%s - unknown current primary epoch for %s",
+                            "%s:%s - unknown current primary epoch for %s, dropping %d requests",
                             myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                            packet.getServiceName()));
-            return false;
+                            serviceName, batch.size()));
+            batch.forEach(rc -> rc.callback().executed(rc.requestPacket(), false));
+            return;
         }
 
-        // execute the app request, and capture the stateDiff
-        boolean isExecuteSuccess;
-        String stateDiff;
-        synchronized (currentEpoch) {
-            long startTime = System.nanoTime();
-            isExecuteSuccess = replicableApp.execute(appRequest);
-            if (!isExecuteSuccess) {
+        // 1. Parse each RequestPacket → Request, track type uniformity
+        List<Request> parsedRequests = new ArrayList<>(batch.size());
+        boolean allXdnHttp = true;
+        boolean allXdnHttpBatch = true;
+        for (RequestAndCallback rc : batch) {
+            try {
+                Request original = rc.requestPacket().getOriginalRequest();
+                Request appReq;
+                if (original != null) {
+                    appReq = original;
+                } else {
+                    String encoded = new String(rc.requestPacket().getEncodedServiceRequest(),
+                            StandardCharsets.ISO_8859_1);
+                    appReq = replicableApp.getRequest(encoded);
+                }
+                parsedRequests.add(appReq);
+                if (!(appReq instanceof XdnHttpRequest)) {
+                    allXdnHttp = false;
+                }
+                if (!(appReq instanceof XdnHttpRequestBatch)) {
+                    allXdnHttpBatch = false;
+                }
+            } catch (RequestParseException e) {
                 logger.log(Level.WARNING,
                         String.format(
-                                "%s:%s - failed to execute request for %s id=%d",
+                                "%s:%s - failed to parse request in batch: %s",
                                 myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                                packet.getServiceName(),
-                                packet.getRequestID()));
-                return false;
+                                e.getMessage()));
+                parsedRequests.add(null);
+                allXdnHttp = false;
+                allXdnHttpBatch = false;
             }
-            long endTime = System.nanoTime();
-            long elapsedTime = endTime - startTime;
-            double elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
-            logger.log(Level.FINER,
-                    String.format(
-                            "%s:%s - executing request within %f ms",
-                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                            elapsedTimeMs));
-            long sdCaptureStartTime = System.nanoTime();
-            stateDiff = backupableApp.captureStatediff(serviceName);
-            endTime = System.nanoTime();
-            elapsedTime = endTime - sdCaptureStartTime;
-            elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
-            logger.log(Level.FINER,
-                    String.format(
-                            "%s:%s - capturing stateDiff within %f ms size=%d bytes",
-                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                            elapsedTimeMs,
-                            stateDiff.length()));
         }
 
-        // put response if request is ClientRequest
-        if (appRequest instanceof ClientRequest) {
-            ClientRequest responsePacket = ((ClientRequest) appRequest).getResponse();
-            if (responsePacket == null) {
-                logger.log(Level.WARNING,
-                        String.format(
-                                "%s:%s - expecting non-null response for client request (svc=%s)",
-                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                                packet.getServiceName()));
-                return false;
+        if (allXdnHttp && !parsedRequests.isEmpty()) {
+            // Fast path: all requests are XdnHttpRequest — execute in parallel via
+            // XdnHttpRequestBatch (CompletableFuture.allOf internally), one stateDiff capture,
+            // and one Paxos proposal for the whole batch.
+            List<XdnHttpRequest> xdnRequests = parsedRequests.stream()
+                    .map(r -> (XdnHttpRequest) r).collect(Collectors.toList());
+            executeXdnBatch(serviceName, currentEpoch, batch, xdnRequests);
+        } else if (allXdnHttpBatch && !parsedRequests.isEmpty()) {
+            // Batch-of-batches path: when the HTTP batcher is enabled, each write request arrives
+            // as a singleton XdnHttpRequestBatch. Combine their inner XdnHttpRequests for
+            // parallel execution — single synchronized block, single capture, single proposal.
+            List<XdnHttpRequestBatch> xdnBatches = parsedRequests.stream()
+                    .map(r -> (XdnHttpRequestBatch) r).collect(Collectors.toList());
+            executeXdnBatchOfBatches(serviceName, currentEpoch, batch, xdnBatches);
+        } else {
+            // Fallback path: non-XdnHttpRequest app (e.g., MonotonicApp in tests), or parse
+            // failure. Execute each request individually with its own capture + propose.
+            for (int i = 0; i < batch.size(); i++) {
+                Request appReq = parsedRequests.get(i);
+                if (appReq == null) {
+                    batch.get(i).callback().executed(batch.get(i).requestPacket(), false);
+                    continue;
+                }
+                executeSingleRequestCoordinateStateDiff(
+                        serviceName, currentEpoch, batch.get(i), appReq);
             }
-
-            packet.setResponse(responsePacket);
-            logger.log(Level.FINER,
-                    String.format(
-                            "%s:%s - primary set response id=%d name=%s pbEpoch=%s",
-                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                            packet.getRequestID(),
-                            packet.getServiceName(),
-                            currentEpoch));
         }
+    }
 
-        // propose the stateDiff
-        ApplyStateDiffPacket applyStateDiffPacket = new ApplyStateDiffPacket(
-                serviceName, currentEpoch, stateDiff);
-        ReplicableClientRequest gpPacket = ReplicableClientRequest.wrap(applyStateDiffPacket);
-        gpPacket.setClientAddress(messenger.getListeningSocketAddress());
-        logger.log(Level.FINER,
+    // Batch path: execute N XdnHttpRequests in parallel (within this batch), then enqueue
+    // for the capture thread to capture stateDiff and propose once. Multiple workers may
+    // run this method concurrently — see "Execution Pipelining" comment above.
+    private void executeXdnBatch(
+            String serviceName,
+            PrimaryEpoch<NodeIDType> currentEpoch,
+            List<RequestAndCallback> batch,
+            List<XdnHttpRequest> xdnRequests) {
+
+        XdnHttpRequestBatch batchRequest = new XdnHttpRequestBatch(xdnRequests);
+
+        // Execute OUTSIDE any lock — fully parallel with other workers.
+        long startTime = System.nanoTime();
+        replicableApp.execute(batchRequest);
+        long endTime = System.nanoTime();
+        logger.log(Level.FINE,
                 String.format(
-                        "%s:%s - primary proposing stateDiff id=%d name=%s pbEpoch=%s len=%d bytes",
+                        "%s:%s - executing batch of %d requests within %f ms",
                         myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                        applyStateDiffPacket.getRequestID(),
-                        packet.getServiceName(),
-                        currentEpoch,
-                        stateDiff.length()));
-        long proposeStartTime = System.nanoTime();
-        this.paxosManager.propose(
-                serviceName,
-                gpPacket,
-                (stateDiffPacket, handled) -> {
-                    long currTime = System.nanoTime();
-                    long proposeElapsedTime = currTime - proposeStartTime;
-                    double proposeElapsedTimeMs = (double) proposeElapsedTime / 1_000_000.0;
-                    assert stateDiffPacket instanceof ApplyStateDiffPacket :
-                            String.format("Unexpected accepted request, expecting %s but found %s",
-                                    ApplyStateDiffPacket.class.getSimpleName(),
-                                    stateDiffPacket.getClass().getSimpleName());
-                    ApplyStateDiffPacket acceptedStateDiffPacket =
-                            (ApplyStateDiffPacket) stateDiffPacket;
-                    logger.log(Level.FINER,
-                            String.format(
-                                    "%s:%s - stateDiff is committed within %f ms id=%d name=%s pbEpoch=%s len=%d bytes",
-                                    myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                                    proposeElapsedTimeMs,
-                                    acceptedStateDiffPacket.getRequestID(),
-                                    acceptedStateDiffPacket.getServiceName(),
-                                    acceptedStateDiffPacket.getPrimaryEpochString(),
-                                    acceptedStateDiffPacket.getStateDiff().length()));
-                    callback.executed(packet, handled);
-                });
+                        batch.size(),
+                        (double) (endTime - startTime) / 1_000_000.0));
 
-        return true;
+        // Re-validate epoch: primary may have changed during execute.
+        PrimaryEpoch<NodeIDType> epochAfterExecute = this.currentPrimaryEpoch.get(serviceName);
+        if (!currentEpoch.equals(epochAfterExecute)) {
+            logger.log(Level.WARNING,
+                    String.format(
+                            "%s:%s - epoch changed during execute for %s, dropping %d requests",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            serviceName, batch.size()));
+            batch.forEach(rc -> rc.callback().executed(rc.requestPacket(), false));
+            return;
+        }
+
+        // Copy per-request responses (set during execute) to RequestPackets
+        // BEFORE enqueue — Paxos callback reads them via requestPacket.getResponse().
+        for (int i = 0; i < batch.size(); i++) {
+            XdnHttpRequest req = xdnRequests.get(i);
+            if (req instanceof ClientRequest) {
+                ClientRequest resp = ((ClientRequest) req).getResponse();
+                if (resp != null) batch.get(i).requestPacket().setResponse(resp);
+            }
+        }
+
+        // Enqueue completion for the capture thread — worker does NOT wait.
+        // The capture thread will call captureStateDiff() + propose() for us.
+        serviceDoneQueues.get(serviceName).offer(new CompletedBatch(
+                BatchType.XDN_HTTP, batch, xdnRequests, null, null, currentEpoch));
+    }
+
+    // Batch-of-batches path: when the HTTP batcher is enabled, each write arrives as a singleton
+    // XdnHttpRequestBatch. Combine their inner XdnHttpRequests for parallel execution, then
+    // enqueue for the capture thread. Multiple workers may run this method concurrently —
+    // see "Execution Pipelining" comment above.
+    private void executeXdnBatchOfBatches(
+            String serviceName,
+            PrimaryEpoch<NodeIDType> currentEpoch,
+            List<RequestAndCallback> batch,
+            List<XdnHttpRequestBatch> xdnBatches) {
+
+        // Execute each outer batch in parallel — avoids flattening into one large fan-out
+        // that amplifies tail latency when the backend serializes writes (e.g., SQLite WAL).
+        long startTime = System.nanoTime();
+        CompletableFuture<?>[] batchFutures = new CompletableFuture<?>[xdnBatches.size()];
+        for (int i = 0; i < xdnBatches.size(); i++) {
+            XdnHttpRequestBatch xdnBatch = xdnBatches.get(i);
+            batchFutures[i] = CompletableFuture.runAsync(() -> replicableApp.execute(xdnBatch));
+        }
+        CompletableFuture.allOf(batchFutures).join();
+        long endTime = System.nanoTime();
+        int totalInnerRequests = xdnBatches.stream().mapToInt(XdnHttpRequestBatch::size).sum();
+        logger.log(Level.INFO,
+                String.format(
+                        "%s:%s - executing batch-of-batches (%d batches, %d reqs) in parallel within %f ms",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        batch.size(), totalInnerRequests,
+                        (double) (endTime - startTime) / 1_000_000.0));
+
+        // Re-validate epoch.
+        PrimaryEpoch<NodeIDType> epochAfterExecute = this.currentPrimaryEpoch.get(serviceName);
+        if (!currentEpoch.equals(epochAfterExecute)) {
+            logger.log(Level.WARNING,
+                    String.format(
+                            "%s:%s - epoch changed during execute for %s, dropping %d requests",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            serviceName, batch.size()));
+            batch.forEach(rc -> rc.callback().executed(rc.requestPacket(), false));
+            return;
+        }
+
+        // Copy responses BEFORE enqueue — Paxos callback reads them via requestPacket.getResponse().
+        for (int i = 0; i < batch.size(); i++) {
+            XdnHttpRequestBatch xdnBatch = xdnBatches.get(i);
+            ClientRequest resp = xdnBatch.getResponse();
+            if (resp != null) batch.get(i).requestPacket().setResponse(resp);
+        }
+
+        // Enqueue completion for the capture thread — worker does NOT wait.
+        serviceDoneQueues.get(serviceName).offer(new CompletedBatch(
+                BatchType.XDN_HTTP_BATCH, batch, null, xdnBatches, null, currentEpoch));
+    }
+
+    // Fallback single-request path for non-XdnHttpRequest apps (original behavior).
+    // Multiple workers may run this concurrently — see "Execution Pipelining" above.
+    private void executeSingleRequestCoordinateStateDiff(
+            String serviceName,
+            PrimaryEpoch<NodeIDType> currentEpoch,
+            RequestAndCallback rc,
+            Request appReq) {
+
+        // Execute OUTSIDE any lock.
+        long startTime = System.nanoTime();
+        boolean success = replicableApp.execute(appReq);
+        if (!success) {
+            logger.log(Level.WARNING,
+                    String.format(
+                            "%s:%s - failed to execute request for %s id=%d",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            rc.requestPacket().getServiceName(),
+                            rc.requestPacket().getRequestID()));
+            rc.callback().executed(rc.requestPacket(), false);
+            return;
+        }
+        long endTime = System.nanoTime();
+        logger.log(Level.FINE,
+                String.format(
+                        "%s:%s - executing request within %f ms",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        (double) (endTime - startTime) / 1_000_000.0));
+
+        // Re-validate epoch.
+        PrimaryEpoch<NodeIDType> epochAfterExecute = this.currentPrimaryEpoch.get(serviceName);
+        if (!currentEpoch.equals(epochAfterExecute)) {
+            logger.log(Level.WARNING,
+                    String.format(
+                            "%s:%s - epoch changed during execute for %s, dropping request id=%d",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            serviceName, rc.requestPacket().getRequestID()));
+            rc.callback().executed(rc.requestPacket(), false);
+            return;
+        }
+
+        // Copy response BEFORE enqueue — Paxos callback reads it via requestPacket.getResponse().
+        if (appReq instanceof ClientRequest) {
+            ClientRequest resp = ((ClientRequest) appReq).getResponse();
+            if (resp != null) rc.requestPacket().setResponse(resp);
+        }
+
+        // Enqueue completion for the capture thread — worker does NOT wait.
+        serviceDoneQueues.get(serviceName).offer(new CompletedBatch(
+                BatchType.SINGLE, List.of(rc), null, null, appReq, currentEpoch));
     }
 
     private boolean handRequestToPrimary(RequestPacket packet, ExecutedCallback callback) {
@@ -738,9 +1337,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 return true;
             }
 
-            // As a backup, this node simply apply the stateDiff coming from the PRIMARY
+            // As a backup, apply the stateDiff asynchronously to avoid blocking the Paxos
+            // execution thread (which would prevent acceptance of new proposals and cause
+            // TCP backpressure on the connection from the primary).  A single-threaded
+            // executor per service preserves application order.
             if (myCurrentRole.equals(Role.BACKUP)) {
-                this.backupableApp.applyStatediff(groupName, packet.getStateDiff());
+                final byte[] stateDiff = packet.getStateDiff();
+                backupApplyExecutors
+                    .computeIfAbsent(groupName, k -> Executors.newSingleThreadExecutor(r -> {
+                        Thread t = new Thread(r, "BackupApply-" + k);
+                        t.setDaemon(true);
+                        return t;
+                    }))
+                    .submit(() -> this.backupableApp.applyStatediff(groupName, stateDiff));
                 return true;
             }
 
@@ -1157,8 +1766,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                             proposalSuccess.set(true);
                             proposalLatch.countDown();
 
-                            // Handle XDN-specific initialization (non-blocking, after signaling success)
-                            handleXdnPrimaryInitialization(groupName, nodes, ipAddresses, placementEpoch);
+                            // Handle XDN-specific initialization on a separate thread so we don't
+                            // block the Paxos executor. nonDeterministicInitialization() can take
+                            // 10+ seconds (docker start, DB init, rsync), and blocking the Paxos
+                            // callback thread prevents other services' Paxos messages from being
+                            // processed, causing timeouts in concurrent service launches.
+                            Thread.ofVirtual()
+                                .name("xdn-pb-init-" + groupName)
+                                .start(() -> handleXdnPrimaryInitialization(
+                                    groupName, nodes, ipAddresses, placementEpoch));
                         }
                 );
 
@@ -1286,7 +1902,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         assert this.outstandingRequests != null;
         while (!this.outstandingRequests.isEmpty()) {
             RequestAndCallback rc = this.outstandingRequests.poll();
-            executeRequestCoordinateStateDiff(rc.requestPacket(), rc.callback());
+            ensureBatchWorker(rc.requestPacket().getServiceName()).offer(rc);
         }
     }
 
@@ -1300,7 +1916,17 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             return false;
         }
 
-        // TODO: handle placement epoch
+        // Interrupt and remove capture thread for this service.
+        Thread captureThread = captureThreads.remove(groupName);
+        if (captureThread != null) captureThread.interrupt();
+        serviceDoneQueues.remove(groupName);
+
+        // Interrupt and remove worker threads for this service.
+        for (int i = 0; i < N_PARALLEL_WORKERS; i++) {
+            Thread worker = batchWorkerThreads.remove(groupName + "-" + i);
+            if (worker != null) worker.interrupt();
+        }
+        serviceBatchQueues.remove(groupName);
 
         return true;
     }
@@ -1477,6 +2103,21 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 return PrimaryBackupPacket.createFromString(stringified);
             }
 
+            // Handle ReplicableClientRequest JSON (used by Paxos-based coordinators
+            // like AwReplicaCoordinator for sequential consistency).
+            if (JSONPacket.couldBeJSON(stringified)) {
+                try {
+                    JSONObject json = new JSONObject(stringified);
+                    Integer type = JSONPacket.getPacketType(json);
+                    if (type != null && type == ReconfigurationPacket.PacketType
+                            .REPLICABLE_CLIENT_REQUEST.getInt()) {
+                        return new ReplicableClientRequest(json, null);
+                    }
+                } catch (JSONException | UnsupportedEncodingException e) {
+                    // not a ReplicableClientRequest, fall through to app
+                }
+            }
+
             return this.app.getRequest(stringified);
         }
 
@@ -1504,17 +2145,45 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 return this.primaryBackupManager.executeApplyStateDiffPacket(stateDiffPacket);
             }
 
-            if (this.app.getRequestTypes().contains(request.getRequestType())) {
-                return this.app.execute(request);
+            // Unwrap ReplicableClientRequest to get the inner app request
+            // (e.g., XdnHttpRequest) that the app knows how to execute.
+            // The inner request may be null if deserialized from JSON/bytes,
+            // so use getRequest(parser) to trigger lazy parsing via the app.
+            long unwrapStartNs = System.nanoTime();
+            Request appRequest = request;
+            if (request instanceof ReplicableClientRequest rcr) {
+                try {
+                    appRequest = rcr.getRequest(this.app);
+                } catch (UnsupportedEncodingException | RequestParseException e) {
+                    throw new RuntimeException(
+                            "PrimaryBackupMiddlewareApp: failed to parse inner request", e);
+                }
+            }
+            long unwrapEndNs = System.nanoTime();
+
+            if (this.app.getRequestTypes().contains(appRequest.getRequestType())) {
+                long appExecStartNs = System.nanoTime();
+                boolean result = this.app.execute(appRequest);
+                long appExecEndNs = System.nanoTime();
+                long unwrapMs = (unwrapEndNs - unwrapStartNs) / 1_000_000;
+                long appExecMs = (appExecEndNs - appExecStartNs) / 1_000_000;
+                if (unwrapMs + appExecMs > 3) {
+                    Logger.getLogger(PrimaryBackupMiddlewareApp.class.getSimpleName()).log(Level.INFO,
+                            "PBMiddlewareApp.execute SLOW unwrap={0}ms appExec={1}ms reqType={2} wasRCR={3}",
+                            new Object[]{unwrapMs, appExecMs,
+                                    appRequest.getClass().getSimpleName(),
+                                    request instanceof ReplicableClientRequest});
+                }
+                return result;
             }
 
-            if (request instanceof ReconfigurableRequest rcRequest && rcRequest.isStop()) {
-                return this.app.restore(request.getServiceName(), null);
+            if (appRequest instanceof ReconfigurableRequest rcRequest && rcRequest.isStop()) {
+                return this.app.restore(appRequest.getServiceName(), null);
             }
 
             throw new RuntimeException(
                     String.format("PrimaryBackupMiddlewareApp: Unknown execute handler" +
-                            " for request %s: %s", request.getClass().getSimpleName(), request));
+                            " for request %s: %s", appRequest.getClass().getSimpleName(), appRequest));
         }
 
         @Override

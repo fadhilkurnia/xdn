@@ -26,11 +26,11 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
     private final long packetId;
     private final String serviceName;
     private final PrimaryEpoch<?> primaryEpoch;
-    private final String stateDiff;
+    private final byte[] stateDiff;
 
     public ApplyStateDiffPacket(String serviceName,
                                 PrimaryEpoch<?> primaryEpoch,
-                                String stateDiff) {
+                                byte[] stateDiff) {
         this(Math.abs(UUID.randomUUID().getLeastSignificantBits()),
                 serviceName,
                 primaryEpoch,
@@ -43,7 +43,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
     private ApplyStateDiffPacket(long packetId,
                                 String serviceName,
                                  PrimaryEpoch<?> primaryEpoch,
-                                 String stateDiff) {
+                                 byte[] stateDiff) {
         assert packetId > 0;
         assert serviceName != null;
         assert primaryEpoch != null;
@@ -79,7 +79,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
         return primaryEpoch.toString();
     }
 
-    public String getStateDiff() {
+    public byte[] getStateDiff() {
         return stateDiff;
     }
 
@@ -91,12 +91,14 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
         return packetId == that.packetId &&
                 Objects.equals(serviceName, that.serviceName) &&
                 Objects.equals(primaryEpoch, that.primaryEpoch) &&
-                Objects.equals(stateDiff, that.stateDiff);
+                Arrays.equals(stateDiff, that.stateDiff);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(packetId, serviceName, primaryEpoch, stateDiff);
+        int result = Objects.hash(packetId, serviceName, primaryEpoch);
+        result = 31 * result + Arrays.hashCode(stateDiff);
+        return result;
     }
 
     @Override
@@ -120,7 +122,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
                         .setPrimaryNodeId(this.primaryEpoch.nodeID)
                         .setPrimaryEpoch(this.primaryEpoch.counter)
                         .setEncodedStateDiff(
-                                ByteString.copyFrom(this.stateDiff, StandardCharsets.ISO_8859_1));
+                                ByteString.copyFrom(this.stateDiff));
 
         // Serialize the packetType in the header, followed by the protobuf
         output.writeBytes(encodedHeader);
@@ -156,7 +158,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
                 new PrimaryEpoch<>(
                         decodedProto.getPrimaryNodeId(),
                         decodedProto.getPrimaryEpoch()),
-                decodedProto.getEncodedStateDiff().toString(StandardCharsets.ISO_8859_1));
+                decodedProto.getEncodedStateDiff().toByteArray());
     }
 
     @Deprecated
@@ -178,7 +180,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
                     requestID,
                     serviceName,
                     new PrimaryEpoch<String>(primaryEpochStr),
-                    stateDiff);
+                    stateDiff.getBytes(StandardCharsets.UTF_8));
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }

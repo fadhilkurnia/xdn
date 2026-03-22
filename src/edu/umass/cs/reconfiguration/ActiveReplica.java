@@ -1669,4 +1669,20 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	public void updateDemandStatsFromHttp(Request request, InetAddress addr) {
 		updateDemandStats(request, addr);
 	}
+
+	@Override
+	public boolean usesPrimaryBackup(String serviceName) {
+		if (originalAppCoordinator instanceof XdnReplicaCoordinator<?> xdnCoord) {
+			return xdnCoord.usesPrimaryBackup(serviceName);
+		}
+		return false;
+	}
+
+	@Override
+	public java.util.List<?> getRequestMatchersForService(String serviceName) {
+		if (originalAppCoordinator instanceof XdnReplicaCoordinator<?> xdnCoord) {
+			return xdnCoord.getRequestMatchersForService(serviceName);
+		}
+		return null;
+	}
 }

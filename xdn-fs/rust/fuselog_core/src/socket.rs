@@ -1,5 +1,5 @@
 use crate::statediff::{StateDiffAction, StateDiffLog};
-use crate::STATEDIFF_LOG;
+use crate::{harvest_and_clear, clear_all};
 use bincode::config;
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet};
@@ -302,166 +302,156 @@ fn try_train_dictionary_async(samples: Vec<Vec<u8>>) {
 fn send_statediff(mut stream: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
     info!("Socket: Received 'get' command");
 
-    let serialized_data = {
-        let mut log = STATEDIFF_LOG.lock().map_err(|e| {
-            error!("Socket: Failed to lock statediff log: {}", e);
-            std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned")
-        })?;
+    // Atomically harvest all actions + fid_map. Lock held for O(1) (mem::take).
+    // After this line, FUSE threads can immediately push new actions — no blocking.
+    let mut log = harvest_and_clear();
 
-        let original_action_count = log.actions.len();
-        let original_fid_count = log.fid_map.len();
+    let original_action_count = log.actions.len();
+    let original_fid_count = log.fid_map.len();
 
-        // Pruning is disabled by default
-        let is_prune_enabled = env::var("FUSELOG_PRUNE")
-            .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
+    // All pruning/serialization/compression happens on LOCAL data — no lock held.
 
-        if is_prune_enabled {
-            info!("=========================================");
-            info!("Pruning enabled. Pruning statediff log...");
-            info!("==========================================");
-            prune_log(&mut log);
+    let is_prune_enabled = env::var("FUSELOG_PRUNE")
+        .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
+
+    if is_prune_enabled {
+        info!("=========================================");
+        info!("Pruning enabled. Pruning statediff log...");
+        info!("==========================================");
+        prune_log(&mut log);
+    } else {
+        info!("Pruning is disabled. Skipping pruning of statediff log.");
+    }
+
+    let action_count = log.actions.len();
+    let fid_count = log.fid_map.len();
+
+    let bincode_data = bincode::encode_to_vec(&log, config::standard()).map_err(|e| {
+        error!("Socket: Failed to serialize statediff log: {}", e);
+        std::io::Error::new(std::io::ErrorKind::Other, format!("Serialization failed: {}", e))
+    })?;
+
+    // Adaptive compression is disabled by default
+    let adaptive_enabled = env::var("ADAPTIVE_COMPRESSION")
+        .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
+
+    if adaptive_enabled && !bincode_data.is_empty() {
+        let mut state = ADAPTIVE_STATE.lock().unwrap();
+
+        if !state.first_statediff_seen {
+            state.first_statediff_seen = true;
+            info!("Skipping first statediff for dictionary training (initialization data)");
         } else {
-            info!("Pruning is disabled. Skipping pruning of statediff log.");
-        }
+            let dev_mode = env::var("ADAPTIVE_DEV_MODE")
+                .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
 
-        let bincode_data = bincode::encode_to_vec(&*log, config::standard()).map_err(|e| {
-            error!("Socket: Failed to serialize statediff log: {}", e);
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Serialization failed: {}", e))
-        })?;
+            let min_sample_size = if dev_mode { DEV_MIN_SAMPLE_SIZE } else { MIN_SAMPLE_SIZE };
 
-        // Adaptive compression is disabled by default
-        let adaptive_enabled = env::var("ADAPTIVE_COMPRESSION")
-            .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
+            if bincode_data.len() >= min_sample_size {
+                state.training_buffer.push(bincode_data.clone());
+                info!("Collected sample for dictionary training: {} bytes (total samples: {})",
+                      bincode_data.len(), state.training_buffer.len());
 
-        if adaptive_enabled && !bincode_data.is_empty() {
-            let mut state = ADAPTIVE_STATE.lock().unwrap();
-
-            if !state.first_statediff_seen {
-                // Skipping the first statediff (database initialization)
-                state.first_statediff_seen = true;
-                info!("Skipping first statediff for dictionary training (initialization data)");
-            } else {
-                let dev_mode = env::var("ADAPTIVE_DEV_MODE")
-                    .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
-
-                let min_sample_size = if dev_mode { DEV_MIN_SAMPLE_SIZE } else { MIN_SAMPLE_SIZE };
-
-                if bincode_data.len() >= min_sample_size {
-                    // Collect sample for training
-                    state.training_buffer.push(bincode_data.clone());
-                    info!("Collected sample for dictionary training: {} bytes (total samples: {})",
-                          bincode_data.len(), state.training_buffer.len());
-
-                    // Let's check if we should train
-                    let total_bytes: usize = state.training_buffer.iter().map(|v| v.len()).sum();
-                    let (min_samples, min_total_bytes) = if dev_mode {
-                        (DEV_MIN_SAMPLES, DEV_MIN_TOTAL_BYTES)
-                    } else {
-                        (MIN_SAMPLES, MIN_TOTAL_BYTES)
-                    };
-
-                    if state.encoder_dict.is_none() &&
-                       state.training_buffer.len() >= min_samples &&
-                       total_bytes >= min_total_bytes &&
-                       !state.training_in_progress {
-                        info!("Threshold reached. Starting async dictionary training...");
-                        state.training_in_progress = true;
-                        let samples = state.training_buffer.clone();
-                        drop(state);
-                        try_train_dictionary_async(samples);
-                    }
+                let total_bytes: usize = state.training_buffer.iter().map(|v| v.len()).sum();
+                let (min_samples, min_total_bytes) = if dev_mode {
+                    (DEV_MIN_SAMPLES, DEV_MIN_TOTAL_BYTES)
                 } else {
-                    info!("Sample too small ({} bytes), skipping collection", bincode_data.len());
+                    (MIN_SAMPLES, MIN_TOTAL_BYTES)
+                };
+
+                if state.encoder_dict.is_none() &&
+                   state.training_buffer.len() >= min_samples &&
+                   total_bytes >= min_total_bytes &&
+                   !state.training_in_progress {
+                    info!("Threshold reached. Starting async dictionary training...");
+                    state.training_in_progress = true;
+                    let samples = state.training_buffer.clone();
+                    drop(state);
+                    try_train_dictionary_async(samples);
                 }
+            } else {
+                info!("Sample too small ({} bytes), skipping collection", bincode_data.len());
             }
         }
+    }
 
-        let compression_enabled = env::var("FUSELOG_COMPRESSION")
-            .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
+    let compression_enabled = env::var("FUSELOG_COMPRESSION")
+        .map_or(false, |val| val.to_lowercase() == "true" || val == "1");
 
-        let final_payload = if compression_enabled && !bincode_data.is_empty() {
-            if adaptive_enabled {
-                let state = ADAPTIVE_STATE.lock().unwrap();
+    let serialized_data = if compression_enabled && !bincode_data.is_empty() {
+        if adaptive_enabled {
+            let state = ADAPTIVE_STATE.lock().unwrap();
 
-                if let Some(dict_arc) = state.encoder_dict.as_ref().map(Arc::clone) {
-                    drop(state);
+            if let Some(dict_arc) = state.encoder_dict.as_ref().map(Arc::clone) {
+                drop(state);
 
-                    let normal_compressed = zstd::encode_all(&bincode_data[..], COMPRESSION_LEVEL)?;
-                    let dict_compressed = {
-                        let mut compressor = zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, &dict_arc)?;
-                        compressor.compress(&bincode_data)?
-                    };
+                let normal_compressed = zstd::encode_all(&bincode_data[..], COMPRESSION_LEVEL)?;
+                let dict_compressed = {
+                    let mut compressor = zstd::bulk::Compressor::with_dictionary(COMPRESSION_LEVEL, &dict_arc)?;
+                    compressor.compress(&bincode_data)?
+                };
 
-                    if dict_compressed.len() < normal_compressed.len() {
-                        info!("Dictionary compression chosen: {} bytes vs {} bytes (normal)",
-                              dict_compressed.len(), normal_compressed.len());
-                        
-                        let mut state = ADAPTIVE_STATE.lock().unwrap();
-                        let should_include_dict = state.new_dict_needs_sending;
-                        
-                        if should_include_dict {
-                            info!("Including dictionary in payload (first time after training)");
-                            state.new_dict_needs_sending = false;
-                            let mut payload = Vec::new();
-                            payload.push(b'd');
-                            payload.extend_from_slice(&(dict_arc.len() as u32).to_le_bytes());
-                            payload.extend_from_slice(&dict_arc);
-                            payload.push(b'z');
-                            payload.extend(dict_compressed);
-                            payload
-                        } else {
-                            info!("Not including dictionary in payload (must have been sent before)");
-                            let mut payload = Vec::with_capacity(1 + dict_compressed.len());
-                            payload.push(b'z');
-                            payload.extend(dict_compressed);
-                            payload
-                        }
-                    } else {
-                        info!("Normal compression chosen: {} bytes vs {} bytes (dictionary)",
-                              normal_compressed.len(), dict_compressed.len());
-                        let mut payload = Vec::with_capacity(1 + normal_compressed.len());
+                if dict_compressed.len() < normal_compressed.len() {
+                    info!("Dictionary compression chosen: {} bytes vs {} bytes (normal)",
+                          dict_compressed.len(), normal_compressed.len());
+
+                    let mut state = ADAPTIVE_STATE.lock().unwrap();
+                    let should_include_dict = state.new_dict_needs_sending;
+
+                    if should_include_dict {
+                        info!("Including dictionary in payload (first time after training)");
+                        state.new_dict_needs_sending = false;
+                        let mut payload = Vec::new();
+                        payload.push(b'd');
+                        payload.extend_from_slice(&(dict_arc.len() as u32).to_le_bytes());
+                        payload.extend_from_slice(&dict_arc);
                         payload.push(b'z');
-                        payload.extend(normal_compressed);
+                        payload.extend(dict_compressed);
+                        payload
+                    } else {
+                        info!("Not including dictionary in payload (must have been sent before)");
+                        let mut payload = Vec::with_capacity(1 + dict_compressed.len());
+                        payload.push(b'z');
+                        payload.extend(dict_compressed);
                         payload
                     }
                 } else {
-                    info!("Adaptive mode enabled but no dictionary trained yet. Using normal compression.");
-                    let compressed_data = zstd::encode_all(&bincode_data[..], COMPRESSION_LEVEL)?;
-                    let mut payload = Vec::with_capacity(1 + compressed_data.len());
+                    info!("Normal compression chosen: {} bytes vs {} bytes (dictionary)",
+                          normal_compressed.len(), dict_compressed.len());
+                    let mut payload = Vec::with_capacity(1 + normal_compressed.len());
                     payload.push(b'z');
-                    payload.extend(compressed_data);
+                    payload.extend(normal_compressed);
                     payload
                 }
             } else {
-                info!("Standard compression enabled.");
+                info!("Adaptive mode enabled but no dictionary trained yet. Using normal compression.");
                 let compressed_data = zstd::encode_all(&bincode_data[..], COMPRESSION_LEVEL)?;
-                info!("Data compressed from {} to {} bytes.", bincode_data.len(), compressed_data.len());
                 let mut payload = Vec::with_capacity(1 + compressed_data.len());
                 payload.push(b'z');
                 payload.extend(compressed_data);
                 payload
             }
         } else {
-            info!("Compression is disabled or data is empty. Sending raw data.");
-            let mut payload = Vec::with_capacity(1 + bincode_data.len());
-            payload.push(b'n');
-            payload.extend(bincode_data);
+            info!("Standard compression enabled.");
+            let compressed_data = zstd::encode_all(&bincode_data[..], COMPRESSION_LEVEL)?;
+            info!("Data compressed from {} to {} bytes.", bincode_data.len(), compressed_data.len());
+            let mut payload = Vec::with_capacity(1 + compressed_data.len());
+            payload.push(b'z');
+            payload.extend(compressed_data);
             payload
-        };
-
-        let action_count = log.actions.len();
-        let fid_count = log.fid_map.len();
-        log.actions.clear();
-        log.fid_map.clear();
-
-        info!("Socket: Original statediff log had {} actions, {} fids. Pruned to {} actions, {} fids.",
-            original_action_count, original_fid_count, action_count, fid_count);
-
-        final_payload
+        }
+    } else {
+        info!("Compression is disabled or data is empty. Sending raw data.");
+        let mut payload = Vec::with_capacity(1 + bincode_data.len());
+        payload.push(b'n');
+        payload.extend(bincode_data);
+        payload
     };
 
-    stream.write_all(&serialized_data.len().to_le_bytes())?;
+    info!("Socket: Original statediff log had {} actions, {} fids. Pruned to {} actions, {} fids.",
+        original_action_count, original_fid_count, action_count, fid_count);
 
+    stream.write_all(&serialized_data.len().to_le_bytes())?;
     stream.write_all(&serialized_data)?;
     info!("Socket: Successfully sent data to client");
     Ok(())
@@ -469,19 +459,7 @@ fn send_statediff(mut stream: UnixStream) -> Result<(), Box<dyn std::error::Erro
 
 fn clear_statediff() -> Result<(), Box<dyn std::error::Error>> {
     info!("Socket: Received 'clear' command");
-
-    let mut log = STATEDIFF_LOG.lock().map_err(|e| {
-        error!("Socket: Failed to lock statediff log: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, "Lock poisoned")
-    })?;
-
-    let action_count = log.actions.len();
-    let fid_count = log.fid_map.len();
-    log.actions.clear();
-    log.fid_map.clear();
-
-    info!("Socket: Cleared statediff log (had {} actions, {} fids).", 
-        action_count, fid_count);
-
+    clear_all();
+    info!("Socket: Cleared statediff log.");
     Ok(())
 }

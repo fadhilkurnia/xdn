@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.Base64;
 import java.util.Map;
 
 public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
@@ -107,7 +106,7 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
     // for rsync, assuming the initialization is deterministic, we update the state in
     // the snapshot dir.
     // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
@@ -151,11 +150,11 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(e);
     }
 
-    return Base64.getEncoder().encodeToString(compressedStateDiff);
+    return compressedStateDiff;
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
+  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
     // important location
     // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
     // snapshot dir : /tmp/xdn/state/zip/<nodeId>/snp/<serviceName>/e<epoch>/
@@ -167,8 +166,7 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetZipFile =
         String.format("%s%s/e%d.zip", this.baseZipDirPath, serviceName, placementEpoch);
 
-    // convert the compressed stateDiff back to byte[]
-    byte[] compressedStateDiff = Base64.getDecoder().decode(encodedState);
+    byte[] compressedStateDiff = encodedState;
 
     // decompress the stateDiff
     byte[] stateDiff;
