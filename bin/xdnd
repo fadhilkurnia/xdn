@@ -57,10 +57,9 @@ function parse_common_dist_args() {
     echo "Please specify the ssh key with '-ssh-key=<location>' argument." >&2
     return 1
   fi
-  # handle the case when ssh_key starts with '~/'.
   case "$ssh_key" in
   "~/"*)
-    ssh_key="${HOME}/${ssh_key:2}"
+    ssh_key="${HOME}/${ssh_key#"~/"}"
     ;;
   esac
   if [ ! -f "$ssh_key" ]; then
@@ -917,7 +916,16 @@ function do_init_driver() {
   echo "Initializing driver machine ..."
 
   sudo apt update
-  sudo apt install -y golang-go openjdk-21-jdk apache2-utils python3-pip ant screen
+  sudo apt install -y openjdk-21-jdk apache2-utils python3-pip ant screen wget
+
+  # install golang from official release (apt golang-go is too old)
+  local golang_tar_name="go1.22.4.linux-amd64.tar.gz"
+  local golang_download_url="https://go.dev/dl/$golang_tar_name"
+  wget --quiet --no-clobber "$golang_download_url" || true
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf "$golang_tar_name"
+  export PATH=$PATH:/usr/local/go/bin
+  echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee -a /etc/environment
   curl https://sh.rustup.rs -sSf | sh -s -- -y
   source $HOME/.cargo/env
   python -m pip install -U pip
@@ -927,12 +935,27 @@ function do_init_driver() {
   python -m pip install -U pandas
   python -m pip install -U basemap
 
+  # install docker
+  echo "Installing Docker ..."
+  echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections
+  sudo apt-get install -y -q ca-certificates curl
+  sudo install -m 0755 -d /etc/apt/keyrings
+  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  sudo chmod a+r /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  sudo apt-get update -y -q && sudo apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+  # make docker accessible without sudo
+  sudo groupadd -f docker
+  sudo usermod -aG docker $USER
+  newgrp docker
+
   ant jar
   ./bin/build_xdn_cli.sh
   sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
   mkdir -p eval/screen_logs
   sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results
-  cd eval/xdn_latency_proxy_go && go build .
+  cd eval/xdn-latency-proxy/go && go build .
   cd -
 
   echo "Dont forget to initialize machines for xdn cluster using 'xdnd dist-init'"

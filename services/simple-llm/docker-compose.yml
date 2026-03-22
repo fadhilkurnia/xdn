@@ -2,23 +2,48 @@ name: simple-llm
 services:
     ollama:
         container_name: ollama
+        build:
+            context: .
+            dockerfile: "./ollama/Dockerfile.llama3.2:1b"
         networks:
             - simple-llm-network
         ports:
             - 11434:11434
         restart: unless-stopped
-        image: simple-ollama:1
+        image: fadhilkurnia/xdn-llama:latest
+
+    mongodb:
+        container_name: mongodb
+        networks:
+            - simple-llm-network
+        restart: unless-stopped
+        image: mongo:8.0
+        volumes:
+            - simple-llm-mongodb-data:/data/db
 
     simple-llm:
         container_name: simple-llm
+        build:
+            context: .
+            dockerfile: ./Dockerfile
+        depends_on:
+            - ollama
+            - mongodb
+        environment:
+            - MODEL_NAME=llama3.2:1b
+            - MONGO_URI=mongodb://mongodb:27017
+            - MONGO_DB_NAME=simple-llm
         networks:
             - simple-llm-network
         ports:
-            - 5000:3000
+            - 8080:3000
         restart: unless-stopped
-        image: simple-llm:1
+        image: fadhilkurnia/xdn-simple-llm:latest
 
 networks:
     simple-llm-network:
         external: false
         name: simple-llm-network
+
+volumes:
+    simple-llm-mongodb-data:

@@ -7,6 +7,15 @@ import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
+import edu.umass.cs.xdn.service.RequestMatcher;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.DefaultFullHttpResponse;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpResponse;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.http.HttpVersion;
 import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -93,13 +102,15 @@ public final class XdnHttpRequestBatcher implements Closeable {
       throw new IllegalStateException("Batcher is closed");
     }
     boolean isInserted;
+    long nowNanos = System.nanoTime();
     if (isSeparateSubmissionWorkers) {
       isInserted =
           submissionQueue.offer(
-              new BatchEntry(request, clientInetSocketAddress, completionHandler));
+              new BatchEntry(request, clientInetSocketAddress, completionHandler, nowNanos));
     } else {
       isInserted =
-          batchingQueue.offer(new BatchEntry(request, clientInetSocketAddress, completionHandler));
+          batchingQueue.offer(
+              new BatchEntry(request, clientInetSocketAddress, completionHandler, nowNanos));
     }
     assert isInserted : "Failed to submit request into the receiving queue";
   }
@@ -116,6 +127,7 @@ public final class XdnHttpRequestBatcher implements Closeable {
               while (running.get() || !submissionQueue.isEmpty()) {
                 BatchEntry entry = submissionQueue.poll();
                 if (entry == null) {
+                  Thread.onSpinWait();
                   continue;
                 }
                 batchingQueue.put(entry);
@@ -129,6 +141,17 @@ public final class XdnHttpRequestBatcher implements Closeable {
     }
   }
 
+  @SuppressWarnings("unchecked")
+  private void ensureRequestMatchers(BatchEntry entry) {
+    String svcName = entry.request().getServiceName();
+    if (svcName != null) {
+      var matchers = arFunctions.getRequestMatchersForService(svcName);
+      if (matchers != null) {
+        entry.request().setRequestMatchers((java.util.List<RequestMatcher>) matchers);
+      }
+    }
+  }
+
   // BatchingWorker consumes multiple requests from batchingQueue, creates batch entry, and
   // passes the batch of request into ActiveReplica via dispatchBatch.
   private void startBatchingWorker() {
@@ -137,41 +160,87 @@ public final class XdnHttpRequestBatcher implements Closeable {
           List<BatchEntry> buffer = new ArrayList<>(maxBatchSize);
           try {
             while (running.get() || !batchingQueue.isEmpty()) {
-              BatchEntry first = batchingQueue.poll();
-              if (first == null) {
-                continue;
-              }
+              BatchEntry first = batchingQueue.take();
+              ensureRequestMatchers(first);
 
-              // Keep write-only, read-modify-write, or unknown request type isolated
-              // to avoid unsafe batching. For now, we only batch read-only requests.
-              if (isNotBehavioralReadOnly(first)) {
+              // Only batch writes for services using primary-backup coordination
+              // or commutative requests. For active replication, non-commutative
+              // writes must remain isolated.
+              if (isNotBehavioralReadOnly(first)
+                  && !arFunctions.usesPrimaryBackup(first.request.getServiceName())
+                  && !first.request.isCommutativeRequest()) {
                 dispatchBatch(Collections.singletonList(first));
                 continue;
               }
 
-              // Put multiple read-only requests for the same service name into a batch,
-              // otherwise, issue a batch with single request only.
+              // Put multiple read-only or commutative requests for the same service
+              // name into a batch, otherwise, issue a batch with single request only.
               buffer.add(first);
               String batchServiceName = first.request.getServiceName();
+
+              // For PB services, dispatch each request as a singleton unless
+              // the request is commutative.
+              if (arFunctions.usesPrimaryBackup(batchServiceName)
+                  && !first.request.isCommutativeRequest()) {
+                dispatchBatch(new ArrayList<>(buffer));
+                buffer.clear();
+                continue;
+              }
+
+              // Track seen URIs for commutative path dedup within a batch
+              Set<String> seenUris = null;
+              boolean isCommutativeBatch = first.request.isCommutativeRequest();
+              if (isCommutativeBatch) {
+                seenUris = new HashSet<>();
+                seenUris.add(first.request.getHttpRequest().uri());
+              }
+
               while (buffer.size() < maxBatchSize) {
                 BatchEntry next = batchingQueue.poll(maxBatchDelayNanos, TimeUnit.NANOSECONDS);
                 if (next == null) {
                   break;
                 }
-                if (isNotBehavioralReadOnly(next)) {
+                ensureRequestMatchers(next);
+
+                // Non-commutative write for non-PB: singleton
+                if (isNotBehavioralReadOnly(next)
+                    && !arFunctions.usesPrimaryBackup(next.request.getServiceName())
+                    && !next.request.isCommutativeRequest()) {
                   dispatchBatch(new ArrayList<>(buffer));
                   buffer.clear();
                   dispatchBatch(Collections.singletonList(next));
                   break;
                 }
+
+                // Different service: flush + start new batch
                 String nextServiceName = next.request.getServiceName();
                 if (!Objects.equals(batchServiceName, nextServiceName)) {
                   dispatchBatch(new ArrayList<>(buffer));
                   buffer.clear();
                   buffer.add(next);
                   batchServiceName = nextServiceName;
+                  isCommutativeBatch = next.request.isCommutativeRequest();
+                  if (isCommutativeBatch) {
+                    seenUris = new HashSet<>();
+                    seenUris.add(next.request.getHttpRequest().uri());
+                  } else {
+                    seenUris = null;
+                  }
                   continue;
                 }
+
+                // Path dedup for commutative: flush if same URI already in batch
+                if (isCommutativeBatch && seenUris != null) {
+                  String uri = next.request.getHttpRequest().uri();
+                  if (!seenUris.add(uri)) {
+                    // Same resource already in batch — flush, start new batch
+                    dispatchBatch(new ArrayList<>(buffer));
+                    buffer.clear();
+                    seenUris.clear();
+                    seenUris.add(uri);
+                  }
+                }
+
                 buffer.add(next);
               }
 
@@ -244,6 +313,22 @@ public final class XdnHttpRequestBatcher implements Closeable {
       return;
     }
 
+    long dispatchTimeNanos = System.nanoTime();
+    long oldestWaitMs = 0;
+    long newestWaitMs = Long.MAX_VALUE;
+    for (BatchEntry entry : entries) {
+      long waitMs = (dispatchTimeNanos - entry.enqueuedAtNanos()) / 1_000_000;
+      if (waitMs > oldestWaitMs) oldestWaitMs = waitMs;
+      if (waitMs < newestWaitMs) newestWaitMs = waitMs;
+    }
+    LOG.log(
+        Level.INFO,
+        "batcher dispatch: size={0} oldestWaitMs={1} newestWaitMs={2}"
+            + " batchingQueueDepth={3} submissionQueueDepth={4}",
+        new Object[] {
+          entries.size(), oldestWaitMs, newestWaitMs, batchingQueue.size(), submissionQueue.size()
+        });
+
     List<XdnHttpRequest> requests = new ArrayList<>(entries.size());
     for (BatchEntry entry : entries) {
       requests.add(entry.request);
@@ -253,9 +338,6 @@ public final class XdnHttpRequestBatcher implements Closeable {
 
     XdnHttpRequestBatch batch;
     try {
-      LOG.log(
-          Level.FINE,
-          this.getClass().getSimpleName() + " - Batching with request size of " + entries.size());
       batch = new XdnHttpRequestBatch(requests);
     } catch (RuntimeException e) {
       boolean isInserted = completionQueue.offer(new BatchResult(entries, e));
@@ -270,7 +352,7 @@ public final class XdnHttpRequestBatcher implements Closeable {
     ReplicableClientRequest gpRequest = ReplicableClientRequest.wrap(batch);
     gpRequest.setClientAddress(firstClientInetSocketAddress);
 
-    BatchContext context = new BatchContext(entries);
+    BatchContext context = new BatchContext(entries, dispatchTimeNanos);
     boolean accepted;
     try {
       accepted = arFunctions.handRequestToAppForHttp(gpRequest, new BatchExecutedCallback(context));
@@ -376,11 +458,44 @@ public final class XdnHttpRequestBatcher implements Closeable {
                 "Mismatch request-%d ID in the batch %d != %d", i, clientReqId, serverRespId);
       }
 
+      // Log per-batch completion timing.
+      long completionNanos = System.nanoTime();
+      long pipelineMs = (completionNanos - context.dispatchedAtNanos()) / 1_000_000;
+      long oldestTotalMs = 0;
+      for (BatchEntry entry : context.entries) {
+        long totalMs = (completionNanos - entry.enqueuedAtNanos()) / 1_000_000;
+        if (totalMs > oldestTotalMs) oldestTotalMs = totalMs;
+      }
+      LOG.log(
+          Level.INFO,
+          "batcher callback: size={0} pipelineMs={1} oldestTotalMs={2} completionQueueDepth={3}",
+          new Object[] {context.entries.size(), pipelineMs, oldestTotalMs, completionQueue.size()});
+
       // Get the batch of response, pair each with the request.
+      // Some individual requests within the batch may have null responses
+      // (e.g., if the container was not ready or the forward failed).
+      // For those, synthesize a 503 Service Unavailable response so the
+      // client receives a proper HTTP error instead of an EOF.
       for (int i = 0; i < executedXdnHttpRequestBatch.size(); i++) {
         XdnHttpRequest clientReq = context.entries.get(i).request;
         XdnHttpRequest serverResp = executedXdnHttpRequestBatch.getRequestList().get(i);
-        clientReq.setHttpResponse(serverResp.getHttpResponse());
+        HttpResponse resp = serverResp.getHttpResponse();
+        if (resp == null) {
+          LOG.log(
+              Level.WARNING,
+              "Null response for request {0} in batch, synthesizing 503",
+              serverResp.getRequestID());
+          ByteBuf body =
+              Unpooled.copiedBuffer(
+                  "Service temporarily unavailable", java.nio.charset.StandardCharsets.UTF_8);
+          FullHttpResponse fallback =
+              new DefaultFullHttpResponse(
+                  HttpVersion.HTTP_1_1, HttpResponseStatus.SERVICE_UNAVAILABLE, body);
+          fallback.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.readableBytes());
+          clientReq.setHttpResponse(fallback);
+        } else {
+          clientReq.setHttpResponse(resp);
+        }
       }
 
       boolean isInserted = completionQueue.offer(new BatchResult(context.entries, null));
@@ -401,9 +516,10 @@ public final class XdnHttpRequestBatcher implements Closeable {
   private record BatchEntry(
       XdnHttpRequest request,
       InetSocketAddress clientInetSocketAddress,
-      RequestCompletionHandler completionHandler) {}
+      RequestCompletionHandler completionHandler,
+      long enqueuedAtNanos) {}
 
-  private record BatchContext(List<BatchEntry> entries) {}
+  private record BatchContext(List<BatchEntry> entries, long dispatchedAtNanos) {}
 
   private record BatchResult(List<BatchEntry> entries, Throwable error) {}
 

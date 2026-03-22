@@ -67,7 +67,7 @@ public abstract class AbstractStateDiffRecorder {
    * @param placementEpoch current placement epoch number.
    * @return the captured state diff (e.g., new data written into a file).
    */
-  public abstract String captureStateDiff(String serviceName, int placementEpoch);
+  public abstract byte[] captureStateDiff(String serviceName, int placementEpoch);
 
   /**
    * Applies the previously captured state diff into the state directory. Mainly used by backups.
@@ -78,7 +78,7 @@ public abstract class AbstractStateDiffRecorder {
    * @return true iff all operations successfully executed.
    */
   public abstract boolean applyStateDiff(
-      String serviceName, int placementEpoch, String encodedState);
+      String serviceName, int placementEpoch, byte[] encodedState);
 
   /**
    * Removes the target directory that hold the safety-critical state, include unmounting filesystem

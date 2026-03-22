@@ -544,7 +544,10 @@ public class NIOTransport<NodeIDType> implements Runnable, HandshakeCallback {
 				// set ops to CONNECT for pending connect requests.
 				processPendingConnects();
 				// wait for an event one of the registered channels.
-				this.selector.select(SELECT_TIMEOUT);
+				// Use a short timeout when there are congested sockets so that
+				// large packets (e.g., multi-MB statediffs) are drained quickly
+				// instead of waiting up to SELECT_TIMEOUT ms per read chunk.
+				this.selector.select(this.congested.isEmpty() ? SELECT_TIMEOUT : 1);
 				// accept, connect, read, or write as needed.
 				processSelectedKeys();
 				// process data from pending buffers on congested channels
@@ -788,6 +791,13 @@ public class NIOTransport<NodeIDType> implements Runnable, HandshakeCallback {
 	public static int MAX_PAYLOAD_SIZE = 4 * 1024 * 1024;
 
 	public static void setMaxPayloadSize(int size) {
+		// Keep compressionThreshold in sync with MAX_PAYLOAD_SIZE when they
+		// were equal (the "effectively disabled" state), so that raising
+		// MAX_PAYLOAD_SIZE for large statediffs does not inadvertently enable
+		// compression (which would cause the NIO thread to block on ZLIB
+		// inflate for every multi-MB packet).
+		if (compressionThreshold == MAX_PAYLOAD_SIZE)
+			compressionThreshold = Math.max(compressionThreshold, size);
 		MAX_PAYLOAD_SIZE = Math.max(MAX_PAYLOAD_SIZE, size);
 	}
 

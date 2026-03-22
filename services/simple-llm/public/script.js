@@ -4,22 +4,32 @@ const promptInput = document.querySelector("#prompt-input");
 const promptBtn = document.querySelector("#prompt-button");
 const loadingBox = document.querySelector("#loading-box");
 const chatBox = document.querySelector("#chat-box");
+let isLoading = false;
+
+function syncPromptState() {
+    const hasInput = promptInput.value.trim().length > 0;
+    promptBtn.toggleAttribute("disabled", isLoading || !hasInput);
+}
+
+function scrollToLatest() {
+    main.scrollTo({ top: main.scrollHeight, behavior: "smooth" });
+}
 
 // Handle loadingBox and disable prompt
 function setLoading(status) {
+    isLoading = status;
+
     if (status) {
         loadingBox.classList.remove("hidden");
         loadingBox.classList.add("flex");
-        promptBtn.setAttribute("disabled", true);
         promptInput.setAttribute("disabled", true);
     } else {
         loadingBox.classList.remove("flex");
         loadingBox.classList.add("hidden");
         promptInput.removeAttribute("disabled");
-
-        if (!input)
-            promptBtn.removeAttribute("disabled");
     }
+
+    syncPromptState();
 }
 
 // Fetch Prompts
@@ -27,7 +37,7 @@ async function getPrompts() {
     const res = await fetch(`${BACK_END_API}/api/prompt`);
 
     if (!res.ok)
-        return console.log("Error: Request rejected.");
+        throw new Error("Request rejected.");
 
     return await res.json();
 }
@@ -44,44 +54,50 @@ async function postPrompts(prompt) {
     });
 
     if (!res.ok)
-        return console.log("Error: Request rejected.");
+        throw new Error("Request rejected.");
 
     return await res.json();
 }
 
 // Handle promptInput, promptBtn, and loadingBox based on fetchPrompt
-let input;
-promptInput.addEventListener("input", (e) => {
-    input = e.target.value;
-
-    if (!input)
-        promptBtn.setAttribute("disabled", true);
-    else 
-        promptBtn.removeAttribute("disabled");
+promptInput.addEventListener("input", () => {
+    syncPromptState();
 });
 
-promptInput.addEventListener("keydown", async (e) => {
-    if (!input || e.key !== "Enter") return;
+async function submitPrompt() {
+    const prompt = promptInput.value.trim();
+    if (!prompt || isLoading) return;
 
-    addPrompt(input);
+    addPrompt(prompt);
+    promptInput.value = "";
+    syncPromptState();
     setLoading(true);
-    promptBtn.setAttribute("disabled", true);
 
     try {
-        const data = await postPrompts(input);
+        const data = await postPrompts(prompt);
 
-        if (data) addResponse(data.response);
+        if (data?.response)
+            addResponse(data.response);
+        else
+            addResponse("The server did not return a response.");
     } catch (err) {
         console.error(err);
+        addResponse("Unable to process the request right now.");
     } finally {
         setLoading(false);
+        promptInput.focus();
     }
+}
 
-    input = "";
-    promptInput.value = "";
-    promptInput.focus();
+promptInput.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+
+    await submitPrompt();
 });
 
+promptBtn.addEventListener("click", async () => {
+    await submitPrompt();
+});
 
 // Add Prompt & Response. Also clear
 function addPrompt(prompt) {
@@ -89,7 +105,7 @@ function addPrompt(prompt) {
     div.classList.add("bg-slate-600", "text-green-50", "p-2", "rounded-lg", "self-end");
     div.textContent = prompt;
     chatBox.appendChild(div);
-    main.scrollIntoView({ block: "end" }); 
+    scrollToLatest();
 }
 
 function addResponse(response) {
@@ -97,14 +113,12 @@ function addResponse(response) {
     div.classList.add("text-slate-900", "p-2");
     div.textContent = response;
     chatBox.appendChild(div);
-    main.scrollIntoView({ block: "end" }); 
+    scrollToLatest();
 }
 
 // OnLoad
 async function onLoad() {
-    const createStatus = await fetch(`${BACK_END_API}/api/db/create`, { method: "POST" });
-
-    if (createStatus) {
+    try {
         const data = await getPrompts();
 
         if (!data || data.rows.length < 1) return;
@@ -113,7 +127,10 @@ async function onLoad() {
             addPrompt(item.prompt);
             addResponse(item.response);
         });
+    } catch (err) {
+        console.error(err);
     }
 }
 
 onLoad();
+syncPromptState();

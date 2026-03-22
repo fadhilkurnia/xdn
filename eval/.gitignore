@@ -4,3 +4,7 @@ location_distributions/dynamic_demand_location.tar.gz
 *.pdf
 *.csv
 output/
+*.png
+notebooks
+location_distributions/dynamic_demand_location_updated
+kvm-approach

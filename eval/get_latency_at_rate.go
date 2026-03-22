@@ -22,12 +22,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
 type result struct {
-	latency time.Duration
-	success bool
+	latency    time.Duration
+	success    bool
+	statusCode int    // 0 means connection error
+	errMsg     string // first few chars of error message (for diagnostics)
 }
 
 func percentile(sorted []float64, p float64) float64 {
@@ -61,12 +65,22 @@ func (headers *headerList) Set(value string) error {
 	return nil
 }
 
+// hasHeader returns true if any -H arg has the given key (case-insensitive).
+func hasHeader(headers []struct{ key, value string }, key string) bool {
+	for _, h := range headers {
+		if strings.EqualFold(h.key, key) {
+			return true
+		}
+	}
+	return false
+}
+
 func sanityCheck(client *http.Client, method string, url string, payload string, headers []struct {
 	key   string
 	value string
 }) {
 	var body io.Reader
-	if method == http.MethodPost {
+	if method == http.MethodPost || method == http.MethodPut {
 		body = bytes.NewBufferString(payload)
 	}
 	req, err := http.NewRequest(method, url, body)
@@ -74,7 +88,7 @@ func sanityCheck(client *http.Client, method string, url string, payload string,
 		fmt.Fprintf(os.Stderr, "sanity check failed to create request: %v\n", err)
 		os.Exit(1)
 	}
-	if method == http.MethodPost {
+	if (method == http.MethodPost || method == http.MethodPut) && !hasHeader(headers, "Content-Type") {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	for _, header := range headers {
@@ -100,10 +114,36 @@ func sanityCheck(client *http.Client, method string, url string, payload string,
 	fmt.Printf("example_response_body: %s\n", responseBody)
 }
 
+func raiseFileDescriptorLimit() {
+	var rlimit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlimit); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to get rlimit: %v\n", err)
+		return
+	}
+	if rlimit.Cur < rlimit.Max {
+		rlimit.Cur = rlimit.Max
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rlimit); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to raise fd limit to %d: %v\n", rlimit.Max, err)
+		}
+	}
+}
+
 func main() {
+	raiseFileDescriptorLimit()
+
 	var headerArgs headerList
 	flag.Var(&headerArgs, "H", "Optional HTTP header in 'Key: Value' format (repeatable)")
-	methodArg := flag.String("X", "POST", "HTTP method (POST or GET)")
+	methodArg := flag.String("X", "POST", "HTTP method (POST, PUT, or GET)")
+	var payloadsFile string
+	flag.StringVar(&payloadsFile, "payloads-file", "",
+		"File with one POST body per line; payloads cycle round-robin across requests")
+	var urlsFile string
+	flag.StringVar(&urlsFile, "urls-file", "",
+		"File with one URL per line; URLs cycle round-robin across requests")
+	readRatio := flag.Float64("read-ratio", 0.0,
+		"Fraction of requests that are GET reads (0.0=all writes, 1.0=all reads). Requires -read-url.")
+	readURL := flag.String("read-url", "",
+		"URL for GET (read) requests when using -read-ratio. Write URL is the positional arg.")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [options] <url> <json_payload> <duration_seconds> <target_rate>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s [options] -X GET <url> <duration_seconds> <target_rate>\n", os.Args[0])
@@ -112,7 +152,7 @@ func main() {
 	flag.Parse()
 	args := flag.Args()
 	method := strings.ToUpper(strings.TrimSpace(*methodArg))
-	if method != http.MethodPost && method != http.MethodGet {
+	if method != http.MethodPost && method != http.MethodGet && method != http.MethodPut {
 		fmt.Fprintf(os.Stderr, "unsupported method: %s\n", method)
 		os.Exit(1)
 	}
@@ -134,13 +174,50 @@ func main() {
 			fmt.Fprintln(os.Stderr, "GET requests must use an empty payload")
 			os.Exit(1)
 		}
-	} else {
+	} else { // POST or PUT
 		if len(args) != 4 {
 			flag.Usage()
 			os.Exit(1)
 		}
 		url = args[0]
 		payload = args[1]
+	}
+
+	var payloads []string
+	if payloadsFile != "" {
+		data, err := os.ReadFile(payloadsFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot read -payloads-file: %v\n", err)
+			os.Exit(1)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) != "" {
+				payloads = append(payloads, line)
+			}
+		}
+		if len(payloads) == 0 {
+			fmt.Fprintf(os.Stderr, "-payloads-file is empty\n")
+			os.Exit(1)
+		}
+		payload = payloads[0] // use first entry for sanity check
+	}
+
+	var urls []string
+	if urlsFile != "" {
+		data, err := os.ReadFile(urlsFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot read -urls-file: %v\n", err)
+			os.Exit(1)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.TrimSpace(line) != "" {
+				urls = append(urls, strings.TrimSpace(line))
+			}
+		}
+		if len(urls) == 0 {
+			fmt.Fprintf(os.Stderr, "-urls-file is empty\n")
+			os.Exit(1)
+		}
 	}
 
 	headers := make([]struct {
@@ -182,14 +259,25 @@ func main() {
 	}
 
 	transport := &http.Transport{
-		MaxIdleConns:        1024,
-		MaxIdleConnsPerHost: 1024,
+		MaxIdleConns:        8192,
+		MaxIdleConnsPerHost: 8192,
+		MaxConnsPerHost:     8192,
 	}
-	client := &http.Client{Transport: transport}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
 
-	sanityCheck(client, method, url, payload, headers)
+	sanityURL := url
+	if len(urls) > 0 {
+		sanityURL = urls[0]
+	}
+	sanityCheck(client, method, sanityURL, payload, headers)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	var payloadCounter int64
+	var urlCounter int64
 
 	start := time.Now()
 	end := start.Add(time.Duration(durationSeconds * float64(time.Second)))
@@ -209,16 +297,34 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			var body io.Reader
-			if method == http.MethodPost {
-				body = bytes.NewBufferString(payload)
+
+			// Decide read vs write when -read-ratio is set
+			thisMethod := method
+			thisURL := url
+			if *readRatio > 0 && *readURL != "" && rand.Float64() < *readRatio {
+				thisMethod = http.MethodGet
+				thisURL = *readURL
 			}
-			req, reqErr := http.NewRequest(method, url, body)
+
+			if len(urls) > 0 {
+				idx := atomic.AddInt64(&urlCounter, 1) - 1
+				thisURL = urls[idx%int64(len(urls))]
+			}
+			var body io.Reader
+			if thisMethod == http.MethodPost || thisMethod == http.MethodPut {
+				thisPayload := payload
+				if len(payloads) > 0 {
+					idx := atomic.AddInt64(&payloadCounter, 1) - 1
+					thisPayload = payloads[idx%int64(len(payloads))]
+				}
+				body = bytes.NewBufferString(thisPayload)
+			}
+			req, reqErr := http.NewRequest(thisMethod, thisURL, body)
 			if reqErr != nil {
 				results <- result{success: false}
 				return
 			}
-			if method == http.MethodPost {
+			if (thisMethod == http.MethodPost || thisMethod == http.MethodPut) && !hasHeader(headers, "Content-Type") {
 				req.Header.Set("Content-Type", "application/json")
 			}
 			for _, header := range headers {
@@ -228,13 +334,17 @@ func main() {
 			resp, respErr := client.Do(req)
 			latency := time.Since(t0)
 			if respErr != nil {
-				results <- result{latency: latency, success: false}
+				errStr := respErr.Error()
+				if len(errStr) > 80 {
+					errStr = errStr[:80]
+				}
+				results <- result{latency: latency, success: false, statusCode: 0, errMsg: errStr}
 				return
 			}
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			success := resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
-			results <- result{latency: latency, success: success}
+			results <- result{latency: latency, success: success, statusCode: resp.StatusCode}
 		}()
 
 		interval := rng.ExpFloat64() / targetRate
@@ -251,9 +361,19 @@ func main() {
 
 	latencies := make([]float64, 0, totalSent)
 	successCount := 0
+	statusCounts := make(map[int]int)
+	errMsgCounts := make(map[string]int)
 	for res := range results {
 		if res.success {
 			successCount++
+		}
+		statusCounts[res.statusCode]++
+		if res.errMsg != "" {
+			errMsgCounts[res.errMsg]++
+		}
+		// Include all requests with a measured latency (success or error response)
+		// so that survivorship bias does not hide queueing effects.
+		if res.latency > 0 {
 			latencies = append(latencies, float64(res.latency)/float64(time.Millisecond))
 		}
 	}
@@ -298,4 +418,22 @@ func main() {
 	fmt.Printf("p90_latency_ms: %.2f\n", p90Latency)
 	fmt.Printf("p95_latency_ms: %.2f\n", p95Latency)
 	fmt.Printf("p99_latency_ms: %.2f\n", p99Latency)
+
+	// Print status code distribution
+	fmt.Println("--- status_code_distribution ---")
+	for code, count := range statusCounts {
+		if code == 0 {
+			fmt.Printf("  connection_error: %d\n", count)
+		} else {
+			fmt.Printf("  status_%d: %d\n", code, count)
+		}
+	}
+
+	// Print error message distribution (top errors)
+	if len(errMsgCounts) > 0 {
+		fmt.Println("--- error_messages ---")
+		for msg, count := range errMsgCounts {
+			fmt.Printf("  [%d] %s\n", count, msg)
+		}
+	}
 }

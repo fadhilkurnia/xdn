@@ -27,4 +27,16 @@ public interface ActiveReplicaFunctions {
 	 * @param addr
 	 */
 	public void updateDemandStatsFromHttp(Request request, InetAddress addr);
+
+	/**
+	 * @param serviceName the name of the service
+	 * @return true if the service uses primary-backup coordination
+	 */
+	default boolean usesPrimaryBackup(String serviceName) {
+		return false;
+	}
+
+	default java.util.List<?> getRequestMatchersForService(String serviceName) {
+		return null;
+	}
 }

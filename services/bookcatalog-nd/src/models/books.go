@@ -24,29 +24,33 @@ func init() {
 	db.AutoMigrate(&Book{})
 }
 
-func (b *Book) CreateBook() *Book {
-	db.Create(&b)
-	return b
+func (b *Book) CreateBook() (*Book, error) {
+	if err := db.Create(&b).Error; err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
-func (b *Book) Save() {
-	db.Save(b)
+func (b *Book) Save() error {
+	return db.Save(b).Error
 }
 
-func GetAllBooks() []Book {
+func GetAllBooks() ([]Book, error) {
 	var Books []Book
-	db.Find(&Books)
-	return Books
+	if err := db.Find(&Books).Error; err != nil {
+		return nil, err
+	}
+	return Books, nil
 }
 
-func GetBookById(Id int64) (*Book, *gorm.DB) {
+func GetBookById(Id int64) (*Book, error) {
 	var getBook Book
-	db := db.First(&getBook, Id)
-	return &getBook, db
+	if err := db.First(&getBook, Id).Error; err != nil {
+		return nil, err
+	}
+	return &getBook, nil
 }
 
-func DeleteBook(ID int64) Book {
-	var book Book
-	db.Delete(&book, ID)
-	return book
+func DeleteBook(ID int64) error {
+	return db.Delete(&Book{}, ID).Error
 }

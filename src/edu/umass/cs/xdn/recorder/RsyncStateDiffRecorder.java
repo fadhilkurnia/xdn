@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -126,7 +125,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
     // important location:
     // mount dir    : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
     // snapshot dir : /tmp/xdn/state/rsync/<nodeId>/snp/<serviceName>/e<epoch>/
@@ -163,12 +162,11 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(e);
     }
 
-    // convert the compressed stateDiff to String
-    return Base64.getEncoder().encodeToString(compressedStateDiff);
+    return compressedStateDiff;
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, String encodedState) {
+  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
     // important location:
     // target dir   : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
     // diff file    : /tmp/xdn/state/rsync/<nodeId>/diff/<serviceName>/e<epoch>.diff
@@ -180,8 +178,8 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     int retCode = Shell.runCommand("rm -rf " + targetDiffFile);
     assert retCode == 0;
 
-    // convert stateDiff from String back to byte[], then decompress
-    byte[] compressedStateDiff = Base64.getDecoder().decode(encodedState);
+    // decompress
+    byte[] compressedStateDiff = encodedState;
     byte[] stateDiff;
     try {
       stateDiff = Utils.decompressBytes(compressedStateDiff);

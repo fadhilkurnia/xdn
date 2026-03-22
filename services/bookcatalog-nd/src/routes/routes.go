@@ -14,6 +14,7 @@ var RegisterBookStoreRoutes = func(router *mux.Router) {
 	router.HandleFunc("/api/books/{bookId}", controllers.GetBookById).Methods("GET")
 	router.HandleFunc("/api/books/{bookId}", controllers.UpdateBook).Methods("PUT")
 	router.HandleFunc("/api/books/{bookId}", controllers.DeleteBook).Methods("DELETE")
+	router.HandleFunc("/admin/checkpoint", controllers.WalCheckpoint).Methods("POST")
 }
 
 var RegisterViewRoutes = func(router *mux.Router) {

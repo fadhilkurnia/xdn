@@ -3,10 +3,13 @@ use fuselog_core::socket::start_listener;
 use fuselog_core::FuseLogFS;
 use std::path::PathBuf;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::fs::File;
 use daemonize::Daemonize;
+
+static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
 
 const SOCKET_PATH: &str = "/tmp/fuselog.sock";
 
@@ -14,13 +17,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     
     let foreground = args.iter().any(|arg| arg == "-f" || arg == "--foreground");
-    
+    let multi_threaded = args.iter().any(|arg| arg == "--multi-threaded");
+
     let filtered_args: Vec<String> = args.into_iter()
-        .filter(|arg| arg != "-f" && arg != "--foreground")
+        .filter(|arg| arg != "-f" && arg != "--foreground" && arg != "--multi-threaded")
         .collect();
     
     if filtered_args.len() != 2 {
-        eprintln!("Usage: {} [-f|--foreground] <directory>", filtered_args[0]);
+        eprintln!("Usage: {} [-f|--foreground] [--multi-threaded] <directory>", filtered_args[0]);
         std::process::exit(1);
     }
 
@@ -39,8 +43,8 @@ fn main() {
 
     if foreground {
         env_logger::init();
-        log::info!("Starting Fuselog in foreground mode on directory: '{}'", root_dir.display());
-        let exit_code = run_fuse_logic(root_dir);
+        log::info!("Starting Fuselog in foreground mode on directory: '{}' (multi-threaded: {})", root_dir.display(), multi_threaded);
+        let exit_code = run_fuse_logic(root_dir, multi_threaded);
         std::process::exit(exit_code);
     } else {
         // Check if daemon logs are enabled (default: false)
@@ -97,8 +101,8 @@ fn main() {
         match daemonize.start() {
             Ok(_) => {
                 env_logger::init();
-                log::info!("Successfully daemonized fuselog for directory: '{}'", root_dir.display());
-                let exit_code = run_fuse_logic(root_dir);
+                log::info!("Successfully daemonized fuselog for directory: '{}' (multi-threaded: {})", root_dir.display(), multi_threaded);
+                let exit_code = run_fuse_logic(root_dir, multi_threaded);
                 std::process::exit(exit_code);
             }
             Err(e) => {
@@ -109,8 +113,8 @@ fn main() {
     }
 }
 
-fn run_fuse_logic(root_dir: PathBuf) -> i32 {
-    log::info!("Starting Fuselog on directory: '{}'", root_dir.display());
+fn run_fuse_logic(root_dir: PathBuf, multi_threaded: bool) -> i32 {
+    log::info!("Starting Fuselog on directory: '{}' (multi-threaded: {})", root_dir.display(), multi_threaded);
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
 
     let socket_file = env::var("FUSELOG_SOCKET_FILE").unwrap_or_else(|_| SOCKET_PATH.to_string());
@@ -139,14 +143,44 @@ fn run_fuse_logic(root_dir: PathBuf) -> i32 {
 
     let fs = FuseLogFS::new(root_dir.clone());
 
-    let exit_code = match fuser::mount2(fs, &root_dir, &options) {
-        Ok(_) => {
-            log::info!("FUSE filesystem has been unmounted.");
-            0
+    let exit_code = if multi_threaded {
+        // Multi-threaded mode: spawn_mount2 returns a BackgroundSession that runs
+        // FUSE in background threads, allowing concurrent callbacks.
+        match fuser::spawn_mount2(fs, &root_dir, &options) {
+            Ok(session) => {
+                log::info!("FUSE filesystem mounted in multi-threaded mode. Waiting for unmount...");
+                // Install signal handler for graceful shutdown
+                unsafe {
+                    extern "C" fn sig_handler(_: libc::c_int) {
+                        SHUTDOWN_FLAG.store(true, Ordering::SeqCst);
+                    }
+                    libc::signal(libc::SIGINT, sig_handler as *const () as libc::sighandler_t);
+                    libc::signal(libc::SIGTERM, sig_handler as *const () as libc::sighandler_t);
+                }
+                // Wait until signal received
+                while !SHUTDOWN_FLAG.load(Ordering::SeqCst) {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                }
+                log::info!("Received shutdown signal, dropping FUSE session...");
+                drop(session);
+                0
+            }
+            Err(e) => {
+                log::error!("Failed to mount FUSE filesystem (multi-threaded): {}", e);
+                1
+            }
         }
-        Err(e) => {
-            log::error!("Failed to mount FUSE filesystem: {}", e);
-            1
+    } else {
+        // Single-threaded mode (default): mount2 blocks on the current thread.
+        match fuser::mount2(fs, &root_dir, &options) {
+            Ok(_) => {
+                log::info!("FUSE filesystem has been unmounted.");
+                0
+            }
+            Err(e) => {
+                log::error!("Failed to mount FUSE filesystem: {}", e);
+                1
+            }
         }
     };
 
@@ -158,3 +192,4 @@ fn run_fuse_logic(root_dir: PathBuf) -> i32 {
 
     exit_code
 }
+

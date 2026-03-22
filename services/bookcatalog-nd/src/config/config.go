@@ -1,6 +1,7 @@
 package config
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -91,7 +92,8 @@ func Connect() {
 		os.MkdirAll(dataDir, os.ModePerm)
 		dsn := "file:data/data.db"
 		isEnableWAL := os.Getenv("ENABLE_WAL")
-		if isEnableWAL != "" && strings.ToLower(isEnableWAL) == "true" {
+		useWAL := isEnableWAL != "" && strings.ToLower(isEnableWAL) == "true"
+		if useWAL {
 			dsn = "file:data/data.db?_journal_mode=WAL&_synchronous=FULL"
 		}
 		d, err := gorm.Open(sqlite.Open(dsn), gormConfig)
@@ -100,6 +102,10 @@ func Connect() {
 			panic(err)
 		}
 		db = d
+		disablePeriodicCheckpoint := os.Getenv("DISABLE_WAL_CHECKPOINT")
+		if useWAL && (disablePeriodicCheckpoint == "" || strings.ToLower(disablePeriodicCheckpoint) != "true") {
+			go periodicWalCheckpoint()
+		}
 	case "rqlite":
 		dsn := fmt.Sprintf("http://%s:4001", dbHost)
 		d, err := gorm.Open(rqlite.Open(dsn), gormConfig)
@@ -115,4 +121,26 @@ func Connect() {
 
 func GetDB() *gorm.DB {
 	return db
+}
+
+func GetSqlDB() (*sql.DB, error) {
+	return db.DB()
+}
+
+func periodicWalCheckpoint() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		sqlDB, err := db.DB()
+		if err != nil {
+			log.Printf("[wal-checkpoint] failed to get sql.DB: %v", err)
+			continue
+		}
+		_, err = sqlDB.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+		if err != nil {
+			log.Printf("[wal-checkpoint] checkpoint failed: %v", err)
+		} else {
+			log.Println("[wal-checkpoint] periodic passive checkpoint completed")
+		}
+	}
 }

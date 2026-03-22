@@ -7,6 +7,8 @@ public class DirectedAcyclicGraph {
 
     private final Map<VectorTimestamp, GraphVertex> idToVertexMapper;
 
+    private final Set<GraphVertex> leafVertices;
+
     public DirectedAcyclicGraph() {
         this(new ArrayList<>());
     }
@@ -18,42 +20,20 @@ public class DirectedAcyclicGraph {
     private DirectedAcyclicGraph(List<GraphVertex> startingVertices) {
         this.startingVertices = new ArrayList<>();
         this.idToVertexMapper = new HashMap<>();
+        this.leafVertices = new LinkedHashSet<>();
         this.startingVertices.addAll(startingVertices);
         for (GraphVertex n : startingVertices) {
             this.idToVertexMapper.put(n.getTimestamp(), n);
+            if (n.getChildren().isEmpty()) {
+                this.leafVertices.add(n);
+            }
         }
     }
 
     public List<GraphVertex> getLeafVertices() {
-        List<GraphVertex> result = new ArrayList<>();
-
-        // Prepare the DFS traversal stack
-        Stack<GraphVertex> traversalStack = new Stack<>();
-        Set<String> visitedVertices = new HashSet<>();
-        for (GraphVertex n : this.startingVertices) {
-            traversalStack.push(n);
-        }
-
-        // Traverse through all the vertices in the graph
-        while (!traversalStack.isEmpty()) {
-            GraphVertex current = traversalStack.pop();
-            visitedVertices.add(current.getTimestamp().toString());
-
-            List<GraphVertex> children = current.getChildren();
-            if (children.isEmpty()) {
-                result.add(current);
-            }
-
-            for (GraphVertex child : children) {
-                if (!visitedVertices.contains(child.getTimestamp().toString())) {
-                    traversalStack.push(child);
-                }
-            }
-        }
-
-        assert !result.isEmpty() : "Expecting leaf vertices but found none";
-        assert result.size() < 100 : "Too big of a result: " + result.size();
-        return result;
+        assert !this.leafVertices.isEmpty() : "Expecting leaf vertices but found none";
+        assert this.leafVertices.size() < 100 : "Too big of a result: " + this.leafVertices.size();
+        return new ArrayList<>(this.leafVertices);
     }
 
     public void addChildOf(List<GraphVertex> parents, GraphVertex child) {
@@ -63,6 +43,9 @@ public class DirectedAcyclicGraph {
         if (parents.isEmpty()) {
             this.startingVertices.add(child);
             this.idToVertexMapper.put(child.getTimestamp(), child);
+            if (child.getChildren().isEmpty()) {
+                this.leafVertices.add(child);
+            }
             return;
         }
 
@@ -85,6 +68,10 @@ public class DirectedAcyclicGraph {
         this.idToVertexMapper.put(child.getTimestamp(), child);
         for (GraphVertex parent : parents) {
             parent.addChildVertex(child);
+            this.leafVertices.remove(parent);
+        }
+        if (child.getChildren().isEmpty()) {
+            this.leafVertices.add(child);
         }
 
         // If the child has children, ensure we don't have cycle.

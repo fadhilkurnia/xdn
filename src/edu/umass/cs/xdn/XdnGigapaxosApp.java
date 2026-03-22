@@ -113,6 +113,12 @@ public class XdnGigapaxosApp
   // This is used mainly for measuring the coordination, not execution, overhead.
   private static final String DBG_HDR_NO_OP_EXECUTION = "___DNO";
 
+  // Maximum number of requests forwarded to the container in parallel within a single
+  // batch execution. Limits tail-latency amplification when the backend serializes writes
+  // (e.g., SQLite WAL). Requests beyond this limit are processed in sequential chunks.
+  private static final int MAX_FORWARD_PARALLELISM =
+      Integer.getInteger("XDN_MAX_FORWARD_PARALLELISM", 8);
+
   private final Logger logger = Logger.getLogger(XdnGigapaxosApp.class.getName());
 
   public XdnGigapaxosApp(String[] args) {
@@ -240,12 +246,10 @@ public class XdnGigapaxosApp
     if (isXdnHttpReq) {
       long preFwdTimeNs = System.nanoTime();
       forwardHttpRequestToContainerizedService(xdnHttpRequest);
-      assert xdnHttpRequest.getHttpResponse() != null
-          : "Obtained null response after request execution";
-      assert ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()) == 1
-          : String.format(
-              "Unexpected refCnt of response after execution (%d!=1)",
-              ReferenceCountUtil.refCnt(xdnHttpRequest.getHttpResponse()));
+      if (xdnHttpRequest.getHttpResponse() == null) {
+        logger.warning(serviceName + " - null response after forward, service not ready yet");
+        return true;
+      }
       releaseHttpResponseOnNonEntryReplica(xdnHttpRequest);
       long endFwdTimeNs = System.nanoTime();
 
@@ -254,7 +258,7 @@ public class XdnGigapaxosApp
 
       long endTime = System.nanoTime();
       logger.log(
-          Level.FINE,
+          Level.INFO,
           "{0}:{1} - execution within {2}ms, {3} {4}:{5} " + "(fwd={6}ms rmc={7}ms) [id: {8}]",
           new Object[] {
             this.myNodeId.toLowerCase(),
@@ -277,7 +281,7 @@ public class XdnGigapaxosApp
       requestCache.remove(xdnBatch.getRequestID());
       long elapsedTime = System.nanoTime() - startTime;
       logger.log(
-          Level.FINE,
+          Level.INFO,
           "{0}:{1} - batch execution within {2}ms, size={3} service={4}",
           new Object[] {
             this.myNodeId,
@@ -707,11 +711,15 @@ public class XdnGigapaxosApp
       String stateDirMountSource =
           stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
       String stateDirMountTarget = property.getStatefulComponentDirectory();
-      stateDiffRecorder.preInitialization(serviceName, newPlacementEpoch);
+      if (!property.isDeterministic()) {
+        stateDiffRecorder.preInitialization(serviceName, newPlacementEpoch);
+      }
 
       // Validates the previous epoch final state, then put it into the to-be-mounted dir.
       // First, prepare the mounted dir.
-      stateDiffRecorder.removeServiceRecorder(serviceName, newPlacementEpoch);
+      if (!property.isDeterministic()) {
+        stateDiffRecorder.removeServiceRecorder(serviceName, newPlacementEpoch);
+      }
       String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
       String removeDirCommand = String.format("rm -rf %s", mountDir);
       int rmDirRetCode = Shell.runCommand(removeDirCommand);
@@ -770,7 +778,13 @@ public class XdnGigapaxosApp
         throw new RuntimeException("Invalid initial state as JSON: " + e);
       }
 
-      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+      if (!property.isDeterministic()) {
+        stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+      } else {
+        String dir = stateDiffRecorder.getTargetDirectory(serviceName, initialPlacementEpoch);
+        Shell.runCommand("rm -rf " + dir);
+        Shell.runCommand("mkdir -p " + dir);
+      }
       // Prepare container names for each service component.
       // Format  : c<component-id>.e<reconfiguration-epoch>.<service-name>.<node-id>.xdn.io
       // Example : c0.e2.bookcatalog.ar2.xdn.io
@@ -872,8 +886,13 @@ public class XdnGigapaxosApp
 
     // TODO: Fix ordering. Must be:
     // preInitialization -> startContainer -> postInitialization
-    stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
-    stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+    if (!service.property.isDeterministic()) {
+      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+      stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+    } else {
+      Shell.runCommand("rm -rf " + stateDirMountSource);
+      Shell.runCommand("mkdir -p " + stateDirMountSource);
+    }
 
     if (service.property.getComponents().size() > 1) {
       // Multi-component services use docker compose for consistent multi-container lifecycle.
@@ -955,7 +974,7 @@ public class XdnGigapaxosApp
             this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), service.serviceName
           });
     } else {
-      stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+      // For deterministic services, no FUSE to drain — just mark init complete.
       service.initializationSucceed = true;
     }
 
@@ -1009,12 +1028,16 @@ public class XdnGigapaxosApp
     // prepare statediff directory, if required
     String stateDirMountSource = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
     String stateDirMountTarget = property.getStatefulComponentDirectory();
-    stateDiffRecorder.preInitialization(serviceName, placementEpoch);
+    if (!property.isDeterministic()) {
+      stateDiffRecorder.preInitialization(serviceName, placementEpoch);
+    }
 
     // Validates the previous epoch final state, then put it into the to-be-mounted dir.
     // First, prepare the mounted dir.
     // TODO: test with fuse
-    stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+    if (!property.isDeterministic()) {
+      stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+    }
     String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
     String removeDirCommand = String.format("rm -rf %s", mountDir);
     int rmDirRetCode = Shell.runCommand(removeDirCommand);
@@ -1142,7 +1165,9 @@ public class XdnGigapaxosApp
       System.err.println(
           "WARNING: non-deterministic service can generate different " + "initial state");
     }
-    stateDiffRecorder.postInitialization(serviceName, placementEpoch);
+    if (!property.isDeterministic()) {
+      stateDiffRecorder.postInitialization(serviceName, placementEpoch);
+    }
 
     this.services.put(serviceName, service);
     this.activeServicePorts.put(serviceName, allocatedPort);
@@ -1211,7 +1236,9 @@ public class XdnGigapaxosApp
     }
 
     // clean the mounted dir for this epoch
-    stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+    if (!serviceInstance.property.isDeterministic()) {
+      stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+    }
     String removeDirCommand = String.format("rm -rf %s", toBeRemovedMountDir);
     int code = Shell.runCommand(removeDirCommand);
     assert code == 0;
@@ -1690,16 +1717,14 @@ public class XdnGigapaxosApp
    *             Begin implementation methods for BackupableApplication interface               *
    *********************************************************************************************/
 
-  private static final String XDN_STATE_DIFF_PREFIX = "xdn:sd:";
-
   @Override
-  public String captureStatediff(String serviceName) {
+  public byte[] captureStatediff(String serviceName) {
     long startCaptureTimeNs = System.nanoTime();
     int currentPlacementEpoch = this.getEpoch(serviceName);
 
     // Guard: skip captureStateDiff if service initialization is not yet complete.
     // For non-deterministic services (e.g., MySQL+WordPress), ~213MB of init data
-    // accumulates in the fuselog buffer until initContainerSync sends 'c'.  If
+    // accumulates in the fuselog buffer until initContainerSync drains it.  If
     // captureStateDiff is called before that, the 5-second payload timeout fires,
     // leaving fuselog stuck in write_all and the socket protocol desynchronized.
     // Also guard when svc == null (preInitialization not called yet) to prevent
@@ -1717,10 +1742,10 @@ public class XdnGigapaxosApp
             currentPlacementEpoch,
             svc
           });
-      return XDN_STATE_DIFF_PREFIX + "null";
+      return null;
     }
 
-    String stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
+    byte[] stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
     if (stateDiff == null) {
       logger.log(
           Level.WARNING,
@@ -1728,9 +1753,8 @@ public class XdnGigapaxosApp
           new Object[] {
             this.myNodeId, this.getClass().getSimpleName(), serviceName, currentPlacementEpoch
           });
-      return XDN_STATE_DIFF_PREFIX + "null";
+      return null;
     }
-    String finalStateDiff = XDN_STATE_DIFF_PREFIX + stateDiff;
     long endCaptureTimeNs = System.nanoTime();
 
     logger.log(
@@ -1740,36 +1764,30 @@ public class XdnGigapaxosApp
           this.myNodeId,
           this.getClass().getSimpleName(),
           (endCaptureTimeNs - startCaptureTimeNs) / 1_000_000.0,
-          finalStateDiff.length(),
+          stateDiff.length,
           serviceName
         });
 
-    return finalStateDiff;
+    return stateDiff;
   }
 
   @Override
-  public boolean applyStatediff(String serviceName, String statediff) {
+  public boolean applyStatediff(String serviceName, byte[] statediff) {
     ServiceInstance service = services.get(serviceName);
     if (service == null) {
       throw new RuntimeException("unknown service " + serviceName);
     }
 
-    // validate the stateDiff
-    if (statediff == null || !statediff.startsWith(XDN_STATE_DIFF_PREFIX)) {
-      System.err.println("invalid XDN statediff format, ignoring it");
-      return false;
+    // Skip if the stateDiff is null or empty (primary's captureStatediff was skipped).
+    if (statediff == null || statediff.length == 0) {
+      return true;
     }
 
     // apply the stateDiff
-    String stateDiffContent = statediff.substring(XDN_STATE_DIFF_PREFIX.length());
-    if (stateDiffContent.equals("null")) {
-      // No-op: primary's captureStatediff was skipped because init was not yet complete.
-      return true;
-    }
     Integer currentPlacementEpoch = this.getEpoch(serviceName);
     assert currentPlacementEpoch != null;
     boolean isApplySuccess =
-        stateDiffRecorder.applyStateDiff(serviceName, currentPlacementEpoch, stateDiffContent);
+        stateDiffRecorder.applyStateDiff(serviceName, currentPlacementEpoch, statediff);
     if (!isApplySuccess) {
       throw new RuntimeException("failed to apply stateDiff");
     }
@@ -2245,7 +2263,13 @@ public class XdnGigapaxosApp
     String serviceName = xdnRequest.getServiceName();
     assert serviceName != null;
     Integer targetPort = this.activeServicePorts.get(serviceName);
-    assert targetPort != null;
+    if (targetPort == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} - no active port for service {2}, dropping request",
+          new Object[] {this.myNodeId, this.getClass().getSimpleName(), serviceName});
+      return;
+    }
     long endValidationTime = System.nanoTime();
 
     String requestRcvTimestampStr =
@@ -2278,7 +2302,14 @@ public class XdnGigapaxosApp
       endConversionTime = System.nanoTime();
       endResponseStoreTime = System.nanoTime();
     } catch (Exception e) {
-      throw new RuntimeException(e);
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} - forward to container failed for {2}: {3}",
+          new Object[] {
+            this.myNodeId, this.getClass().getSimpleName(), serviceName, e.getMessage()
+          });
+      // Leave xdnRequest.httpResponse as null — callers handle null responses.
+      return;
     }
 
     logger.log(
@@ -2299,32 +2330,72 @@ public class XdnGigapaxosApp
 
   private void forwardHttpRequestBatchToContainerizedService(XdnHttpRequestBatch batch) {
     List<XdnHttpRequest> requests = batch.getRequestList();
-    CompletableFuture<?>[] futures = new CompletableFuture<?>[requests.size()];
-    for (int i = 0; i < requests.size(); i++) {
-      XdnHttpRequest httpRequest = requests.get(i);
-      futures[i] =
-          CompletableFuture.runAsync(
-              () -> {
-                forwardHttpRequestToContainerizedService(httpRequest);
-                assert httpRequest.getHttpResponse() != null
-                    : "Obtained null response after request execution";
-                assert ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()) == 1
-                    : String.format(
-                        "Unexpected refCnt of response after execution (%d!=1)",
-                        ReferenceCountUtil.refCnt(httpRequest.getHttpResponse()));
-                // NOTE: we are not releasing the reference-counter response here because
-                //       it will be released in the HttpActiveReplica.
-              });
+
+    // Fast path: single request — no pipelining overhead.
+    if (requests.size() == 1) {
+      XdnHttpRequest httpRequest = requests.get(0);
+      forwardHttpRequestToContainerizedService(httpRequest);
+      if (httpRequest.getHttpResponse() == null) {
+        logger.warning(
+            "null response for batch req, service not ready: " + httpRequest.getServiceName());
+      }
+      return;
     }
-    CompletableFuture.allOf(futures).join();
+
+    // All requests in a batch target the same service, so they share the same port.
+    String serviceName = requests.get(0).getServiceName();
+    Integer targetPort = this.activeServicePorts.get(serviceName);
+    if (targetPort == null) {
+      logger.warning(myNodeId + " - no active port for service " + serviceName);
+      return;
+    }
+
+    // Build the list of FullHttpRequests for pipelining.
+    List<FullHttpRequest> forwardRequests = new java.util.ArrayList<>(requests.size());
+    for (XdnHttpRequest xdnReq : requests) {
+      forwardRequests.add(copyHttpRequest(xdnReq));
+    }
+
+    try {
+      // Use HTTP/1.1 pipelining: write all requests to one connection, then read all responses.
+      List<FullHttpResponse> responses =
+          httpForwarderClient.executePipelined("127.0.0.1", targetPort, forwardRequests);
+
+      // Match responses to requests in order.
+      for (int i = 0; i < requests.size(); i++) {
+        XdnHttpRequest xdnReq = requests.get(i);
+        if (i < responses.size()) {
+          xdnReq.setHttpResponse(responses.get(i));
+        } else {
+          logger.warning("null response for pipelined batch req: " + xdnReq.getServiceName());
+        }
+      }
+    } catch (Exception e) {
+      logger.log(
+          Level.WARNING,
+          "{0} - pipelined batch forward failed for {1}: {2}",
+          new Object[] {myNodeId, serviceName, e.getMessage()});
+      // Fall back to sequential forwarding for remaining requests without responses.
+      for (XdnHttpRequest xdnReq : requests) {
+        if (xdnReq.getHttpResponse() == null) {
+          forwardHttpRequestToContainerizedService(xdnReq);
+        }
+      }
+    }
   }
 
   private FullHttpRequest copyHttpRequest(XdnHttpRequest httpRequest) {
     ByteBuf content = httpRequest.getHttpRequestContent().content();
-    ByteBuf copiedContent =
-        content != null && content.isReadable()
-            ? Unpooled.copiedBuffer(content)
-            : Unpooled.EMPTY_BUFFER;
+    ByteBuf copiedContent;
+    try {
+      copiedContent =
+          content != null && content.refCnt() > 0 && content.isReadable()
+              ? content.copy()
+              : Unpooled.EMPTY_BUFFER;
+    } catch (io.netty.util.IllegalReferenceCountException e) {
+      // ByteBuf was released between our check and the copy — use empty content.
+      copiedContent = Unpooled.EMPTY_BUFFER;
+    }
 
     DefaultFullHttpRequest copy =
         new DefaultFullHttpRequest(

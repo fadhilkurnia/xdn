@@ -130,29 +130,30 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
 
             boolean isExecSuccess = this.app.execute(clientRequest);
 
-            // for write request, send WRITE_AFTER packets to all replicas but myself
-            // Response are removed in receiver side before execution.
+            // for write request, respond to client first, then asynchronously
+            // broadcast WRITE_AFTER to all peer replicas on a separate thread
+            // so the client response is not blocked by WAN broadcast latency.
             if (isWriteOnly && isMonotonic) {
-                retainRequestContent(clientRequest);
-                try {
-                    if (isExecSuccess) {
-                        callback.executed(clientRequest, true);
+                if (isExecSuccess) {
+                    callback.executed(clientRequest, true);
 
-                        LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
-                                myNodeId.toString(), clientRequest);
-                        Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
-                        myPeers.remove(myNodeId);
-                        GenericMessagingTask<NodeIDType, LazyPacket> m =
-                                new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                    retainRequestContent(clientRequest);
+                    Thread.ofVirtual().start(() -> {
                         try {
-                            logger.log(Level.INFO, "Sending WRITE_AFTER packet ...");
+                            LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
+                                    myNodeId.toString(), clientRequest);
+                            Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                            myPeers.remove(myNodeId);
+                            GenericMessagingTask<NodeIDType, LazyPacket> m =
+                                    new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                            logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
                             messenger.send(m);
-                        } catch (JSONException e) {
-                            throw new RuntimeException(e);
+                        } catch (Exception e) {
+                            logger.log(Level.WARNING, "Failed to send WRITE_AFTER", e);
+                        } finally {
+                            releaseRequestContent(clientRequest);
                         }
-                    }
-                } finally {
-                    releaseRequestContent(clientRequest);
+                    });
                 }
             } else {
                 if (isExecSuccess) {

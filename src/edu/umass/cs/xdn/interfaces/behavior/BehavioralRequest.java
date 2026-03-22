@@ -38,4 +38,8 @@ public interface BehavioralRequest {
   default boolean isNilExternal() {
     return this.getBehaviors().contains(RequestBehaviorType.NIL_EXTERNAL);
   }
+
+  default boolean isCommutativeRequest() {
+    return this.getBehaviors().contains(RequestBehaviorType.COMMUTATIVE);
+  }
 }

@@ -1,6 +1,7 @@
 package edu.umass.cs.primarybackup.packets;
 
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
+import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -17,7 +18,8 @@ public class RequestPacket extends PrimaryBackupPacket implements ClientRequest 
 
     public static final String SERIALIZED_PREFIX = "pb:req:";
     private final String serviceName;
-    private final byte[] encodedServiceRequest;
+    private byte[] encodedServiceRequest;
+    private final Request originalRequest;
     private final long packetID;
 
     private ClientRequest response;
@@ -25,13 +27,22 @@ public class RequestPacket extends PrimaryBackupPacket implements ClientRequest 
     public RequestPacket(String serviceName, byte[] encodedServiceRequest) {
         this.serviceName = serviceName;
         this.encodedServiceRequest = encodedServiceRequest;
+        this.originalRequest = null;
         this.packetID = System.currentTimeMillis();
     }
 
     private RequestPacket(String serviceName, byte[] encodedServiceRequest, long packetID) {
         this.serviceName = serviceName;
         this.encodedServiceRequest = encodedServiceRequest;
+        this.originalRequest = null;
         this.packetID = packetID;
+    }
+
+    public RequestPacket(String serviceName, Request originalRequest) {
+        this.serviceName = serviceName;
+        this.encodedServiceRequest = null;
+        this.originalRequest = originalRequest;
+        this.packetID = System.currentTimeMillis();
     }
 
     @Override
@@ -50,7 +61,14 @@ public class RequestPacket extends PrimaryBackupPacket implements ClientRequest 
     }
 
     public byte[] getEncodedServiceRequest() {
+        if (encodedServiceRequest == null && originalRequest != null) {
+            encodedServiceRequest = originalRequest.toString().getBytes(StandardCharsets.ISO_8859_1);
+        }
         return encodedServiceRequest;
+    }
+
+    public Request getOriginalRequest() {
+        return originalRequest;
     }
 
     @Override
@@ -69,13 +87,13 @@ public class RequestPacket extends PrimaryBackupPacket implements ClientRequest 
         RequestPacket that = (RequestPacket) o;
         return packetID == that.packetID &&
                 Objects.equals(serviceName, that.serviceName) &&
-                Arrays.equals(encodedServiceRequest, that.encodedServiceRequest);
+                Arrays.equals(getEncodedServiceRequest(), that.getEncodedServiceRequest());
     }
 
     @Override
     public int hashCode() {
         int result = Objects.hash(serviceName, packetID);
-        result = 31 * result + Arrays.hashCode(encodedServiceRequest);
+        result = 31 * result + Arrays.hashCode(getEncodedServiceRequest());
         return result;
     }
 
@@ -85,7 +103,7 @@ public class RequestPacket extends PrimaryBackupPacket implements ClientRequest 
             JSONObject json = new JSONObject();
             json.put("serviceName", this.serviceName);
             json.put("request", new String(
-                    this.encodedServiceRequest,
+                    this.getEncodedServiceRequest(),
                     StandardCharsets.ISO_8859_1)
             );
             json.put("id", this.packetID);

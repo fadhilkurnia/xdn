@@ -71,14 +71,16 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         Request clientRequest = rcr.getRequest();
         String serviceName = clientRequest.getServiceName();
 
-        String requestLogText = "";
-        if (clientRequest instanceof XdnHttpRequest xdnHttpRequest) {
-            requestLogText = xdnHttpRequest.getLogText();
-        } else {
-            requestLogText = clientRequest.getRequestType().toString();
+        if (logger.isLoggable(Level.FINE)) {
+            String requestLogText;
+            if (clientRequest instanceof XdnHttpRequest xdnHttpRequest) {
+                requestLogText = xdnHttpRequest.getLogText();
+            } else {
+                requestLogText = clientRequest.getRequestType().toString();
+            }
+            logger.log(Level.FINE, "{0}:AwReplicaCoordinator -- coordinateRequest {1}",
+                    new Object[]{this.myNodeID, requestLogText});
         }
-        logger.log(Level.INFO, String.format("%s:AwReplicaCoordinator -- coordinateRequest %s\n",
-                this.myNodeID, requestLogText));
 
         // We handle read-only request locally, with no coordination.
         if (clientRequest instanceof BehavioralRequest br && br.isReadOnlyRequest()) {
@@ -105,7 +107,18 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         // Most requests, especially write-only and read-modify-write requests need to
         // be coordinated. Note that the code below is asynchronous, we wait for the
         // coordination confirmation before returning to client.
-        this.paxosManager.propose(serviceName, rcr, callback);
+        boolean isLeaderAtPropose = this.paxosManager.isPaxosCoordinator(serviceName);
+        long proposeStartNs = System.nanoTime();
+        ExecutedCallback instrumentedCallback = (response, handled) -> {
+            long elapsedMs = (System.nanoTime() - proposeStartNs) / 1_000_000;
+            boolean isLeaderAtCallback = this.paxosManager.isPaxosCoordinator(serviceName);
+            System.err.println("AwRC propose-to-callback " + elapsedMs
+                    + "ms leaderAtPropose=" + isLeaderAtPropose
+                    + " leaderAtCallback=" + isLeaderAtCallback
+                    + " node=" + this.myNodeID);
+            callback.executed(response, handled);
+        };
+        this.paxosManager.propose(serviceName, rcr, instrumentedCallback);
 
         return true;
     }

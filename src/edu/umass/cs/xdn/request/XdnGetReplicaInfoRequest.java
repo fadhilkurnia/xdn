@@ -103,6 +103,10 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
     this.containerStatus = containerStatus;
   }
 
+  public void setRequestBehaviors(List<RequestMatcher> requestBehaviors) {
+    this.requestBehaviors = requestBehaviors;
+  }
+
   public String getErrorMessage() {
     return errorMessage;
   }

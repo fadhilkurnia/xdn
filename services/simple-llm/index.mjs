@@ -2,23 +2,79 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import Database from "better-sqlite3";
+import { MongoClient } from "mongodb";
 
 const app = express();
+const mongoClient = new MongoClient(process.env.MONGO_URI ?? "mongodb://mongodb:27017", {
+  serverSelectionTimeoutMS: 2000,
+});
+const LLM_API = process.env.LLM_API ?? "http://ollama:11434";
+const MODEL_NAME = process.env.MODEL_NAME ?? "llama3.2:1b";
+const MONGO_DB_NAME = process.env.MONGO_DB_NAME ?? "simple-llm";
+const PROMPTS_COLLECTION_NAME = "prompts";
+const MAX_MONGO_CONNECT_ATTEMPTS = 10;
+const MONGO_RETRY_DELAY_MS = 1000;
+const parsedPort = Number.parseInt(process.env.PORT ?? "3000", 10);
+const PORT = Number.isNaN(parsedPort) ? 3000 : parsedPort;
+let database;
+let promptsCollection;
 
 app.use(cors());
 app.use(express.json());
 
-const db = new Database("./data/data.db", {
-  readonly: false,
-});
+async function sleep(ms) {
+    await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+}
 
-const LLM_API = "http://ollama:11434";
-const PORT = 3000;
+async function ensurePromptsCollection() {
+    if (!database) {
+        throw new Error("MongoDB is not initialized.");
+    }
 
-app.listen(PORT, () => {
-    console.log(`Server is running. Listening to port ${PORT}`);
-});
+    const collectionExists = await database.listCollections(
+        { name: PROMPTS_COLLECTION_NAME },
+        { nameOnly: true }
+    ).hasNext();
+
+    if (!collectionExists) {
+        await database.createCollection(PROMPTS_COLLECTION_NAME);
+    }
+
+    promptsCollection = database.collection(PROMPTS_COLLECTION_NAME);
+    await promptsCollection.createIndex({ createdAt: 1, _id: 1 });
+}
+
+async function initializeDatabase() {
+    if (!database) {
+        let lastError;
+
+        for (let attempt = 1; attempt <= MAX_MONGO_CONNECT_ATTEMPTS; attempt += 1) {
+            try {
+                await mongoClient.connect();
+                database = mongoClient.db(MONGO_DB_NAME);
+                break;
+            } catch (err) {
+                lastError = err;
+                console.error(
+                    `Failed to connect to MongoDB (attempt ${attempt}/${MAX_MONGO_CONNECT_ATTEMPTS}).`,
+                    err
+                );
+
+                if (attempt < MAX_MONGO_CONNECT_ATTEMPTS) {
+                    await sleep(MONGO_RETRY_DELAY_MS);
+                }
+            }
+        }
+
+        if (!database) {
+            throw lastError;
+        }
+    }
+
+    await ensurePromptsCollection();
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,19 +88,11 @@ app.post('/api/db/create', async (req, res) => {
     console.log(`POST /api/db/create`);
 
     try {
-        const stmt = db.prepare(
-            `CREATE TABLE IF NOT EXISTS prompts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                prompt TEXT NOT NULL,
-                response TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`
-        );
-        stmt.run();
-        return res.status(201).json({ message: "Database generated successfully." });
+        await initializeDatabase();
+        return res.status(200).json({ message: "Database is ready." });
     } catch (err) {
         console.error(err);
-        return res.status(401).json({ message: "Internal server error." });
+        return res.status(500).json({ message: "Internal server error." });
     }
 });
 
@@ -52,12 +100,11 @@ app.post('/api/db/clear', async (req, res) => {
     console.log(`POST /api/db/clear`);
 
     try {
-        const stmt = db.prepare(`DELETE FROM prompts`);
-        stmt.run();
-        return res.status(201).json({ message: "Database cleared." });
+        await promptsCollection.deleteMany({});
+        return res.status(200).json({ message: "Database cleared." });
     } catch (err) {
         console.error(err);
-        return res.status(401).json({ message: "Internal server error." });
+        return res.status(500).json({ message: "Internal server error." });
     } 
 });
 
@@ -65,61 +112,77 @@ app.post('/api/prompt', async (req, res) => {
 	console.log(`POST /api/prompt`);
 
 	try {
-		const prompt = req.body.prompt;
-		if (!prompt) 
+		const prompt = typeof req.body.prompt === "string" ? req.body.prompt : "";
+		if (!prompt.trim())
 			return res.status(400).json({ message: "Prompt must not be empty" });
 
 		const body = JSON.stringify({
-            model: "llama3.2:1b",
-            prompt: `${prompt}. Return response is a maximum of one paragraph. Don't make it longer than that.`,
+            model: MODEL_NAME,
+            prompt: `${prompt.trim()}. Return response is a maximum of one paragraph. Don't make it longer than that.`,
             stream: false,
 		});
 		const result = await fetch(`${LLM_API}/api/generate`, { 
 			method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
 			body: body,
 		});
 
 		if (!result.ok)
-			return res.status(401).json({ message: "Ollama server error" });
+			return res.status(502).json({ message: "Ollama server error" });
 
 		const data = await result.json();
-        /*
-        const data = {
-            response: "random response",
-        }
-        */
+		if (!data || typeof data.response !== "string" || !data.response.trim())
+            return res.status(502).json({ message: "Ollama response was invalid" });
 
-		if (data && data.response) {
-            const timestamp = new Date(data.created_at).toISOString().slice(0, 19).replace('T', ' ');
-            // const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const createdAt = new Date(data.created_at ?? Date.now());
+        const safeCreatedAt = Number.isNaN(createdAt.getTime())
+            ? new Date()
+            : createdAt;
+        await promptsCollection.insertOne({
+            prompt: prompt.trim(),
+            response: data.response,
+            createdAt: safeCreatedAt,
+        });
 
-            const stmt = db.prepare(
-                `INSERT INTO prompts (prompt, response, timestamp) VALUES (?, ?, ?)`
-            );
-            stmt.run(prompt, data.response, timestamp);
-
-			return res.status(200).json({
-                response: data.response
-			});
-		}
+		return res.status(200).json({
+            response: data.response
+		});
 	} catch (err) {
 		console.error(err);
-        return res.status(401).json({ message: "Internal server error" });
+        return res.status(500).json({ message: "Internal server error" });
 	} 
 });
 
-app.get('/api/prompt', (req, res) => {
+app.get('/api/prompt', async (req, res) => {
 	console.log(`GET /api/prompt`);
 
     try {
-        const stmt = db.prepare(
-            `SELECT prompt, response FROM prompts 
-            ORDER BY timestamp ASC`
-        );
-        const rows = stmt.all();
+        const rows = await promptsCollection.find(
+            {},
+            {
+                projection: {
+                    _id: 0,
+                    prompt: 1,
+                    response: 1,
+                },
+            }
+        ).sort({ createdAt: 1, _id: 1 }).toArray();
         return res.status(200).json({ rows: rows });
     } catch (err) {
         console.error(err);
-        return res.status(401).json({ message: "Internal server error" });
+        return res.status(500).json({ message: "Internal server error" });
     }
+});
+
+try {
+    await initializeDatabase();
+} catch (err) {
+    console.error("Failed to initialize database.", err);
+    process.exit(1);
+}
+
+app.listen(PORT, () => {
+    console.log(`Server is running. Listening to port ${PORT}`);
 });

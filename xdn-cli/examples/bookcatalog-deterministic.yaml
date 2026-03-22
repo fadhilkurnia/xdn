@@ -1,0 +1,7 @@
+---
+name: "svc"
+image: "fadhilkurnia/xdn-bookcatalog"
+port: 80
+state: /app/data/
+consistency: linearizability
+deterministic: true

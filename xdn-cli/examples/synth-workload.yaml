@@ -1,0 +1,10 @@
+---
+name: "synth"
+image: "fadhilkurnia/xdn-synth-workload"
+port: 80
+state: /data/
+consistency: linearizability
+deterministic: false
+environments:
+  - ENABLE_WAL: "true"
+  - DB_TYPE: "sqlite"
