@@ -42,6 +42,7 @@ from run_load_pb_wordpress_common import (
     check_rest_api,
     clear_xdn_cluster,
     create_post,
+    disable_wp_cron,
     enable_rest_auth,
     install_wordpress,
     start_cluster,
@@ -143,8 +144,8 @@ def ensure_docker_images_on_rc():
         print(f"   {img}: done")
 
 
-def run_load_point(primary, rate):
-    """Run get_latency_at_rate.go at `rate` req/s for LOAD_DURATION_SEC seconds.
+def run_load_point(primary, rate, duration_sec=LOAD_DURATION_SEC):
+    """Run get_latency_at_rate.go at `rate` req/s for `duration_sec` seconds.
 
     Uses XML-RPC wp.editPost via -payloads-file for round-robin post editing.
     Returns a dict with throughput_rps, avg_ms, p50_ms, p90_ms, p95_ms, p99_ms.
@@ -160,7 +161,7 @@ def run_load_point(primary, rate):
         "-payloads-file", str(PAYLOADS_FILE),
         url,
         "placeholder",
-        str(LOAD_DURATION_SEC),
+        str(duration_sec),
         str(rate),
     ]
     env = os.environ.copy()
@@ -258,8 +259,8 @@ def tune_mysql(primary):
     time.sleep(2)
 
 
-def warmup_rate_point(primary, rate):
-    """Run a throwaway warmup load at `rate` for WARMUP_DURATION_SEC seconds."""
+def warmup_rate_point(primary, rate, warmup_duration_sec=WARMUP_DURATION_SEC):
+    """Run a throwaway warmup load at `rate` for `warmup_duration_sec` seconds."""
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     output_file = RESULTS_DIR / f"warmup_rate{rate}.txt"
     url = f"http://{primary}:{HTTP_PROXY_PORT}/xmlrpc.php"
@@ -271,7 +272,7 @@ def warmup_rate_point(primary, rate):
         "-payloads-file", str(PAYLOADS_FILE),
         url,
         "placeholder",
-        str(WARMUP_DURATION_SEC),
+        str(warmup_duration_sec),
         str(rate),
     ]
     env = os.environ.copy()
@@ -377,6 +378,9 @@ def setup_fresh_wordpress_cluster():
         print("ERROR: REST API auth setup failed.")
         sys.exit(1)
 
+    print("   [setup] Disabling WP-Cron and auto-updates ...")
+    disable_wp_cron(primary)
+
     print("   [setup] Checking REST API availability ...")
     if not check_rest_api(primary, HTTP_PROXY_PORT, SERVICE_NAME):
         print("ERROR: REST API not available.")
@@ -421,6 +425,10 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--rates", type=str, default=None,
                    help="Comma-separated rates to override default BOTTLENECK_RATES")
+    p.add_argument("--duration", type=int, default=LOAD_DURATION_SEC,
+                   help=f"Measurement duration per rate point in seconds (default: {LOAD_DURATION_SEC})")
+    p.add_argument("--warmup-duration", type=int, default=WARMUP_DURATION_SEC,
+                   help=f"Warmup duration per rate point in seconds (default: {WARMUP_DURATION_SEC})")
     p.add_argument("--skip-setup", action="store_true",
                    help="Skip cluster setup for ALL rates (assume already running)")
     return p.parse_args()
@@ -437,14 +445,17 @@ if __name__ == "__main__":
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     PAYLOADS_FILE = RESULTS_DIR / "xmlrpc_payloads.txt"
 
-    # Determine rate list
+    # Determine rate list and durations
     rates = [int(r) for r in args.rates.split(",")] if args.rates else BOTTLENECK_RATES
+    load_duration = args.duration
+    warmup_duration = args.warmup_duration
 
     print("=" * 60)
     print("WordPress PB Throughput-Ceiling Investigation")
     print(f"  Mode     : fresh cluster per rate (isolated)")
     print(f"  Workload : XML-RPC wp.editPost")
     print(f"  Rates    : {rates}")
+    print(f"  Duration : {load_duration}s per rate (warmup: {warmup_duration}s)")
     print(f"  Results  → {RESULTS_DIR}")
     print("=" * 60)
 
@@ -468,8 +479,8 @@ if __name__ == "__main__":
             print(f"   Primary: {primary}")
 
         # ── Warmup ────────────────────────────────────────────────────
-        print(f"\n   -> rate={rate} req/s (warmup {WARMUP_DURATION_SEC}s) ...")
-        warmup_result = warmup_rate_point(primary, rate)
+        print(f"\n   -> rate={rate} req/s (warmup {warmup_duration}s) ...")
+        warmup_result = warmup_rate_point(primary, rate, warmup_duration)
         if warmup_result["throughput_rps"] < 0.1 * rate:
             print(
                 f"   SKIP: warmup tput={warmup_result['throughput_rps']:.2f} rps "
@@ -482,8 +493,8 @@ if __name__ == "__main__":
         time.sleep(5)
 
         # ── Measurement ───────────────────────────────────────────────
-        print(f"   -> rate={rate} req/s (measuring {LOAD_DURATION_SEC}s) ...")
-        m = run_load_point(primary, rate)
+        print(f"   -> rate={rate} req/s (measuring {load_duration}s) ...")
+        m = run_load_point(primary, rate, load_duration)
         row = {"rate_rps": rate, **m}
         results.append(row)
         print(
