@@ -423,9 +423,9 @@ function install_dependencies() {
   CMD_DESC+=("install dialog frontend")
   CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install dialog apt-utils -y")
 
-  # libfuse3
-  CMD_DESC+=("install libfuse3 for Fuselog")
-  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y pkg-config libfuse3-dev")
+  # xdn-fs build dependencies
+  CMD_DESC+=("install xdn-fs build dependencies")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential pkg-config libfuse3-dev libzstd-dev")
 
   # install golang
   CMD_DESC+=("download golang")
@@ -460,6 +460,10 @@ function install_dependencies() {
   # install java21
   CMD_DESC+=("install java21")
   CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk ant")
+
+  # install rust for xdn-fs rust binaries
+  CMD_DESC+=("install rust toolchain")
+  CMD+=("curl https://sh.rustup.rs -sSf | sh -s -- -y")
 
   # install python3-pip and tcconfig for WAN latency emulation
   CMD_DESC+=("install pip")
@@ -520,7 +524,8 @@ function upload_binaries() {
   # TODO: check that fuselog and fuselog-apply are working
 
   CMD=()
-  CMD+=('/$HOME/xdn/bin/build_xdn_cli.sh')
+  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_cli.sh')
+  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_fuselog.sh')
   CMD+=("sudo rm -rf /usr/local/bin/xdn")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
@@ -529,8 +534,8 @@ function upload_binaries() {
   CMD+=('sudo ln -s $HOME/xdn/bin/xdn /usr/local/bin/xdn')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuselog')
   CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuselog-apply')
-  CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuserust')
-  CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuserust-apply')
+  CMD+=('sudo ln -s $HOME/xdn/bin/fuserust /usr/local/bin/fuserust')
+  CMD+=('sudo ln -s $HOME/xdn/bin/fuserust-apply /usr/local/bin/fuserust-apply')
   CMD+=("sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf")
   for i in "${!CMD[@]}"; do
     cmd=${CMD[$i]}
@@ -916,7 +921,8 @@ function do_init_driver() {
   echo "Initializing driver machine ..."
 
   sudo apt update
-  sudo apt install -y openjdk-21-jdk apache2-utils python3-pip ant screen wget
+  sudo apt install -y openjdk-21-jdk apache2-utils python3-pip ant screen wget \
+    build-essential pkg-config libfuse3-dev libzstd-dev
 
   # install golang from official release (apt golang-go is too old)
   local golang_tar_name="go1.22.4.linux-amd64.tar.gz"
@@ -952,6 +958,7 @@ function do_init_driver() {
 
   ant jar
   ./bin/build_xdn_cli.sh
+  ./bin/build_xdn_fuselog.sh
   sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
   mkdir -p eval/screen_logs
   sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results

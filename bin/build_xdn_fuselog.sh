@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CPP_DIR="$PROJECT_ROOT/xdn-fs/cpp"
 RUST_DIR="$PROJECT_ROOT/xdn-fs/rust"
+BIN_DIR="$PROJECT_ROOT/bin"
 
 function main() {
   # validate the program name, which must be 'build_xdn_fuselog.sh'.
@@ -56,6 +57,7 @@ function main() {
       ;;
   esac
 
+  stage_project_binaries
   echo "Build complete."
 }
 
@@ -103,6 +105,29 @@ function build_rust() {
 
   echo "  Rust binaries built:"
   ls -lh "$RUST_DIR/target/release/fuselog_core" 2>/dev/null || true
+  ls -lh "$RUST_DIR/target/release/fuselog_apply" 2>/dev/null || true
+}
+
+function stage_project_binaries() {
+  echo "=== Staging binaries into $BIN_DIR/ ==="
+  mkdir -p "$BIN_DIR"
+
+  if [[ -f "$CPP_DIR/fuselog" ]]; then
+    cp "$CPP_DIR/fuselog" "$BIN_DIR/fuselog"
+    echo "  Staged fuselog"
+  fi
+  if [[ -f "$CPP_DIR/fuselog-apply" ]]; then
+    cp "$CPP_DIR/fuselog-apply" "$BIN_DIR/fuselog-apply"
+    echo "  Staged fuselog-apply"
+  fi
+  if [[ -f "$RUST_DIR/target/release/fuselog_core" ]]; then
+    cp "$RUST_DIR/target/release/fuselog_core" "$BIN_DIR/fuserust"
+    echo "  Staged fuserust"
+  fi
+  if [[ -f "$RUST_DIR/target/release/fuselog_apply" ]]; then
+    cp "$RUST_DIR/target/release/fuselog_apply" "$BIN_DIR/fuserust-apply"
+    echo "  Staged fuserust-apply"
+  fi
 }
 
 function install_binaries() {
@@ -124,6 +149,10 @@ function install_binaries() {
   if [[ -f "$RUST_DIR/target/release/fuselog_core" ]]; then
     cp "$RUST_DIR/target/release/fuselog_core" "$INSTALL_DIR/fuserust"
     echo "  Installed fuserust"
+  fi
+  if [[ -f "$RUST_DIR/target/release/fuselog_apply" ]]; then
+    cp "$RUST_DIR/target/release/fuselog_apply" "$INSTALL_DIR/fuserust-apply"
+    echo "  Installed fuserust-apply"
   fi
 
   echo "  Installation complete."
