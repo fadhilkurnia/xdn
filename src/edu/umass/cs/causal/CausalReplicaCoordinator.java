@@ -1,8 +1,5 @@
 package edu.umass.cs.causal;
 
-import edu.umass.cs.causal.dag.DirectedAcyclicGraph;
-import edu.umass.cs.causal.dag.GraphVertex;
-import edu.umass.cs.causal.dag.VectorTimestamp;
 import edu.umass.cs.causal.packets.CausalPacket;
 import edu.umass.cs.causal.packets.CausalPacketType;
 import edu.umass.cs.causal.packets.CausalWriteAckPacket;
@@ -75,13 +72,6 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
                          // quorum tracker to prune vertex in our DAG
                          ConcurrentHashMap<VectorTimestamp, QuorumRecord> graphNodeQuorumRecord,
-
-                         // Tracks which vertices have completed app.execute(), not just DAG
-                         // insertion. Forwarded writes check this — not idToVertexMapper — so they
-                         // never execute before their causal dependencies have actually been applied
-                         // to app state. Written after execute() returns; read under the dag lock
-                         // in dependency checks, so no additional synchronization is needed.
-                         Set<VectorTimestamp> executedTimestamps,
 
                          // buffered write-fwd, waiting for missing dependencies
                          Map<VectorTimestamp, CausalWriteForwardPacket> pendingForwardPackets) {
@@ -167,13 +157,6 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         for (NodeIDType n : nodes) nodesIds.add(n.toString());
         GraphVertex zeroRootNode =
                 new GraphVertex(new VectorTimestamp(nodesIds), new ArrayList<>());
-
-        // The zero root vertex is considered already "executed" — it represents the
-        // initial state, not a real write — so forwarded writes that list it as a
-        // dependency are immediately unblocked.
-        Set<VectorTimestamp> executedTimestamps = ConcurrentHashMap.newKeySet();
-        executedTimestamps.add(zeroRootNode.getTimestamp());
-
         ReplicaInstance<NodeIDType> instance =
                 new ReplicaInstance<>(
                         /*serviceName=*/serviceName,
@@ -183,9 +166,8 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                         /*writeQuorumSize=*/writeQuorumSize,
                         /*readQuorumSize=*/readQuorumSize,
                         /*dag=*/new DirectedAcyclicGraph(zeroRootNode),
-                        /*graphNodeQuorumRecord=*/new ConcurrentHashMap<>(),
-                        /*executedTimestamps=*/executedTimestamps,
-                        /*pendingForwardPackets=*/new ConcurrentHashMap<>());
+                        /*pendingForwardPackets=*/new ConcurrentHashMap<>(),
+                        /*writeQuorumRecord=*/new ConcurrentHashMap<>());
         this.instances.put(serviceName, instance);
 
         // Start the app using the restore method with the passed initial state.
@@ -264,54 +246,56 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             nodeIds.add(n.toString());
         }
 
-        // Handle write-only request
+        // Handle write-only request by forwarding it to the write-quorum
         if (behavioralRequest.isWriteOnlyRequest()) {
-            // Phase 1 (under lock): assign a timestamp and insert the vertex into the DAG.
-            // This is the only part that must be atomic — it prevents two concurrent writes
-            // from computing the same dominant timestamp from the same leaf set.
-            // app.execute() is NOT called here; it is the slow part (container round-trip)
-            // and must not hold the lock.
-            final VectorTimestamp dominantTimestamp;
-            final List<VectorTimestamp> leafTimestamp;
+            // The entire read-modify-write on the DAG must be atomic.
+            // Two concurrent writes arriving on different threads (Netty EventLoop vs NIO
+            // messenger) would otherwise both read the same leaf set, compute the same
+            // dominant timestamp, and produce a duplicate vertex — or race on ArrayList
+            // internals inside GraphVertex.children causing the NPE seen at high throughput.
+            // We also hold the lock over app.execute() and the quorum-record update so that
+            // the causal order observed by the app matches the DAG order.
+            // messenger.send() is deliberately outside the lock: it is I/O and does not
+            // touch shared mutable state.
+            final CausalWriteForwardPacket wfp;
             synchronized (serviceInstance.dag) {
+                // Get the current leaf vector timestamps
                 List<GraphVertex> leafOpNodes = serviceInstance.dag.getLeafVertices();
-                leafTimestamp = new ArrayList<>();
+                List<VectorTimestamp> leafTimestamp = new ArrayList<>();
                 for (GraphVertex leafNode : leafOpNodes) {
                     leafTimestamp.add(leafNode.getTimestamp());
                 }
 
+                // Create a new GraphNode with a dominant timestamp, by increasing this replica's
+                // component in the vector timestamp.
                 VectorTimestamp maxTimestamp = !leafTimestamp.isEmpty()
                         ? VectorTimestamp.createMaxTimestamp(leafTimestamp)
                         : new VectorTimestamp(nodeIds);
-                dominantTimestamp = maxTimestamp.increaseNodeTimestamp(myNodeIdStr);
+                VectorTimestamp dominantTimestamp = maxTimestamp.increaseNodeTimestamp(myNodeIdStr);
                 GraphVertex newOpNode = new GraphVertex(dominantTimestamp, List.of(clientRequest));
                 serviceInstance.dag.addChildOf(leafOpNodes, newOpNode);
 
+                // execute the request
+                boolean isExecSuccess = this.app.execute(clientRequest);
+                assert isExecSuccess : "failed to execute request " + clientRequest;
+
+                // Send response back to client
+                callback.executed(clientRequest, true);
+
+                // Record that we (the originating node) have already applied this write.
                 serviceInstance.graphNodeQuorumRecord.put(
                         dominantTimestamp,
                         QuorumRecord.withInitialNode(myNodeIdStr));
+
+                wfp = new CausalWriteForwardPacket(
+                        serviceName,
+                        this.myNodeID.toString(),
+                        leafTimestamp,
+                        dominantTimestamp,
+                        (ClientRequest) clientRequest);
             }
 
-            // Phase 2 (outside lock): execute against the container. This is the slow I/O
-            // step (~ms per request). Releasing the lock here allows concurrent forwarded
-            // writes whose dependencies are already satisfied to proceed in parallel.
-            boolean isExecSuccess = this.app.execute(clientRequest);
-            assert isExecSuccess : "failed to execute request " + clientRequest;
-
-            // Mark this vertex as fully executed so dependent forwarded writes can unblock.
-            serviceInstance.executedTimestamps.add(dominantTimestamp);
-
-            // Reply to client and drain any pending forwarded writes now unblocked.
-            callback.executed(clientRequest, true);
-            drainPendingForwardedWrites(serviceInstance);
-
-            // Phase 3 (outside lock): broadcast to peers.
-            CausalWriteForwardPacket wfp = new CausalWriteForwardPacket(
-                    serviceName,
-                    this.myNodeID.toString(),
-                    leafTimestamp,
-                    dominantTimestamp,
-                    (ClientRequest) clientRequest);
+            // Broadcast outside the lock — I/O must not hold the instance lock.
             List<NodeIDType> myPeers = new ArrayList<>();
             for (NodeIDType n : serviceInstance.nodes) {
                 if (n.equals(this.myNodeID)) continue;
@@ -362,65 +346,58 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
         List<VectorTimestamp> dependencies = packet.getDependencies();
 
-        // Phase 1 (under lock): check dependencies and insert into DAG.
-        //
-        // The dependency check and DAG insert must be atomic with respect to concurrent
-        // local writes (handleClientRequest phase 1). Without the lock, a local write
-        // could insert a vertex between our executedTimestamps check and our
-        // pendingForwardPackets.put, causing us to buffer a packet whose dependencies
-        // are already satisfied — stranding it until the next drain.
-        //
-        // We check executedTimestamps, not idToVertexMapper. A vertex being in the DAG
-        // is not sufficient — app.execute() must have completed so that app state actually
-        // reflects the causal predecessor before we execute the dependent write.
+        final CausalWriteAckPacket ackPacket;
         synchronized (serviceInstance.dag) {
-            boolean isDependenciesSatisfied =
-                    serviceInstance.executedTimestamps.containsAll(dependencies);
+            // Validate that we have all the parents node (i.e., dependencies).
+            // Must be checked under the lock so the dependency check and the DAG insert
+            // are atomic — otherwise a concurrent insert could satisfy a dependency between
+            // our check and our buffering, leaving the packet stranded in pending forever.
+            boolean isDependenciesSatisfied = serviceInstance.dag.isContainAll(dependencies);
 
+            // If we don't have all the dependencies, then buffer the forwarded write operation so
+            // that we can execute the operation later, once the dependencies are satisfied.
             if (!isDependenciesSatisfied) {
                 serviceInstance.pendingForwardPackets.put(
                         packet.getRequestTimestamp(), packet);
                 return;
             }
 
-            // Insert the vertex into the DAG under the lock so concurrent writes see it
-            // immediately when computing their own leaf sets and timestamps.
+            // Execute the write-only request
+            ClientRequest clientRequest = packet.getClientWriteOnlyRequest();
+            assert clientRequest instanceof BehavioralRequest behavioralRequest &&
+                    behavioralRequest.isWriteOnlyRequest() :
+                    "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
+            boolean isExecSuccess = this.app.execute(clientRequest);
+            assert isExecSuccess;
+
+            // Update my local causal directly-acyclic graph
             List<GraphVertex> parentGraphVertices =
                     serviceInstance.dag.getVerticesByTimestamps(dependencies);
             GraphVertex newGraphVertex = new GraphVertex(
                     packet.getRequestTimestamp(),
                     List.of(packet.getClientWriteOnlyRequest()));
             serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
-        }
 
-        // Phase 2 (outside lock): execute against the container.
-        ClientRequest clientRequest = packet.getClientWriteOnlyRequest();
-        assert clientRequest instanceof BehavioralRequest behavioralRequest &&
-                behavioralRequest.isWriteOnlyRequest() :
-                "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
-        boolean isExecSuccess = this.app.execute(clientRequest);
-        assert isExecSuccess;
-
-        // Mark executed, then drain any pending writes now unblocked by this one.
-        serviceInstance.executedTimestamps.add(packet.getRequestTimestamp());
-        drainPendingForwardedWrites(serviceInstance);
-
-        // Phase 3 (outside lock): send ack with current leaf set.
-        final List<VectorTimestamp> graphLeafNodeIds;
-        synchronized (serviceInstance.dag) {
+            // Get the current graph leaf nodes' ID for the ack
             List<GraphVertex> graphLeafNodes = serviceInstance.dag.getLeafVertices();
-            graphLeafNodeIds = new ArrayList<>();
+            List<VectorTimestamp> graphLeafNodeIds = new ArrayList<>();
             for (GraphVertex n : graphLeafNodes) {
                 graphLeafNodeIds.add(n.getTimestamp());
             }
+            ackPacket = new CausalWriteAckPacket(
+                    serviceName,
+                    this.myNodeID.toString(),
+                    packet.getRequestTimestamp(),
+                    graphLeafNodeIds);
+
+            // Handle all pending forwarded requests while still holding the lock,
+            // so their dependency checks and DAG inserts are also atomic.
+            handlePendingForwardedWriteAfterPackets(serviceInstance);
         }
+
+        // Send acknowledgment outside the lock — I/O must not hold the instance lock.
         String senderId = packet.getSenderId();
         NodeIDType senderNodeId = this.nodeIdDeserializer.valueOf(senderId);
-        CausalWriteAckPacket ackPacket = new CausalWriteAckPacket(
-                serviceName,
-                this.myNodeID.toString(),
-                packet.getRequestTimestamp(),
-                graphLeafNodeIds);
         GenericMessagingTask<NodeIDType, CausalPacket> m =
                 new GenericMessagingTask<>(senderNodeId, ackPacket);
         try {
@@ -431,68 +408,55 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     }
 
     /**
-     * Drains pending forwarded writes whose causal dependencies are now fully executed.
-     * Called after any write completes execution on both the local and forwarded paths.
-     *
-     * Structure per iteration:
-     *   - Acquire lock: scan pending map, collect all packets whose executedTimestamps
-     *     covers their dependencies, insert each into the DAG, remove from pending.
-     *   - Release lock: execute each collected packet against the container (~ms each).
-     *   - Add to executedTimestamps, then repeat if anything was applied.
-     *
-     * The outer loop is necessary because applying packet A may satisfy the dependencies
-     * of packet B, which was skipped in the same pass.
+     * Must be called while holding {@code synchronized(serviceInstance.dag)}.
+     * Iterates pending packets repeatedly until no more can be unblocked, since
+     * applying one pending packet may satisfy the dependencies of another.
      */
-    private void drainPendingForwardedWrites(ReplicaInstance<NodeIDType> serviceInstance) {
+    private void handlePendingForwardedWriteAfterPackets(
+            ReplicaInstance<NodeIDType> serviceInstance) {
         assert serviceInstance != null : "Unexpected null ServiceInstance";
+        if (serviceInstance.pendingForwardPackets.isEmpty()) {
+            return;
+        }
 
+        // Repeat until a full pass finds nothing new to apply, because applying one
+        // pending packet can satisfy the dependencies of another pending packet.
         boolean anyApplied;
         do {
             anyApplied = false;
+            Iterator<Map.Entry<VectorTimestamp, CausalWriteForwardPacket>> iterator =
+                    serviceInstance.pendingForwardPackets.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<VectorTimestamp, CausalWriteForwardPacket> entry = iterator.next();
+                CausalWriteForwardPacket currPacket = entry.getValue();
+                List<VectorTimestamp> currDependencies = currPacket.getDependencies();
+                boolean isDepSatisfied = serviceInstance.dag.isContainAll(currDependencies);
 
-            // Collect all unblocked packets and insert them into the DAG under the lock.
-            List<CausalWriteForwardPacket> readyPackets = new ArrayList<>();
-            synchronized (serviceInstance.dag) {
-                Iterator<Map.Entry<VectorTimestamp, CausalWriteForwardPacket>> iterator =
-                        serviceInstance.pendingForwardPackets.entrySet().iterator();
-                while (iterator.hasNext()) {
-                    Map.Entry<VectorTimestamp, CausalWriteForwardPacket> entry = iterator.next();
-                    CausalWriteForwardPacket currPacket = entry.getValue();
-                    List<VectorTimestamp> currDependencies = currPacket.getDependencies();
+                // Skip if the dependencies are still not satisfied
+                if (!isDepSatisfied) continue;
 
-                    if (!serviceInstance.executedTimestamps.containsAll(currDependencies)) {
-                        continue;
-                    }
-
-                    // Insert into DAG under the lock before releasing it for execute().
-                    List<GraphVertex> parentGraphVertices =
-                            serviceInstance.dag.getVerticesByTimestamps(currDependencies);
-                    GraphVertex newGraphVertex = new GraphVertex(
-                            currPacket.getRequestTimestamp(),
-                            List.of(currPacket.getClientWriteOnlyRequest()));
-                    serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
-
-                    iterator.remove();
-                    readyPackets.add(currPacket);
-                }
-            }
-
-            // Execute all ready packets outside the lock.
-            for (CausalWriteForwardPacket currPacket : readyPackets) {
+                // Execute the pending write-only request as the deps are satisfied already
                 ClientRequest clientRequest = currPacket.getClientWriteOnlyRequest();
-                assert clientRequest instanceof BehavioralRequest br && br.isWriteOnlyRequest() :
-                        "Expecting WriteOnlyRequest but got " +
-                                clientRequest.getClass().getSimpleName();
+                assert clientRequest instanceof BehavioralRequest behavioralRequest &&
+                        behavioralRequest.isWriteOnlyRequest() :
+                        "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
                 boolean isExecSuccess = this.app.execute(clientRequest);
                 assert isExecSuccess : "Failed to execute the pending write request";
 
-                serviceInstance.executedTimestamps.add(currPacket.getRequestTimestamp());
+                // Update my local causal directly-acyclic graph
+                List<GraphVertex> parentGraphVertices =
+                        serviceInstance.dag.getVerticesByTimestamps(currDependencies);
+                GraphVertex newGraphVertex = new GraphVertex(
+                        currPacket.getRequestTimestamp(),
+                        List.of(currPacket.getClientWriteOnlyRequest()));
+                serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
+
+                // remove the pending write packet from the map
+                iterator.remove();
                 anyApplied = true;
 
                 // TODO: optionally send Ack to the sender
             }
-
-            // If we applied anything, loop — newly executed packets may unblock more.
         } while (anyApplied && !serviceInstance.pendingForwardPackets.isEmpty());
     }
 
@@ -510,15 +474,13 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             return;
         }
 
-        // Record the acknowledgement. confirmingNodeIds is a concurrent set so the add
-        // is safe without a lock. The size check + remove is a benign double-remove race:
-        // ConcurrentHashMap.remove() is idempotent, and the pruning TODO below will need
-        // to be made properly atomic (e.g. computeIfPresent) when implemented.
+        // records the acknowledgement
         qr.confirmingNodeIds().add(packet.getSenderId());
         if (qr.confirmingNodeIds().size() == serviceInstance.nodes().size()) {
             // TODO: send pruning packet to all nodes (can be done asynchronously),
             //  then remove the record.
             serviceInstance.graphNodeQuorumRecord().remove(ts);
+            return;
         }
     }
 

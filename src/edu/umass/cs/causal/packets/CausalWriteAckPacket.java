@@ -1,7 +1,6 @@
 package edu.umass.cs.causal.packets;
 
 import com.google.protobuf.InvalidProtocolBufferException;
-import edu.umass.cs.causal.dag.VectorTimestamp;
 import edu.umass.cs.causal.proto.CausalPacketProto;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
