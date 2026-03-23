@@ -1,5 +1,8 @@
 package edu.umass.cs.causal;
 
+import edu.umass.cs.causal.dag.DirectedAcyclicGraph;
+import edu.umass.cs.causal.dag.GraphVertex;
+import edu.umass.cs.causal.dag.VectorTimestamp;
 import edu.umass.cs.causal.packets.CausalPacket;
 import edu.umass.cs.causal.packets.CausalPacketType;
 import edu.umass.cs.causal.packets.CausalWriteAckPacket;

@@ -2,6 +2,7 @@ package edu.umass.cs.causal.packets;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
+import edu.umass.cs.causal.dag.VectorTimestamp;
 import edu.umass.cs.causal.proto.CausalPacketProto;
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
