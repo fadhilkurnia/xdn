@@ -393,6 +393,14 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             assert clientRequest instanceof BehavioralRequest behavioralRequest &&
                     behavioralRequest.isWriteOnlyRequest() :
                     "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
+
+            if (clientRequest instanceof XdnHttpRequest xhr) {
+                xhr.clearHttpResponse();
+            } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+                for (XdnHttpRequest xhr : batch.getRequestList()) {
+                    xhr.clearHttpResponse();
+                }
+            }
             boolean isExecSuccess = this.app.execute(clientRequest);
             assert isExecSuccess;
 
