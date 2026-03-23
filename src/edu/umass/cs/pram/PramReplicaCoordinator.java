@@ -15,6 +15,8 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.interfaces.behavior.ReadOnlyRequest;
 import edu.umass.cs.xdn.interfaces.behavior.WriteOnlyRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -207,6 +209,14 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                     while (!replicaQueue.isEmpty()) {
                         PramWriteAfterPacket writePacket = replicaQueue.remove();
                         ClientRequest appRequest = writePacket.getClientWriteRequest();
+                        if (appRequest instanceof XdnHttpRequest xhr) {
+                            xhr.clearHttpResponse();
+                        } else if (appRequest instanceof XdnHttpRequestBatch batch) {
+                            for (XdnHttpRequest xhr: batch.getRequestList()) {
+                                xhr.clearHttpResponse();
+                            }
+                        }
+
                         boolean isExecuted = app.execute(appRequest);
                         assert isExecuted :
                                 "failed to execute write request from " + senderIdString;
