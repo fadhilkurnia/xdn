@@ -218,11 +218,6 @@ public class MonotonicReadsHandler {
                 return false;
             }
 
-            // enqueue the executed request
-            synchronized (serviceInstance.executedRequests()) {
-                serviceInstance.executedRequests().add(clientRequest.toBytes());
-            }
-
             // bump up the service's current timestamp
             serviceLastTimestamp = serviceInstance.currTimestamp()
                     .increaseNodeTimestamp(myNodeID.toString());
@@ -232,18 +227,27 @@ public class MonotonicReadsHandler {
                     .setLastTimestamp("W", serviceLastTimestamp);
             callback.executed(clientRequest, true);
 
-            // asynchronously send the writes to other replicas
-            Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
-            otherReplicas.remove(myNodeID);
-            if (!otherReplicas.isEmpty()) {
-                ClientCentricWriteAfterPacket writeAfterPacket =
-                        new ClientCentricWriteAfterPacket(
-                                /*senderID=*/myNodeID.toString(),
-                                /*timestamp=*/serviceLastTimestamp,
-                                /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
-                final GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                        new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
-                replicationExecutor.submit(() -> {
+            // capture final timestamp for use in async tasks
+            final VectorTimestamp finalTimestamp = serviceLastTimestamp;
+            final ClientRequest finalRequest = (ClientRequest) clientRequest;
+
+            replicationExecutor.submit(() -> {
+                // enqueue the serialized request for sync — off the critical path
+                synchronized (serviceInstance.executedRequests()) {
+                    serviceInstance.executedRequests().add(finalRequest.toBytes());
+                }
+
+                // send write-after to peers
+                Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
+                otherReplicas.remove(myNodeID);
+                if (!otherReplicas.isEmpty()) {
+                    ClientCentricWriteAfterPacket writeAfterPacket =
+                            new ClientCentricWriteAfterPacket(
+                                    /*senderID=*/myNodeID.toString(),
+                                    /*timestamp=*/finalTimestamp,
+                                    /*clientWriteOnlyRequest=*/finalRequest);
+                    GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                            new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
                     try {
                         logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
                                 + writeAfterPacket.getServiceName());
@@ -252,8 +256,8 @@ public class MonotonicReadsHandler {
                         logger.log(Level.WARNING,
                                 "Failed to send ClientCentricWriteAfterPacket: " + e.getMessage(), e);
                     }
-                });
-            }
+                }
+            });
         }
 
         return true;
