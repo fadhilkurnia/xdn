@@ -21,6 +21,8 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -296,6 +298,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                 assert isExecSuccess : "failed to execute request " + clientRequest;
 
                 // Send response back to client
+                stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
                 callback.executed(clientRequest, true);
 
                 // Record that we (the originating node) have already applied this write.
@@ -338,6 +341,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         if (behavioralRequest.isReadOnlyRequest()) {
             boolean isExecSuccess = this.app.execute(clientRequest);
             assert isExecSuccess : "failed to execute request " + clientRequest;
+            stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
             callback.executed(clientRequest, true);
             return true;
         }
@@ -509,4 +513,12 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         }
     }
 
+    private void stampAll(Request request, int stage) {
+        if (!XdnHttpRequest.ENABLE_LATENCY_TRACING) return;
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) xhr.stamp(stage);
+        } else if (request instanceof XdnHttpRequest xhr) {
+            xhr.stamp(stage);
+        }
+    }
 }
