@@ -6,15 +6,11 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.packets.*;
-import edu.umass.cs.primarybackup.packets.PrimaryBackupPacketType;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
-import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
-import edu.umass.cs.xdn.interfaces.behavior.ReadOnlyRequest;
-import edu.umass.cs.xdn.interfaces.behavior.WriteOnlyRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
@@ -22,9 +18,7 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -55,6 +49,21 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     }
 
     private final ConcurrentMap<String, PramInstance<NodeIDType>> currentInstances;
+
+    // Dedicated executor for sending WRITE_AFTER packets to peers.
+    // Offloaded from the calling thread so messenger.send() never blocks the hot path.
+    private final ExecutorService replicationExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            r -> {
+                Thread t = new Thread(r, "xdn-pram-replication");
+                t.setDaemon(true);
+                return t;
+            });
+
+    // Per-sender single-thread executor map — preserves FIFO order per sender
+    // without spawning a new OS thread per packet.
+    private final ConcurrentMap<NodeIDType, ExecutorService> senderExecutors =
+            new ConcurrentHashMap<>();
 
     private Logger logger = Logger.getLogger(PramReplicaCoordinator.class.getName());
 
@@ -142,6 +151,7 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                     readRequest.getClass().getSimpleName()));
             boolean isExecSuccess = app.execute(readRequest);
             if (isExecSuccess) {
+                stampAll(readRequest, XdnHttpRequest.TS_CALLBACK);
                 callback.executed(readRequest, true);
             }
             return isExecSuccess;
@@ -154,27 +164,38 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                     writeRequest.getClass().getSimpleName()));
             boolean isExecSuccess = app.execute(writeRequest);
             if (isExecSuccess) {
+                stampAll(writeRequest, XdnHttpRequest.TS_CALLBACK);
                 callback.executed(writeRequest, true);
-            }
 
-            // Send WRITE_AFTER packets to all replicas but myself.
-            String serviceName = writeRequest.getServiceName();
-            assert this.currentInstances.containsKey(serviceName) :
-                    "Unknown service name " + serviceName;
-            Set<NodeIDType> nodes = this.currentInstances.get(serviceName).nodes();
-            nodes.remove(myNodeID);
-            PramPacket writeAfterPacket = new PramWriteAfterPacket(myNodeID.toString(), writeRequest);
-            GenericMessagingTask<NodeIDType, PramPacket> m =
-                    new GenericMessagingTask<>(nodes.toArray(), writeAfterPacket);
-            try {
-                logger.log(Level.FINER, String.format("%s:%s - sending WRITE_AFTER packet of %s",
-                        myNodeID, PramReplicaCoordinator.class.getSimpleName(),
-                        writeRequest.getClass().getSimpleName()));
-                messenger.send(m);
-            } catch (JSONException | IOException e) {
-                throw new RuntimeException(e);
+                // Offload messenger.send() to the replication executor so it does not
+                // block the calling thread. The client response has already been dispatched
+                // above; peers do not need to be notified before we return.
+                String serviceName = writeRequest.getServiceName();
+                assert this.currentInstances.containsKey(serviceName) :
+                        "Unknown service name " + serviceName;
+                final Set<NodeIDType> peers = new HashSet<>(
+                        this.currentInstances.get(serviceName).nodes());
+                peers.remove(myNodeID);
+                if (!peers.isEmpty()) {
+                    replicationExecutor.submit(() -> {
+                        PramPacket writeAfterPacket =
+                                new PramWriteAfterPacket(myNodeID.toString(), writeRequest);
+                        GenericMessagingTask<NodeIDType, PramPacket> m =
+                                new GenericMessagingTask<>(peers.toArray(), writeAfterPacket);
+                        try {
+                            logger.log(Level.FINER,
+                                    String.format("%s:%s - sending WRITE_AFTER packet of %s",
+                                            myNodeID,
+                                            PramReplicaCoordinator.class.getSimpleName(),
+                                            writeRequest.getClass().getSimpleName()));
+                            messenger.send(m);
+                        } catch (JSONException | IOException e) {
+                            logger.log(Level.WARNING,
+                                    "Failed to send WRITE_AFTER packet: " + e.getMessage(), e);
+                        }
+                    });
+                }
             }
-
             return isExecSuccess;
         }
 
@@ -197,33 +218,42 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                     "Unknown service name " + serviceName;
             PramInstance<NodeIDType> instance = this.currentInstances.get(serviceName);
 
-            // find the sender's queue
+            // Enqueue packet into the per-sender queue so FIFO order is preserved.
             instance.replicaQueue.putIfAbsent(senderID, new ConcurrentLinkedQueue<>());
             Queue<PramWriteAfterPacket> replicaQueue = instance.replicaQueue.get(senderID);
             boolean isAdded = replicaQueue.add(p);
             assert isAdded : "Failed to enqueue the write request from " + senderIdString;
 
-            // spawn a thread to execute all the write requests in the FIFO queue
-            Thread writeExecutor = new Thread(() -> {
-                synchronized (replicaQueue) {
-                    while (!replicaQueue.isEmpty()) {
-                        PramWriteAfterPacket writePacket = replicaQueue.remove();
-                        ClientRequest appRequest = writePacket.getClientWriteRequest();
-                        if (appRequest instanceof XdnHttpRequest xhr) {
-                            xhr.clearHttpResponse();
-                        } else if (appRequest instanceof XdnHttpRequestBatch batch) {
-                            for (XdnHttpRequest xhr: batch.getRequestList()) {
-                                xhr.clearHttpResponse();
-                            }
-                        }
+            // Submit execution to a per-sender single-thread executor.
+            // A single-thread executor per sender gives us two properties:
+            //   1. FIFO ordering — tasks run in submission order.
+            //   2. No thread-per-packet overhead — threads are reused across packets.
+            // synchronized(replicaQueue) is no longer needed because the single-thread
+            // executor serializes access by construction.
+            ExecutorService senderExecutor = senderExecutors.computeIfAbsent(senderID,
+                    id -> Executors.newSingleThreadExecutor(r -> {
+                        Thread t = new Thread(r, "xdn-pram-write-after-" + id);
+                        t.setDaemon(true);
+                        return t;
+                    }));
 
-                        boolean isExecuted = app.execute(appRequest);
-                        assert isExecuted :
-                                "failed to execute write request from " + senderIdString;
+            senderExecutor.submit(() -> {
+                while (!replicaQueue.isEmpty()) {
+                    PramWriteAfterPacket writePacket = replicaQueue.poll();
+                    if (writePacket == null) break;
+                    ClientRequest appRequest = writePacket.getClientWriteRequest();
+                    if (appRequest instanceof XdnHttpRequest xhr) {
+                        xhr.clearHttpResponse();
+                    } else if (appRequest instanceof XdnHttpRequestBatch batch) {
+                        for (XdnHttpRequest xhr : batch.getRequestList()) {
+                            xhr.clearHttpResponse();
+                        }
                     }
+                    boolean isExecuted = app.execute(appRequest);
+                    assert isExecuted :
+                            "failed to execute write request from " + senderIdString;
                 }
             });
-            writeExecutor.start();
 
             return true;
         }
@@ -263,5 +293,14 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     public Set<NodeIDType> getReplicaGroup(String serviceName) {
         PramInstance<NodeIDType> pramInstance = this.currentInstances.get(serviceName);
         return pramInstance != null ? pramInstance.nodes() : null;
+    }
+
+    private void stampAll(Request request, int stage) {
+        if (!XdnHttpRequest.ENABLE_LATENCY_TRACING) return;
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) xhr.stamp(stage);
+        } else if (request instanceof XdnHttpRequest xhr) {
+            xhr.stamp(stage);
+        }
     }
 }
