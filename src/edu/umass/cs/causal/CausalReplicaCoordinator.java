@@ -27,6 +27,8 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -87,6 +89,17 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     private final Map<String, ReplicaInstance<NodeIDType>> instances;
 
     private final Logger logger = Logger.getLogger(CausalReplicaCoordinator.class.getName());
+
+    // Dedicated executor for all messenger.send() calls so they never block the
+    // calling thread (which may be a Netty EventLoop or GigaPaxos NIO thread).
+    // Both the write-forward broadcast and the ack send are submitted here.
+    private final ExecutorService replicationExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            r -> {
+                Thread t = new Thread(r, "xdn-causal-replication");
+                t.setDaemon(true);
+                return t;
+            });
 
     public CausalReplicaCoordinator(Replicable app,
                                     NodeIDType myID,
@@ -298,18 +311,24 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                         (ClientRequest) clientRequest);
             }
 
-            // Broadcast outside the lock — I/O must not hold the instance lock.
+            // Broadcast outside the lock and off the calling thread — I/O must not
+            // block the Netty EventLoop or GigaPaxos NIO thread.
             List<NodeIDType> myPeers = new ArrayList<>();
             for (NodeIDType n : serviceInstance.nodes) {
                 if (n.equals(this.myNodeID)) continue;
                 myPeers.add(n);
             }
-            GenericMessagingTask<NodeIDType, CausalPacket> m =
-                    new GenericMessagingTask<>(myPeers.toArray(), wfp);
-            try {
-                this.messenger.send(m);
-            } catch (IOException | JSONException e) {
-                throw new RuntimeException(e);
+            if (!myPeers.isEmpty()) {
+                final GenericMessagingTask<NodeIDType, CausalPacket> m =
+                        new GenericMessagingTask<>(myPeers.toArray(), wfp);
+                replicationExecutor.submit(() -> {
+                    try {
+                        this.messenger.send(m);
+                    } catch (IOException | JSONException e) {
+                        logger.log(Level.WARNING,
+                                "Failed to send CausalWriteForwardPacket: " + e.getMessage(), e);
+                    }
+                });
             }
 
             return true;
@@ -398,16 +417,19 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             handlePendingForwardedWriteAfterPackets(serviceInstance);
         }
 
-        // Send acknowledgment outside the lock — I/O must not hold the instance lock.
+        // Send acknowledgment outside the lock and off the calling thread.
         String senderId = packet.getSenderId();
         NodeIDType senderNodeId = this.nodeIdDeserializer.valueOf(senderId);
-        GenericMessagingTask<NodeIDType, CausalPacket> m =
+        final GenericMessagingTask<NodeIDType, CausalPacket> m =
                 new GenericMessagingTask<>(senderNodeId, ackPacket);
-        try {
-            this.messenger.send(m);
-        } catch (IOException | JSONException e) {
-            throw new RuntimeException(e);
-        }
+        replicationExecutor.submit(() -> {
+            try {
+                this.messenger.send(m);
+            } catch (IOException | JSONException e) {
+                logger.log(Level.WARNING,
+                        "Failed to send CausalWriteAckPacket: " + e.getMessage(), e);
+            }
+        });
     }
 
     /**
