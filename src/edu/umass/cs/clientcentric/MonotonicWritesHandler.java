@@ -13,6 +13,8 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 
 import java.io.IOException;
@@ -363,6 +365,13 @@ public class MonotonicWritesHandler {
             if (ourTs == theirTs - 1) {
                 replicationExecutor.submit(() -> {
                     Request clientRequest = writeAfterPacket.getClientWriteOnlyRequest();
+                    if (clientRequest instanceof XdnHttpRequest xhr) {
+                        xhr.clearHttpResponse();
+                    } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+                        for (XdnHttpRequest xhr : batch.getRequestList()) {
+                            xhr.clearHttpResponse();
+                        }
+                    }
                     boolean isExecSuccess = app.execute(clientRequest, true);
                     assert isExecSuccess : "Failed to execute request";
                     serviceInstance.currTimestamp().updateNodeTimestamp(rawSenderID, theirTs);
