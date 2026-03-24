@@ -31,7 +31,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -69,11 +68,9 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     private record ClientRequestAndCallback(ClientRequest request, ExecutedCallback callback) {
     }
 
-    // Carries everything needed to execute a write outside the DAG lock, in causal order.
-    // callback is null for peer-forwarded writes (no client to respond to).
-    private record PendingExecution(ClientRequest request,
-                                    ExecutedCallback callback,
-                                    boolean stampAndCallback) {
+    // Used only on the peer-forwarded path to collect resolved writes inside the DAG lock
+    // for submission to executeExecutor outside the lock.
+    private record PendingExecution(ClientRequest request) {
     }
 
     private record ReplicaInstance
@@ -111,17 +108,17 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                 return t;
             });
 
-    // Single-threaded ordered execution queue. Writes are enqueued inside the DAG lock
-    // (in causal order) and consumed here — outside the lock — so app.execute() and
-    // callback.executed() never block other writers waiting on the DAG lock.
-    // Single-threaded to preserve the causal execution order assigned by the DAG.
-    private final LinkedBlockingQueue<PendingExecution> executeQueue =
-            new LinkedBlockingQueue<>();
-    private final ExecutorService executeConsumer = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "xdn-causal-execute");
-        t.setDaemon(true);
-        return t;
-    });
+    // Thread pool for app.execute() and callback.executed() — outside the DAG lock.
+    // Safe to parallelize because our workload consists of independent clients with no
+    // cross-key causal dependencies. If a mixed workload with client-session causality
+    // across keys is needed in the future, replace this with a dependency-aware scheduler.
+    private final ExecutorService executeExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors()),
+            r -> {
+                Thread t = new Thread(r, "xdn-causal-execute");
+                t.setDaemon(true);
+                return t;
+            });
 
     public CausalReplicaCoordinator(Replicable app,
                                     NodeIDType myID,
@@ -149,27 +146,6 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         this.messenger.precedePacketDemultiplexer(packetDemultiplexer);
 
         this.logger.log(Level.INFO, "Initialized at node " + this.myNodeID);
-
-        // Start the single-threaded consumer that drains executeQueue.
-        // Runs for the lifetime of this coordinator.
-        executeConsumer.submit(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    PendingExecution pe = executeQueue.take();
-                    boolean isExecSuccess = this.app.execute(pe.request(),
-                            !pe.stampAndCallback()); // noReplyToClient = peer-forwarded path
-                    if (pe.stampAndCallback() && isExecSuccess) {
-                        stampAll(pe.request(), XdnHttpRequest.TS_CALLBACK);
-                        pe.callback().executed(pe.request(), true);
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                } catch (Exception e) {
-                    logger.log(Level.WARNING, "Execute consumer caught exception: " + e.getMessage(), e);
-                }
-            }
-        });
     }
 
     @Override
@@ -312,9 +288,8 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             // messenger) would otherwise both read the same leaf set, compute the same
             // dominant timestamp, and produce a duplicate vertex — or race on ArrayList
             // internals inside GraphVertex.children causing the NPE seen at high throughput.
-            // app.execute() and callback.executed() are intentionally moved outside the lock
-            // onto the single-threaded executeConsumer to reduce lock hold time. The queue
-            // preserves the causal order assigned here inside the lock.
+            // app.execute() and callback.executed() are submitted to executeExecutor outside
+            // the lock so the DAG critical section stays pure in-memory and fast.
             final CausalWriteForwardPacket wfp;
             synchronized (serviceInstance.dag) {
                 // Get the current leaf vector timestamps
@@ -345,8 +320,17 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                         dominantTimestamp,
                         (ClientRequest) clientRequest);
 
-                // Enqueue for execution outside the lock, in the order assigned by the DAG.
-                executeQueue.add(new PendingExecution((ClientRequest) clientRequest, callback, true));
+                // Submit for execution outside the lock, off the calling thread.
+                // Each write is an independent task — no ordering constraint for our workload.
+                final ClientRequest execRequest = (ClientRequest) clientRequest;
+                final ExecutedCallback execCallback = callback;
+                executeExecutor.submit(() -> {
+                    boolean isExecSuccess = this.app.execute(execRequest);
+                    if (isExecSuccess) {
+                        stampAll(execRequest, XdnHttpRequest.TS_CALLBACK);
+                        execCallback.executed(execRequest, true);
+                    }
+                });
             }
 
             // Broadcast outside the lock and off the calling thread — I/O must not
@@ -449,7 +433,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
 
             // Enqueue for execution outside the lock — no client callback on the peer path.
-            toExecute.add(new PendingExecution(clientRequest, null, false));
+            toExecute.add(new PendingExecution(clientRequest));
 
             // Get the current graph leaf nodes' ID for the ack
             List<GraphVertex> graphLeafNodes = serviceInstance.dag.getLeafVertices();
@@ -468,9 +452,14 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             handlePendingForwardedWriteAfterPackets(serviceInstance, toExecute);
         }
 
-        // Enqueue all resolved writes onto the ordered execute queue, outside the lock.
-        // Order within toExecute matches causal order established inside the lock.
-        executeQueue.addAll(toExecute);
+        // Submit all resolved writes to the thread pool outside the lock.
+        // Each is an independent task — no ordering constraint for our workload.
+        for (PendingExecution pe : toExecute) {
+            executeExecutor.submit(() -> {
+                // noReplyToClient=true on the peer path: the originating node handles the response.
+                this.app.execute(pe.request(), true);
+            });
+        }
 
         // Send acknowledgment outside the lock and off the calling thread.
         String senderId = packet.getSenderId();
@@ -533,7 +522,8 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                 serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
 
                 // Enqueue for execution outside the lock — peer path, no client callback.
-                toExecute.add(new PendingExecution(clientRequest, null, false));
+                // Enqueue for execution outside the lock — peer path, no client callback.
+                toExecute.add(new PendingExecution(clientRequest));
 
                 // remove the pending write packet from the map
                 iterator.remove();
