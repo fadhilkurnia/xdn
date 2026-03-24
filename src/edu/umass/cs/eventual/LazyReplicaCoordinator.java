@@ -18,8 +18,6 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
-import io.netty.buffer.ByteBuf;
-import io.netty.util.ReferenceCountUtil;
 
 import java.io.IOException;
 import java.util.HashSet;
@@ -27,6 +25,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -47,6 +47,17 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     }
 
     private final ConcurrentMap<String, LazyReplicaInstance<NodeIDType>> currentInstances;
+
+    // Dedicated single-thread executor for sending WRITE_AFTER packets to peers.
+    // Single-threaded to preserve replication order. app.execute() and callback.executed()
+    // are now called on the calling thread, so this executor only handles messenger.send().
+    private final ExecutorService replicationExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            r -> {
+                Thread t = new Thread(r, "xdn-lazy-replication");
+                t.setDaemon(true);
+                return t;
+            });
 
     private final Logger logger = Logger.getLogger(LazyReplicaCoordinator.class.getSimpleName());
 
@@ -85,8 +96,10 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
+        /*
         System.out.println(">> " + myNodeId + " LazyReplicaCoordinator -- receiving request " +
                 request.getClass().getSimpleName());
+         */
         if (!(request instanceof ReplicableClientRequest) && !(request instanceof LazyPacket)) {
             throw new RuntimeException("Unknown request/packet handled by LazyReplicaCoordinator");
         }
@@ -99,9 +112,10 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         }
         LazyReplicaInstance<NodeIDType> currInstance = this.currentInstances.get(serviceName);
 
-        // unwrap the request if needed
+        // unwrap the request if needed — unwrap recursively because intermediate
+        // coordinators (XdnReplicaCoordinator, AbstractTransactor) may re-wrap.
         Request currRequestOrPacket = request;
-        if (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
+        while (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
             currRequestOrPacket = rcr.getRequest();
         }
 
@@ -128,39 +142,43 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                                 "for LazyReplicaCoordinator");
             }
 
-            boolean isExecSuccess = this.app.execute(clientRequest);
-
-            // for write request, send WRITE_AFTER packets to all replicas but myself
-            // Response are removed in receiver side before execution.
             if (isWriteOnly && isMonotonic) {
-                retainRequestContent(clientRequest);
-                try {
-                    if (isExecSuccess) {
-                        callback.executed(clientRequest, true);
-
-                        LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
-                                myNodeId.toString(), clientRequest);
-                        Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
-                        myPeers.remove(myNodeId);
-                        GenericMessagingTask<NodeIDType, LazyPacket> m =
-                                new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
-                        try {
-                            logger.log(Level.INFO, "Sending WRITE_AFTER packet ...");
-                            messenger.send(m);
-                        } catch (JSONException e) {
-                            throw new RuntimeException(e);
-                        }
-                    }
-                } finally {
-                    releaseRequestContent(clientRequest);
-                }
-            } else {
+                boolean isExecSuccess = this.app.execute(clientRequest);
                 if (isExecSuccess) {
+                    stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
+                    callback.executed(clientRequest, true);
+
+                    // Offload replication to peers asynchronously — the client does not
+                    // wait for this and it does not need to be in order.
+                    final Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                    myPeers.remove(myNodeId);
+                    if (!myPeers.isEmpty()) {
+                        replicationExecutor.submit(() -> {
+                            try {
+                                LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
+                                        myNodeId.toString(), clientRequest);
+                                logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
+                                GenericMessagingTask<NodeIDType, LazyPacket> m =
+                                        new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                                messenger.send(m);
+                            } catch (IOException | JSONException e) {
+                                logger.log(Level.WARNING,
+                                        "Failed to send WRITE_AFTER packet: " + e.getMessage(), e);
+                            }
+                        });
+                    }
+                }
+                return isExecSuccess;
+            } else {
+                // Read path: execute synchronously. Reads have no replication step
+                // and are already batched upstream, so blocking here is acceptable.
+                boolean isExecSuccess = this.app.execute(clientRequest);
+                if (isExecSuccess) {
+                    stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
                     callback.executed(clientRequest, true);
                 }
+                return isExecSuccess;
             }
-
-            return isExecSuccess;
         }
 
         // handle peer-initiated packet (i.e., write-after)
@@ -187,7 +205,9 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
             return this.app.execute(clientRequest, true);
         }
 
-        throw new IllegalStateException("Unexpected LazyPacket/Request: " + request.getRequestType());
+        throw new IllegalStateException(
+                "Unexpected request type after unwrapping: " + currRequestOrPacket.getClass().getSimpleName()
+                        + " (original type: " + request.getRequestType() + ")");
     }
 
     @Override
@@ -222,41 +242,15 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
         return replicaInstance != null ? replicaInstance.nodes() : null;
     }
 
-    private void retainRequestContent(ClientRequest request) {
+    // Stamps the given timestamp stage on every XdnHttpRequest inside the request,
+    // whether it is a single request or a batch.
+    private void stampAll(Request request, int stage) {
+        if (!XdnHttpRequest.ENABLE_LATENCY_TRACING) return;
         if (request instanceof XdnHttpRequestBatch batch) {
-            for (XdnHttpRequest xhr : batch.getRequestList()) {
-                retainSingleRequestContent(xhr);
-            }
+            for (XdnHttpRequest xhr : batch.getRequestList()) xhr.stamp(stage);
         } else if (request instanceof XdnHttpRequest xhr) {
-            retainSingleRequestContent(xhr);
+            xhr.stamp(stage);
         }
     }
 
-    private void retainSingleRequestContent(XdnHttpRequest xhr) {
-        if (xhr.getHttpRequestContent() != null) {
-            ByteBuf content = xhr.getHttpRequestContent().content();
-            if (content != null && content.refCnt() > 0) {
-                ReferenceCountUtil.retain(content);
-            }
-        }
-    }
-
-    private void releaseRequestContent(ClientRequest request) {
-        if (request instanceof XdnHttpRequestBatch batch) {
-            for (XdnHttpRequest xhr : batch.getRequestList()) {
-                releaseSingleRequestContent(xhr);
-            }
-        } else if (request instanceof XdnHttpRequest xhr) {
-            releaseSingleRequestContent(xhr);
-        }
-    }
-
-    private void releaseSingleRequestContent(XdnHttpRequest xhr) {
-        if (xhr.getHttpRequestContent() != null) {
-            ByteBuf content = xhr.getHttpRequestContent().content();
-            if (content != null && content.refCnt() > 0) {
-                ReferenceCountUtil.release(content);
-            }
-        }
-    }
 }

@@ -32,6 +32,8 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -186,9 +188,11 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 			ExecutedCallback callback) throws RequestParseException {
 		// prepare the updated callback that log the coordination duration
 		long startProcessingTime = System.nanoTime();
+
 		ExecutedCallback loggedCallback = callback;
         if (callback != null) {
             loggedCallback = (response, handled) -> {
+				stampAll(response, XdnHttpRequest.TS_CALLBACK);
                 callback.executed(response, handled);
                 long elapsedTime = System.nanoTime() - startProcessingTime;
                 logger.log(Level.FINE, "{0}:{1} - request coordination within {2}ms",
@@ -451,4 +455,12 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 		this.paxosManager.tryToBePaxosCoordinator(groupName);
 	}
 
+	private void stampAll(Request request, int stage) {
+		if (!XdnHttpRequest.ENABLE_LATENCY_TRACING) return;
+		if (request instanceof XdnHttpRequestBatch batch) {
+			for (XdnHttpRequest xhr : batch.getRequestList()) xhr.stamp(stage);
+		} else if (request instanceof XdnHttpRequest xhr) {
+			xhr.stamp(stage);
+		}
+	}
 }

@@ -1,6 +1,5 @@
 package edu.umass.cs.causal.packets;
 
-import edu.umass.cs.causal.dag.VectorTimestamp;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestTest;
 import edu.umass.cs.xdn.request.XdnRequestParser;

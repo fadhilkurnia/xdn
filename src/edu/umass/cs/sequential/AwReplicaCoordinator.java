@@ -15,6 +15,7 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -77,13 +78,14 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         } else {
             requestLogText = clientRequest.getRequestType().toString();
         }
-        logger.log(Level.INFO, String.format("%s:AwReplicaCoordinator -- coordinateRequest %s\n",
+        logger.log(Level.FINE, String.format("%s:AwReplicaCoordinator -- coordinateRequest %s\n",
                 this.myNodeID, requestLogText));
 
         // We handle read-only request locally, with no coordination.
         if (clientRequest instanceof BehavioralRequest br && br.isReadOnlyRequest()) {
             boolean isExecSuccess = this.app.execute(clientRequest);
             if (isExecSuccess) {
+                stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
                 callback.executed(clientRequest, true);
             }
             return isExecSuccess;
@@ -175,4 +177,12 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         return this.paxosManager.isPaxosCoordinator(serviceName);
     }
 
+    private void stampAll(Request request, int stage) {
+        if (!XdnHttpRequest.ENABLE_LATENCY_TRACING) return;
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) xhr.stamp(stage);
+        } else if (request instanceof XdnHttpRequest xhr) {
+            xhr.stamp(stage);
+        }
+    }
 }

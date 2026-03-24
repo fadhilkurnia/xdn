@@ -479,6 +479,7 @@ public abstract class ReconfigurableNode<NodeIDType> {
         PaxosConfig.ensureFileHandlerDirExists();
         Config.register(args);
         NIOTransport.setMaxPayloadSize(Config.getGlobalInt(PC.NIO_MAX_PAYLOAD_SIZE));
+	NIOTransport.setUseSenderTask(true);
         ReconfigurationConfig.setConsoleHandler();
 
         Set<ReconfigurableNode> rcNodes = new HashSet<ReconfigurableNode>();

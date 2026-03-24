@@ -13,17 +13,32 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import org.json.JSONException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class MonotonicReadsHandler {
 
     private static final Logger logger = Logger.getLogger(MonotonicReadsHandler.class.getSimpleName());
+
+    // Shared executor for all messenger.send() calls so they never block the calling
+    // thread (Netty EventLoop or GigaPaxos NIO thread). Covers sync-request sends,
+    // write-after broadcasts, and sync-response sends.
+    private static final ExecutorService replicationExecutor = Executors.newFixedThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            r -> {
+                Thread t = new Thread(r, "xdn-mr-replication");
+                t.setDaemon(true);
+                return t;
+            });
 
     protected static <NodeIDType> boolean coordinateRequest(
             Request request,
@@ -100,7 +115,7 @@ public class MonotonicReadsHandler {
         assert serviceLastTimestamp != null :
                 "An active service=" + serviceName + " having null timestamp";
 
-        logger.log(Level.INFO, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
+        logger.log(Level.FINE, String.format("%s:%s - handling client request %s id=%d clientReadTs=%s ourTs=%s",
                 messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
                 clientReplicableRequest.getClass().getSimpleName(),
                 clientReplicableRequest.getRequestID(),
@@ -172,7 +187,7 @@ public class MonotonicReadsHandler {
                                 new GenericMessagingTask<>(targetReplicaNodeId, syncPacket);
                         syncPackets.add(m);
 
-                        logger.log(Level.INFO,
+                        logger.log(Level.FINE,
                                 String.format("%s:%s - preparing SyncRequestPacket to %s, clientTs=%d ourTs=%d",
                                         messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
                                         nodeIdRaw, clientTs, replicaTs));
@@ -181,11 +196,14 @@ public class MonotonicReadsHandler {
 
                 // send the sync packets
                 for (GenericMessagingTask<NodeIDType, ClientCentricPacket> m : syncPackets) {
-                    try {
-                        messenger.send(m);
-                    } catch (IOException | JSONException e) {
-                        throw new RuntimeException(e);
-                    }
+                    replicationExecutor.submit(() -> {
+                        try {
+                            messenger.send(m);
+                        } catch (IOException | JSONException e) {
+                            logger.log(Level.WARNING,
+                                    "Failed to send ClientCentricSyncRequestPacket: " + e.getMessage(), e);
+                        }
+                    });
                 }
             }
         }
@@ -200,11 +218,6 @@ public class MonotonicReadsHandler {
                 return false;
             }
 
-            // enqueue the executed request
-            synchronized (serviceInstance.executedRequests()) {
-                serviceInstance.executedRequests().add(clientRequest.toBytes());
-            }
-
             // bump up the service's current timestamp
             serviceLastTimestamp = serviceInstance.currTimestamp()
                     .increaseNodeTimestamp(myNodeID.toString());
@@ -214,23 +227,37 @@ public class MonotonicReadsHandler {
                     .setLastTimestamp("W", serviceLastTimestamp);
             callback.executed(clientRequest, true);
 
-            // asynchronously send the writes to other replicas
-            Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
-            otherReplicas.remove(myNodeID);
-            ClientCentricWriteAfterPacket writeAfterPacket =
-                    new ClientCentricWriteAfterPacket(
-                            /*senderID=*/myNodeID.toString(),
-                            /*timestamp=*/serviceLastTimestamp,
-                            /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
-            GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                    new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
-            try {
-                logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
-                        + writeAfterPacket.getServiceName());
-                messenger.send(m);
-            } catch (JSONException | IOException e) {
-                throw new RuntimeException(e);
-            }
+            // capture final timestamp for use in async tasks
+            final VectorTimestamp finalTimestamp = serviceLastTimestamp;
+            final ClientRequest finalRequest = (ClientRequest) clientRequest;
+
+            replicationExecutor.submit(() -> {
+                // enqueue the serialized request for sync — off the critical path
+                synchronized (serviceInstance.executedRequests()) {
+                    serviceInstance.executedRequests().add(finalRequest.toBytes());
+                }
+
+                // send write-after to peers
+                Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
+                otherReplicas.remove(myNodeID);
+                if (!otherReplicas.isEmpty()) {
+                    ClientCentricWriteAfterPacket writeAfterPacket =
+                            new ClientCentricWriteAfterPacket(
+                                    /*senderID=*/myNodeID.toString(),
+                                    /*timestamp=*/finalTimestamp,
+                                    /*clientWriteOnlyRequest=*/finalRequest);
+                    GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                            new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
+                    try {
+                        logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
+                                + writeAfterPacket.getServiceName());
+                        messenger.send(m);
+                    } catch (JSONException | IOException e) {
+                        logger.log(Level.WARNING,
+                                "Failed to send ClientCentricWriteAfterPacket: " + e.getMessage(), e);
+                    }
+                }
+            });
         }
 
         return true;
@@ -248,7 +275,7 @@ public class MonotonicReadsHandler {
 
         NodeIDType myNodeId = messenger.getMyID();
 
-        logger.log(Level.INFO, String.format("%s:%s - handling coordination packet %s",
+        logger.log(Level.FINE, String.format("%s:%s - handling coordination packet %s",
                 myNodeId, MonotonicReadsHandler.class.getSimpleName(), packet.getRequestType()));
 
         // handle WriteAfterPacket
@@ -281,6 +308,13 @@ public class MonotonicReadsHandler {
             if (ourTs == theirTs - 1) {
                 // execute the write operation
                 Request clientRequest = writeAfterPacket.getClientWriteOnlyRequest();
+                if (clientRequest instanceof XdnHttpRequest xhr) {
+                    xhr.clearHttpResponse();
+                } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+                    for (XdnHttpRequest xhr : batch.getRequestList()) {
+                        xhr.clearHttpResponse();
+                    }
+                }
                 boolean isExecSuccess = app.execute(clientRequest, true);
                 assert isExecSuccess : "Failed to execute request";
 
@@ -307,24 +341,27 @@ public class MonotonicReadsHandler {
                                 /*senderId=*/myNodeId.toString(),
                                 /*serviceName=*/serviceInstance.name(),
                                 /*fromSequenceNumber*/peerFromSeqNum);
-                GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                        new GenericMessagingTask<>(
-                                nodeIdDeserializer.valueOf(rawSenderID),
-                                syncRequestPacket);
 
                 // cache the last requested seqNum to prevent storming the same peer with same requests
                 serviceInstance.peerLastSyncRequestSeqNum().put(
                         nodeIdDeserializer.valueOf(rawSenderID), peerFromSeqNum);
 
-                try {
-                    logger.log(Level.INFO, String.format(
-                            "%s:%s - missing writes (theirTs=%d), thus requesting them from %s with startSeqNum=%d",
-                            myNodeId, MonotonicReadsHandler.class.getSimpleName(),
-                            theirTs, rawSenderID, peerFromSeqNum));
-                    messenger.send(m);
-                } catch (IOException | JSONException e) {
-                    throw new RuntimeException(e);
-                }
+                final GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                        new GenericMessagingTask<>(
+                                nodeIdDeserializer.valueOf(rawSenderID),
+                                syncRequestPacket);
+                replicationExecutor.submit(() -> {
+                    try {
+                        logger.log(Level.INFO, String.format(
+                                "%s:%s - missing writes (theirTs=%d), thus requesting them from %s with startSeqNum=%d",
+                                myNodeId, MonotonicReadsHandler.class.getSimpleName(),
+                                theirTs, rawSenderID, peerFromSeqNum));
+                        messenger.send(m);
+                    } catch (IOException | JSONException e) {
+                        logger.log(Level.WARNING,
+                                "Failed to send gap-fill ClientCentricSyncRequestPacket: " + e.getMessage(), e);
+                    }
+                });
             }
 
             return;
@@ -374,15 +411,18 @@ public class MonotonicReadsHandler {
                             /*encodedRequests=*/reqs);
 
             // send the response packet
-            GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+            final GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
                     new GenericMessagingTask<>(senderId, responsePacket);
-            try {
-                logger.log(Level.FINER, "Sending ClientCentricSyncResponsePacket: "
-                        + responsePacket.getServiceName());
-                messenger.send(m);
-            } catch (IOException | JSONException e) {
-                throw new RuntimeException(e);
-            }
+            replicationExecutor.submit(() -> {
+                try {
+                    logger.log(Level.FINER, "Sending ClientCentricSyncResponsePacket: "
+                            + responsePacket.getServiceName());
+                    messenger.send(m);
+                } catch (IOException | JSONException e) {
+                    logger.log(Level.WARNING,
+                            "Failed to send ClientCentricSyncResponsePacket: " + e.getMessage(), e);
+                }
+            });
 
             return;
         }
@@ -401,7 +441,7 @@ public class MonotonicReadsHandler {
             long respStartingSeqNum = syncResponse.getStartingSequenceNumber(); // inclusive
             long ourLatestSeqNum = serviceInstance.currTimestamp().getNodeTimestamp(rawSenderId);
 
-            logger.log(Level.INFO,
+            logger.log(Level.FINE,
                     String.format("%s:%s - handling SyncResponsePacket from %s, theirSeqNum=%d ourSeqNum=%d",
                             messenger.getMyID(), MonotonicReadsHandler.class.getSimpleName(),
                             senderId, respStartingSeqNum, ourLatestSeqNum));
