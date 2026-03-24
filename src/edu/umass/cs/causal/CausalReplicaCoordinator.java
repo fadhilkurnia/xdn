@@ -65,13 +65,6 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         }
     }
 
-    private record ClientRequestAndCallback(ClientRequest request, ExecutedCallback callback) {
-    }
-
-    // Used only on the peer-forwarded path to collect resolved writes inside the DAG lock
-    // for submission to executeExecutor outside the lock.
-    private record PendingExecution(ClientRequest request) {
-    }
 
     private record ReplicaInstance
             <NodeIDType>(String serviceName,
@@ -108,17 +101,6 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                 return t;
             });
 
-    // Thread pool for app.execute() and callback.executed() — outside the DAG lock.
-    // Safe to parallelize because our workload consists of independent clients with no
-    // cross-key causal dependencies. If a mixed workload with client-session causality
-    // across keys is needed in the future, replace this with a dependency-aware scheduler.
-    private final ExecutorService executeExecutor = Executors.newFixedThreadPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors()),
-            r -> {
-                Thread t = new Thread(r, "xdn-causal-execute");
-                t.setDaemon(true);
-                return t;
-            });
 
     public CausalReplicaCoordinator(Replicable app,
                                     NodeIDType myID,
@@ -281,15 +263,49 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             nodeIds.add(n.toString());
         }
 
-        // Handle write-only request by forwarding it to the write-quorum
+        // Handle write-only request
         if (behavioralRequest.isWriteOnlyRequest()) {
+
+            // Monotonic fast path: no causal dependencies between independent clients.
+            // Bypass the DAG entirely — execute locally, respond to client immediately,
+            // then broadcast to peers off-thread. Mirrors LazyReplicaCoordinator's write path.
+            if (behavioralRequest.isMonotonicRequest()) {
+                boolean isExecSuccess = this.app.execute(clientRequest);
+                if (isExecSuccess) {
+                    stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
+                    callback.executed(clientRequest, true);
+
+                    // Broadcast to peers with an empty dependency list — peers will detect
+                    // isEmpty() and also bypass their DAG on receipt.
+                    final Set<NodeIDType> myPeers = new HashSet<>(serviceInstance.nodes());
+                    myPeers.remove(myNodeID);
+                    if (!myPeers.isEmpty()) {
+                        final CausalWriteForwardPacket wfp = new CausalWriteForwardPacket(
+                                serviceName,
+                                this.myNodeID.toString(),
+                                Collections.emptyList(),          // no dependencies — monotonic
+                                new VectorTimestamp(List.of()),   // sentinel — not used by peer
+                                (ClientRequest) clientRequest);
+                        replicationExecutor.submit(() -> {
+                            try {
+                                messenger.send(new GenericMessagingTask<>(
+                                        myPeers.toArray(), wfp));
+                            } catch (IOException | JSONException e) {
+                                logger.log(Level.WARNING,
+                                        "Failed to send monotonic forward packet: " + e.getMessage(), e);
+                            }
+                        });
+                    }
+                }
+                return isExecSuccess;
+            }
+
+            // Non-monotonic slow path: full DAG ordering required.
             // The entire read-modify-write on the DAG must be atomic.
             // Two concurrent writes arriving on different threads (Netty EventLoop vs NIO
             // messenger) would otherwise both read the same leaf set, compute the same
             // dominant timestamp, and produce a duplicate vertex — or race on ArrayList
             // internals inside GraphVertex.children causing the NPE seen at high throughput.
-            // app.execute() and callback.executed() are submitted to executeExecutor outside
-            // the lock so the DAG critical section stays pure in-memory and fast.
             final CausalWriteForwardPacket wfp;
             synchronized (serviceInstance.dag) {
                 // Get the current leaf vector timestamps
@@ -319,18 +335,13 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                         leafTimestamp,
                         dominantTimestamp,
                         (ClientRequest) clientRequest);
+            }
 
-                // Submit for execution outside the lock, off the calling thread.
-                // Each write is an independent task — no ordering constraint for our workload.
-                final ClientRequest execRequest = (ClientRequest) clientRequest;
-                final ExecutedCallback execCallback = callback;
-                executeExecutor.submit(() -> {
-                    boolean isExecSuccess = this.app.execute(execRequest);
-                    if (isExecSuccess) {
-                        stampAll(execRequest, XdnHttpRequest.TS_CALLBACK);
-                        execCallback.executed(execRequest, true);
-                    }
-                });
+            // Execute and respond outside the lock — DAG ordering is already fixed above.
+            boolean isExecSuccess = this.app.execute(clientRequest);
+            if (isExecSuccess) {
+                stampAll(clientRequest, XdnHttpRequest.TS_CALLBACK);
+                callback.executed(clientRequest, true);
             }
 
             // Broadcast outside the lock and off the calling thread — I/O must not
@@ -391,9 +402,23 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
         List<VectorTimestamp> dependencies = packet.getDependencies();
 
-        // Collects writes whose DAG position is now resolved so they can be executed
-        // outside the lock in causal order. Peer-forwarded writes have no callback.
-        final List<PendingExecution> toExecute = new ArrayList<>();
+        // Monotonic fast path: empty dependency list means the originating node sent this
+        // via the monotonic fast path. No DAG interaction needed — execute directly on the
+        // calling NIO thread and return. No ack is sent; the originating node already
+        // responded to its client before broadcasting.
+        if (dependencies.isEmpty()) {
+            ClientRequest clientRequest = packet.getClientWriteOnlyRequest();
+            if (clientRequest instanceof XdnHttpRequest xhr) {
+                xhr.clearHttpResponse();
+            } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+                for (XdnHttpRequest xhr : batch.getRequestList()) xhr.clearHttpResponse();
+            }
+            this.app.execute(clientRequest, true);
+            return;
+        }
+
+        // Non-monotonic slow path: dependency check and DAG insert must be atomic.
+        final List<ClientRequest> toExecute = new ArrayList<>();
         final CausalWriteAckPacket ackPacket;
         synchronized (serviceInstance.dag) {
             // Validate that we have all the parents node (i.e., dependencies).
@@ -432,8 +457,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                     List.of(packet.getClientWriteOnlyRequest()));
             serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
 
-            // Enqueue for execution outside the lock — no client callback on the peer path.
-            toExecute.add(new PendingExecution(clientRequest));
+            toExecute.add(clientRequest);
 
             // Get the current graph leaf nodes' ID for the ack
             List<GraphVertex> graphLeafNodes = serviceInstance.dag.getLeafVertices();
@@ -452,13 +476,9 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             handlePendingForwardedWriteAfterPackets(serviceInstance, toExecute);
         }
 
-        // Submit all resolved writes to the thread pool outside the lock.
-        // Each is an independent task — no ordering constraint for our workload.
-        for (PendingExecution pe : toExecute) {
-            executeExecutor.submit(() -> {
-                // noReplyToClient=true on the peer path: the originating node handles the response.
-                this.app.execute(pe.request(), true);
-            });
+        // Execute all resolved writes outside the lock, on the calling thread.
+        for (ClientRequest cr : toExecute) {
+            this.app.execute(cr, true);
         }
 
         // Send acknowledgment outside the lock and off the calling thread.
@@ -480,12 +500,11 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
      * Must be called while holding {@code synchronized(serviceInstance.dag)}.
      * Iterates pending packets repeatedly until no more can be unblocked, since
      * applying one pending packet may satisfy the dependencies of another.
-     * Resolved writes are appended to {@code toExecute} in causal order for
-     * execution outside the lock by the caller.
+     * Resolved requests are appended to {@code toExecute} for execution outside the lock.
      */
     private void handlePendingForwardedWriteAfterPackets(
             ReplicaInstance<NodeIDType> serviceInstance,
-            List<PendingExecution> toExecute) {
+            List<ClientRequest> toExecute) {
         assert serviceInstance != null : "Unexpected null ServiceInstance";
         if (serviceInstance.pendingForwardPackets.isEmpty()) {
             return;
@@ -521,9 +540,7 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                         List.of(currPacket.getClientWriteOnlyRequest()));
                 serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
 
-                // Enqueue for execution outside the lock — peer path, no client callback.
-                // Enqueue for execution outside the lock — peer path, no client callback.
-                toExecute.add(new PendingExecution(clientRequest));
+                toExecute.add(clientRequest);
 
                 // remove the pending write packet from the map
                 iterator.remove();
