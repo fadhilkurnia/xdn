@@ -99,21 +99,36 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private static final long BATCH_ACCUMULATION_MS =
         Long.getLong("PB_BATCH_ACCUMULATION_MS", 0);
 
-    // Accumulation window for the CAPTURE THREAD (done queue), in microseconds.
-    // After the first completed batch arrives, the capture thread waits up to this many µs
-    // for additional completions before calling captureStateDiff + propose.  A larger window
-    // amortizes the ~1-2ms captureStateDiff and ~12ms Paxos commit across more requests.
-    // Set to 0 to disable (original take+drainTo behaviour).
-    private static final long CAPTURE_ACCUMULATION_US =
+    // Minimum accumulation window for the CAPTURE THREAD (done queue), in microseconds.
+    // At low load the capture thread uses this value for minimal latency.
+    // Set to 0 to disable accumulation entirely.
+    private static final long CAPTURE_ACCUMULATION_MIN_US =
         Long.getLong("PB_CAPTURE_ACCUMULATION_US",
-            // Backwards compat: if the old MS flag is set, convert to µs
             Long.getLong("PB_CAPTURE_ACCUMULATION_MS", 0L) * 1000);
+
+    // Maximum accumulation window in microseconds.  Under high load the capture
+    // thread grows toward this value to batch more requests per proposal.
+    private static final long CAPTURE_ACCUMULATION_MAX_US =
+        Long.getLong("PB_CAPTURE_ACCUMULATION_MAX_US", 5_000); // 5ms default
 
     // Debug flag: skip captureStateDiff + Paxos propose in the capture thread.
     // When enabled, callbacks fire immediately after workers finish execution,
     // isolating the PBM worker pipeline from the Paxos consensus overhead.
     private static final boolean SKIP_REPLICATION =
         Boolean.getBoolean("PB_SKIP_REPLICATION");
+
+    // When true, prints sampled pipeline timing breakdown (every 50th batch)
+    // to stdout. Enable via -DPB_SAMPLE_LATENCY=true.
+    private static final boolean SAMPLE_LATENCY =
+        Boolean.getBoolean("PB_SAMPLE_LATENCY");
+
+    // When true, execute requests directly on the calling thread (writePool)
+    // instead of enqueueing to dedicated worker threads. Eliminates the
+    // serviceBatchQueues queue and its associated queue amplification of
+    // tail latency. The capture thread + doneQueue are still used for
+    // serialized captureStateDiff + propose.
+    private static final boolean INLINE_EXECUTE =
+        Boolean.getBoolean("PB_INLINE_EXECUTE");
 
     // Maximum number of concurrent execute() calls per service.
     // Limits how many PBM workers can simultaneously execute requests against
@@ -177,6 +192,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // Maps ApplyStateDiffPacket.requestID → the N (packet, callback) pairs it represents
     private final ConcurrentHashMap<Long, List<RequestAndCallback>>
         pendingBatchCallbacks = new ConcurrentHashMap<>();
+
+    // Counter for sampling pipeline timing (every Nth batch prints breakdown)
+    private static final java.util.concurrent.atomic.AtomicLong sampledBatchCounter =
+        new java.util.concurrent.atomic.AtomicLong();
 
     // Per-service single-threaded executor for async backup statediff application.
     // Single-threaded per service preserves application order without blocking the Paxos thread.
@@ -446,12 +465,35 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             this.paxosManager.tryToBePaxosCoordinator(serviceName);
         }
 
-        // Submit to the per-service batch worker; the worker drains the queue and executes
-        // requests in parallel batches before proposing a single stateDiff per batch.
         RequestAndCallback rc = new RequestAndCallback(packet, callback);
         rc.setPbmEntryNs(System.nanoTime());
-        ensureBatchWorker(serviceName).offer(rc);
+
+        if (INLINE_EXECUTE) {
+            // Execute directly on the calling thread (writePool). No intermediate
+            // queue — eliminates queue amplification of tail latency. The calling
+            // thread blocks until WordPress responds, then enqueues to the doneQueue
+            // for the capture thread to handle captureStateDiff + propose.
+            ensureCaptureThread(serviceName);
+            rc.setWorkerPickupNs(System.nanoTime());
+            List<RequestAndCallback> batch = List.of(rc);
+            executeRequestBatchCoordinateStateDiff(serviceName, batch);
+        } else {
+            // Submit to the per-service batch worker queue.
+            ensureBatchWorker(serviceName).offer(rc);
+        }
         return true;
+    }
+
+    /** Ensure the done queue and capture thread exist for a service. */
+    private void ensureCaptureThread(String serviceName) {
+        serviceDoneQueues.computeIfAbsent(serviceName, svc -> {
+            LinkedBlockingQueue<CompletedBatch> doneQ = new LinkedBlockingQueue<>();
+            Thread captureThread = Thread.ofVirtual()
+                    .name("pb-capture-" + svc)
+                    .start(() -> captureThreadLoop(svc, doneQ));
+            captureThreads.put(svc, captureThread);
+            return doneQ;
+        });
     }
 
     private LinkedBlockingQueue<RequestAndCallback> ensureBatchWorker(String serviceName) {
@@ -459,12 +501,7 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             LinkedBlockingQueue<RequestAndCallback> q = new LinkedBlockingQueue<>();
 
             // Create done queue + single capture thread for this service.
-            LinkedBlockingQueue<CompletedBatch> doneQ = new LinkedBlockingQueue<>();
-            serviceDoneQueues.put(svc, doneQ);
-            Thread captureThread = Thread.ofVirtual()
-                    .name("pb-capture-" + svc)
-                    .start(() -> captureThreadLoop(svc, doneQ));
-            captureThreads.put(svc, captureThread);
+            ensureCaptureThread(svc);
 
             // Create N worker threads.
             for (int i = 0; i < N_PARALLEL_WORKERS; i++) {
@@ -532,6 +569,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
     private void captureThreadLoop(
             String serviceName, LinkedBlockingQueue<CompletedBatch> doneQueue) {
+        // Adaptive accumulation: starts at MIN, grows toward MAX when the
+        // doneQueue has items waiting (high load), shrinks back when idle.
+        long currentAccumulationUs = CAPTURE_ACCUMULATION_MIN_US;
+
         while (!Thread.currentThread().isInterrupted()) {
             List<CompletedBatch> drained = null;
             try {
@@ -593,11 +634,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 drained = new ArrayList<>();
                 drained.add(first);
 
-                // Accumulation window: wait up to CAPTURE_ACCUMULATION_US for more
-                // completions so we can batch them into a single captureStateDiff + propose.
-                if (CAPTURE_ACCUMULATION_US > 0) {
+                // Adaptive accumulation window: wait up to currentAccumulationUs
+                // for more completions to batch into a single captureStateDiff + propose.
+                if (currentAccumulationUs > 0) {
                     long deadlineNs = System.nanoTime()
-                            + CAPTURE_ACCUMULATION_US * 1_000L;
+                            + currentAccumulationUs * 1_000L;
                     CompletedBatch next;
                     while ((next = doneQueue.poll(
                             Math.max(0, deadlineNs - System.nanoTime()),
@@ -609,6 +650,22 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 // Non-blocking drain of any additional completions that
                 // arrived while we were processing the previous cycle.
                 doneQueue.drainTo(drained);
+
+                // Adapt accumulation window based on load pressure.
+                // If the queue still has items after draining, we're under
+                // high load — grow the window to batch more per proposal.
+                // If the queue is empty, we're under low load — shrink back
+                // for minimal latency.
+                int remaining = doneQueue.size();
+                if (remaining > 0 && currentAccumulationUs < CAPTURE_ACCUMULATION_MAX_US) {
+                    // Double the window, capped at MAX
+                    currentAccumulationUs = Math.min(
+                            currentAccumulationUs * 2 + 100,
+                            CAPTURE_ACCUMULATION_MAX_US);
+                } else if (remaining == 0 && drained.size() <= 1) {
+                    // Low load: shrink back toward MIN
+                    currentAccumulationUs = CAPTURE_ACCUMULATION_MIN_US;
+                }
 
                 logger.log(Level.INFO, String.format(
                         "%s:%s - capture thread: drained=%d doneQueueRemaining=%d takeWait=%.3fms",
@@ -643,6 +700,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     allCallbacks.addAll(cb.batch());
                 }
 
+                // Stamp capture drain time on all requests.
+                long drainNs = System.nanoTime();
+                for (RequestAndCallback rc : allCallbacks) {
+                    rc.setCaptureDrainNs(drainNs);
+                }
+
                 // BYPASS: skip capture+propose, fire callbacks immediately.
                 // This isolates the PBM worker pipeline from Paxos overhead.
                 if (SKIP_REPLICATION) {
@@ -660,6 +723,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 long sdStart = System.nanoTime();
                 byte[] stateDiff = backupableApp.captureStatediff(serviceName);
                 long sdEnd = System.nanoTime();
+
+                // Stamp capture diff end time.
+                for (RequestAndCallback rc : allCallbacks) {
+                    rc.setCaptureDiffEndNs(sdEnd);
+                }
                 logger.log(Level.INFO, String.format(
                         "%s:%s - capture thread: stateDiff in %.3f ms, size=%d bytes, "
                         + "covering %d completed batches (%d requests)",
@@ -680,11 +748,18 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 pendingBatchCallbacks.put(applyPkt.getRequestID(), callbackSnapshot);
 
                 long proposeStart = System.nanoTime();
+
+                // Stamp propose time on all requests.
+                for (RequestAndCallback rc : callbackSnapshot) {
+                    rc.setProposeNs(proposeStart);
+                }
+
                 this.paxosManager.propose(
                         serviceName,
                         gpPacket,
                         (proposedPacket, handled) -> {
-                            double elapsedMs = (System.nanoTime() - proposeStart) / 1_000_000.0;
+                            long commitNs = System.nanoTime();
+                            double elapsedMs = (commitNs - proposeStart) / 1_000_000.0;
                             logger.log(Level.INFO, String.format(
                                     "%s:%s - capture thread: %d requests committed in %.3f ms (diffSize=%d)",
                                     myNodeID, PrimaryBackupManager.class.getSimpleName(),
@@ -695,26 +770,54 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                             List<RequestAndCallback> cbs =
                                     pendingBatchCallbacks.remove(batchId);
                             if (cbs != null) {
-                                // Pipeline timing summary (gated by XDN_TIMING_HEADERS)
-                                if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
-                                        && !cbs.isEmpty()) {
-                                    long callbackNs = System.nanoTime();
-                                    RequestAndCallback sample = cbs.get(0);
-                                    if (sample.pbmEntryNs() > 0) {
-                                        System.out.printf(
-                                            "PBM_TIMING: queueWait=%.2fms exec=%.2fms "
-                                            + "captureWait=%.2fms capture=%.2fms propose=%.2fms "
-                                            + "total=%.2fms batchSize=%d diffSize=%d%n",
-                                            (sample.workerPickupNs() - sample.pbmEntryNs()) / 1e6,
-                                            (sample.executeEndNs() - sample.workerPickupNs()) / 1e6,
-                                            (sdStart - sample.doneQueueNs()) / 1e6,
-                                            (sdEnd - sdStart) / 1e6,
+                                // Stamp commit time + print sampled pipeline breakdown.
+                                for (RequestAndCallback rc : cbs) {
+                                    rc.setCommitCallbackNs(commitNs);
+                                }
+
+                                // Sampling: print every Nth batch's full pipeline timing.
+                                // Gated by PB_SAMPLE_LATENCY flag; when XDN_TIMING_HEADERS
+                                // is also on, prints every batch instead of sampling.
+                                long batchCount = sampledBatchCounter.incrementAndGet();
+                                boolean shouldSample = SAMPLE_LATENCY && (
+                                    edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
+                                    || (batchCount % 50 == 0));
+
+                                if (shouldSample && !cbs.isEmpty()) {
+                                    RequestAndCallback eldest = cbs.get(0);
+                                    RequestAndCallback newest = cbs.get(cbs.size() - 1);
+                                    if (eldest.pbmEntryNs() > 0) {
+                                        String line = String.format(
+                                            "PBM_SAMPLE[%d]: batchSize=%d diffSize=%d paxosCommit=%.2fms | "
+                                            + "FIRST queueWait=%.2f exec=%.2f captureWait=%.2f capture=%.2f "
+                                            + "proposePrep=%.2f paxos=%.2f total=%.2fms | "
+                                            + "LAST queueWait=%.2f exec=%.2f captureWait=%.2f total=%.2fms%n",
+                                            batchCount, cbs.size(),
+                                            stateDiff != null ? stateDiff.length : 0,
                                             elapsedMs,
-                                            (callbackNs - sample.pbmEntryNs()) / 1e6,
-                                            cbs.size(),
-                                            stateDiff != null ? stateDiff.length : 0);
+                                            (eldest.workerPickupNs() - eldest.pbmEntryNs()) / 1e6,
+                                            (eldest.executeEndNs() - eldest.workerPickupNs()) / 1e6,
+                                            (eldest.captureDrainNs() - eldest.doneQueueNs()) / 1e6,
+                                            (eldest.captureDiffEndNs() - eldest.captureDrainNs()) / 1e6,
+                                            (eldest.proposeNs() - eldest.captureDiffEndNs()) / 1e6,
+                                            (commitNs - eldest.proposeNs()) / 1e6,
+                                            (commitNs - eldest.pbmEntryNs()) / 1e6,
+                                            (newest.workerPickupNs() - newest.pbmEntryNs()) / 1e6,
+                                            (newest.executeEndNs() - newest.workerPickupNs()) / 1e6,
+                                            (newest.captureDrainNs() - newest.doneQueueNs()) / 1e6,
+                                            (commitNs - newest.pbmEntryNs()) / 1e6
+                                        );
+                                        // Write to dedicated file for reliable capture
+                                        try {
+                                            java.nio.file.Files.writeString(
+                                                java.nio.file.Path.of("/tmp/pbm_samples.log"),
+                                                line,
+                                                java.nio.file.StandardOpenOption.CREATE,
+                                                java.nio.file.StandardOpenOption.APPEND);
+                                        } catch (Exception ignored) {}
                                     }
                                 }
+
                                 cbs.forEach(rc -> rc.callback()
                                         .executed(rc.requestPacket(), handled));
                             }

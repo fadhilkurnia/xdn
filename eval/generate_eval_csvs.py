@@ -76,6 +76,11 @@ PB_SOURCES = {
         ("openebs", os.path.join(RESULTS_DIR, "load_pb_tpcc_openebs")),
         ("pgsync", os.path.join(RESULTS_DIR, "load_pb_tpcc_pgsync")),
     ],
+    "tpcc-java": [
+        ("xdn_pb", os.path.join(RESULTS_DIR, "load_pb_tpcc-java_reflex")),
+        ("openebs", os.path.join(RESULTS_DIR, "load_pb_tpcc-java_openebs")),
+        ("pgsync", os.path.join(RESULTS_DIR, "load_pb_tpcc-java_pgsync")),
+    ],
 }
 
 

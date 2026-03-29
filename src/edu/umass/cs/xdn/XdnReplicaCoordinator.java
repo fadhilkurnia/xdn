@@ -51,6 +51,27 @@ import org.json.JSONObject;
  */
 public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
+  // ── Sampling-based latency profiler (enable via -DXDN_COORD_PROFILER=true) ──
+  private static final boolean COORD_PROFILER_ENABLED =
+      Boolean.parseBoolean(System.getProperty("XDN_COORD_PROFILER", "false"));
+  private static final int PROFILER_SAMPLE_INTERVAL = 1000; // print every N requests
+  private static final java.util.concurrent.atomic.AtomicLong profilerCount =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumTotal =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumGetCoord =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumPrepReq =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumMatcher =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumCache =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumCoord =
+      new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.concurrent.atomic.AtomicLong profilerSumCallback =
+      new java.util.concurrent.atomic.AtomicLong();
+
   private final String myNodeID;
   private final XdnGigapaxosApp xdnGigapaxosApp;
 
@@ -255,6 +276,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     // prepare updated callback that logs the elapsed time
     ReplicableClientRequest finalGpRequest = gpRequest;
+    long preCoordTimeNs = System.nanoTime();
     ExecutedCallback loggedCallback =
         (response, handled) -> {
           long endTimeNs = System.nanoTime();
@@ -273,6 +295,38 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
                 (endTimeNs - endReqCacheTimeNs) / 1_000_000.0,
                 String.valueOf(finalGpRequest.getRequestID())
               });
+
+          // ── Sampling profiler ──
+          // Breakdown: total = wrapper_overhead + coordinator_and_execute
+          //   wrapper_overhead = getCoord + prepReq + matcher + cache + lambdaCreation
+          //   coordinator_and_execute = endTime - preCoordTime (includes coordinator dispatch + app.execute + callback overhead)
+          if (COORD_PROFILER_ENABLED) {
+            long wrapperNs = preCoordTimeNs - startCoordinationTimeNs;
+            long coordAndExecNs = endTimeNs - preCoordTimeNs;
+            profilerSumTotal.addAndGet(endTimeNs - startCoordinationTimeNs);
+            profilerSumGetCoord.addAndGet(endGetCoordinatorTimeNs - startCoordinationTimeNs);
+            profilerSumPrepReq.addAndGet(endRequestPrepTimeNs - endGetCoordinatorTimeNs);
+            profilerSumMatcher.addAndGet(endPrepReqMatcherTimeNs - endRequestPrepTimeNs);
+            profilerSumCache.addAndGet(endReqCacheTimeNs - endPrepReqMatcherTimeNs);
+            profilerSumCoord.addAndGet(wrapperNs);
+            profilerSumCallback.addAndGet(coordAndExecNs);
+            long n = profilerCount.incrementAndGet();
+            if (n % PROFILER_SAMPLE_INTERVAL == 0) {
+              System.err.printf(
+                  "[XDN-PROFILER] n=%d avg_total=%.1fus "
+                  + "(wrapper=%.1fus [getCoord=%.1fus prepReq=%.1fus matcher=%.1fus cache=%.1fus] "
+                  + "coordExec=%.1fus)%n",
+                  n,
+                  profilerSumTotal.get() / 1000.0 / n,
+                  profilerSumCoord.get() / 1000.0 / n,
+                  profilerSumGetCoord.get() / 1000.0 / n,
+                  profilerSumPrepReq.get() / 1000.0 / n,
+                  profilerSumMatcher.get() / 1000.0 / n,
+                  profilerSumCache.get() / 1000.0 / n,
+                  profilerSumCallback.get() / 1000.0 / n);
+            }
+          }
+
           callback.executed(response, handled);
         };
 

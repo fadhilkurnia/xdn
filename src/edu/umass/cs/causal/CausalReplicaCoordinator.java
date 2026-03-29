@@ -21,12 +21,17 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -75,11 +80,15 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
                          Map<VectorTimestamp, CausalWriteForwardPacket> pendingForwardPackets) {
     }
 
+    private static final int DEFAULT_EXECUTE_WORKERS =
+            Math.max(32, Runtime.getRuntime().availableProcessors() * 4);
+
     private final NodeIDType myNodeID;
     private final Stringifiable<NodeIDType> nodeIdDeserializer;
 
     private final Set<IntegerPacketType> requestTypes;
     private final Map<String, ReplicaInstance<NodeIDType>> instances;
+    private final ExecutorService executePool;
 
     private final Logger logger = Logger.getLogger(CausalReplicaCoordinator.class.getName());
 
@@ -90,6 +99,13 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         super(app, messenger);
         this.myNodeID = myID;
         this.instances = new ConcurrentHashMap<>();
+
+        int nWorkers = Integer.getInteger("CAUSAL_N_EXECUTE_WORKERS", DEFAULT_EXECUTE_WORKERS);
+        this.executePool = Executors.newFixedThreadPool(nWorkers, r -> {
+            Thread t = new Thread(r, "causal-exec-" + myID);
+            t.setDaemon(true);
+            return t;
+        });
 
         // Validate the nodeIdDeserializer
         this.nodeIdDeserializer = nodeIdDeserializer;
@@ -119,8 +135,10 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        this.logger.log(Level.FINE, "node={0} coordinating request {1}",
-                new Object[]{this.myNodeID, request.getClass().getSimpleName()});
+        if (this.logger.isLoggable(Level.FINE)) {
+            this.logger.log(Level.FINE, "node={0} coordinating request {1}",
+                    new Object[]{this.myNodeID, request.getClass().getSimpleName()});
+        }
 
         if (request instanceof ReplicableClientRequest r) {
             return this.handleClientRequest(r, callback);
@@ -244,37 +262,43 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             nodeIds.add(n.toString());
         }
 
-        // Handle write-only request by forwarding it to the write-quorum
+        // Handle write-only request by forwarding it to the write-quorum — async dispatch
         if (behavioralRequest.isWriteOnlyRequest()) {
-            long t0 = System.nanoTime();
+            // Atomically read leaves, create dominant timestamp, and add to DAG.
+            // Must hold the DAG lock for the entire read-modify-write to prevent
+            // concurrent writers from seeing stale leaf sets.
+            List<VectorTimestamp> leafTimestamp;
+            VectorTimestamp dominantTimestamp;
+            int leafCount;
+            synchronized (serviceInstance.dag) {
+                List<GraphVertex> leafOpNodes = serviceInstance.dag.getLeafVertices();
+                leafTimestamp = new ArrayList<>();
+                for (GraphVertex leafNode : leafOpNodes) {
+                    leafTimestamp.add(leafNode.getTimestamp());
+                }
+                leafCount = leafOpNodes.size();
 
-            // Get the current leaf vector timestamps
-            List<GraphVertex> leafOpNodes = serviceInstance.dag.getLeafVertices();
-            List<VectorTimestamp> leafTimestamp = new ArrayList<>();
-            for (GraphVertex leafNode : leafOpNodes) {
-                leafTimestamp.add(leafNode.getTimestamp());
+                VectorTimestamp maxTimestamp = !leafTimestamp.isEmpty()
+                        ? VectorTimestamp.createMaxTimestamp(leafTimestamp)
+                        : new VectorTimestamp(nodeIds);
+                dominantTimestamp = maxTimestamp.increaseNodeTimestamp(myNodeIdStr);
+                GraphVertex newOpNode = new GraphVertex(dominantTimestamp, List.of(clientRequest));
+                serviceInstance.dag.addChildOf(leafOpNodes, newOpNode);
             }
 
-            // Create a new GraphNode with a dominant timestamp, by increasing this replica's
-            // component in the vector timestamp.
-            VectorTimestamp maxTimestamp = !leafTimestamp.isEmpty()
-                    ? VectorTimestamp.createMaxTimestamp(leafTimestamp)
-                    : new VectorTimestamp(nodeIds);
-            VectorTimestamp dominantTimestamp = maxTimestamp.increaseNodeTimestamp(myNodeIdStr);
-            GraphVertex newOpNode = new GraphVertex(dominantTimestamp, List.of(clientRequest));
-            serviceInstance.dag.addChildOf(leafOpNodes, newOpNode);
+            // Write requests are fire-and-forget — execute inline, broadcast
+            // write-forward to peers BEFORE responding (to ensure ByteBufs are
+            // still valid during serialization), then respond to client.
+            long t0 = System.nanoTime();
+
+            boolean isExecSuccess = this.app.execute(clientRequest);
+            if (!isExecSuccess) {
+                this.logger.log(Level.WARNING, "Failed to execute write request: " + clientRequest);
+                callback.executed(clientRequest, false);
+                return true;
+            }
             long t1 = System.nanoTime();
 
-            // execute the request
-            boolean isExecSuccess = this.app.execute(clientRequest);
-            assert isExecSuccess : "failed to execute request " + clientRequest;
-            long t2 = System.nanoTime();
-
-            // Send response back to client
-            callback.executed(clientRequest, true);
-            long t3 = System.nanoTime();
-
-            // Asynchronously broadcast the write request, containing the dependencies.
             serviceInstance.graphNodeQuorumRecord.put(
                     dominantTimestamp,
                     new QuorumRecord(
@@ -297,26 +321,25 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             } catch (IOException | JSONException e) {
                 throw new RuntimeException(e);
             }
-            long t4 = System.nanoTime();
 
-            long dagUs = (t1 - t0) / 1000;
-            long execUs = (t2 - t1) / 1000;
-            long cbUs = (t3 - t2) / 1000;
-            long bcastUs = (t4 - t3) / 1000;
-            long totalUs = (t4 - t0) / 1000;
-            this.logger.log(Level.INFO,
-                    "{0}:CausalRC write total={1}us dag={2}us exec={3}us cb={4}us bcast={5}us leaves={6}",
-                    new Object[]{this.myNodeID, totalUs, dagUs, execUs, cbUs, bcastUs,
-                            leafOpNodes.size()});
+            callback.executed(clientRequest, true);
+
+            if (this.logger.isLoggable(Level.FINE)) {
+                long execUs = (t1 - t0) / 1000;
+                long totalUs = (System.nanoTime() - t0) / 1000;
+                this.logger.log(Level.FINE,
+                        "{0}:CausalRC write total={1}us exec={2}us leaves={3}",
+                        new Object[]{this.myNodeID, totalUs, execUs, leafCount});
+            }
 
             return true;
         }
 
-        // Handle read-only request by executing it locally
+        // Read-only requests need no coordination — execute inline on the
+        // caller thread to avoid thread-pool dispatch overhead.
         if (behavioralRequest.isReadOnlyRequest()) {
             boolean isExecSuccess = this.app.execute(clientRequest);
-            assert isExecSuccess : "failed to execute request " + clientRequest;
-            callback.executed(clientRequest, true);
+            callback.executed(clientRequest, isExecSuccess);
             return true;
         }
 
@@ -356,11 +379,16 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             return;
         }
 
-        // Execute the write-only request
+        // Execute the write-only request. The deserialized request may carry a
+        // stale httpResponse from the sender's execution — clear it so
+        // forwardHttpRequestToContainerizedService can set a fresh response.
         ClientRequest clientRequest = packet.getClientWriteOnlyRequest();
         assert clientRequest instanceof BehavioralRequest behavioralRequest &&
                 behavioralRequest.isWriteOnlyRequest() :
                 "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
+        if (clientRequest instanceof XdnHttpRequest xhr && xhr.getHttpResponse() != null) {
+            xhr.clearHttpResponse();
+        }
         boolean isExecSuccess = this.app.execute(clientRequest);
         assert isExecSuccess;
 
@@ -406,35 +434,45 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             return;
         }
 
-        Iterator<Map.Entry<VectorTimestamp, CausalWriteForwardPacket>> iterator =
-                serviceInstance.pendingForwardPackets.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<VectorTimestamp, CausalWriteForwardPacket> entry = iterator.next();
+        // Collect satisfied entries first, then process them. This avoids
+        // ConcurrentModificationException from iterator.remove() when another
+        // NIO thread concurrently puts into the same ConcurrentHashMap.
+        List<Map.Entry<VectorTimestamp, CausalWriteForwardPacket>> satisfied = new ArrayList<>();
+        for (Map.Entry<VectorTimestamp, CausalWriteForwardPacket> entry :
+                serviceInstance.pendingForwardPackets.entrySet()) {
+            List<VectorTimestamp> deps = entry.getValue().getDependencies();
+            if (serviceInstance.dag.isContainAll(deps)) {
+                satisfied.add(entry);
+            }
+        }
+
+        for (Map.Entry<VectorTimestamp, CausalWriteForwardPacket> entry : satisfied) {
+            // Remove first to prevent re-processing by another thread
+            if (serviceInstance.pendingForwardPackets.remove(entry.getKey()) == null) {
+                continue; // already processed by another thread
+            }
+
             CausalWriteForwardPacket currPacket = entry.getValue();
-            List<VectorTimestamp> currDependencies = currPacket.getDependencies();
-            boolean isDepSatisfied = serviceInstance.dag.isContainAll(currDependencies);
 
-            // Ignore if the dependencies are still not satisfied
-            if (!isDepSatisfied) continue;
-
-            // Execute the pending write-only request as the deps are satisfied already
+            // Execute the pending write-only request
             ClientRequest clientRequest = currPacket.getClientWriteOnlyRequest();
             assert clientRequest instanceof BehavioralRequest behavioralRequest &&
                     behavioralRequest.isWriteOnlyRequest() :
                     "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
+            if (clientRequest instanceof XdnHttpRequest xhr && xhr.getHttpResponse() != null) {
+                xhr.clearHttpResponse();
+            }
             boolean isExecSuccess = this.app.execute(clientRequest);
             assert isExecSuccess : "Failed to execute the pending write request";
 
             // Update my local causal directly-acyclic graph
+            List<VectorTimestamp> currDependencies = currPacket.getDependencies();
             List<GraphVertex> parentGraphVertices =
                     serviceInstance.dag.getVerticesByTimestamps(currDependencies);
             GraphVertex newGraphVertex = new GraphVertex(
                     currPacket.getRequestTimestamp(),
                     List.of(currPacket.getClientWriteOnlyRequest()));
             serviceInstance.dag.addChildOf(parentGraphVertices, newGraphVertex);
-
-            // remove the pending write after packet from the map
-            iterator.remove();
 
             // TODO: optionally send Ack to the sender
         }
@@ -450,7 +488,9 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         VectorTimestamp ts = packet.getConfirmedGraphNodeId();
         QuorumRecord qr = serviceInstance.graphNodeQuorumRecord.get(ts);
         if (qr == null) {
-            this.logger.log(Level.INFO, "Ignoring non-existent vertex in our DAG.");
+            if (this.logger.isLoggable(Level.INFO)) {
+                this.logger.log(Level.INFO, "Ignoring non-existent vertex in our DAG.");
+            }
             return;
         }
 
@@ -464,4 +504,25 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
         }
     }
 
+    private void retainRequestContent(Request request) {
+        if (request instanceof XdnHttpRequest xhr) {
+            if (xhr.getHttpRequestContent() != null) {
+                ByteBuf content = xhr.getHttpRequestContent().content();
+                if (content != null && content.refCnt() > 0) {
+                    ReferenceCountUtil.retain(content);
+                }
+            }
+        }
+    }
+
+    private void releaseRequestContent(Request request) {
+        if (request instanceof XdnHttpRequest xhr) {
+            if (xhr.getHttpRequestContent() != null) {
+                ByteBuf content = xhr.getHttpRequestContent().content();
+                if (content != null && content.refCnt() > 0) {
+                    ReferenceCountUtil.release(content);
+                }
+            }
+        }
+    }
 }

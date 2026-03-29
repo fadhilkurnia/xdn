@@ -489,7 +489,7 @@ def prepare_service_yaml(consistency, service_name):
     target = f"static/xdn_geolat_{CONSISTENCY_SHORT[consistency]}.yaml"
     shutil.copy2(SERVICE_TEMPLATE, target)
     replace_placeholder(target, "___SERVICE_NAME___", service_name)
-    replace_placeholder(target, "___CONSITENCY_MODEL___", consistency)
+    replace_placeholder(target, "___CONSISTENCY_MODEL___", consistency)
     return target
 
 # ==============================================================================

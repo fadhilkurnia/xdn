@@ -443,7 +443,7 @@ for consistency in consistency_models:
         ret_code = os.system(command)
         assert ret_code == 0
         replace_placeholder(service_prop_filename, "___SERVICE_NAME___", service_name)
-        replace_placeholder(service_prop_filename, "___CONSITENCY_MODEL___", consistency)
+        replace_placeholder(service_prop_filename, "___CONSISTENCY_MODEL___", consistency)
 
         # deploy the service
         print(f">> Deploying the service ...")

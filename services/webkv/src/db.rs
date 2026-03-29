@@ -1,6 +1,7 @@
 use rocksdb::{Options, TransactionDB, TransactionDBOptions, TransactionOptions, WriteOptions};
 use rusqlite::{params, Connection};
 use std::sync::Mutex;
+use std::time::Duration;
 use tikv_client::TransactionClient;
 use tokio::runtime::{Handle, Runtime};
 use tokio::task;
@@ -120,6 +121,9 @@ pub struct TiKeyValueStore {
     runtime: Runtime,
 }
 
+const TIKV_MAX_RETRIES: u32 = 20;
+const TIKV_RETRY_BASE_MS: u64 = 1;
+
 impl KeyValueStore for TiKeyValueStore {
     fn new(pd_endpoints: &str) -> Result<Self, String> {
         let endpoints: Vec<String> = pd_endpoints
@@ -143,20 +147,30 @@ impl KeyValueStore for TiKeyValueStore {
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
-        self.run(async {
-            let mut txn = self.client.begin_optimistic().await?;
-            txn.put(key.to_owned(), value.to_owned()).await?;
-            txn.commit().await?;
-            Ok(())
+        let key = key.to_owned();
+        let value = value.to_owned();
+        self.retry_write(move |client| {
+            let k = key.clone();
+            let v = value.clone();
+            Box::pin(async move {
+                let mut txn = client.begin_optimistic().await?;
+                txn.put(k, v).await?;
+                txn.commit().await?;
+                Ok(())
+            })
         })
     }
 
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        let result = self.run(async {
-            let mut txn = self.client.begin_optimistic().await?;
-            let result = txn.get(key.to_owned()).await?;
-            txn.commit().await?;
-            Ok(result)
+        let key = key.to_owned();
+        let result: Option<Vec<u8>> = self.retry_read(move |client| {
+            let k = key.clone();
+            Box::pin(async move {
+                let mut txn = client.begin_optimistic().await?;
+                let result = txn.get(k).await?;
+                txn.commit().await?;
+                Ok(result)
+            })
         })?;
 
         match result {
@@ -169,11 +183,15 @@ impl KeyValueStore for TiKeyValueStore {
     }
 
     fn delete(&self, key: &str) -> Result<(), String> {
-        self.run(async {
-            let mut txn = self.client.begin_optimistic().await?;
-            txn.delete(key.to_owned()).await?;
-            txn.commit().await?;
-            Ok(())
+        let key = key.to_owned();
+        self.retry_write(move |client| {
+            let k = key.clone();
+            Box::pin(async move {
+                let mut txn = client.begin_optimistic().await?;
+                txn.delete(k).await?;
+                txn.commit().await?;
+                Ok(())
+            })
         })
     }
 }
@@ -188,6 +206,75 @@ impl TiKeyValueStore {
             Err(_) => self.runtime.block_on(fut).map_err(|e| e.to_string()),
         }
     }
+
+    fn is_retryable(e: &tikv_client::Error) -> bool {
+        let msg = e.to_string();
+        msg.contains("WriteConflict")
+            || msg.contains("write conflict")
+            || msg.contains("KeyIsLocked")
+            || msg.contains("key is locked")
+            || msg.contains("TxnLockNotFound")
+    }
+
+    fn retry_write<F>(&self, make_txn: F) -> Result<(), String>
+    where
+        F: Fn(&TransactionClient) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), tikv_client::Error>> + Send + '_>,
+        >,
+    {
+        let do_retry = async {
+            for attempt in 0..TIKV_MAX_RETRIES {
+                match make_txn(&self.client).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        if !Self::is_retryable(&e) || attempt + 1 == TIKV_MAX_RETRIES {
+                            return Err(e);
+                        }
+                        let backoff =
+                            Duration::from_millis(TIKV_RETRY_BASE_MS << attempt.min(6));
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
+            }
+            unreachable!()
+        };
+        match Handle::try_current() {
+            Ok(handle) => {
+                task::block_in_place(|| handle.block_on(do_retry)).map_err(|e| e.to_string())
+            }
+            Err(_) => self.runtime.block_on(do_retry).map_err(|e| e.to_string()),
+        }
+    }
+
+    fn retry_read<F, T>(&self, make_txn: F) -> Result<T, String>
+    where
+        F: Fn(&TransactionClient) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<T, tikv_client::Error>> + Send + '_>,
+        >,
+    {
+        let do_retry = async {
+            for attempt in 0..TIKV_MAX_RETRIES {
+                match make_txn(&self.client).await {
+                    Ok(v) => return Ok(v),
+                    Err(e) => {
+                        if !Self::is_retryable(&e) || attempt + 1 == TIKV_MAX_RETRIES {
+                            return Err(e);
+                        }
+                        let backoff =
+                            Duration::from_millis(TIKV_RETRY_BASE_MS << attempt.min(6));
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
+            }
+            unreachable!()
+        };
+        match Handle::try_current() {
+            Ok(handle) => {
+                task::block_in_place(|| handle.block_on(do_retry)).map_err(|e| e.to_string())
+            }
+            Err(_) => self.runtime.block_on(do_retry).map_err(|e| e.to_string()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,7 +282,7 @@ mod tests {
     use super::{KeyValueStore, TiKeyValueStore};
 
     #[test]
-    fn tikv_round_trip_when_env_set() {
+    fn tikv_txn_round_trip_when_env_set() {
         let pd = match std::env::var("TIKV_PD_ADDR") {
             Ok(v) => v,
             Err(_) => {

@@ -30,8 +30,8 @@ PD_PEER_PORT = 2380
 TIKV_PORT = 20160
 TIKV_STATUS_PORT = 20180
 DATA_DIR_PREFIX = "/tmp"
-DEFAULT_PD_IMAGE = "pingcap/pd:latest"
-DEFAULT_TIKV_IMAGE = "pingcap/tikv:latest"
+DEFAULT_PD_IMAGE = "pingcap/pd:v5.4.3"
+DEFAULT_TIKV_IMAGE = "pingcap/tikv:v5.4.3"
 RQLITED_BIN = "rqlited"
 VALID_APPS = {
     "fadhilkurnia/xdn-bookcatalog",
@@ -535,13 +535,20 @@ def run_latency_client(
     duration_seconds: float,
     rate: int,
     output_path: Path,
+    payloads_file: Optional[str] = None,
+    urls_file: Optional[str] = None,
 ) -> None:
     raise_fd_limit()
     duration_arg = f"{duration_seconds:.0f}" if duration_seconds.is_integer() else f"{duration_seconds}"
     env = os.environ.copy()
     env["GO111MODULE"] = "off"
     env["GOWORK"] = "off"
-    cmd = ["go", "run", source_path.name, url, payload, duration_arg, f"{rate}"]
+    cmd = ["go", "run", source_path.name]
+    if payloads_file:
+        cmd.extend(["-payloads-file", payloads_file])
+    if urls_file:
+        cmd.extend(["-urls-file", urls_file])
+    cmd.extend([url, payload, duration_arg, f"{rate}"])
     with open(output_path, "w", encoding="utf-8") as fh:
         result = subprocess.run(
             cmd,
@@ -648,6 +655,17 @@ def main():
         default=DEFAULT_LOAD_GENERATOR,
         help="Load generator to use (k6 or get_latency_at_rate.go)",
     )
+    parser.add_argument(
+        "--randomize-keys",
+        action="store_true",
+        help="Randomize keys for webkv workload (avoids TiKV write conflicts)",
+    )
+    parser.add_argument(
+        "--n-keys",
+        type=int,
+        default=1000,
+        help="Number of distinct keys when --randomize-keys is used (default: 1000)",
+    )
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -664,7 +682,8 @@ def main():
     service_label = sanitize_name(service_name)
     container_name = normalize_service_name(args.dockerImageName, service_name)
 
-    results_dir = results_base / f"load_ar_{default_service}_distdb_{backend}_{timestamp}"
+    suffix = "_randkeys" if args.randomize_keys else ""
+    results_dir = results_base / f"load_ar_{default_service}_distdb_{backend}{suffix}_{timestamp}"
     results_dir.mkdir(parents=True, exist_ok=True)
 
     active_replicas = parse_active_replicas(config_path)
@@ -770,6 +789,19 @@ def main():
                     duration_seconds = parse_duration_seconds(args.duration)
                     payload_json = json.dumps(payload_data)
                     logger.info("Running Go latency client with target rate %s req/s", rate)
+                    # Generate randomized key files for workloads that need them
+                    payloads_path = None
+                    urls_path = None
+                    if args.randomize_keys:
+                        n_keys = args.n_keys
+                        payloads_path = str(results_dir / "payloads.txt")
+                        urls_path = str(results_dir / "urls.txt")
+                        base_url = f"http://{target_host}:{http_target_port}/api/kv"
+                        with open(payloads_path, "w") as pf, open(urls_path, "w") as uf:
+                            for ki in range(n_keys):
+                                k = f"key{ki}"
+                                pf.write(json.dumps({"key": k, "value": "xyz"}) + "\n")
+                                uf.write(f"{base_url}/{k}\n")
                     run_latency_client(
                         go_source,
                         request_url,
@@ -777,6 +809,8 @@ def main():
                         duration_seconds,
                         rate,
                         latency_output,
+                        payloads_file=payloads_path,
+                        urls_file=urls_path,
                     )
                     metrics = parse_latency_output(latency_output)
                 logger.info("Results for rate=%s: %s", rate, metrics)

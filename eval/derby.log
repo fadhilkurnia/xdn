@@ -1,0 +1,27 @@
+----------------------------------------------------------------
+Wed Mar 25 21:14:17 EDT 2026:
+Booting Derby version The Apache Software Foundation - Apache Derby - 10.11.1.1 - (1616546): instance a816c00e-019d-27b4-dac6-00007cb17c88 
+on database directory /tmp/gigapaxos/paxos_logs/paxos_dbAR2 with class loader jdk.internal.loader.ClassLoaders$AppClassLoader@c387f44 
+Loaded from file:/users/fadhil/xdn/jars/gigapaxos-1.0.10.jar
+java.vendor=Ubuntu
+java.runtime.version=21.0.10+7-Ubuntu-122.04
+user.dir=/users/fadhil/xdn/eval
+os.name=Linux
+os.arch=amd64
+os.version=5.15.0-168-generic
+derby.system.home=null
+Database Class Loader started - derby.database.classpath=''
+base.classpath=''
+----------------------------------------------------------------
+Wed Mar 25 21:14:17 EDT 2026:
+Booting Derby version The Apache Software Foundation - Apache Derby - 10.11.1.1 - (1616546): instance 7e41c0d6-019d-27b4-da4a-00007f17f0e8 
+on database directory /tmp/gigapaxos/paxos_logs/paxos_dbRC0 with class loader jdk.internal.loader.ClassLoaders$AppClassLoader@c387f44 
+Loaded from file:/users/fadhil/xdn/jars/gigapaxos-1.0.10.jar
+java.vendor=Ubuntu
+java.runtime.version=21.0.10+7-Ubuntu-122.04
+user.dir=/users/fadhil/xdn/eval
+os.name=Linux
+os.arch=amd64
+os.version=5.15.0-168-generic
+derby.system.home=null
+Database Class Loader started - derby.database.classpath=''

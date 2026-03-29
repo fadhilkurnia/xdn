@@ -1,0 +1,21 @@
+---
+name: tpcc-java
+components:
+   - tpcc-postgres:
+      image: postgres:17.4-bookworm
+      expose: 5432
+      stateful: true
+      healthcheck: "pg_isready -U postgres"
+      environments:
+        - POSTGRES_PASSWORD: benchpass
+        - POSTGRES_DB: tpcc
+   - tpcc-java-app:
+      image: fadhilkurnia/xdn-tpcc-java
+      port: 80
+      entry: true
+      environments:
+        - DATABASE_URL: postgresql://postgres:benchpass@tpcc-postgres:5432/tpcc
+        - WAREHOUSES: 10
+deterministic: false
+state: tpcc-postgres:/var/lib/postgresql/data/
+consistency: linearizability

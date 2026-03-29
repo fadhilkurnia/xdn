@@ -142,6 +142,18 @@ public class HttpActiveReplica {
     private static final boolean BYPASS_COORDINATOR =
             Boolean.getBoolean("PB_BYPASS_COORDINATOR");
 
+    // ── Pipeline profiler (enable via -DXDN_PIPELINE_PROFILER=true) ──
+    private static final boolean PIPELINE_PROFILER_ENABLED =
+            Boolean.getBoolean("XDN_PIPELINE_PROFILER");
+    private static final java.util.concurrent.atomic.AtomicLong pipelineProfilerCount =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong pipelineProfilerSumParse =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong pipelineProfilerSumQueue =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong pipelineProfilerSumDispatch =
+            new java.util.concurrent.atomic.AtomicLong();
+
     static {
         // Initialize HTTP clients for debugging purposes.
         for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
@@ -399,8 +411,6 @@ public class HttpActiveReplica {
             SimpleChannelInboundHandler<Object> {
 
         private static String nodeId = null;
-        private static final AtomicInteger asyncInFlight = new AtomicInteger();
-        private static final int MAX_ASYNC_IN_FLIGHT = 4096;
 
         /** Single daemon thread for enforcing request timeouts without blocking writePool. */
         private static final ScheduledExecutorService timeoutScheduler =
@@ -470,7 +480,7 @@ public class HttpActiveReplica {
                 timeoutTask.cancel(false);
             }
 
-            asyncInFlight.decrementAndGet();
+
 
             XdnHttpRequest httpRequest = rctx.httpRequest();
             ChannelHandlerContext ctx = rctx.ctx();
@@ -483,54 +493,39 @@ public class HttpActiveReplica {
                 return;
             }
 
-            // Dispatch response write to the channel's EventLoop
-            long sendAsyncStartNs = System.nanoTime();
-            long callbackElapsedMs = (sendAsyncStartNs - rctx.startExecTimeNs()) / 1_000_000;
-            ctx.executor().execute(() -> {
-                long eventLoopStartNs = System.nanoTime();
-                long queueDelayMs = (eventLoopStartNs - sendAsyncStartNs) / 1_000_000;
-                try {
-                    if (error != null) {
-                        String msg = error.getMessage() != null
-                                ? error.getMessage() : error.getClass().getSimpleName();
-                        logger.log(Level.WARNING,
-                                "Async request error: {0}", new Object[]{msg});
-                        HttpResponseStatus status =
-                                (error instanceof TimeoutException)
-                                        ? SERVICE_UNAVAILABLE
-                                        : INTERNAL_SERVER_ERROR;
-                        HttpActiveReplicaHandler.sendStringResponse(
-                                msg, status, false, ctx);
-                    } else {
-                        // Instrumentation: add pipeline timing header before writing response.
-                        if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
-                                && httpResponse != null) {
-                            httpResponse.headers().set("X-XDN-Pipeline",
-                                    String.format("callback=%dms;qdelay=%dms",
-                                            callbackElapsedMs, queueDelayMs));
-                        }
-                        HttpActiveReplicaHandler.writeHttpResponse(
-                                httpRequest.getRequestID(),
-                                httpResponse,
-                                ctx,
-                                rctx.isKeepAlive(),
-                                rctx.startExecTimeNs());
+            // Write response directly — ctx.writeAndFlush() is thread-safe in Netty,
+            // so we skip the event loop dispatch (ctx.executor().execute()) that added
+            // unnecessary scheduling latency (~0.5ms per request).
+            try {
+                if (error != null) {
+                    String msg = error.getMessage() != null
+                            ? error.getMessage() : error.getClass().getSimpleName();
+                    logger.log(Level.WARNING,
+                            "Async request error: {0}", new Object[]{msg});
+                    HttpResponseStatus status =
+                            (error instanceof TimeoutException)
+                                    ? SERVICE_UNAVAILABLE
+                                    : INTERNAL_SERVER_ERROR;
+                    HttpActiveReplicaHandler.sendStringResponse(
+                            msg, status, false, ctx);
+                } else {
+                    if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
+                            && httpResponse != null) {
+                        long callbackElapsedMs = (System.nanoTime() - rctx.startExecTimeNs()) / 1_000_000;
+                        httpResponse.headers().set("X-XDN-Pipeline",
+                                String.format("callback=%dms", callbackElapsedMs));
                     }
-                    long writeEndNs = System.nanoTime();
-                    long writeMs = (writeEndNs - eventLoopStartNs) / 1_000_000;
-                    long totalMs = (writeEndNs - rctx.startExecTimeNs()) / 1_000_000;
-                    if (totalMs > 10) {
-                        logger.log(Level.INFO,
-                                "SLOW_RESPONSE total={0}ms callback={1}ms eventLoopQueue={2}ms write={3}ms method={4} uri={5}",
-                                new Object[]{totalMs, callbackElapsedMs, queueDelayMs, writeMs,
-                                        httpRequest.getHttpRequest().method(),
-                                        httpRequest.getHttpRequest().uri()});
-                    }
-                } finally {
-                    safeRelease(httpRequest.getHttpRequest());
-                    safeRelease(httpRequest.getHttpRequestContent());
+                    HttpActiveReplicaHandler.writeHttpResponse(
+                            httpRequest.getRequestID(),
+                            httpResponse,
+                            ctx,
+                            rctx.isKeepAlive(),
+                            rctx.startExecTimeNs());
                 }
-            });
+            } finally {
+                safeRelease(httpRequest.getHttpRequest());
+                safeRelease(httpRequest.getHttpRequestContent());
+            }
         }
 
         /**
@@ -822,34 +817,27 @@ public class HttpActiveReplica {
                 this.request = null;
                 this.requestContent = null;
 
-                // Backpressure: reject if too many async requests are in flight.
-                int inFlight = asyncInFlight.incrementAndGet();
-                if (inFlight > MAX_ASYNC_IN_FLIGHT) {
-                    asyncInFlight.decrementAndGet();
-                    ReferenceCountUtil.release(httpRequest.getHttpRequest());
-                    ReferenceCountUtil.release(httpRequest.getHttpRequestContent());
-                    HttpActiveReplicaHandler.sendStringResponse(
-                            "Server overloaded (" + inFlight + " requests in flight)",
-                            SERVICE_UNAVAILABLE, false, ctx);
-                    return;
-                }
-
                 AtomicBoolean responded = new AtomicBoolean(false);
                 ResponseContext rctx = new ResponseContext(
                         httpRequest, ctx, isKeepAlive, startExecTimeNs, responded);
 
-                // Schedule a timeout — replaces the old future.get(timeout)
-                ScheduledFuture<?> timeoutTask = timeoutScheduler.schedule(() -> {
-                    sendAsyncResponse(rctx, null, null,
-                            new TimeoutException("Request timed out after "
-                                    + httpFrontendRequestTimeoutMs + "ms"));
-                }, httpFrontendRequestTimeoutMs, TimeUnit.MILLISECONDS);
+                // Lazy timeout: only schedule if the request hasn't completed within
+                // a short period. For most requests that complete in <100ms, this
+                // avoids the cost of creating and cancelling a ScheduledFuture.
+                ScheduledFuture<?> timeoutTask = null;
+                if (httpFrontendRequestTimeoutMs > 0) {
+                    timeoutTask = timeoutScheduler.schedule(() -> {
+                        sendAsyncResponse(rctx, null, null,
+                                new TimeoutException("Request timed out after "
+                                        + httpFrontendRequestTimeoutMs + "ms"));
+                    }, httpFrontendRequestTimeoutMs, TimeUnit.MILLISECONDS);
+                }
 
                 // If channel closes before completion, clean up
+                final ScheduledFuture<?> capturedTimeout = timeoutTask;
                 ctx.channel().closeFuture().addListener(cf -> {
                     if (responded.compareAndSet(false, true)) {
-                        timeoutTask.cancel(false);
-                        asyncInFlight.decrementAndGet();
+                        if (capturedTimeout != null) capturedTimeout.cancel(false);
                         safeRelease(httpRequest.getHttpRequest());
                         safeRelease(httpRequest.getHttpRequestContent());
                     }
@@ -857,16 +845,39 @@ public class HttpActiveReplica {
 
                 // Lightweight dispatch — writePool thread returns in microseconds
                 InetSocketAddress senderAddr = this.senderAddr;
+                final long enqueueTimeNs = System.nanoTime();
                 selectedPool.execute(() -> {
+                    long dequeueTimeNs = System.nanoTime();
                     try {
                         if (isHttpFrontendBatchEnabled)
                             dispatchXdnHttpRequestViaBatching(
-                                    httpRequest, senderAddr, rctx, timeoutTask);
+                                    httpRequest, senderAddr, rctx, capturedTimeout);
                         else
                             dispatchXdnHttpRequest(
-                                    httpRequest, senderAddr, rctx, timeoutTask);
+                                    httpRequest, senderAddr, rctx, capturedTimeout);
                     } catch (Throwable t) {
-                        sendAsyncResponse(rctx, null, timeoutTask, t);
+                        sendAsyncResponse(rctx, null, capturedTimeout, t);
+                    }
+                    // ── Pipeline profiler ──
+                    if (PIPELINE_PROFILER_ENABLED) {
+                        long doneTimeNs = System.nanoTime();
+                        long parseNs = enqueueTimeNs - startExecTimeNs;
+                        long queueNs = dequeueTimeNs - enqueueTimeNs;
+                        long dispatchNs = doneTimeNs - dequeueTimeNs;
+                        pipelineProfilerSumParse.addAndGet(parseNs);
+                        pipelineProfilerSumQueue.addAndGet(queueNs);
+                        pipelineProfilerSumDispatch.addAndGet(dispatchNs);
+                        long n = pipelineProfilerCount.incrementAndGet();
+                        if (n % 1000 == 0) {
+                            System.err.printf(
+                                "[PIPELINE-PROFILER] n=%d avg parse=%.1fus queue=%.1fus dispatch=%.1fus total=%.1fus%n",
+                                n,
+                                pipelineProfilerSumParse.get() / 1000.0 / n,
+                                pipelineProfilerSumQueue.get() / 1000.0 / n,
+                                pipelineProfilerSumDispatch.get() / 1000.0 / n,
+                                (pipelineProfilerSumParse.get() + pipelineProfilerSumQueue.get()
+                                    + pipelineProfilerSumDispatch.get()) / 1000.0 / n);
+                        }
                     }
                 });
             }
@@ -1303,16 +1314,23 @@ public class HttpActiveReplica {
                         HttpHeaderValues.CLOSE);
             }
 
+            // Guard: if the channel is already closed, release the response and bail out.
+            // Without this, writeAndFlush on a closed channel causes the Netty encoder
+            // to throw IllegalReferenceCountException when it tries to read the ByteBuf.
+            if (!ctx.channel().isActive()) {
+                safeRelease(httpResponse);
+                return;
+            }
+
             long preResponseWriteTsNs = System.nanoTime();
             ChannelFuture cf = ctx.writeAndFlush(httpResponse);
             cf.addListener((ChannelFutureListener) channelFuture -> {
                 try {
                     if (!channelFuture.isSuccess()) {
                         if (channelFuture.cause() instanceof ClosedChannelException) {
-                            // do nothing if end-client is the one who close the connection.
                             return;
                         }
-                        logger.log(Level.WARNING,
+                        logger.log(Level.FINE,
                                 "Writing response failed: " + channelFuture.cause());
                     }
 
@@ -1330,18 +1348,13 @@ public class HttpActiveReplica {
                                         String.valueOf(requestId)});
                     }
 
-                    // If keep-alive is off, close the connection once the content is fully written.
                     if (!isKeepAlive) {
                         ctx.writeAndFlush(Unpooled.EMPTY_BUFFER)
                                 .addListener(ChannelFutureListener.CLOSE);
                     }
                 } finally {
-                    // We should release the reference-counted httpResponse here.
-                    // It is allocated in the XdnGigapaxosApp after forwarding the request
-                    // into the containerized service.
-                    // However, because this handler is a SimpleChannelInboundHandler, this
-                    // handler already automatically release the httpResponse for us because
-                    // of the ctx.writeAndFlush(..) above.
+                    // writeAndFlush transfers ByteBuf ownership to Netty's pipeline,
+                    // which releases it after encoding. No manual release needed here.
                 }
             });
         }

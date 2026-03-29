@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -47,6 +49,7 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     }
 
     private final ConcurrentMap<String, LazyReplicaInstance<NodeIDType>> currentInstances;
+    private final ExecutorService executePool;
 
     private final Logger logger = Logger.getLogger(LazyReplicaCoordinator.class.getSimpleName());
 
@@ -70,6 +73,14 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
 
         this.currentInstances = new ConcurrentHashMap<>();
 
+        int nWorkers = Integer.getInteger("LAZY_N_EXECUTE_WORKERS",
+                Math.max(32, Runtime.getRuntime().availableProcessors() * 4));
+        this.executePool = Executors.newFixedThreadPool(nWorkers, r -> {
+            Thread t = new Thread(r, "lazy-exec-" + myNodeId);
+            t.setDaemon(true);
+            return t;
+        });
+
         // add packet demultiplexer for LaztPacket that will invoke
         // the coordinateRequest() method.
         LazyPacketDemultiplexer packetDemultiplexer =
@@ -85,8 +96,10 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
     @Override
     public boolean coordinateRequest(Request request, ExecutedCallback callback)
             throws IOException, RequestParseException {
-        System.out.println(">> " + myNodeId + " LazyReplicaCoordinator -- receiving request " +
-                request.getClass().getSimpleName());
+        if (logger.isLoggable(Level.FINE)) {
+            logger.log(Level.FINE, ">> " + myNodeId + " LazyReplicaCoordinator -- receiving request " +
+                    request.getClass().getSimpleName());
+        }
         if (!(request instanceof ReplicableClientRequest) && !(request instanceof LazyPacket)) {
             throw new RuntimeException("Unknown request/packet handled by LazyReplicaCoordinator");
         }
@@ -128,40 +141,46 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                                 "for LazyReplicaCoordinator");
             }
 
-            boolean isExecSuccess = this.app.execute(clientRequest);
-
-            // for write request, respond to client first, then asynchronously
-            // broadcast WRITE_AFTER to all peer replicas on a separate thread
-            // so the client response is not blocked by WAN broadcast latency.
-            if (isWriteOnly && isMonotonic) {
-                if (isExecSuccess) {
-                    callback.executed(clientRequest, true);
-
-                    retainRequestContent(clientRequest);
-                    Thread.ofVirtual().start(() -> {
-                        try {
-                            LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
-                                    myNodeId.toString(), clientRequest);
-                            Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
-                            myPeers.remove(myNodeId);
-                            GenericMessagingTask<NodeIDType, LazyPacket> m =
-                                    new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
-                            logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
-                            messenger.send(m);
-                        } catch (Exception e) {
-                            logger.log(Level.WARNING, "Failed to send WRITE_AFTER", e);
-                        } finally {
-                            releaseRequestContent(clientRequest);
-                        }
-                    });
-                }
-            } else {
-                if (isExecSuccess) {
-                    callback.executed(clientRequest, true);
-                }
+            // Read-only requests need no coordination — execute inline on the
+            // caller thread to avoid thread-pool dispatch overhead.
+            if (isReadOnly) {
+                boolean isExecSuccess = this.app.execute(clientRequest);
+                callback.executed(clientRequest, isExecSuccess);
+                return true;
             }
 
-            return isExecSuccess;
+            // Write requests are fire-and-forget — execute inline, respond,
+            // then asynchronously broadcast WRITE_AFTER on a virtual thread.
+            boolean isExecSuccess = this.app.execute(clientRequest);
+            if (!isExecSuccess) {
+                if (logger.isLoggable(Level.WARNING)) {
+                    logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
+                }
+                callback.executed(clientRequest, false);
+                return true;
+            }
+            callback.executed(clientRequest, true);
+
+            retainRequestContent(clientRequest);
+            Thread.ofVirtual().start(() -> {
+                try {
+                    LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
+                            myNodeId.toString(), clientRequest);
+                    Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                    myPeers.remove(myNodeId);
+                    GenericMessagingTask<NodeIDType, LazyPacket> m =
+                            new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                    if (logger.isLoggable(Level.FINE)) {
+                        logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
+                    }
+                    messenger.send(m);
+                } catch (Exception e) {
+                    logger.log(Level.WARNING, "Failed to send WRITE_AFTER", e);
+                } finally {
+                    releaseRequestContent(clientRequest);
+                }
+            });
+            return true;
         }
 
         // handle peer-initiated packet (i.e., write-after)
@@ -193,9 +212,11 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
 
     @Override
     public boolean createReplicaGroup(String serviceName, int epoch, String state, Set<NodeIDType> nodes, String placementMetadata) {
-        System.out.printf(">> %s:LazyReplicaCoordinator -- " +
-                        "createReplicaGroup name=%s nodes=%s epoch=%d state=%s\n",
-                myNodeId, serviceName, nodes, epoch, state);
+        if (logger.isLoggable(Level.INFO)) {
+            logger.log(Level.INFO, String.format(">> %s:LazyReplicaCoordinator -- " +
+                            "createReplicaGroup name=%s nodes=%s epoch=%d state=%s",
+                    myNodeId, serviceName, nodes, epoch, state));
+        }
         LazyReplicaInstance<NodeIDType> replicaInstance =
                 new LazyReplicaInstance<>(serviceName, epoch, state, nodes);
         this.currentInstances.put(serviceName, replicaInstance);

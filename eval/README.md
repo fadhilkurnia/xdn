@@ -101,15 +101,88 @@ Environment variables `RATES` and `DURATION` can override the defaults
 ## Non-Deterministic Apps (Primary-Backup)
 
 These scripts benchmark non-deterministic applications under primary-backup
-replication. They run per-rate isolated benchmarks (fresh cluster deployment
-per rate point) and produce `rate<N>.txt` files.
+replication. Each script covers one replication system and accepts an `--app`
+flag to select the application. They run per-rate isolated benchmarks (fresh
+cluster deployment per rate point) and produce `rate<N>.txt` files.
 
-### Naming convention
+### Available apps
 
-Scripts follow the pattern `run_load_pb_<app>_<system>.py` where `<app>` is the
-application (e.g., `bookcatalog`, `wordpress`, `tpcc`, `hotelres`, `synth`) and
-`<system>` is the replication system (e.g., `reflex`, `openebs`, `rqlite`,
-`criu`, `semisync`, `pgsync`).
+| App name | Description | Docker images |
+|----------|-------------|---------------|
+| `wordpress` | WordPress + MySQL | `mysql:8.4.0`, `wordpress:6.5.4-apache` |
+| `bookcatalog` | BookCatalog-ND (SQLite) | `fadhilkurnia/xdn-bookcatalog-nd` |
+| `tpcc` | TPC-C (PostgreSQL + Flask) | `postgres:17.4-bookworm`, `fadhilkurnia/xdn-tpcc` |
+| `hotelres` | Hotel-Reservation (MongoDB) | `mongo:8.0.5-rc2-noble`, `fadhilkurnia/xdn-hotel-reservation` |
+| `synth` | Synthetic Workload (SQLite) | `fadhilkurnia/xdn-synth-workload` |
+
+### `run_load_pb_reflex_app.py`
+
+XDN Primary-Backup via FUSELOG state-diff replication. Fresh cluster per rate point.
+
+```
+python eval/run_load_pb_reflex_app.py --app wordpress --rates 100,200,500,1000
+python eval/run_load_pb_reflex_app.py --app bookcatalog --duration 30
+python eval/run_load_pb_reflex_app.py --app tpcc --sanity-check
+```
+
+Apps: `wordpress`, `bookcatalog`, `tpcc`, `hotelres`.
+Extra flags: `--sanity-check`, `--sample-latency`, `--jfr`, `--apache-timing`.
+
+### `run_load_pb_openebs_app.py`
+
+OpenEBS Mayastor 3-replica block-level NVMe-oF replication on Kubernetes.
+
+```
+python eval/run_load_pb_openebs_app.py --app wordpress --rates 100,200,500
+python eval/run_load_pb_openebs_app.py --app bookcatalog --skip-k8s --skip-openebs
+```
+
+Apps: `wordpress`, `bookcatalog`, `tpcc`, `hotelres`, `synth`.
+Extra flags: `--skip-k8s`, `--skip-disk-prep`, `--skip-openebs`, `--skip-deploy`.
+
+### `run_load_pb_distdb_app.py`
+
+Native distributed database replication baselines. The DB backend is
+auto-selected based on the app:
+
+| App | Backend | Description |
+|-----|---------|-------------|
+| `wordpress` | MySQL semi-sync | `rpl_semi_sync_source_wait_for_replica_count=1` |
+| `tpcc` | PostgreSQL sync | `synchronous_commit=on` with streaming replicas |
+| `hotelres` | MongoDB replica set | `w:majority` write concern |
+| `bookcatalog` | rqlite (Raft) | Each SQL txn = separate Raft consensus round |
+| `synth` | rqlite (Raft) | Same as bookcatalog |
+
+```
+python eval/run_load_pb_distdb_app.py --app wordpress --rates 100,200,500
+python eval/run_load_pb_distdb_app.py --app tpcc --skip-db
+```
+
+Extra flags: `--skip-teardown`, `--skip-db`, `--skip-app`, `--skip-seed`.
+
+### `run_load_pb_criu_app.py`
+
+CRIU checkpoint/restore baseline using `BaselineCriuReplica.java` proxy.
+
+```
+python eval/run_load_pb_criu_app.py --app wordpress --rates 1,100,200
+python eval/run_load_pb_criu_app.py --app bookcatalog
+```
+
+Apps: `wordpress`, `bookcatalog`.
+
+### Synth validation scripts
+
+The synthetic workload scripts run parametric experiments (vary txns, ops,
+write_size, autocommit) to validate XDN's sync-granularity hypothesis.
+They are kept as separate scripts since their experiment structure differs
+from the standard rate sweep:
+
+| Script | System |
+|--------|--------|
+| `validate_load_pb_synth_reflex.py` | XDN Primary-Backup |
+| `validate_load_pb_synth_openebs.py` | OpenEBS |
+| `validate_load_pb_synth_rqlite.py` | rqlite |
 
 ### Output location
 
@@ -120,40 +193,55 @@ the latest run. Each directory contains:
 - `rate<N>.txt` — per-rate metrics from the Go load generator
 - `screen_rate<N>.log` — cluster console log for that rate point
 - `screen.log` — concatenated screen logs
+- `gigapaxos_config.properties` — effective GigaPaxos config used
+- `jvm_args.txt` — JVM args used for the run
 
-The `rate<N>.txt` files contain key-value metrics:
+### Legacy scripts
+
+The original per-app-per-system scripts are preserved in `eval/legacy_pb_scripts/`
+with deprecation warnings. They will be removed in a future release.
+
+## Geo-Distributed Latency
+
+### `run_geolat_v2.py`
+
+Measures end-to-end latency from 3 US cities (New York, Chicago, Los Angeles)
+under 5 deployment approaches. All latencies are computed from geographic
+coordinates using 3.1x speed-of-light inflation via `tc` netem emulation on
+CloudLab.
+
+**Baselines** (single deployment, measure from all 3 cities):
+- `single_region`: 3 replicas in Virginia (us-east-1), 2ms inter-AZ RTT
+- `multi_region`: 3 replicas across Virginia, Ohio, Oregon (Spanner-like)
+
+**ReFlex** (per-city deployment — replicas placed near each city separately):
+- `reflex_lin`: 3 replicas near the target city (linearizability)
+- `reflex_seq`: 3+ replicas near the target city, Flexible Paxos (sequential)
+- `reflex_evt`: 3 replicas near the target city (eventual, local reads+writes)
+
+Each ReFlex approach deploys a fresh cluster optimized for one city at a time,
+reflecting the real use case where each user's service gets replicas placed
+near their location. Consistency protocol is verified via `/replica/info`
+after each deployment.
 
 ```
-total_requests_sent: <int>
-total_successful_responses: <int>
-actual_achieved_rate_rps: <float>
-actual_throughput_rps: <float>
-average_latency_ms: <float>
-median_latency_ms: <float>
-p90_latency_ms: <float>
-p95_latency_ms: <float>
-p99_latency_ms: <float>
+python eval/run_geolat_v2.py \
+    --ar-hosts 10.10.1.1,10.10.1.2,10.10.1.3 \
+    --control-plane-host 10.10.1.4
+
+python eval/run_geolat_v2.py \
+    --approaches single_region,multi_region,reflex_lin \
+    --num-warmup 100 --num-requests 200
 ```
 
-### Available scripts
+Results go to `eval/results/geolat_v2_<timestamp>/` with CSVs:
+`eval_geo_latency_cdf.csv`, `eval_geo_per_city_latency.csv`,
+`eval_geo_raw.csv`, `eval_geo_summary.csv`.
 
-| Script | App | System |
-|--------|-----|--------|
-| `run_load_pb_bookcatalog_reflex.py` | BookCatalog-ND (SQLite) | XDN Primary-Backup |
-| `run_load_pb_bookcatalog_openebs.py` | BookCatalog-ND | OpenEBS |
-| `run_load_pb_bookcatalog_rqlite.py` | BookCatalog-ND | rqlite |
-| `run_load_pb_bookcatalog_criu.py` | BookCatalog-ND | CRIU |
-| `run_load_pb_wordpress_reflex.py` | WordPress | XDN Primary-Backup |
-| `run_load_pb_wordpress_openebs.py` | WordPress | OpenEBS |
-| `run_load_pb_wordpress_semisync.py` | WordPress | MySQL Semi-Sync |
-| `run_load_pb_tpcc_reflex.py` | TPC-C (PostgreSQL) | XDN Primary-Backup |
-| `run_load_pb_tpcc_openebs.py` | TPC-C | OpenEBS |
-| `run_load_pb_tpcc_pgsync.py` | TPC-C | PostgreSQL Sync Repl |
-| `run_load_pb_hotelres_reflex.py` | Hotel-Reservation | XDN Primary-Backup |
-| `run_load_pb_hotelres_openebs.py` | Hotel-Reservation | OpenEBS |
-| `run_load_pb_synth_reflex.py` | Synthetic Workload | XDN Primary-Backup |
-| `run_load_pb_synth_openebs.py` | Synthetic Workload | OpenEBS |
-| `run_load_pb_synth_rqlite.py` | Synthetic Workload | rqlite |
+### `run_geolat_consistency.py` (v1)
+
+Original 50-city geo-latency experiment measuring only ReFlex consistency
+levels across multiple read ratios. Still usable for the v1 paper figures.
 
 ## Microbenchmarks
 
@@ -168,6 +256,27 @@ python eval/run_microbench_breakdown_bookcatalog.py [--rates 100,200,...] [--lev
 ```
 
 Results go to `eval/results/bookcatalog_optbreakdown_<timestamp>/`.
+
+### `run_microbench_coordination_granularity.py`
+
+Measures per-request latency as a function of SQL statements per request,
+demonstrating ReFlex's coordination granularity advantage. Uses the tpcc-java
+service with configurable `txns` parameter. Sends sequential requests (one at
+a time) to isolate pure coordination cost.
+
+```
+python eval/run_microbench_coordination_granularity.py --system reflex
+python eval/run_microbench_coordination_granularity.py --system pgsync-txn
+python eval/run_microbench_coordination_granularity.py --system pgsync-stmt
+python eval/run_microbench_coordination_granularity.py --system openebs
+```
+
+Systems: `reflex` (1 round/request), `pgsync-txn` (1 sync/commit),
+`pgsync-stmt` (1 sync/SQL statement), `openebs` (1 round/fsync).
+Extra flags: `--sanity-check`, `--txns 1,2,3,5,8,10,15`, `--n-samples 50`,
+`--n-warmup 10`.
+Results go to `eval/results/microbench_coordination_<system>_<timestamp>/`.
+Use `plot_coordination_granularity.py` to combine results into a paper figure.
 
 ## Debugging / Investigation
 
@@ -274,8 +383,8 @@ python eval/init_drbd.py <node1> <node2> <node3> --backing-device /dev/sdb
 
 **Primary-backup (non-deterministic apps):**
 
-1. Run `run_load_pb_<app>_<system>.py` for each system to produce `rate<N>.txt`
-   files in timestamped directories under `eval/results/`
+1. Run `run_load_pb_<system>_app.py --app <app>` for each system to produce
+   `rate<N>.txt` files in timestamped directories under `eval/results/`
 2. Ensure symlinks (`eval/results/load_pb_<app>_<system>/`) point to the latest runs
 3. Run `generate_eval_csvs.py` to aggregate results into combined CSVs
 4. Run the appropriate `plot_*.py` script to generate figures
