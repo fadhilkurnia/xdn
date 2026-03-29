@@ -186,15 +186,29 @@ def get_app_request_config(image: str) -> Tuple[str, Dict[str, str], str, Dict[s
     raise ValueError(f"No request payload defined for image: {image}")
 
 
+SCREEN_SESSION = "xdn_ar_bench"
+SCREEN_LOG = "screen_logs/xdn_ar_bench.log"
+
+
 def start_cluster(config_path: Path, repo_root: Path, extra_jvm_args: str = ""):
     gp_server = repo_root / "bin" / "gpServer.sh"
-    cmd = [str(gp_server), f"-DgigapaxosConfig={config_path}"]
+    jvm_args_str = f"-DgigapaxosConfig={config_path}"
     if extra_jvm_args:
-        cmd.extend(extra_jvm_args.split())
-    cmd.extend(["start", "all"])
-    logger.info("Starting XDN cluster with %s (extra JVM args: %s)", config_path, extra_jvm_args or "(none)")
-    subprocess.run(cmd, check=True)
-    
+        jvm_args_str += " " + extra_jvm_args
+
+    # Start in a screen session with logging so we capture JVM output
+    os.makedirs("screen_logs", exist_ok=True)
+    os.system(f"rm -f {SCREEN_LOG}")
+    screen_cmd = (
+        f"screen -L -Logfile {SCREEN_LOG} -S {SCREEN_SESSION} -d -m bash -c "
+        f"'{gp_server} {jvm_args_str} start all; exec bash'"
+    )
+    logger.info("Starting XDN cluster: %s", screen_cmd)
+    ret = os.system(screen_cmd)
+    if ret != 0:
+        raise RuntimeError(f"Failed to start cluster in screen session (exit {ret})")
+    time.sleep(15)  # give JVMs time to start
+
     logger.info("Waiting for control plane and active replica HTTP endpoints to be ready...")
     http_offset, rc_http_enabled, active_http_enabled, active_http_port_80 = parse_http_settings(config_path)
     if rc_http_enabled is False:
@@ -607,11 +621,21 @@ def main():
     )
     logger.info("Using request endpoint %s with payload %s", post_endpoint, payload_data)
 
+    # Save config to results directory for reproducibility
+    import shutil
+    config_copy = results_dir / config_path.name
+    shutil.copy2(config_path, config_copy)
+    logger.info("Config saved to %s", config_copy)
+    # Also save JVM args
+    jvm_args_file = results_dir / "jvm_args.txt"
+    jvm_args_file.write_text(args.jvm_args + "\n")
+
     go_source: Optional[Path] = None
     if args.load_generator == "go":
         go_source = Path(__file__).resolve().parent / "get_latency_at_rate.go"
 
     results = []
+    screen_logs = []
 
     for i, rate in enumerate(rates_list):
         logger.info("=" * 60)
@@ -703,6 +727,17 @@ def main():
                     "Throughput %.2f rps < 75%% of offered %s rps (latency still OK); continuing.",
                     metrics["throughput_rps"], rate,
                 )
+            # Save screen log for this rate point
+            screen_rate_log = results_dir / f"screen_rate{rate}.log"
+            try:
+                import shutil
+                if Path(SCREEN_LOG).exists():
+                    shutil.copy2(SCREEN_LOG, screen_rate_log)
+                    screen_logs.append(screen_rate_log)
+                    logger.info("Screen log saved -> %s", screen_rate_log)
+            except Exception as e:
+                logger.warning("Failed to copy screen log: %s", e)
+
         finally:
             # Always clean up this rate's cluster
             try:
@@ -710,6 +745,18 @@ def main():
             except Exception:
                 pass
             stop_cluster(config_path, repo_root)
+
+    # Combine all per-rate screen logs into one
+    if screen_logs:
+        combined_log = results_dir / "screen.log"
+        with open(combined_log, "w") as out:
+            for log_path in screen_logs:
+                if log_path.exists():
+                    out.write(f"\n{'='*60}\n")
+                    out.write(f"  {log_path.name}\n")
+                    out.write(f"{'='*60}\n")
+                    out.write(log_path.read_text())
+        logger.info("Combined screen log -> %s", combined_log)
 
     csv_path = write_results_csv(results_dir, results)
     print(f"Results saved to {csv_path}")

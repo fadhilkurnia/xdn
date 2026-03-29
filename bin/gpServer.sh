@@ -404,7 +404,9 @@ $LOCAL_SSL_KEYFILES \
 -Djava.util.logging.config.file=$LOG_PROPERTIES \
 -Dlog4j.configuration=$LOG4J_PROPERTIES \
 -DgigapaxosConfig=$GP_PROPERTIES \
--Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host"
+-Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host \
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED \
+--add-opens java.base/java.nio.channels.spi=ALL-UNNAMED"
 
 JVMARGS="$DEFAULT_JVMARGS $SUPPLIED_JVMARGS"
 
@@ -413,7 +415,9 @@ $REMOTE_SSL_KEYFILES \
 -Djava.util.logging.config.file=$(get_simple_name $LOG_PROPERTIES) \
 -Dlog4j.configuration=$(get_simple_name $LOG4J_PROPERTIES) \
 -DgigapaxosConfig=$(get_simple_name $DEFAULT_GP_PROPERTIES) \
--Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host"
+-Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host \
+--add-opens java.base/sun.nio.ch=ALL-UNNAMED \
+--add-opens java.base/java.nio.channels.spi=ALL-UNNAMED"
 
 REMOTE_JVMARGS="$SUPPLIED_JVMARGS $DEFAULT_REMOTE_JVMARGS"
 

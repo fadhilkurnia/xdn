@@ -30,13 +30,13 @@ public class DirectedAcyclicGraph {
         }
     }
 
-    public List<GraphVertex> getLeafVertices() {
+    public synchronized List<GraphVertex> getLeafVertices() {
         assert !this.leafVertices.isEmpty() : "Expecting leaf vertices but found none";
         assert this.leafVertices.size() < 100 : "Too big of a result: " + this.leafVertices.size();
         return new ArrayList<>(this.leafVertices);
     }
 
-    public void addChildOf(List<GraphVertex> parents, GraphVertex child) {
+    public synchronized void addChildOf(List<GraphVertex> parents, GraphVertex child) {
         assert parents != null;
         assert child != null;
 
@@ -79,7 +79,7 @@ public class DirectedAcyclicGraph {
                 "The newly inserted child vertex create a cycle in the graph";
     }
 
-    public boolean isContain(GraphVertex vertex) {
+    public synchronized boolean isContain(GraphVertex vertex) {
         return this.idToVertexMapper.get(vertex.getTimestamp()) != null;
     }
 
@@ -111,14 +111,14 @@ public class DirectedAcyclicGraph {
         return false;
     }
 
-    public boolean isContainAll(List<VectorTimestamp> timestamps) {
+    public synchronized boolean isContainAll(List<VectorTimestamp> timestamps) {
         for (VectorTimestamp ts : timestamps) {
             if (!this.idToVertexMapper.containsKey(ts)) return false;
         }
         return true;
     }
 
-    public List<GraphVertex> getVerticesByTimestamps(List<VectorTimestamp> timestamps) {
+    public synchronized List<GraphVertex> getVerticesByTimestamps(List<VectorTimestamp> timestamps) {
         List<GraphVertex> graphVertices = new ArrayList<>();
         for (VectorTimestamp ts : timestamps) {
             GraphVertex n = this.idToVertexMapper.get(ts);

@@ -17,6 +17,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"sort"
 	"strconv"
@@ -79,39 +80,53 @@ func sanityCheck(client *http.Client, method string, url string, payload string,
 	key   string
 	value string
 }) {
-	var body io.Reader
-	if method == http.MethodPost || method == http.MethodPut {
-		body = bytes.NewBufferString(payload)
-	}
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sanity check failed to create request: %v\n", err)
-		os.Exit(1)
-	}
-	if (method == http.MethodPost || method == http.MethodPut) && !hasHeader(headers, "Content-Type") {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	for _, header := range headers {
-		req.Header.Set(header.key, header.value)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sanity check failed to reach endpoint: %v\n", err)
-		os.Exit(1)
-	}
-	respBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
-	if readErr != nil {
-		fmt.Fprintf(os.Stderr, "sanity check failed to read response: %v\n", readErr)
-		os.Exit(1)
-	}
-	responseBody := strings.TrimSpace(string(respBytes))
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	maxRetries := 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		var body io.Reader
+		if method == http.MethodPost || method == http.MethodPut {
+			body = bytes.NewBufferString(payload)
+		}
+		req, err := http.NewRequest(method, url, body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sanity check failed to create request: %v\n", err)
+			os.Exit(1)
+		}
+		if (method == http.MethodPost || method == http.MethodPut) && !hasHeader(headers, "Content-Type") {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		for _, header := range headers {
+			req.Header.Set(header.key, header.value)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < maxRetries {
+				fmt.Fprintf(os.Stderr, "sanity check attempt %d/%d failed: %v, retrying...\n", attempt, maxRetries, err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "sanity check failed to reach endpoint: %v\n", err)
+			os.Exit(1)
+		}
+		respBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "sanity check failed to read response: %v\n", readErr)
+			os.Exit(1)
+		}
+		responseBody := strings.TrimSpace(string(respBytes))
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			fmt.Printf("example_response_status: %s\n", resp.Status)
+			fmt.Printf("example_response_body: %s\n", responseBody)
+			return
+		}
+		if attempt < maxRetries {
+			fmt.Fprintf(os.Stderr, "sanity check attempt %d/%d: status %s, retrying...\n", attempt, maxRetries, resp.Status)
+			time.Sleep(2 * time.Second)
+			continue
+		}
 		fmt.Fprintf(os.Stderr, "sanity check failed with status %s\nresponse_body: %s\n", resp.Status, responseBody)
 		os.Exit(1)
 	}
-	fmt.Printf("example_response_status: %s\n", resp.Status)
-	fmt.Printf("example_response_body: %s\n", responseBody)
 }
 
 func raiseFileDescriptorLimit() {
@@ -144,6 +159,8 @@ func main() {
 		"Fraction of requests that are GET reads (0.0=all writes, 1.0=all reads). Requires -read-url.")
 	readURL := flag.String("read-url", "",
 		"URL for GET (read) requests when using -read-ratio. Write URL is the positional arg.")
+	enableCookies := flag.Bool("enable-cookies", false,
+		"Enable cookie jar so the client sends back Set-Cookie values (e.g., XDN session timestamps).")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [options] <url> <json_payload> <duration_seconds> <target_rate>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s [options] -X GET <url> <duration_seconds> <target_rate>\n", os.Args[0])
@@ -263,16 +280,32 @@ func main() {
 		MaxIdleConnsPerHost: 8192,
 		MaxConnsPerHost:     8192,
 	}
-	client := &http.Client{
+	// When cookies are disabled, all goroutines share a single client (no jar).
+	// When cookies are enabled, each goroutine gets its own client with a
+	// private cookie jar so that per-session timestamps (XDN-CC-TS-R/W) are
+	// tracked independently per concurrent "session", avoiding cross-goroutine
+	// timestamp leakage and cookie jar mutex contention.
+	sharedClient := &http.Client{
 		Transport: transport,
 		Timeout:   30 * time.Second,
+	}
+	newClient := func() *http.Client {
+		if !*enableCookies {
+			return sharedClient
+		}
+		j, _ := cookiejar.New(nil)
+		return &http.Client{
+			Transport: transport,
+			Timeout:   30 * time.Second,
+			Jar:       j,
+		}
 	}
 
 	sanityURL := url
 	if len(urls) > 0 {
 		sanityURL = urls[0]
 	}
-	sanityCheck(client, method, sanityURL, payload, headers)
+	sanityCheck(newClient(), method, sanityURL, payload, headers)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -295,6 +328,10 @@ func main() {
 
 		totalSent++
 		wg.Add(1)
+		// Each goroutine models an independent client. With cookies enabled,
+		// each gets its own cookie jar (no shared state between clients).
+		// Without cookies, all goroutines share the same http.Client.
+		c := newClient()
 		go func() {
 			defer wg.Done()
 
@@ -331,7 +368,7 @@ func main() {
 				req.Header.Set(header.key, header.value)
 			}
 			t0 := time.Now()
-			resp, respErr := client.Do(req)
+			resp, respErr := c.Do(req)
 			latency := time.Since(t0)
 			if respErr != nil {
 				errStr := respErr.Error()
@@ -382,7 +419,9 @@ func main() {
 	if elapsed <= 0 {
 		elapsed = durationSeconds
 	}
-	actualRate := float64(totalSent) / elapsed
+	// actualRate measures the send rate during the active send window,
+	// not including the tail drain time for in-flight responses.
+	actualRate := float64(totalSent) / durationSeconds
 	throughput := float64(successCount) / elapsed
 
 	minLatency := 0.0

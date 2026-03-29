@@ -1,0 +1,17 @@
+---
+name: todo_mreg
+image: fadhilkurnia/xdn-todo
+state: /app/data/
+port: 80
+consistency: sequential
+deterministic: true
+environments:
+  - ENABLE_WAL: "true"
+
+requests:
+  - path_prefix: "/"
+    methods: "GET,OPTIONS,HEAD"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: write_only

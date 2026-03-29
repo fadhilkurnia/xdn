@@ -17,6 +17,8 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -53,12 +55,16 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
             ) {
     }
 
+    private static final int DEFAULT_EXECUTE_WORKERS =
+            Math.max(32, Runtime.getRuntime().availableProcessors() * 4);
+
     private final NodeIDType myNodeID;
     private final Stringifiable<NodeIDType> nodeIdDeserializer;
     private final Replicable app;
     private final Logger logger = Logger.getLogger(BayouReplicaCoordinator.class.getSimpleName());
     private final Set<IntegerPacketType> packetTypes;
     private final Map<String, ReplicaInstance<NodeIDType>> instances;
+    private final ExecutorService executePool;
 
     public BayouReplicaCoordinator(Replicable app,
                                    NodeIDType myNodeID,
@@ -69,6 +75,13 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
         this.nodeIdDeserializer = nodeIdDeserializer;
         this.app = app;
         this.instances = new ConcurrentHashMap<>();
+
+        int nWorkers = Integer.getInteger("BAYOU_N_EXECUTE_WORKERS", DEFAULT_EXECUTE_WORKERS);
+        this.executePool = Executors.newFixedThreadPool(nWorkers, r -> {
+            Thread t = new Thread(r, "bayou-exec-" + myNodeID);
+            t.setDaemon(true);
+            return t;
+        });
 
         // validate the nodeIdDeserializer
         assert this.nodeIdDeserializer.valueOf(myNodeID.toString()).equals(myNodeID) :
@@ -126,25 +139,25 @@ public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordina
         if (serviceInstance.consistencyModel.equals(ConsistencyModel.MONOTONIC_READS)) {
             return MonotonicReadsHandler.coordinateRequest(
                     request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger);
+                    this.messenger, this.executePool);
         }
 
         if (serviceInstance.consistencyModel.equals(ConsistencyModel.MONOTONIC_WRITES)) {
             return MonotonicWritesHandler.coordinateRequest(
                     request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger);
+                    this.messenger, this.executePool);
         }
 
         if (serviceInstance.consistencyModel.equals(ConsistencyModel.READ_YOUR_WRITES)) {
             return ReadYourWritesHandler.coordinateRequest(
                     request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger);
+                    this.messenger, this.executePool);
         }
 
         if (serviceInstance.consistencyModel.equals(ConsistencyModel.WRITES_FOLLOW_READS)) {
             return WritesFollowReadsHandler.coordinateRequest(
                     request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger);
+                    this.messenger, this.executePool);
         }
 
         throw new RuntimeException("Unknown client-centric consistency model " +

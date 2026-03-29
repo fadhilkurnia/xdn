@@ -299,47 +299,35 @@ public final class XdnHttpForwarderClient implements Closeable {
 
               Channel channel = acquireFuture.getNow();
               if (channel == null || !channel.isActive()) {
-                responseFuture.completeExceptionally(
-                    new IllegalStateException("Acquired inactive HTTP channel"));
+                // Channel was closed by the server (Connection: close) since
+                // it was returned to the pool. Release it (to decrement pool
+                // count) then close, and acquire a fresh connection.
                 if (channel != null) {
                   releaseQuietly(pool, channel);
+                  channel.close();
                 }
-                return;
-              }
-
-              ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
-              if (handler == null) {
-                responseFuture.completeExceptionally(
-                    new IllegalStateException("Missing response handler in pipeline"));
-                releaseQuietly(pool, channel);
-                return;
-              }
-
-              RequestContext context = new RequestContext(channel, pool, responseFuture);
-              if (!handler.register(context)) {
-                responseFuture.completeExceptionally(
-                    new IllegalStateException("Another request is already in flight"));
-                releaseQuietly(pool, channel);
-                return;
-              }
-
-              // When enabled, force keep-alive to prevent the upstream (e.g. Apache)
-              // from closing the connection after the response. Without this,
-              // containers that send "Connection: close" cause pooled channels
-              // to go inactive, triggering retry overhead.
-              if (FORCE_KEEPALIVE) {
-                HttpUtil.setKeepAlive(outbound, true);
-              }
-
-              ChannelFuture writeFuture = channel.writeAndFlush(outbound);
-              writeFuture.addListener(
-                  (ChannelFutureListener)
-                      wf -> {
-                        ts[1] = System.nanoTime();
-                        if (!wf.isSuccess()) {
-                          handler.fail(wf.cause());
+                pool.acquire()
+                    .addListener((Future<Channel> retryFuture) -> {
+                      if (!retryFuture.isSuccess()) {
+                        responseFuture.completeExceptionally(retryFuture.cause());
+                        return;
+                      }
+                      Channel fresh = retryFuture.getNow();
+                      if (fresh == null || !fresh.isActive()) {
+                        responseFuture.completeExceptionally(
+                            new IllegalStateException("Acquired inactive HTTP channel after retry"));
+                        if (fresh != null) {
+                          releaseQuietly(pool, fresh);
+                          fresh.close();
                         }
-                      });
+                        return;
+                      }
+                      dispatchRequest(fresh, pool, outbound, responseFuture, ts);
+                    });
+                return;
+              }
+
+              dispatchRequest(channel, pool, outbound, responseFuture, ts);
             });
 
     try {
@@ -367,11 +355,56 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
-  private FixedChannelPool poolFor(Origin origin) {
-    return pools.computeIfAbsent(origin, this::createPool);
+  /** Dispatch the HTTP request on an active channel. Used by both the initial
+   *  acquire path and the retry-on-inactive path. */
+  private void dispatchRequest(Channel channel, FixedChannelPool pool,
+      FullHttpRequest outbound, CompletableFuture<FullHttpResponse> responseFuture, long[] ts) {
+    ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
+    if (handler == null) {
+      responseFuture.completeExceptionally(
+          new IllegalStateException("Missing response handler in pipeline"));
+      releaseQuietly(pool, channel);
+      return;
+    }
+
+    RequestContext context = new RequestContext(channel, pool, responseFuture);
+    if (!handler.register(context)) {
+      responseFuture.completeExceptionally(
+          new IllegalStateException("Another request is already in flight"));
+      releaseQuietly(pool, channel);
+      return;
+    }
+
+    if (FORCE_KEEPALIVE) {
+      HttpUtil.setKeepAlive(outbound, true);
+    }
+
+    // Re-set TCP_QUICKACK before each request. The Linux kernel resets
+    // quickack mode after processing received data, so we must re-enable it
+    // before each send to ensure the ACK for the server's response header
+    // is sent immediately (avoiding the Nagle + delayed ACK 40ms penalty).
+    PoolHandler.setQuickAck(channel);
+    ChannelFuture writeFuture = channel.writeAndFlush(outbound);
+    writeFuture.addListener(
+        (ChannelFutureListener)
+            wf -> {
+              ts[1] = System.nanoTime();
+              if (!wf.isSuccess()) {
+                handler.fail(wf.cause());
+              }
+            });
   }
 
-  private FixedChannelPool createPool(Origin origin) {
+  /** Number of TCP connections to pre-create when a pool is first used.
+   *  Set to 0 to disable pre-warming. */
+  private static final int POOL_PREWARM_SIZE =
+      Integer.getInteger("XDN_HTTP_POOL_PREWARM_SIZE", 8);
+
+  private FixedChannelPool poolFor(Origin origin) {
+    return pools.computeIfAbsent(origin, this::createAndWarmPool);
+  }
+
+  private FixedChannelPool createAndWarmPool(Origin origin) {
     Bootstrap bootstrap =
         new Bootstrap()
             .group(eventLoopGroup)
@@ -381,7 +414,36 @@ public final class XdnHttpForwarderClient implements Closeable {
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
             .remoteAddress(new InetSocketAddress(origin.host(), origin.port()));
 
-    return new FixedChannelPool(bootstrap, new PoolHandler(), getMaxPoolSize());
+    FixedChannelPool pool = new FixedChannelPool(bootstrap, new PoolHandler(), getMaxPoolSize());
+
+    // Pre-warm: eagerly create TCP connections so the first real requests
+    // don't pay the connect latency.
+    if (POOL_PREWARM_SIZE > 0) {
+      int n = Math.min(POOL_PREWARM_SIZE, getMaxPoolSize());
+      List<Channel> warmChannels = new ArrayList<>(n);
+      for (int i = 0; i < n; i++) {
+        try {
+          Future<Channel> f = pool.acquire();
+          Channel ch = f.await().getNow();
+          if (ch != null && ch.isActive()) {
+            warmChannels.add(ch);
+          } else if (ch != null) {
+            ch.close();
+          }
+        } catch (Exception e) {
+          LOG.log(Level.FINE, "Pool pre-warm connection {0} failed: {1}",
+              new Object[]{i, e.getMessage()});
+          break;
+        }
+      }
+      for (Channel ch : warmChannels) {
+        pool.release(ch);
+      }
+      LOG.log(Level.INFO, "Pre-warmed {0} connections to {1}:{2}",
+          new Object[]{warmChannels.size(), origin.host(), origin.port()});
+    }
+
+    return pool;
   }
 
   private int getMaxPoolSize() {
@@ -482,15 +544,48 @@ public final class XdnHttpForwarderClient implements Closeable {
 
     @Override
     public void channelAcquired(Channel ch) {
-      // No-op
+      setQuickAck(ch);
     }
 
     @Override
     public void channelCreated(Channel ch) {
+      setQuickAck(ch);
       ChannelPipeline pipeline = ch.pipeline();
       pipeline.addLast(new HttpClientCodec());
+      // Re-set TCP_QUICKACK on every channelRead BEFORE the aggregator
+      // processes the data. This ensures the ACK for the response header
+      // segment is sent immediately (the kernel resets TCP_QUICKACK after
+      // each receive, so we must re-enable it before each ACK).
+      pipeline.addLast(new io.netty.channel.ChannelInboundHandlerAdapter() {
+        @Override
+        public void channelRead(io.netty.channel.ChannelHandlerContext ctx,
+                                Object msg) throws Exception {
+          setQuickAck(ctx.channel());
+          super.channelRead(ctx, msg);
+        }
+      });
       pipeline.addLast(new HttpObjectAggregator(MAX_CONTENT_LENGTH));
       pipeline.addLast(new ClientResponseHandler());
+    }
+
+    private static volatile boolean quickAckWarned = false;
+
+    static void setQuickAck(Channel ch) {
+      try {
+        // Access protected javaChannel() via AbstractNioChannel
+        java.lang.reflect.Method m =
+            io.netty.channel.nio.AbstractNioChannel.class.getDeclaredMethod("javaChannel");
+        m.setAccessible(true);
+        java.nio.channels.SocketChannel sc =
+            (java.nio.channels.SocketChannel) m.invoke(ch);
+        // TCP_QUICKACK disables delayed ACK; must be re-set after each recv
+        sc.setOption(jdk.net.ExtendedSocketOptions.TCP_QUICKACK, true);
+      } catch (Exception e) {
+        if (!quickAckWarned) {
+          LOG.log(Level.WARNING, "Could not set TCP_QUICKACK: {0}", e.getMessage());
+          quickAckWarned = true;
+        }
+      }
     }
   }
 
@@ -599,6 +694,15 @@ public final class XdnHttpForwarderClient implements Closeable {
       if (!delivered) {
         ReferenceCountUtil.release(response);
       }
+      // If server sent Connection: close, close the channel AFTER releasing
+      // it to the pool. Release decrements the pool's acquired count (so new
+      // connections can be created), and the subsequent close invalidates the
+      // channel so the pool won't hand it out again.
+      if (!HttpUtil.isKeepAlive(response)) {
+        release();
+        channel.close();
+        return;
+      }
       release();
     }
 
@@ -635,6 +739,7 @@ public final class XdnHttpForwarderClient implements Closeable {
     private final FixedChannelPool pool;
     private final List<CompletableFuture<FullHttpResponse>> futures;
     private int nextIndex = 0;
+    private boolean serverClosedConnection = false;
 
     PipelineContext(
         Channel channel,
@@ -652,13 +757,22 @@ public final class XdnHttpForwarderClient implements Closeable {
         LOG.warning("Pipelined response received but all futures already completed");
         return true;
       }
+      // Track if server signalled Connection: close on any response.
+      if (!HttpUtil.isKeepAlive(response)) {
+        serverClosedConnection = true;
+      }
       CompletableFuture<FullHttpResponse> future = futures.get(nextIndex++);
       if (!future.complete(response)) {
         ReferenceCountUtil.release(response);
       }
       boolean allDone = nextIndex >= futures.size();
       if (allDone) {
+        // Always release to the pool first (to decrement acquired count),
+        // then close if the server signalled Connection: close.
         releaseChannel();
+        if (serverClosedConnection) {
+          channel.close();
+        }
       }
       return allDone;
     }

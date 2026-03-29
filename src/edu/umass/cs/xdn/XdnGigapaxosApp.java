@@ -2612,12 +2612,12 @@ public class XdnGigapaxosApp
 
     // There's no way to detect if SQLite is used
     String dbReadyMsg = null;
-    int migrateWaitTime = 5;
+    int migrateWaitTime = Integer.getInteger("XDN_MIGRATE_WAIT_SEC", 5);
     int numOfLines = 10;
     switch (databaseImage) {
       case "mysql":
         dbReadyMsg = "mysqld: ready for connections";
-        migrateWaitTime = 60;
+        if (migrateWaitTime == 5) migrateWaitTime = 60; // default for MySQL
         break;
       case "postgres":
         dbReadyMsg = "database system is ready to accept connections";
@@ -2714,22 +2714,33 @@ public class XdnGigapaxosApp
     }
 
     // Synchronize initialized state to backup replicas to keep non-deterministic state aligned.
-    logger.log(
-        Level.INFO,
-        "{0}:{1} starting initContainerSync for {2}:{3}",
-        new Object[] {
-          this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
-        });
-    this.stateDiffRecorder.initContainerSync(
-        this.myNodeId, serviceName, ipAddresses, placementEpoch, sshKey);
-    logger.log(
-        Level.INFO,
-        "{0}:{1} completed initContainerSync for {2}:{3}",
-        new Object[] {
-          this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
-        });
-    System.out.println("Completed initContainerSync for " + serviceName);
-    service.initializationSucceed = true;
+    // When XDN_SKIP_INIT_SYNC=true, skip the rsync but still mark initialization as complete.
+    // This allows the PB pipeline to function (captureStateDiff enabled) without waiting for
+    // the full initial state transfer. Backups won't have the initial state but will receive
+    // statediffs going forward. Use only for benchmarking.
+    boolean skipInitSync = Boolean.getBoolean("XDN_SKIP_INIT_SYNC");
+    if (skipInitSync) {
+      System.out.println("Skipping initContainerSync for " + serviceName + " (XDN_SKIP_INIT_SYNC=true)");
+      System.out.println("Completed initContainerSync for " + serviceName);
+      service.initializationSucceed = true;
+    } else {
+      logger.log(
+          Level.INFO,
+          "{0}:{1} starting initContainerSync for {2}:{3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
+          });
+      this.stateDiffRecorder.initContainerSync(
+          this.myNodeId, serviceName, ipAddresses, placementEpoch, sshKey);
+      logger.log(
+          Level.INFO,
+          "{0}:{1} completed initContainerSync for {2}:{3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
+          });
+      System.out.println("Completed initContainerSync for " + serviceName);
+      service.initializationSucceed = true;
+    }
   }
 
   /**********************************************************************************************

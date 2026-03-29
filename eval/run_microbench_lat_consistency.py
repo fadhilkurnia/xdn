@@ -501,7 +501,7 @@ def run_measurement(consistency, result_file, inter_replica_rtt_ms=0.0):
         log.info(">> [%s] Preparing service YAML ...", consistency)
         shutil.copy2(SERVICE_PROP_TEMPLATE, service_yaml)
         replace_placeholder(service_yaml, "___SERVICE_NAME___", service_name)
-        replace_placeholder(service_yaml, "___CONSITENCY_MODEL___", consistency)
+        replace_placeholder(service_yaml, "___CONSISTENCY_MODEL___", consistency)
         # Eventual consistency requires MONOTONIC behavior for writes.
         # LazyReplicaCoordinator checks that declared behaviors include
         # {MONOTONIC, READ_ONLY, WRITE_ONLY} before accepting the service.

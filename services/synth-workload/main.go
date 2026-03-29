@@ -19,9 +19,10 @@ import (
 var db *sql.DB
 
 type WorkloadRequest struct {
-	Txns      int `json:"txns"`
-	Ops       int `json:"ops"`
-	WriteSize int `json:"write_size"`
+	Txns       int  `json:"txns"`
+	Ops        int  `json:"ops"`
+	WriteSize  int  `json:"write_size"`
+	AutoCommit bool `json:"autocommit"` // when true, each op is auto-committed (no explicit txn)
 }
 
 type WorkloadResponse struct {
@@ -152,25 +153,47 @@ func executeSQLite(requestID string, req WorkloadRequest) int {
 	totalRows := 0
 	payload := randomBytes(req.WriteSize)
 
-	for i := 0; i < req.Txns; i++ {
-		tx, err := db.Begin()
-		if err != nil {
-			log.Printf("BEGIN failed: %v", err)
-			continue
+	if req.AutoCommit {
+		// Auto-commit mode: each INSERT is its own transaction.
+		// Each auto-committed write triggers an independent fsync,
+		// matching how most ORMs (GORM, wpdb, ActiveRecord) work.
+		// On replicated block storage (e.g., OpenEBS), each fsync
+		// is independently replicated — N ops = N coordination rounds.
+		for i := 0; i < req.Txns; i++ {
+			for j := 0; j < req.Ops; j++ {
+				_, err := db.Exec(
+					"INSERT INTO workload_data (request_id, txn_idx, op_idx, payload) VALUES (?, ?, ?, ?)",
+					requestID, i, j, payload,
+				)
+				if err != nil {
+					log.Printf("INSERT (autocommit) failed: %v", err)
+					continue
+				}
+				totalRows++
+			}
 		}
-		for j := 0; j < req.Ops; j++ {
-			_, err := tx.Exec(
-				"INSERT INTO workload_data (request_id, txn_idx, op_idx, payload) VALUES (?, ?, ?, ?)",
-				requestID, i, j, payload,
-			)
+	} else {
+		// Explicit transaction mode: N ops wrapped in 1 txn = 1 fsync.
+		for i := 0; i < req.Txns; i++ {
+			tx, err := db.Begin()
 			if err != nil {
-				log.Printf("INSERT failed: %v", err)
+				log.Printf("BEGIN failed: %v", err)
 				continue
 			}
-			totalRows++
-		}
-		if err := tx.Commit(); err != nil {
-			log.Printf("COMMIT failed: %v", err)
+			for j := 0; j < req.Ops; j++ {
+				_, err := tx.Exec(
+					"INSERT INTO workload_data (request_id, txn_idx, op_idx, payload) VALUES (?, ?, ?, ?)",
+					requestID, i, j, payload,
+				)
+				if err != nil {
+					log.Printf("INSERT failed: %v", err)
+					continue
+				}
+				totalRows++
+			}
+			if err := tx.Commit(); err != nil {
+				log.Printf("COMMIT failed: %v", err)
+			}
 		}
 	}
 	return totalRows
@@ -185,31 +208,55 @@ func executeRqlite(requestID string, req WorkloadRequest) int {
 	totalRows := 0
 	payload := fmt.Sprintf("%x", randomBytes(req.WriteSize))
 
-	// Each transaction = separate HTTP call to rqlite = separate Raft round
-	for i := 0; i < req.Txns; i++ {
-		stmts := make([]string, 0, req.Ops+2)
-		stmts = append(stmts, "BEGIN")
-		for j := 0; j < req.Ops; j++ {
-			stmt := fmt.Sprintf(
-				"INSERT INTO workload_data (request_id, txn_idx, op_idx, payload) VALUES ('%s', %d, %d, X'%s')",
-				requestID, i, j, payload,
-			)
-			stmts = append(stmts, stmt)
+	if req.AutoCommit {
+		// Auto-commit mode: each INSERT is a separate rqlite request = separate Raft round.
+		// N txns × N ops = N×N Raft coordination rounds.
+		for i := 0; i < req.Txns; i++ {
+			for j := 0; j < req.Ops; j++ {
+				stmt := fmt.Sprintf(
+					"INSERT INTO workload_data (request_id, txn_idx, op_idx, payload) VALUES ('%s', %d, %d, X'%s')",
+					requestID, i, j, payload,
+				)
+				body, _ := json.Marshal([]string{stmt})
+				resp, err := http.Post(rqliteURL+"/db/execute", "application/json", strings.NewReader(string(body)))
+				if err != nil {
+					log.Printf("rqlite execute (autocommit) failed: %v", err)
+					continue
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode < 300 {
+					totalRows++
+				}
+			}
 		}
-		stmts = append(stmts, "COMMIT")
+	} else {
+		// Explicit transaction mode: each transaction = separate HTTP call to rqlite = separate Raft round
+		for i := 0; i < req.Txns; i++ {
+			stmts := make([]string, 0, req.Ops+2)
+			stmts = append(stmts, "BEGIN")
+			for j := 0; j < req.Ops; j++ {
+				stmt := fmt.Sprintf(
+					"INSERT INTO workload_data (request_id, txn_idx, op_idx, payload) VALUES ('%s', %d, %d, X'%s')",
+					requestID, i, j, payload,
+				)
+				stmts = append(stmts, stmt)
+			}
+			stmts = append(stmts, "COMMIT")
 
-		body, _ := json.Marshal(stmts)
-		resp, err := http.Post(rqliteURL+"/db/execute?transaction", "application/json", strings.NewReader(string(body)))
-		if err != nil {
-			log.Printf("rqlite execute failed: %v", err)
-			continue
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode < 300 {
-			totalRows += req.Ops
-		} else {
-			log.Printf("rqlite returned HTTP %d for txn %d", resp.StatusCode, i)
+			body, _ := json.Marshal(stmts)
+			resp, err := http.Post(rqliteURL+"/db/execute?transaction", "application/json", strings.NewReader(string(body)))
+			if err != nil {
+				log.Printf("rqlite execute failed: %v", err)
+				continue
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode < 300 {
+				totalRows += req.Ops
+			} else {
+				log.Printf("rqlite returned HTTP %d for txn %d", resp.StatusCode, i)
+			}
 		}
 	}
 	return totalRows
