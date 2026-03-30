@@ -85,7 +85,7 @@ DEFAULT_RATES = [250, 500, 750, 1000, 1250, 1500]
 DEFAULT_READ_RATIOS = [0, 80, 100]
 LOAD_DURATION_SEC = 60
 WARMUP_DURATION_SEC = 10
-WARMUP_RATE = 100
+WARMUP_RATE = 2000
 AVG_LATENCY_THRESHOLD_MS = 100.0
 
 GO_CLIENT = Path(__file__).resolve().parent / "get_latency_at_rate.go"
@@ -235,9 +235,12 @@ def wait_for_service(host, port, service_name, timeout_sec=120):
             url = f"http://{host}:{port}/api/todo/tasks"
             req = urllib.request.Request(url, headers={"XDN": service_name})
             r = urllib.request.urlopen(req, timeout=5)
-            if r.status < 500:
+            if 200 <= r.status < 300:
                 return True
-        except (HTTPError, Exception):
+        except HTTPError as e:
+            if 200 <= e.code < 300:
+                return True
+        except Exception:
             pass
         time.sleep(2)
     return False
@@ -587,16 +590,88 @@ def run_consistency_sweep(consistency, read_ratios, rates, results_dir, csv_writ
             log.info("")
             log.info("  >> [%s] read_ratio=%d%% — rates: %s", consistency, read_ratio, rates)
 
-            # Brief warmup
-            log.info("    Warming up at %d rps for %ds ...", WARMUP_RATE, warmup_duration)
-            warmup_out = results_dir / f"{consistency}_r{read_ratio}_warmup.txt"
-            use_cookies = consistency in CLIENT_CENTRIC_MODELS
-            run_load_client(target_host, service_name, WARMUP_RATE, warmup_duration,
-                            read_ratio, warmup_out, target_port=target_port,
-                            enable_cookies=use_cookies)
-            time.sleep(3)
-
             for rate in rates:
+                # Fresh cluster per rate to isolate residues from previous rates
+                log.info("    [%s r=%d%% rate=%d] Fresh cluster setup ...",
+                         consistency, read_ratio, rate)
+
+                # Step A: forceclear while cluster is still running
+                forceclear_cmd = (
+                    f"../bin/gpServer.sh -DgigapaxosConfig={config_file} forceclear all "
+                    f"> /dev/null 2>&1"
+                )
+                os.system(forceclear_cmd)
+                os.system(f"screen -S {screen_session} -X quit > /dev/null 2>&1")
+                clear_xdn_cluster()
+                os.system(f"rm -f {screen_log}")
+
+                # Step B: start fresh cluster with JVM startup wait
+                start_cmd = (
+                    f"screen -L -Logfile {screen_log} -S {screen_session} -d -m bash -c "
+                    f"'../bin/gpServer.sh -DgigapaxosConfig={config_file} -DSYNC=true start all; exec bash'"
+                )
+                os.system(start_cmd)
+                time.sleep(15)  # give JVMs time to start (matches AR script)
+                if LOCAL_MODE:
+                    for port in LOCAL_HTTP_PROXY_PORTS:
+                        wait_for_port("127.0.0.1", port, timeout_sec=60)
+                else:
+                    for host in AR_HOSTS:
+                        wait_for_port(host, HTTP_PROXY_PORT, timeout_sec=60)
+
+                # Step C: deploy service and wait
+                cp_host = LOCAL_CONTROL_PLANE_HOST if LOCAL_MODE else CONTROL_PLANE_HOST
+                rate_deploy_cmd = (
+                    f"XDN_CONTROL_PLANE={cp_host} {XDN_BINARY} launch "
+                    f"{service_name} --file={service_yaml}"
+                )
+                log.info("      Deploying: %s", rate_deploy_cmd)
+                for attempt in range(5):
+                    result = subprocess.run(rate_deploy_cmd, capture_output=True, text=True, shell=True)
+                    if result.returncode == 0 and "Error" not in result.stdout:
+                        log.info("      Deploy OK")
+                        break
+                    log.info("      Deploy attempt %d failed: %s", attempt + 1,
+                             result.stdout.strip()[:200])
+                    time.sleep(5)
+                time.sleep(5)  # let containers start (matches AR script)
+
+                # Step D: wait for service readiness
+                readiness_host = "127.0.0.1" if LOCAL_MODE else AR_HOSTS[0]
+                readiness_port = LOCAL_HTTP_PROXY_PORTS[0] if LOCAL_MODE else HTTP_PROXY_PORT
+                if not wait_for_service(readiness_host, readiness_port, service_name):
+                    log.warning("      Service not ready, skipping rate=%d", rate)
+                    continue
+
+                # Step E: re-detect leader if needed
+                if read_ratio == 100 and consistency in LEADER_CONSISTENCY_MODELS:
+                    pass  # already targeting AR_HOSTS[0]
+                elif consistency in LEADER_CONSISTENCY_MODELS:
+                    target_host, target_port = detect_leader(service_name)
+
+                # Step F: seed data for reads (must use "warmup-{i}" to match
+                # SERVICE_READ_ENDPOINT = /api/todo/tasks/warmup-8)
+                import requests as http_requests
+                headers_seed = {"Content-Type": "application/json", "XDN": service_name}
+                for i in range(20):
+                    try:
+                        http_requests.post(
+                            f"http://{target_host}:{target_port}{SERVICE_WRITE_ENDPOINT}",
+                            headers=headers_seed, data=f'{{"item":"warmup-{i}"}}', timeout=10,
+                        )
+                    except Exception:
+                        pass
+                time.sleep(2)
+
+                # Step G: warmup
+                use_cookies = consistency in CLIENT_CENTRIC_MODELS
+                warmup_out = results_dir / f"{consistency}_r{read_ratio}_rate{rate}_warmup.txt"
+                run_load_client(target_host, service_name, WARMUP_RATE, warmup_duration,
+                                read_ratio, warmup_out, target_port=target_port,
+                                enable_cookies=use_cookies)
+                time.sleep(3)
+
+                # Step H: measure
                 log.info("    [%s r=%d%%] rate=%d rps (measuring %ds) ...",
                          consistency, read_ratio, rate, load_duration)
 

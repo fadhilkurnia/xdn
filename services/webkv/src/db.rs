@@ -163,14 +163,11 @@ impl KeyValueStore for TiKeyValueStore {
 
     fn get(&self, key: &str) -> Result<Option<String>, String> {
         let key = key.to_owned();
-        let result: Option<Vec<u8>> = self.retry_read(move |client| {
-            let k = key.clone();
-            Box::pin(async move {
-                let mut txn = client.begin_optimistic().await?;
-                let result = txn.get(k).await?;
-                txn.commit().await?;
-                Ok(result)
-            })
+        let result = self.run(async {
+            let mut txn = self.client.begin_optimistic().await?;
+            let result = txn.get(key).await?;
+            txn.commit().await?;
+            Ok(result)
         })?;
 
         match result {
@@ -226,36 +223,6 @@ impl TiKeyValueStore {
             for attempt in 0..TIKV_MAX_RETRIES {
                 match make_txn(&self.client).await {
                     Ok(()) => return Ok(()),
-                    Err(e) => {
-                        if !Self::is_retryable(&e) || attempt + 1 == TIKV_MAX_RETRIES {
-                            return Err(e);
-                        }
-                        let backoff =
-                            Duration::from_millis(TIKV_RETRY_BASE_MS << attempt.min(6));
-                        tokio::time::sleep(backoff).await;
-                    }
-                }
-            }
-            unreachable!()
-        };
-        match Handle::try_current() {
-            Ok(handle) => {
-                task::block_in_place(|| handle.block_on(do_retry)).map_err(|e| e.to_string())
-            }
-            Err(_) => self.runtime.block_on(do_retry).map_err(|e| e.to_string()),
-        }
-    }
-
-    fn retry_read<F, T>(&self, make_txn: F) -> Result<T, String>
-    where
-        F: Fn(&TransactionClient) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<T, tikv_client::Error>> + Send + '_>,
-        >,
-    {
-        let do_retry = async {
-            for attempt in 0..TIKV_MAX_RETRIES {
-                match make_txn(&self.client).await {
-                    Ok(v) => return Ok(v),
                     Err(e) => {
                         if !Self::is_retryable(&e) || attempt + 1 == TIKV_MAX_RETRIES {
                             return Err(e);

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%2210 0 100 100%22><text y=%22.90em%22 font-size=%2290%22>🗄️</text></svg>"></link>
+    <title>Key-Value Store Application</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 h-screen flex items-center justify-center">
+    <div class="w-full max-w-md p-4 bg-white shadow-lg rounded-md">
+
+        <!-- Application Name -->
+        <h1 class="text-2xl font-bold text-center mb-16">🗄️ Our Key-Value Store</h1>
+
+        <!-- Input Section -->
+        <div class="mb-4">
+            <label for="key-input" class="block text-base text-center font-medium mb-2">Find a value by the key</label>
+            <div class="flex">
+                <input type="text" id="key-input" class="w-full border rounded-l-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter key ...">
+                <button id="fetch-btn" class="bg-blue-500 hover:bg-blue-700 text-white font-bold px-4 rounded-r-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    Search
+                </button>
+            </div>
+        </div>
+
+        <!-- Key-Value Display Section -->
+        <div id="kv-card" class="hidden mt-4 p-4 bg-gray-100 rounded-md">
+            <!-- Key Display -->
+            <div class="mb-2 flex items-center">
+                <label class="block text-sm font-bold w-20 mr-2">Key</label>
+                <input type="text" id="kv-key" class="flex-1 border px-4 py-2 bg-gray-200 cursor-not-allowed" readonly>
+            </div>
+            <!-- Value Display -->
+            <div class="mb-2 flex items-center">
+                <label class="block text-sm font-bold w-20 mr-2">Value</label>
+                <input type="text" id="kv-value" class="flex-1 border px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <!-- Action Buttons -->
+            <div class="flex justify-end space-x-2">
+                <button id="edit-btn" class="bg-green-500 hover:bg-green-700 text-white font-bold py-1 px-4 rounded focus:outline-none focus:ring-2 focus:ring-green-500">
+                    Update
+                </button>
+                <button id="delete-btn" class="bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-4 rounded focus:outline-none focus:ring-2 focus:ring-red-500">
+                    Delete
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript for Fetch, Edit, Delete -->
+    <script>
+        const fetchBtn = document.getElementById('fetch-btn');
+        const editBtn = document.getElementById('edit-btn');
+        const deleteBtn = document.getElementById('delete-btn');
+        const kvCard = document.getElementById('kv-card');
+        const keyInput = document.getElementById('key-input');
+        const kvKey = document.getElementById('kv-key');
+        const kvValue = document.getElementById('kv-value');
+
+        // Fetch Key-Value Pair
+        fetchBtn.addEventListener('click', async () => {
+            const key = keyInput.value.trim();
+            if (!key) return alert('Please enter a key.');
+
+            try {
+                const response = await fetch(`/api/kv/${key}`);
+                if (!response.ok) throw new Error('Key not found.');
+                
+                const data = await response.json();
+                kvKey.value = data.key;
+                kvValue.value = data.value;
+                kvCard.classList.remove('hidden');
+            } catch (error) {
+                alert(error.message);
+            }
+        });
+
+        // Edit Value
+        editBtn.addEventListener('click', async () => {
+            const key = kvKey.value;
+            const value = kvValue.value.trim();
+
+            try {
+                const response = await fetch(`/api/kv/${key}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ key: key, value: value }),
+                });
+
+                if (!response.ok) throw new Error('Failed to update value.');
+
+                alert('Value updated successfully.');
+            } catch (error) {
+                alert(error.message);
+            }
+        });
+
+        // Delete Key-Value Pair
+        deleteBtn.addEventListener('click', async () => {
+            const key = kvKey.value;
+
+            try {
+                const response = await fetch(`/api/kv/${key}`, {
+                    method: 'DELETE',
+                });
+
+                if (!response.ok) throw new Error('Failed to delete key.');
+
+                alert('Key-Value pair deleted successfully.');
+                keyInput.value = '';
+                kvValue.value = '';
+            } catch (error) {
+                alert(error.message);
+            }
+        });
+    </script>
+</body>
+</html>

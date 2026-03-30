@@ -33,6 +33,7 @@ HTTP_PORT_OFFSET = 300
 VALID_APPS = {
     "fadhilkurnia/xdn-bookcatalog",
     "fadhilkurnia/xdn-webkv",
+    "fadhilkurnia/xdn-webkv-batching",
     "fadhilkurnia/xdn-todo",
     "fadhilkurnia/xdn-todo-go",
 }
@@ -176,7 +177,7 @@ def get_app_request_config(image: str) -> Tuple[str, Dict[str, str], str, Dict[s
 
     if image == "fadhilkurnia/xdn-bookcatalog":
         return "/api/books", {"author": "abc", "title": "xyz"}, "bookcatalog", {"ENABLE_WAL": "true"}
-    if image == "fadhilkurnia/xdn-webkv":
+    if image in ("fadhilkurnia/xdn-webkv", "fadhilkurnia/xdn-webkv-batching"):
         return "/api/kv/abc", {"key": "abc", "value": "xyz"}, "webkv", {}
     if image == "fadhilkurnia/xdn-todo":
         return "/api/todo/tasks", {"item": "task"}, "todo", {"ENABLE_WAL": "true"}

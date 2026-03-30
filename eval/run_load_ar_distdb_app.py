@@ -36,8 +36,10 @@ RQLITED_BIN = "rqlited"
 VALID_APPS = {
     "fadhilkurnia/xdn-bookcatalog",
     "fadhilkurnia/xdn-webkv",
+    "fadhilkurnia/xdn-webkv-batching",
     "fadhilkurnia/xdn-todo",
     "fadhilkurnia/xdn-todo-go",
+    "fadhilkurnia/xdn-todo-go-batching",
 }
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ def get_app_request_config(image: str) -> Dict[str, object]:
             "service": "bookcatalog",
             "env": {"ENABLE_WAL": "true"},
         }
-    if image == "fadhilkurnia/xdn-webkv":
+    if image in ("fadhilkurnia/xdn-webkv", "fadhilkurnia/xdn-webkv-batching"):
         return {
             "backend": "tikv",
             "endpoint": "/api/kv/abc",
@@ -100,6 +102,15 @@ def get_app_request_config(image: str) -> Dict[str, object]:
             "payload": {"item": "task"},
             "service": "todogo",
             "env": {"ENABLE_WAL": "true"},
+        }
+    if image == "fadhilkurnia/xdn-todo-go-batching":
+        return {
+            "backend": "rqlite",
+            "endpoint": "/api/todo/tasks",
+            "payload": {"item": "task"},
+            "service": "todogo_batch",
+            "env": {"ENABLE_WAL": "true", "ENABLE_RQLITE_BATCHING": "true"},
+            "docker_image": "fadhilkurnia/xdn-todo-go",
         }
 
     valid = ", ".join(sorted(VALID_APPS))
@@ -678,6 +689,9 @@ def main():
     payload_data = dict(app_config.get("payload", {}))
     default_service = str(app_config.get("service") or "svc")
     app_env = dict(app_config.get("env", {}))
+    # Allow the app config to override the Docker image (e.g., batching variant
+    # uses the same image as the base app, just with different env vars).
+    docker_image = str(app_config.get("docker_image", args.dockerImageName))
     service_name = args.service_name or default_service
     service_label = sanitize_name(service_name)
     container_name = normalize_service_name(args.dockerImageName, service_name)
@@ -763,7 +777,7 @@ def main():
             combined_env = {**app_env, **db_env}
             start_app_container(
                 target_host,
-                args.dockerImageName,
+                docker_image,
                 container_name,
                 http_target_port,
                 combined_env,
