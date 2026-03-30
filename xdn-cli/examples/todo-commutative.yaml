@@ -1,0 +1,14 @@
+---
+name: "svc"
+image: "fadhilkurnia/xdn-todo"
+port: 80
+state: /app/data/
+consistency: linearizability
+deterministic: true
+requests:
+  - path_prefix: "/api/todo/tasks"
+    methods: "POST,DELETE"
+    behavior: commutative
+  - path_prefix: "/"
+    methods: "GET,HEAD,OPTIONS,TRACE"
+    behavior: read_only

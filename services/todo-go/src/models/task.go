@@ -39,6 +39,12 @@ func GetTask(item string) (*Task, error) {
 }
 
 func AddTask(item string) error {
+	if b := config.GetWriteBatcher(); b != nil {
+		return b.Submit(
+			"INSERT INTO tasks (item, counter) VALUES (?, 1) ON CONFLICT(item) DO UPDATE SET counter = counter + 1",
+			item,
+		)
+	}
 	result := db.Exec(
 		"INSERT INTO tasks (item, counter) VALUES (?, 1) ON CONFLICT(item) DO UPDATE SET counter = counter + 1",
 		item,
@@ -47,6 +53,12 @@ func AddTask(item string) error {
 }
 
 func RemoveTask(item string) error {
+	if b := config.GetWriteBatcher(); b != nil {
+		return b.Submit(
+			"INSERT INTO tasks (item, counter) VALUES (?, -1) ON CONFLICT(item) DO UPDATE SET counter = counter - 1",
+			item,
+		)
+	}
 	result := db.Exec(
 		"INSERT INTO tasks (item, counter) VALUES (?, -1) ON CONFLICT(item) DO UPDATE SET counter = counter - 1",
 		item,

@@ -5,14 +5,17 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/fadhilkurnia/xdn-todo-go/src/batcher"
 	"goki.dev/rqlite"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 var db *gorm.DB
+var writeBatcher *batcher.Batcher
 
 func Connect() {
 	dbType := os.Getenv("DB_TYPE")
@@ -62,6 +65,25 @@ func Connect() {
 			panic(err)
 		}
 		db = d
+
+		// Initialize write batcher if enabled.
+		if strings.ToLower(os.Getenv("ENABLE_RQLITE_BATCHING")) == "true" {
+			maxSize := 128
+			if v, err := strconv.Atoi(os.Getenv("RQLITE_BATCH_MAX_SIZE")); err == nil && v > 0 {
+				maxSize = v
+			}
+			windowMs := 2
+			if v, err := strconv.Atoi(os.Getenv("RQLITE_BATCH_WINDOW_MS")); err == nil && v > 0 {
+				windowMs = v
+			}
+			b, err := batcher.New(dsn, maxSize, windowMs)
+			if err != nil {
+				log.Printf("WARNING: failed to create write batcher: %v", err)
+			} else {
+				b.Start()
+				writeBatcher = b
+			}
+		}
 	}
 }
 
@@ -77,4 +99,10 @@ func normalizeRqliteURL(dbHost string) string {
 
 func GetDB() *gorm.DB {
 	return db
+}
+
+// GetWriteBatcher returns the write batcher if rqlite batching is enabled,
+// or nil otherwise.
+func GetWriteBatcher() *batcher.Batcher {
+	return writeBatcher
 }
