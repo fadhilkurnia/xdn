@@ -810,9 +810,19 @@ public class HttpActiveReplica {
 
             XdnHttpRequest executedRequest;
             try {
-                executedRequest = future.get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
+                executedRequest = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                if (executedRequest == null) {
+                    throw new RuntimeException("Executed request is null after future completion");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Batched request execution was interrupted", e);
+            } catch (java.util.concurrent.TimeoutException e) {
+                throw new RuntimeException("Batched request execution timed out after 5s", e);
+            } catch (ExecutionException e) {
+                throw new RuntimeException(
+                        "Batched request execution failed: " + e.getCause().getMessage(), e
+                );
             }
 
             assert httpRequest.getRequestID() == executedRequest.getRequestID() :
@@ -1031,15 +1041,18 @@ public class HttpActiveReplica {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            String message = cause.getMessage() != null
+                    ? cause.getMessage()
+                    : cause.getClass().getSimpleName();
             if (!(cause instanceof SocketException) ||
-                    cause.getMessage().contains("Connection reset")) {
-                System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
+                    message.contains("Connection reset")) {
+                System.out.println("HttpActiveReplicaHandler Error: " + message);
                 cause.printStackTrace();
             }
             if (ctx.channel().isActive()) {
-                byte[] bytes = ("Error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                byte[] bytes = ("Error: " + message).getBytes(CharsetUtil.UTF_8);
                 boolean isUnknownServiceNameError =
-                        cause.getMessage().contains("Unknown coordinator for name=");
+                        message.contains("Unknown coordinator for name=");
                 FullHttpResponse resp = new DefaultFullHttpResponse(
                         HTTP_1_1, isUnknownServiceNameError ? NOT_FOUND : INTERNAL_SERVER_ERROR,
                         Unpooled.wrappedBuffer(bytes));
