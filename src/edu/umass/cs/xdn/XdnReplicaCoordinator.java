@@ -277,6 +277,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             this.getClass().getSimpleName(),
             coordinator.getClass().getSimpleName()
           });
+      return createServiceUnavailableResponse(request, callback);
     }
     return isCoordinated;
   }
@@ -369,6 +370,35 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             headers,
             new DefaultHttpHeaders());
     httpRequest.setHttpResponse(notFoundResponse);
+    callback.executed(httpRequest, true);
+    return true;
+  }
+
+  private boolean createServiceUnavailableResponse(Request request, ExecutedCallback callback) {
+    String serviceName = request.getServiceName();
+    XdnHttpRequest httpRequest = null;
+    if (request instanceof ReplicableClientRequest rcr
+        && rcr.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
+      httpRequest = xdnHttpRequest;
+    }
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      httpRequest = xdnHttpRequest;
+    }
+    if (httpRequest == null) {
+      return false;
+    }
+
+    String errorMessage = String.format("Service '%s' is temporarily unavailable", serviceName);
+    byte[] errorBytes = errorMessage.getBytes();
+    FullHttpResponse serviceUnavailableResponse =
+        new DefaultFullHttpResponse(
+            HttpVersion.HTTP_1_1,
+            HttpResponseStatus.SERVICE_UNAVAILABLE,
+            Unpooled.copiedBuffer(errorBytes));
+    HttpUtil.setContentLength(serviceUnavailableResponse, errorBytes.length);
+    serviceUnavailableResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+    serviceUnavailableResponse.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+    httpRequest.setHttpResponse(serviceUnavailableResponse);
     callback.executed(httpRequest, true);
     return true;
   }
