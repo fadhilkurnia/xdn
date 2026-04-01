@@ -139,6 +139,17 @@ public final class XdnHttpForwarderClient implements Closeable {
     return pools.computeIfAbsent(origin, this::createPool);
   }
 
+  public void closePool(String host, int port) {
+    FixedChannelPool pool = pools.remove(new Origin(host, port));
+    if (pool != null) {
+      try {
+        pool.close();
+      } catch (RuntimeException e) {
+        LOG.log(Level.WARNING, "Failed to close pool for " + host + ":" + port, e);
+      }
+    }
+  }
+
   private FixedChannelPool createPool(Origin origin) {
     Bootstrap bootstrap =
         new Bootstrap()
