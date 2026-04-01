@@ -294,6 +294,20 @@ public class PaxosManager<NodeIDType> {
         return rrc != null;
     }
 
+    protected boolean failOutstandingRequest(RequestPacket requestPacket,
+                                             String reason) {
+        if (requestPacket == null)
+            return false;
+        RequestAndCallback rc = this.outstanding.dequeue(requestPacket);
+        if (rc != null)
+            this.outstanding.totalRequestSize -= rc.requestPacket.lengthEstimate();
+        RequestInstrumenter.remove(requestPacket.requestID);
+
+        if (rc != null && rc.callback != null)
+            rc.callback.executed(rc.requestPacket, false);
+        return rc != null;
+    }
+
     // non-final
     private boolean hasRecovered = false;
 
@@ -1128,6 +1142,8 @@ public class PaxosManager<NodeIDType> {
             return null;
         boolean matched = false;
         PaxosInstanceStateMachine pism = this.getInstance(paxosID);
+        if (pism != null && pism.isStopped())
+            return null;
         if (pism != null) {
             matched = true;
             requestPacket.putPaxosID(paxosID, pism.getVersion());
