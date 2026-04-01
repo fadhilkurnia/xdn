@@ -312,19 +312,23 @@ trim_file_list "$conf_transferrables"
 
 # prepare ssh args if `SSH_KEY_PATH` envvar is set
 SSH_KEY_PATH_ARG=""
-RSYNC_SSH_KEY_PATH_ARG=""
+RSYNC_RSH_CMD="ssh -x -o StrictHostKeyChecking=no"
+# expand leading tilde in SSH key path if provided
+if [[ -n ${SSH_KEY_PATH:-} && ${SSH_KEY_PATH:0:1} == "~" ]]; then
+  SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
+fi
 if [[ ! -z $SSH_KEY_PATH ]]; then
   SSH_KEY_PATH_ARG="-i $SSH_KEY_PATH"
-  RSYNC_SSH_KEY_PATH_ARG="-e 'ssh -x -i $SSH_KEY_PATH -o StrictHostKeyChecking=no'"
+  RSYNC_RSH_CMD+=" -i $SSH_KEY_PATH"
 fi
 
 # disabling warnings to prevent manual override; can supply ssh keys
 # here if needed, but they must be the same on the local host and on
 # the first host that continues the installation.
-SSH="ssh $SSH_KEY_PATH_ARG -x -o StrictHostKeyChecking=no"
+SSH="$RSYNC_RSH_CMD"
 
 RSYNC_PATH="mkdir -p $INSTALL_PATH $INSTALL_PATH/$CONF"
-RSYNC="rsync --force -aL $RSYNC_SSH_KEY_PATH_ARG "
+RSYNC="rsync --force -aL"
 
 # get username from (1) environment variable GP_USERNAME, (2) from
 # gigapaxos properties file, or (3) from whoami
@@ -381,9 +385,9 @@ function rsync_symlink {
   address=$1
   print 1 "Transferring conf files to $address:$INSTALL_PATH"
 
-  print 2 "$RSYNC --rsync-path=\"$RSYNC_PATH $LINK_CMD && rsync\" \
+  print 2 "RSYNC_RSH=\"$RSYNC_RSH_CMD\" $RSYNC --rsync-path=\"$RSYNC_PATH $LINK_CMD && rsync\" \
     $conf_transferrables $username@$address:$INSTALL_PATH/$CONF/"
-  $RSYNC --rsync-path="$RSYNC_PATH $LINK_CMD && rsync" \
+  RSYNC_RSH="$RSYNC_RSH_CMD" $RSYNC --rsync-path="$RSYNC_PATH $LINK_CMD && rsync" \
     $conf_transferrables $username@$address:$INSTALL_PATH/$CONF/
 }
 
@@ -467,10 +471,10 @@ function start_server {
     non_local="$server=$addressport $non_local"
     echo "Starting remote server $server"
     print 1 "Transferring jar files $jar_files to $address:$INSTALL_PATH"
-    print 2 "$RSYNC --rsync-path=\"$RSYNC_PATH && rsync\" \
+    print 2 "RSYNC_RSH=\"$RSYNC_RSH_CMD\" $RSYNC --rsync-path=\"$RSYNC_PATH && rsync\" \
       $jar_files $username@$address:$INSTALL_PATH/jars/ "
-    $RSYNC --rsync-path="$RSYNC_PATH && rsync" \
-      $jar_files $username@$address:$INSTALL_PATH/jars/ 
+    RSYNC_RSH="$RSYNC_RSH_CMD" $RSYNC --rsync-path="$RSYNC_PATH && rsync" \
+      $jar_files $username@$address:$INSTALL_PATH/jars/
     rsync_symlink $address
 
     # then start remote server
