@@ -183,11 +183,15 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return createNotFoundResponse(request, callback);
     }
     long endGetCoordinatorTimeNs = System.nanoTime();
-    logger.log(Level.FINE,
+    logger.log(
+        Level.FINE,
         "[REQUEST_PROCESSING] phase=COORD_START service={0} tsNs={1} id={2} node={3}",
-        new Object[]{serviceName, startCoordinationTimeNs,
-            request instanceof ReplicableClientRequest rcr ? rcr.getRequestID() : -1,
-            this.myNodeID});
+        new Object[] {
+          serviceName,
+          startCoordinationTimeNs,
+          request instanceof ReplicableClientRequest rcr ? rcr.getRequestID() : -1,
+          this.myNodeID
+        });
 
     // one edge case, handling XdnGetProtocolRoleRequest
     if (request instanceof XdnGetReplicaInfoRequest xdnGetReplicaInfoRequest) {
@@ -273,11 +277,17 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     if (logger.isLoggable(Level.FINE)) {
       long proposeTimeNs = System.nanoTime();
-      logger.log(Level.FINE,
-          "[REQUEST_PROCESSING] phase=PAXOS_PROPOSE service={0} tsNs={1} id={2} node={3} prepMs={4}",
-          new Object[]{serviceName, proposeTimeNs, finalGpRequest.getRequestID(),
-              this.myNodeID,
-              (proposeTimeNs - startCoordinationTimeNs) / 1_000_000.0});
+      logger.log(
+          Level.FINE,
+          "[REQUEST_PROCESSING] phase=PAXOS_PROPOSE service={0} tsNs={1} id={2} node={3}"
+              + " prepMs={4}",
+          new Object[] {
+            serviceName,
+            proposeTimeNs,
+            finalGpRequest.getRequestID(),
+            this.myNodeID,
+            (proposeTimeNs - startCoordinationTimeNs) / 1_000_000.0
+          });
     }
 
     // asynchronously coordinate the request
@@ -410,7 +420,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             HttpResponseStatus.SERVICE_UNAVAILABLE,
             Unpooled.copiedBuffer(errorBytes));
     HttpUtil.setContentLength(serviceUnavailableResponse, errorBytes.length);
-    serviceUnavailableResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+    serviceUnavailableResponse
+        .headers()
+        .set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
     serviceUnavailableResponse.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
     httpRequest.setHttpResponse(serviceUnavailableResponse);
     callback.executed(httpRequest, true);

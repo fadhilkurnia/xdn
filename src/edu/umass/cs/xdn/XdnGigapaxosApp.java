@@ -220,11 +220,15 @@ public class XdnGigapaxosApp
   public boolean execute(Request request) {
     long startExecuteTimeNs = System.nanoTime();
     String serviceName = request.getServiceName();
-    logger.log(Level.FINE,
+    logger.log(
+        Level.FINE,
         "[REQUEST_PROCESSING] phase=EXEC_START service={0} tsNs={1} id={2} node={3}",
-        new Object[]{serviceName, startExecuteTimeNs,
-            request instanceof XdnHttpRequest xhr ? xhr.getRequestID() : -1,
-            this.myNodeId});
+        new Object[] {
+          serviceName,
+          startExecuteTimeNs,
+          request instanceof XdnHttpRequest xhr ? xhr.getRequestID() : -1,
+          this.myNodeId
+        });
 
     // Prepare XdnHttpRequest
     boolean isXdnHttpReq = request instanceof XdnHttpRequest;
@@ -314,9 +318,7 @@ public class XdnGigapaxosApp
       final String svcName = serviceName;
       final int epoch = stoppedPlacementEpoch;
       CompletableFuture.runAsync(
-          () -> this.stopContainerizedServiceInstance(svcName, epoch),
-          this.containerStopExecutor
-      );
+          () -> this.stopContainerizedServiceInstance(svcName, epoch), this.containerStopExecutor);
 
       return true;
     }
@@ -2180,11 +2182,18 @@ public class XdnGigapaxosApp
 
     FullHttpRequest forwardedHttpRequest = copyHttpRequest(xdnRequest);
     long endRequestCreationTime = System.nanoTime();
-    logger.log(Level.FINE,
-        "[REQUEST_PROCESSING] phase=CONTAINER_FWD service={0} tsNs={1} id={2} node={3} port={4} prepMs={5}",
-        new Object[]{serviceName, endRequestCreationTime, xdnRequest.getRequestID(),
-            this.myNodeId, targetPort,
-            (endRequestCreationTime - startTime) / 1_000_000.0});
+    logger.log(
+        Level.FINE,
+        "[REQUEST_PROCESSING] phase=CONTAINER_FWD service={0} tsNs={1} id={2} node={3} port={4}"
+            + " prepMs={5}",
+        new Object[] {
+          serviceName,
+          endRequestCreationTime,
+          xdnRequest.getRequestID(),
+          this.myNodeId,
+          targetPort,
+          (endRequestCreationTime - startTime) / 1_000_000.0
+        });
 
     long endRequestResponseTime;
     long endConversionTime;
@@ -2194,11 +2203,17 @@ public class XdnGigapaxosApp
       FullHttpResponse httpResponse =
           httpForwarderClient.execute("127.0.0.1", targetPort, forwardedHttpRequest);
       endRequestResponseTime = System.nanoTime();
-      logger.log(Level.FINE,
-          "[REQUEST_PROCESSING] phase=CONTAINER_RESP service={0} tsNs={1} id={2} node={3} containerMs={4}",
-          new Object[]{serviceName, endRequestResponseTime, xdnRequest.getRequestID(),
-              this.myNodeId,
-              (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0});
+      logger.log(
+          Level.FINE,
+          "[REQUEST_PROCESSING] phase=CONTAINER_RESP service={0} tsNs={1} id={2} node={3}"
+              + " containerMs={4}",
+          new Object[] {
+            serviceName,
+            endRequestResponseTime,
+            xdnRequest.getRequestID(),
+            this.myNodeId,
+            (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0
+          });
 
       // store the response
       xdnRequest.setHttpResponse(httpResponse);

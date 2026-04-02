@@ -283,8 +283,7 @@ public final class XdnHttpForwarderClient implements Closeable {
   }
 
   private static final class FirstByteTimestampHandler extends ChannelInboundHandlerAdapter {
-    static final AttributeKey<Long> FIRST_BYTE_NS =
-        AttributeKey.valueOf("firstByteNs");
+    static final AttributeKey<Long> FIRST_BYTE_NS = AttributeKey.valueOf("firstByteNs");
 
     private boolean recorded;
 
@@ -399,18 +398,20 @@ public final class XdnHttpForwarderClient implements Closeable {
       if (PROFILE) {
         long completeNs = System.nanoTime();
 
-        LOG.log(Level.FINE,
-            "[REQUEST_PROCESSING] phase=CONTAINER_RTT_BREAKDOWN "
-                + "poolAcquireUs={0} encodeWriteUs={1} networkRttUs={2} decodeUs={3} completionUs={4} totalUs={5}",
-            new Object[]{
-                (poolAcquiredNs - executeStartNs) / 1_000.0,
-                writeDoneNs > 0 ? (writeDoneNs - poolAcquiredNs) / 1_000.0 : -1,
-                (writeDoneNs > 0 && firstByteNs > 0)
-                    ? (firstByteNs - writeDoneNs) / 1_000.0 : -1,
-                (firstByteNs > 0 && responseReceivedNs > 0)
-                    ? (responseReceivedNs - firstByteNs) / 1_000.0 : -1,
-                responseReceivedNs > 0 ? (completeNs - responseReceivedNs) / 1_000.0 : -1,
-                (completeNs - executeStartNs) / 1_000.0});
+        LOG.log(
+            Level.FINE,
+            "[REQUEST_PROCESSING] phase=CONTAINER_RTT_BREAKDOWN poolAcquireUs={0} encodeWriteUs={1}"
+                + " networkRttUs={2} decodeUs={3} completionUs={4} totalUs={5}",
+            new Object[] {
+              (poolAcquiredNs - executeStartNs) / 1_000.0,
+              writeDoneNs > 0 ? (writeDoneNs - poolAcquiredNs) / 1_000.0 : -1,
+              (writeDoneNs > 0 && firstByteNs > 0) ? (firstByteNs - writeDoneNs) / 1_000.0 : -1,
+              (firstByteNs > 0 && responseReceivedNs > 0)
+                  ? (responseReceivedNs - firstByteNs) / 1_000.0
+                  : -1,
+              responseReceivedNs > 0 ? (completeNs - responseReceivedNs) / 1_000.0 : -1,
+              (completeNs - executeStartNs) / 1_000.0
+            });
       }
 
       boolean delivered = responseFuture.complete(response);
