@@ -649,6 +649,10 @@ public class HttpActiveReplica {
 
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
+                logger.log(Level.FINE,
+                        "[REQUEST_PROCESSING] phase=HTTP_RECEIVED service={0} tsNs={1} id={2} node={3} method={4} uri={5}",
+                        new Object[]{serviceName, startExecTimeNs, httpRequest.getRequestID(),
+                                nodeId, this.request.method(), this.request.uri()});
                 // Retain the netty objects because we execute off the event loop and
                 // SimpleChannelInboundHandler will otherwise release them after this method returns.
                 ReferenceCountUtil.retain(httpRequest.getHttpRequest());
@@ -1181,6 +1185,11 @@ public class HttpActiveReplica {
                                         (elapsedOverallTime / 1_000_000.0),
                                         (writeDuration / 1_000_000.0),
                                         String.valueOf(requestId)});
+                        logger.log(Level.FINE,
+                                "[REQUEST_PROCESSING] phase=RESPONSE_SENT tsNs={0} id={1} node={2} elapsedMs={3} writeMs={4}",
+                                new Object[]{now, requestId, nodeId,
+                                        (elapsedOverallTime / 1_000_000.0),
+                                        (writeDuration / 1_000_000.0)});
                     }
 
                     // If keep-alive is off, close the connection once the content is fully written.

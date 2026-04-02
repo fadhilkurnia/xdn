@@ -9,6 +9,7 @@ import io.netty.channel.pool.ChannelPoolHandler;
 import io.netty.channel.pool.FixedChannelPool;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
+import io.netty.util.AttributeKey;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.Future;
 import java.io.Closeable;
@@ -43,6 +44,7 @@ import java.util.logging.Logger;
 public final class XdnHttpForwarderClient implements Closeable {
 
   private static final Logger LOG = Logger.getLogger(XdnHttpForwarderClient.class.getName());
+  static final boolean PROFILE = Boolean.getBoolean("xdn.request.profiling");
 
   private static final int MAX_CONTENT_LENGTH = 16 * 1024 * 1024;
   private static final int DEFAULT_MAX_POOL_SIZE = 8;
@@ -69,6 +71,8 @@ public final class XdnHttpForwarderClient implements Closeable {
     Objects.requireNonNull(host, "host");
     Objects.requireNonNull(request, "request");
 
+    long executeStartNs = PROFILE ? System.nanoTime() : 0;
+
     Origin origin = new Origin(host, port);
     FixedChannelPool pool = poolFor(origin);
     CompletableFuture<FullHttpResponse> responseFuture = new CompletableFuture<>();
@@ -85,6 +89,8 @@ public final class XdnHttpForwarderClient implements Closeable {
                 responseFuture.completeExceptionally(acquireFuture.cause());
                 return;
               }
+
+              long poolAcquiredNs = PROFILE ? System.nanoTime() : 0;
 
               Channel channel = acquireFuture.getNow();
               if (channel == null || !channel.isActive()) {
@@ -104,7 +110,8 @@ public final class XdnHttpForwarderClient implements Closeable {
                 return;
               }
 
-              RequestContext context = new RequestContext(channel, pool, responseFuture);
+              RequestContext context =
+                  new RequestContext(channel, pool, responseFuture, executeStartNs, poolAcquiredNs);
               if (!handler.register(context)) {
                 responseFuture.completeExceptionally(
                     new IllegalStateException("Another request is already in flight"));
@@ -116,7 +123,11 @@ public final class XdnHttpForwarderClient implements Closeable {
               writeFuture.addListener(
                   (ChannelFutureListener)
                       wf -> {
-                        if (!wf.isSuccess()) {
+                        if (wf.isSuccess()) {
+                          if (PROFILE) {
+                            context.setWriteDoneNs(System.nanoTime());
+                          }
+                        } else {
                           handler.fail(wf.cause());
                         }
                       });
@@ -246,6 +257,12 @@ public final class XdnHttpForwarderClient implements Closeable {
       if (handler != null) {
         handler.clear();
       }
+      if (PROFILE) {
+        FirstByteTimestampHandler fbHandler = ch.pipeline().get(FirstByteTimestampHandler.class);
+        if (fbHandler != null) {
+          fbHandler.reset();
+        }
+      }
     }
 
     @Override
@@ -256,9 +273,32 @@ public final class XdnHttpForwarderClient implements Closeable {
     @Override
     public void channelCreated(Channel ch) {
       ChannelPipeline pipeline = ch.pipeline();
+      if (PROFILE) {
+        pipeline.addLast(new FirstByteTimestampHandler());
+      }
       pipeline.addLast(new HttpClientCodec());
       pipeline.addLast(new HttpObjectAggregator(MAX_CONTENT_LENGTH));
       pipeline.addLast(new ClientResponseHandler());
+    }
+  }
+
+  private static final class FirstByteTimestampHandler extends ChannelInboundHandlerAdapter {
+    static final AttributeKey<Long> FIRST_BYTE_NS =
+        AttributeKey.valueOf("firstByteNs");
+
+    private boolean recorded;
+
+    void reset() {
+      recorded = false;
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+      if (!recorded && msg instanceof ByteBuf) {
+        recorded = true;
+        ctx.channel().attr(FIRST_BYTE_NS).set(System.nanoTime());
+      }
+      ctx.fireChannelRead(msg);
     }
   }
 
@@ -290,11 +330,19 @@ public final class XdnHttpForwarderClient implements Closeable {
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpResponse msg) {
+      long responseReceivedNs = PROFILE ? System.nanoTime() : 0;
       RequestContext context = inFlight.getAndSet(null);
       if (context == null) {
         ReferenceCountUtil.release(msg);
         LOG.warning("Received response with no context; dropping");
         return;
+      }
+      if (PROFILE) {
+        Long firstByteNs = ctx.channel().attr(FirstByteTimestampHandler.FIRST_BYTE_NS).get();
+        if (firstByteNs != null) {
+          context.setFirstByteNs(firstByteNs);
+        }
+        context.setResponseReceivedNs(responseReceivedNs);
       }
       context.complete(msg);
     }
@@ -312,10 +360,59 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
-  private record RequestContext(
-      Channel channel, FixedChannelPool pool, CompletableFuture<FullHttpResponse> responseFuture) {
+  private static final class RequestContext {
+    private final Channel channel;
+    private final FixedChannelPool pool;
+    private final CompletableFuture<FullHttpResponse> responseFuture;
+    private final long executeStartNs;
+    private final long poolAcquiredNs;
+    private volatile long writeDoneNs;
+    private volatile long firstByteNs;
+    private volatile long responseReceivedNs;
+
+    RequestContext(
+        Channel channel,
+        FixedChannelPool pool,
+        CompletableFuture<FullHttpResponse> responseFuture,
+        long executeStartNs,
+        long poolAcquiredNs) {
+      this.channel = channel;
+      this.pool = pool;
+      this.responseFuture = responseFuture;
+      this.executeStartNs = executeStartNs;
+      this.poolAcquiredNs = poolAcquiredNs;
+    }
+
+    void setWriteDoneNs(long ns) {
+      this.writeDoneNs = ns;
+    }
+
+    void setFirstByteNs(long ns) {
+      this.firstByteNs = ns;
+    }
+
+    void setResponseReceivedNs(long ns) {
+      this.responseReceivedNs = ns;
+    }
 
     void complete(FullHttpResponse response) {
+      if (PROFILE) {
+        long completeNs = System.nanoTime();
+
+        LOG.log(Level.FINE,
+            "[REQUEST_PROCESSING] phase=CONTAINER_RTT_BREAKDOWN "
+                + "poolAcquireUs={0} encodeWriteUs={1} networkRttUs={2} decodeUs={3} completionUs={4} totalUs={5}",
+            new Object[]{
+                (poolAcquiredNs - executeStartNs) / 1_000.0,
+                writeDoneNs > 0 ? (writeDoneNs - poolAcquiredNs) / 1_000.0 : -1,
+                (writeDoneNs > 0 && firstByteNs > 0)
+                    ? (firstByteNs - writeDoneNs) / 1_000.0 : -1,
+                (firstByteNs > 0 && responseReceivedNs > 0)
+                    ? (responseReceivedNs - firstByteNs) / 1_000.0 : -1,
+                responseReceivedNs > 0 ? (completeNs - responseReceivedNs) / 1_000.0 : -1,
+                (completeNs - executeStartNs) / 1_000.0});
+      }
+
       boolean delivered = responseFuture.complete(response);
       if (!delivered) {
         ReferenceCountUtil.release(response);
