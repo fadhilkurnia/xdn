@@ -1,0 +1,221 @@
+<html>
+    <head>
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📚</text></svg>">
+        <title>Book Catalog</title>
+        <link rel="stylesheet" type="text/css" href="https://rawgit.com/vitmalina/w2ui/master/dist/w2ui.min.css">
+    </head>
+    <body>
+        <div style="margin:auto; width: 700px; text-align: center; padding-top: 20px; font-family:verdana">
+            <h2>📚 Welcome to my book catalog!</h2>
+        </div>
+        <br>
+        <div id="book-grid-view" style="margin: auto; width: 700px; min-height: 350px;"></div>
+        <script type="module">
+            import { w2grid, w2popup, w2form, w2confirm } from 'https://rawgit.com/vitmalina/w2ui/master/dist/w2ui.es6.min.js'
+            let apiEndpoint = "/api";
+            
+            let loadData = function(successCallback) {
+                fetch(apiEndpoint + "/books")
+                    .then((response) => {
+                        if (!response.ok) {
+                            window.alert("Failed to fetch book data: received invalid response.");
+                            return [];
+                        }
+                        return response.json();
+                    })
+                    .then((json) => {
+                        grid.clear();
+                        for (const book of json) {
+                            grid.add({ recid: book.id, title: book.title, author: book.author, action: createEditButton(book.id) })
+                        }
+                        if (successCallback) {
+                            successCallback();
+                        }
+                    })
+                    .catch((err) => {
+                        window.alert("Failed to fetch book data: " + err.message);
+                    });
+            };
+
+            let setEditButtonListener = function() {
+                const editButtons = document.getElementsByClassName("book-edit-btn");
+                [...editButtons].forEach(btn => btn.addEventListener("click", dataPopup.bind(this, true, Number(btn.getAttribute('bookID')))));
+                const deleteButtons = document.getElementsByClassName("book-delete-btn");
+                [...deleteButtons].forEach(btn => btn.addEventListener("click", handleDeleteButton.bind(this, Number(btn.getAttribute('bookID')))));
+            };
+
+            let createBook = function(bookTitle, bookAuthor) {
+                fetch(apiEndpoint + "/books", {
+                    method: "POST",
+                    body: JSON.stringify({title: bookTitle, author: bookAuthor}),
+                    headers: {"Content-type": "application/json; charset=UTF-8"}
+                })
+                    .then((response) => {
+                        return response.json();
+                    })
+                    .then((json) => {
+                        w2popup.close();
+                        form.clear();
+                        loadData(setEditButtonListener);
+                    })
+                    .catch((err) => {
+                        w2popup.close();
+                        window.alert("Failed to create new book: " + err.message);
+                    });
+            };
+
+            let updateBook = function(bookID, bookTitle, bookAuthor) {
+                fetch(apiEndpoint + "/books/" + String(bookID), {
+                    method: "PUT",
+                    body: JSON.stringify({title: bookTitle, author: bookAuthor}),
+                    headers: {"Content-type": "application/json; charset=UTF-8"}
+                })
+                    .then((response) => {
+                        return response.json();
+                    })
+                    .then((json) => {
+                        w2popup.close();
+                        form.clear();
+                        loadData(setEditButtonListener);
+                    })
+                    .catch((err) => {
+                        w2popup.close();
+                        window.alert("Failed to update book: " + err.message);
+                    });
+            };
+
+            let dataPopup = function(isEdit, bookID) {
+                w2popup.open({
+                    title: (isEdit ? 'Edit Book' : 'Add New Book'),
+                    width: 350,
+                    body: '<div id="book-edit-form" style="position: absolute; left: 2px; right: 2px; top: 2px; bottom: 2px;"></div>',
+                    onOpen : function(e) {
+                        e.onComplete = function () {
+                            form.render("#book-edit-form");
+
+                            if (!isEdit) {
+                                form.setValue('updateType', 'create');
+                            }
+                            
+                            if (isEdit) {
+                                form.setValue('updateType', 'update');
+                                form.disable('title', 'author');
+                                fetch(apiEndpoint + "/books/" + String(bookID))
+                                    .then((response) => {
+                                        return response.json();
+                                    })
+                                    .then((json) => {
+                                        form.setValue('id', json.id);
+                                        form.setValue('title', json.title);
+                                        form.setValue('author', json.author);
+                                        form.enable('title', 'author');
+                                    })
+                                    .catch((err) => {
+                                        w2popup.close();
+                                        form.enable('title', 'author');
+                                        window.alert("Failed to retrieve book data: " + err.message);
+                                    });
+                            }
+                        };
+                    }
+                });
+            };
+
+            let createEditButton = function(bookID) {
+                return `<button type="button" class="book-edit-btn" bookID="${bookID}" style="padding: 4px 2px 3px"> 🖊️ Edit </button> <button type="button" class="book-delete-btn" bookID="${bookID}" style="padding: 4px 2px 3px"> 🗑️ Delete </button>`;
+            };
+
+            let handleDeleteButton = function(bookID) {
+                fetch(apiEndpoint + "/books/" + String(bookID))
+                    .then((response) => {
+                        return response.json();
+                    })
+                    .then((json) => {
+                        let modalText = `<p>Are you sure?<br><br> You are going to delete the following book: <br>"${json.title}"<br>by ${json.author}</p>`;
+                        w2confirm(modalText, 'Delete Confirmation')
+                            .yes(() => {
+                                fetch(apiEndpoint + "/books/" + String(bookID), {
+                                    method: "DELETE"
+                                })
+                                    .then((response) => {
+                                        return response.json();
+                                    })
+                                    .then((json) => {
+                                        loadData(setEditButtonListener);
+                                    })
+                                    .catch((err) => {
+                                        window.alert("Failed to delete book: " + err.message);
+                                    });
+                            })
+                            .no(() => {
+                                // do nothing
+                            })
+                    })
+                    .catch((err) => {
+                        window.alert("Failed to retrieve book data for deletion: " + err.message);
+                    });
+            }
+
+            let grid = new w2grid({
+                name: 'grid',
+                box: '#book-grid-view',
+                multiSelect: false,
+                show: {toolbar: true},
+                columns: [
+                    { field: 'recid', text: 'ID', size: '50px', sortable: true },
+                    { field: 'title', text: 'Title', size: '30%', sortable: true },
+                    { field: 'author', text: 'Authors', size: '30%', sortable: true },
+                    { field: 'action', text: 'Action', size: '135px', sortable: false, style: 'text-align: center' }
+                ],
+                toolbar: {
+                    items: [
+                        { id: 'add', type: 'button', text: 'Add Record', icon: 'w2ui-icon-plus' }
+                    ],
+                    onClick(event) {
+                        if (event.target == 'add') {
+                            form.clear();
+                            dataPopup(false, 0);
+                        }
+                    }
+                },
+                records: [],
+                onReload: function(event) {
+                    loadData(setEditButtonListener);
+                },
+                onRender: async function(event) {
+                    await event.complete;
+                    setEditButtonListener();
+                }
+            });
+            let form = new w2form({
+                name: 'book-edit-form',
+                fields: [
+                    { field: 'updateType', type: 'text', required: true, hidden: true },
+                    { field: 'id', type: 'int', required: true, hidden: true },
+                    { field: 'title', type: 'text', required: true, html: { label: 'Book Title' } },
+                    { field: 'author', type: 'text', required: true, html: { label: 'Book Authors' } }
+                ],
+                record: {
+                    updateType: 'create',
+                    id: 0,
+                },
+                actions: {
+                    Reset() {
+                        this.clear();							
+                    },
+                    Save() {
+                        let errors = this.validate();
+                        if (errors != null && errors.length == 0 && this.record.updateType === "create") {
+                            createBook(this.record.title, this.record.author);
+                        }
+                        if (errors != null && errors.length == 0 && this.record.updateType === "update") {
+                            updateBook(this.record.id, this.record.title, this.record.author);
+                        }
+                    }
+                }
+            });
+
+            loadData(setEditButtonListener);
+        </script>
+    </body>
+</html>
