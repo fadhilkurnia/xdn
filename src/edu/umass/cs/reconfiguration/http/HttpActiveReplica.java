@@ -123,15 +123,18 @@ public class HttpActiveReplica {
     private static final String DBG_HDR_BYPASS_COORDINATION = "___DBC";
     private static final String DBG_HDR_BYPASS_COORDINATION_PORT = "___DBCP";
     private static final String DBG_HDR_DIRECT_EXECUTE = "___DDE";
-    private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
-    private static final XdnHttpForwarderClient[] debugHttpClients =
-            new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
+    private static volatile XdnHttpForwarderClient debugHttpClient;
     public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
 
-    static {
-        for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
-            debugHttpClients[i] = new XdnHttpForwarderClient();
+    private static XdnHttpForwarderClient getDebugHttpClient() {
+        if (debugHttpClient == null) {
+            synchronized (HttpActiveReplica.class) {
+                if (debugHttpClient == null) {
+                    debugHttpClient = new XdnHttpForwarderClient();
+                }
+            }
         }
+        return debugHttpClient;
     }
 
     public HttpActiveReplica(String nodeId,
@@ -977,8 +980,7 @@ public class HttpActiveReplica {
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION);
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION_PORT);
 
-                int forwarderClientIdx = (int) (ctx.channel().remoteAddress().hashCode() % DBG_NUM_FORWARDER_CLIENTS);
-                XdnHttpForwarderClient debugHttpClient = debugHttpClients[forwarderClientIdx];
+                XdnHttpForwarderClient debugHttpClient = getDebugHttpClient();
 
                 // Send and execute possibly long-running request in offload executor.
                 ReferenceCountUtil.retain(httpRequest.getHttpRequest());
