@@ -123,15 +123,18 @@ public class HttpActiveReplica {
     private static final String DBG_HDR_BYPASS_COORDINATION = "___DBC";
     private static final String DBG_HDR_BYPASS_COORDINATION_PORT = "___DBCP";
     private static final String DBG_HDR_DIRECT_EXECUTE = "___DDE";
-    private static final int DBG_NUM_FORWARDER_CLIENTS = 128;
-    private static final XdnHttpForwarderClient[] debugHttpClients =
-            new XdnHttpForwarderClient[DBG_NUM_FORWARDER_CLIENTS];
+    private static volatile XdnHttpForwarderClient debugHttpClient;
     public static XdnGigapaxosApp debugAppReference = null; // needed for DBG_HDR_DIRECT_EXECUTE
 
-    static {
-        for (int i = 0; i < DBG_NUM_FORWARDER_CLIENTS; i++) {
-            debugHttpClients[i] = new XdnHttpForwarderClient();
+    private static XdnHttpForwarderClient getDebugHttpClient() {
+        if (debugHttpClient == null) {
+            synchronized (HttpActiveReplica.class) {
+                if (debugHttpClient == null) {
+                    debugHttpClient = new XdnHttpForwarderClient();
+                }
+            }
         }
+        return debugHttpClient;
     }
 
     public HttpActiveReplica(String nodeId,
@@ -646,6 +649,10 @@ public class HttpActiveReplica {
 
                 XdnHttpRequest httpRequest =
                         new XdnHttpRequest(this.request, this.requestContent);
+                logger.log(Level.FINE,
+                        "[REQUEST_PROCESSING] phase=HTTP_RECEIVED service={0} tsNs={1} id={2} node={3} method={4} uri={5}",
+                        new Object[]{serviceName, startExecTimeNs, httpRequest.getRequestID(),
+                                nodeId, this.request.method(), this.request.uri()});
                 // Retain the netty objects because we execute off the event loop and
                 // SimpleChannelInboundHandler will otherwise release them after this method returns.
                 ReferenceCountUtil.retain(httpRequest.getHttpRequest());
@@ -810,9 +817,19 @@ public class HttpActiveReplica {
 
             XdnHttpRequest executedRequest;
             try {
-                executedRequest = future.get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
+                executedRequest = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+                if (executedRequest == null) {
+                    throw new RuntimeException("Executed request is null after future completion");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Batched request execution was interrupted", e);
+            } catch (java.util.concurrent.TimeoutException e) {
+                throw new RuntimeException("Batched request execution timed out after 5s", e);
+            } catch (ExecutionException e) {
+                throw new RuntimeException(
+                        "Batched request execution failed: " + e.getCause().getMessage(), e
+                );
             }
 
             assert httpRequest.getRequestID() == executedRequest.getRequestID() :
@@ -967,8 +984,7 @@ public class HttpActiveReplica {
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION);
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_BYPASS_COORDINATION_PORT);
 
-                int forwarderClientIdx = (int) (ctx.channel().remoteAddress().hashCode() % DBG_NUM_FORWARDER_CLIENTS);
-                XdnHttpForwarderClient debugHttpClient = debugHttpClients[forwarderClientIdx];
+                XdnHttpForwarderClient debugHttpClient = getDebugHttpClient();
 
                 // Send and execute possibly long-running request in offload executor.
                 ReferenceCountUtil.retain(httpRequest.getHttpRequest());
@@ -1031,15 +1047,18 @@ public class HttpActiveReplica {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            String message = cause.getMessage() != null
+                    ? cause.getMessage()
+                    : cause.getClass().getSimpleName();
             if (!(cause instanceof SocketException) ||
-                    cause.getMessage().contains("Connection reset")) {
-                System.out.println("HttpActiveReplicaHandler Error: " + cause.getMessage());
+                    message.contains("Connection reset")) {
+                System.out.println("HttpActiveReplicaHandler Error: " + message);
                 cause.printStackTrace();
             }
             if (ctx.channel().isActive()) {
-                byte[] bytes = ("Error: " + cause.getMessage()).getBytes(CharsetUtil.UTF_8);
+                byte[] bytes = ("Error: " + message).getBytes(CharsetUtil.UTF_8);
                 boolean isUnknownServiceNameError =
-                        cause.getMessage().contains("Unknown coordinator for name=");
+                        message.contains("Unknown coordinator for name=");
                 FullHttpResponse resp = new DefaultFullHttpResponse(
                         HTTP_1_1, isUnknownServiceNameError ? NOT_FOUND : INTERNAL_SERVER_ERROR,
                         Unpooled.wrappedBuffer(bytes));
@@ -1166,6 +1185,11 @@ public class HttpActiveReplica {
                                         (elapsedOverallTime / 1_000_000.0),
                                         (writeDuration / 1_000_000.0),
                                         String.valueOf(requestId)});
+                        logger.log(Level.FINE,
+                                "[REQUEST_PROCESSING] phase=RESPONSE_SENT tsNs={0} id={1} node={2} elapsedMs={3} writeMs={4}",
+                                new Object[]{now, requestId, nodeId,
+                                        (elapsedOverallTime / 1_000_000.0),
+                                        (writeDuration / 1_000_000.0)});
                     }
 
                     // If keep-alive is off, close the connection once the content is fully written.

@@ -116,6 +116,44 @@ function do_distributed_initialization() {
   # TODO: start the service
 }
 
+function do_deploy() {
+  echo "Deploying XDN binaries to all machines from the provided config ..."
+
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
+  if [[ -z ${CONFIG} || -z ${SSH_KEY} || -z ${USERNAME} ]]; then
+    echo "CONFIG, SSH_KEY, and USERNAME must all be provided" >&2
+    exit 1
+  fi
+
+  local unique_ips=()
+  while IFS= read -r line; do
+    if [[ $line =~ ^(active|reconfigurator)\.[a-zA-Z0-9_]*= ]]; then
+      ip=$(echo "$line" | awk -F'[=:]' '{print $2}')
+      if [[ ! " ${unique_ips[*]-} " =~ " ${ip} " ]]; then
+        unique_ips+=("$ip")
+      fi
+    fi
+  done <"$CONFIG"
+
+  echo " - config file       : ${CONFIG}"
+  echo " - machines to update:"
+  for ip in "${unique_ips[@]}"; do
+    echo "   - $ip"
+  done
+  echo ""
+
+  for machine in "${unique_ips[@]}"; do
+    upload_binaries "$machine" "$SSH_KEY" "$USERNAME"
+  done
+
+  echo "Deployment complete."
+  exit 0
+}
+
 function do_start_all() {
   echo "Starting all gigapaxos servers defined in the config ..."
 
@@ -404,8 +442,8 @@ function install_dependencies() {
   # install python3-pip and tcconfig for WAN latency emulation
   CMD_DESC+=("install pip")
   CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip")
-  CMD_DESC+=("install tcconfig for WAN latency emulation")
-  CMD+=("sudo pip install -q tcconfig")
+  # CMD_DESC+=("install tcconfig for WAN latency emulation")
+  # CMD+=("sudo pip install -q tcconfig")
 
   # install rqlite for the geodistributed baseline
   local rqlite_folder_name="rqlite-v8.36.12-linux-amd64"
@@ -495,6 +533,9 @@ function print_usage() {
   echo " Available commands are listed below."
   echo " To initialize all the machines, installing required dependencies:"
   echo "   xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To deploy binaries to initialized machines:"
+  echo "   xdnd deploy -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
   echo " To start all gigapaxos servers using gpServer:"
   echo "   xdnd start-all -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
@@ -854,7 +895,7 @@ function main() {
 
   # parse the second param, i.e., the action.
   local SECOND_PARAM=$1
-  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "init-driver" "start" "help" "check")
+  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "init-driver" "start" "help" "check" "deploy")
   if ! is_in_list "$SECOND_PARAM" "${VALID_ACTIONS[@]}"; then
     echo "Action '$SECOND_PARAM' is not a valid actions."
     echo "Valid actions are: start, check, dist-init, help."
@@ -867,6 +908,9 @@ function main() {
   case "$ACTION" in
   "dist-init")
     do_distributed_initialization "$@"
+    ;;
+  "deploy")
+    do_deploy "$@"
     ;;
   "dist-init-observability")
     do_distributed_init_observability "$@"

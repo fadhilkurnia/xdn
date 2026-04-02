@@ -457,6 +457,15 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
          * messaging is turned off for all but DECISION or CHECKPOINT_STATE
          * packets) and can not change any disk state. */
         if (this.paxosState.isStopped()) {
+            if (this.paxosManager != null
+                    && pp instanceof RequestPacket
+                    && (msgType == PaxosPacketType.REQUEST
+                        || msgType == PaxosPacketType.PROPOSAL)) {
+                this.paxosManager.failOutstandingRequest(
+                        (RequestPacket) pp,
+                        "INSTANCE_STOPPED:" + this.getPaxosID() + ":"
+                                + this.getVersion());
+            }
             log.log(Level.INFO, "{0} stopped; dropping {1}; returning", new Object[]{
                     this, pp != null ? pp.getSummary() : null});
             return;

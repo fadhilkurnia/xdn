@@ -43,6 +43,8 @@ import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -91,6 +93,15 @@ public class XdnGigapaxosApp
   // It is specifically designed with Netty, matching HttpActiveReplica, to avoid
   // unnecessary request conversion (e.g., Netty request to OpenJDK request).
   private final XdnHttpForwarderClient httpForwarderClient;
+
+  // Background executor for container stops during reconfiguration.
+  private final ExecutorService containerStopExecutor =
+      Executors.newCachedThreadPool(
+          r -> {
+            Thread t = new Thread(r, "xdn-container-stop");
+            t.setDaemon(true);
+            return t;
+          });
 
   // HTTP request cache to prevent deserializing an already deserialized request
   // upon coordination. This is useful for the entry replica.
@@ -209,6 +220,15 @@ public class XdnGigapaxosApp
   public boolean execute(Request request) {
     long startExecuteTimeNs = System.nanoTime();
     String serviceName = request.getServiceName();
+    logger.log(
+        Level.FINE,
+        "[REQUEST_PROCESSING] phase=EXEC_START service={0} tsNs={1} id={2} node={3}",
+        new Object[] {
+          serviceName,
+          startExecuteTimeNs,
+          request instanceof XdnHttpRequest xhr ? xhr.getRequestID() : -1,
+          this.myNodeId
+        });
 
     // Prepare XdnHttpRequest
     boolean isXdnHttpReq = request instanceof XdnHttpRequest;
@@ -287,7 +307,20 @@ public class XdnGigapaxosApp
       boolean isCaptureSuccess =
           this.captureContainerizedServiceFinalState(serviceName, stoppedPlacementEpoch);
       assert isCaptureSuccess : "failed to store the final state before stopping";
-      return this.stopContainerizedServiceInstance(serviceName, stoppedPlacementEpoch);
+
+      // --- Synchronous: close HTTP connection pool immediately ---
+      Integer servicePort = this.activeServicePorts.get(serviceName);
+      if (servicePort != null) {
+        this.httpForwarderClient.closePool("127.0.0.1", servicePort);
+      }
+
+      // --- Async: stop containers in the background ---
+      final String svcName = serviceName;
+      final int epoch = stoppedPlacementEpoch;
+      CompletableFuture.runAsync(
+          () -> this.stopContainerizedServiceInstance(svcName, epoch), this.containerStopExecutor);
+
+      return true;
     }
 
     String exceptionMessage =
@@ -1819,7 +1852,7 @@ public class XdnGigapaxosApp
 
     // Copy the service state into the prepared directory.
     String hostMountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
-    String stateCopyCommand = String.format("cp -a %s %s", hostMountDir, finalStateDirPath);
+    String stateCopyCommand = String.format("cp -a %s. %s", hostMountDir, finalStateDirPath);
     int count = 0;
     while (true) {
       if (++count >= 10) {
@@ -2149,6 +2182,18 @@ public class XdnGigapaxosApp
 
     FullHttpRequest forwardedHttpRequest = copyHttpRequest(xdnRequest);
     long endRequestCreationTime = System.nanoTime();
+    logger.log(
+        Level.FINE,
+        "[REQUEST_PROCESSING] phase=CONTAINER_FWD service={0} tsNs={1} id={2} node={3} port={4}"
+            + " prepMs={5}",
+        new Object[] {
+          serviceName,
+          endRequestCreationTime,
+          xdnRequest.getRequestID(),
+          this.myNodeId,
+          targetPort,
+          (endRequestCreationTime - startTime) / 1_000_000.0
+        });
 
     long endRequestResponseTime;
     long endConversionTime;
@@ -2158,6 +2203,17 @@ public class XdnGigapaxosApp
       FullHttpResponse httpResponse =
           httpForwarderClient.execute("127.0.0.1", targetPort, forwardedHttpRequest);
       endRequestResponseTime = System.nanoTime();
+      logger.log(
+          Level.FINE,
+          "[REQUEST_PROCESSING] phase=CONTAINER_RESP service={0} tsNs={1} id={2} node={3}"
+              + " containerMs={4}",
+          new Object[] {
+            serviceName,
+            endRequestResponseTime,
+            xdnRequest.getRequestID(),
+            this.myNodeId,
+            (endRequestResponseTime - endRequestCreationTime) / 1_000_000.0
+          });
 
       // store the response
       xdnRequest.setHttpResponse(httpResponse);
