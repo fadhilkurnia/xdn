@@ -214,18 +214,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     var serviceName = request.getServiceName();
     var coordinator = this.serviceCoordinator.get(serviceName);
     if (coordinator == null) {
-      System.err.printf(
-          "[XDN-DIAG] %s coord-entry svc=%s NO-COORDINATOR (404)%n",
-          this.myNodeID.toLowerCase(), serviceName);
       // returns 404 not found back to client
       return createNotFoundResponse(request, callback);
     }
-    System.err.printf(
-        "[XDN-DIAG] %s coord-entry svc=%s coordinator=%s reqClass=%s%n",
-        this.myNodeID.toLowerCase(),
-        serviceName,
-        coordinator.getClass().getSimpleName(),
-        request.getClass().getSimpleName());
     long endGetCoordinatorTimeNs = System.nanoTime();
 
     // one edge case, handling XdnGetProtocolRoleRequest
@@ -340,20 +331,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             }
           }
 
-          System.err.printf(
-              "[XDN-DIAG] %s coord-callback-fired svc=%s handled=%s respNull=%s%n",
-              this.myNodeID.toLowerCase(), serviceName, handled, (response == null));
           callback.executed(response, handled);
         };
 
     // asynchronously coordinate the request
-    System.err.printf(
-        "[XDN-DIAG] %s coord-delegating svc=%s to=%s%n",
-        this.myNodeID.toLowerCase(), serviceName, coordinator.getClass().getSimpleName());
     boolean isCoordinated = coordinator.coordinateRequest(gpRequest, loggedCallback);
-    System.err.printf(
-        "[XDN-DIAG] %s coord-delegate-returned svc=%s isCoordinated=%s%n",
-        this.myNodeID.toLowerCase(), serviceName, isCoordinated);
     if (!isCoordinated) {
       logger.log(
           Level.FINE,
@@ -618,9 +600,6 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       String state,
       Set<NodeIDType> nodes,
       String placementMetadata) {
-    System.err.printf(
-        "[XDN-DIAG] %s createReplicaGroup-entry svc=%s epoch=%d nodes=%s stateNull=%s%n",
-        this.myNodeID.toLowerCase(), serviceName, epoch, nodes, (state == null));
     logger.log(
         Level.FINEST,
         "{0}:XdnReplicaCoordinator - createReplicaGroup "
@@ -639,12 +618,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
-    boolean result =
-        this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
-    System.err.printf(
-        "[XDN-DIAG] %s createReplicaGroup-done svc=%s registered=%s%n",
-        this.myNodeID.toLowerCase(), serviceName, this.serviceCoordinator.containsKey(serviceName));
-    return result;
+    return this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
   }
 
   private boolean initializeReplicaGroup(

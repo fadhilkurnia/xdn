@@ -204,14 +204,7 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
         }
 
 		// propose the request with Paxos
-		boolean isLocalCoordinator = this.paxosManager.isPaxosCoordinator(paxosGroupID);
-		System.err.printf(
-				"[XDN-DIAG] %s paxos-propose-entry svc=%s isLocalCoordinator=%s%n",
-				this.paxosManager.getNodeID(), paxosGroupID, isLocalCoordinator);
 		String proposee = this.propose(paxosGroupID, request, loggedCallback);
-		System.err.printf(
-				"[XDN-DIAG] %s paxos-propose-returned svc=%s proposee=%s%n",
-				this.paxosManager.getNodeID(), paxosGroupID, proposee);
 
 		Level level = Level.FINE;
 		log.log(level, "{0} {1} request {2} to {3}:{4}", new Object[]{
