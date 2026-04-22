@@ -155,7 +155,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // Create target mnt dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/mnt/service1/
-    Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1");
+    Shell.runCommand("sudo umount " + targetDir);
     Shell.runCommand("rm -rf " + targetDir);
     int code = Shell.runCommand("mkdir -p " + targetDir);
     if (code != 0) {
@@ -732,7 +732,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
 
     String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
-    int umountRetCode = Shell.runCommand("sudo umount " + targetDir + " > /dev/null 2>&1", false);
+    int umountRetCode = Shell.runCommand("sudo umount " + targetDir, true);
     if (umountRetCode != 0) {
       logger.log(
           Level.WARNING,
