@@ -236,27 +236,38 @@ def stop_cluster(config_path: Path, repo_root: Path):
         logger.warning("Cluster cleanup failed for command: %s", " ".join(clear_cmd))
 
 
-def deploy_service(control_plane_host: str, image: str, service_name: str, env_vars: Optional[Dict[str, str]] = None):
+def deploy_service(control_plane_host: str, image: str, service_name: str,
+                   env_vars: Optional[Dict[str, str]] = None,
+                   yaml_file: Optional[str] = None):
     # Launch the target image as an XDN service via CLI; assume control-plane host resolves.
-    env_parts = []
-    for key, value in (env_vars or {}).items():
-        env_parts.append(f"--env {shlex.quote(f'{key}={value}')}")
-    env_arg = " ".join(env_parts)
-    cmd = (
-        f"XDN_CONTROL_PLANE={shlex.quote(control_plane_host)} "
-        f"xdn launch {shlex.quote(service_name)} "
-        f"--image={shlex.quote(image)} --deterministic=true "
-        f"--consistency=linearizability --state=/app/data/ {env_arg}"
-    )
-    logger.info("Launching XDN service %s with image %s", service_name, image)
+    xdn_bin = str(Path(__file__).resolve().parent.parent / "bin" / "xdn")
+    if yaml_file:
+        cmd = (
+            f"XDN_CONTROL_PLANE={shlex.quote(control_plane_host)} "
+            f"{shlex.quote(xdn_bin)} launch {shlex.quote(service_name)} "
+            f"--file={shlex.quote(yaml_file)}"
+        )
+    else:
+        env_parts = []
+        for key, value in (env_vars or {}).items():
+            env_parts.append(f"--env {shlex.quote(f'{key}={value}')}")
+        env_arg = " ".join(env_parts)
+        cmd = (
+            f"XDN_CONTROL_PLANE={shlex.quote(control_plane_host)} "
+            f"{shlex.quote(xdn_bin)} launch {shlex.quote(service_name)} "
+            f"--image={shlex.quote(image)} --deterministic=true "
+            f"--consistency=linearizability --state=/app/data/ {env_arg}"
+        )
+    logger.info("Launching XDN service %s with image %s (yaml=%s)", service_name, image, yaml_file)
     subprocess.run(cmd, shell=True, check=True)
     time.sleep(5)
 
 
 def destroy_service(control_plane_host: str, service_name: str):
+    xdn_bin = str(Path(__file__).resolve().parent.parent / "bin" / "xdn")
     cmd = (
         f"yes yes | XDN_CONTROL_PLANE={shlex.quote(control_plane_host)} "
-        f"xdn service destroy {shlex.quote(service_name)}"
+        f"{shlex.quote(xdn_bin)} service destroy {shlex.quote(service_name)}"
     )
     try:
         subprocess.run(cmd, shell=True, check=True)
@@ -465,6 +476,8 @@ def run_latency_client(
     duration_seconds: float,
     rate: int,
     output_path: Path,
+    payloads_file: Optional[str] = None,
+    urls_file: Optional[str] = None,
 ) -> None:
     raise_fd_limit()
     duration_arg = f"{duration_seconds:.0f}" if duration_seconds.is_integer() else f"{duration_seconds}"
@@ -479,11 +492,17 @@ def run_latency_client(
         f"XDN: {service_name}",
         "-H",
         "Content-Type: application/json",
+    ]
+    if payloads_file:
+        cmd.extend(["-payloads-file", payloads_file])
+    if urls_file:
+        cmd.extend(["-urls-file", urls_file])
+    cmd.extend([
         url,
         payload,
         duration_arg,
         f"{rate}",
-    ]
+    ])
     with open(output_path, "w", encoding="utf-8") as fh:
         result = subprocess.run(
             cmd,
@@ -589,6 +608,22 @@ def main():
         help="Load generator to use (k6 or get_latency_at_rate.go)",
     )
     parser.add_argument(
+        "--yaml",
+        default=None,
+        help="Deploy via YAML file instead of CLI flags (enables commutativity declarations, etc.)",
+    )
+    parser.add_argument(
+        "--randomize-keys",
+        action="store_true",
+        help="Randomize keys in workload payloads (generates distinct keys for each request)",
+    )
+    parser.add_argument(
+        "--n-keys",
+        type=int,
+        default=1000,
+        help="Number of distinct keys when --randomize-keys is used (default: 1000)",
+    )
+    parser.add_argument(
         "--jvm-args",
         default="-DSYNC=true",
         help="Extra JVM args to pass to gpServer.sh (e.g. '-DSYNC=true')",
@@ -610,7 +645,8 @@ def main():
     post_endpoint, payload_data, app_name, env_vars = get_app_request_config(args.dockerImageName)
 
     # Create timestamped results directory
-    results_dir = results_base / f"load_ar_{app_name}_reflex_{timestamp}"
+    suffix = "_randkeys" if args.randomize_keys else ""
+    results_dir = results_base / f"load_ar_{app_name}_reflex{suffix}_{timestamp}"
     results_dir.mkdir(parents=True, exist_ok=True)
     logger.info(
         "Using service name=%s, target=%s:%s (http port %s), rates=%s req/s",
@@ -650,7 +686,8 @@ def main():
 
             logger.info("Starting fresh cluster ...")
             start_cluster(config_path, repo_root, extra_jvm_args=args.jvm_args)
-            deploy_service(control_plane_host, args.dockerImageName, service_name, env_vars)
+            deploy_service(control_plane_host, args.dockerImageName, service_name, env_vars,
+                           yaml_file=args.yaml)
             verify_service(target_host, http_target_port, service_name)
 
             leader_host, leader_port = detect_leader_replica(active_replicas, service_name)
@@ -687,6 +724,25 @@ def main():
                     duration_seconds = parse_duration_seconds(args.duration)
                     payload_json = json.dumps(payload_data)
                     logger.info("Running Go latency client with target rate %s req/s", rate)
+
+                    # Generate randomized key files for workloads that need them
+                    payloads_path = None
+                    urls_path = None
+                    if args.randomize_keys:
+                        n_keys = args.n_keys
+                        payloads_path = str(results_dir / "payloads.txt")
+                        urls_path = str(results_dir / "urls.txt")
+                        # Strip the trailing key from the endpoint to get the base
+                        # e.g., "/api/kv/abc" -> "/api/kv"
+                        base_endpoint = post_endpoint.rsplit("/", 1)[0]
+                        base_url = f"http://{leader_host}:{leader_http_port}{base_endpoint}"
+                        with open(payloads_path, "w") as pf, open(urls_path, "w") as uf:
+                            for ki in range(n_keys):
+                                k = f"key{ki}"
+                                pf.write(json.dumps({"key": k, "value": "xyz"}) + "\n")
+                                uf.write(f"{base_url}/{k}\n")
+                        logger.info("Generated %d randomized keys -> %s, %s", n_keys, payloads_path, urls_path)
+
                     run_latency_client(
                         go_source,
                         service_name,
@@ -695,6 +751,8 @@ def main():
                         duration_seconds,
                         rate,
                         latency_output,
+                        payloads_file=payloads_path,
+                        urls_file=urls_path,
                     )
                     metrics = parse_latency_output(latency_output)
                 logger.info("Results for rate=%s: %s", rate, metrics)

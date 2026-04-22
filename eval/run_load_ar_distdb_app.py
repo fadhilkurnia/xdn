@@ -40,6 +40,7 @@ VALID_APPS = {
     "fadhilkurnia/xdn-todo",
     "fadhilkurnia/xdn-todo-go",
     "fadhilkurnia/xdn-todo-go-batching",
+    "fadhilkurnia/xdn-webkv-pipeline",
 }
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,8 @@ def get_app_request_config(image: str) -> Dict[str, object]:
             "service": "bookcatalog",
             "env": {"ENABLE_WAL": "true"},
         }
-    if image in ("fadhilkurnia/xdn-webkv", "fadhilkurnia/xdn-webkv-batching"):
+    if image in ("fadhilkurnia/xdn-webkv", "fadhilkurnia/xdn-webkv-batching",
+                  "fadhilkurnia/xdn-webkv-pipeline"):
         return {
             "backend": "tikv",
             "endpoint": "/api/kv/abc",
