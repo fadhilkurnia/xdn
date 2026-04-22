@@ -161,6 +161,8 @@ func main() {
 		"URL for GET (read) requests when using -read-ratio. Write URL is the positional arg.")
 	enableCookies := flag.Bool("enable-cookies", false,
 		"Enable cookie jar so the client sends back Set-Cookie values (e.g., XDN session timestamps).")
+	perSecondOutput := flag.String("per-second-output", "",
+		"Path to CSV file for per-second throughput (format: second,throughput_rps)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [options] <url> <json_payload> <duration_seconds> <target_rate>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s [options] -X GET <url> <duration_seconds> <target_rate>\n", os.Args[0])
@@ -316,6 +318,10 @@ func main() {
 	end := start.Add(time.Duration(durationSeconds * float64(time.Second)))
 	next := start
 
+	// Per-second success counters for optional CSV output.
+	maxSeconds := int(durationSeconds) + 60
+	perSecondSuccess := make([]int64, maxSeconds)
+
 	results := make(chan result, 1024)
 	var wg sync.WaitGroup
 	totalSent := 0
@@ -381,6 +387,12 @@ func main() {
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			success := resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+			if success {
+				sec := int(time.Since(start).Seconds())
+				if sec >= 0 && sec < len(perSecondSuccess) {
+					atomic.AddInt64(&perSecondSuccess[sec], 1)
+				}
+			}
 			results <- result{latency: latency, success: success, statusCode: resp.StatusCode}
 		}()
 
@@ -473,6 +485,25 @@ func main() {
 		fmt.Println("--- error_messages ---")
 		for msg, count := range errMsgCounts {
 			fmt.Printf("  [%d] %s\n", count, msg)
+		}
+	}
+
+	// Write per-second throughput CSV if requested.
+	if *perSecondOutput != "" {
+		f, ferr := os.Create(*perSecondOutput)
+		if ferr != nil {
+			fmt.Fprintf(os.Stderr, "failed to create per-second output file: %v\n", ferr)
+		} else {
+			fmt.Fprintln(f, "second,throughput_rps")
+			limit := int(durationSeconds) + 10
+			if limit > len(perSecondSuccess) {
+				limit = len(perSecondSuccess)
+			}
+			for sec := 0; sec < limit; sec++ {
+				fmt.Fprintf(f, "%d,%.1f\n", sec, float64(perSecondSuccess[sec]))
+			}
+			f.Close()
+			fmt.Fprintf(os.Stderr, "per-second throughput written to %s\n", *perSecondOutput)
 		}
 	}
 }
