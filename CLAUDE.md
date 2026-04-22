@@ -47,6 +47,15 @@ ant runtest -Dtest=MyTest        # Run a specific JUnit 4/5 test by class name
 ant test                         # Run legacy JUnit 4 reconfiguration tests
 ```
 
+**Running a single test method from the CLI** (via JUnit ConsoleLauncher; useful when `ant runtest` is too coarse):
+```bash
+ant clean jar xdn-compile-tests
+java -cp "lib/junit-platform-console-standalone-1.11.1.jar:build/classes:build/test-classes:lib/*" \
+  org.junit.platform.console.ConsoleLauncher execute \
+  --select-method edu.umass.cs.xdn.XdnGetReplicaInfoTest#testGetReplicaInfoSingleService \
+  --details=verbose
+```
+
 XDN scripted tests (`run_xdn_tests.sh`) run each test method in a 
 **separate JVM** because each test that calls 
 `XdnTestCluster.start()`/`.close()` needs full resource cleanup. 
@@ -193,3 +202,9 @@ For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifec
 - Test naming: `Xdn*Test.java` for XDN-specific tests, `*Test.java` for general tests
 - Commit messages: short, lowercase, imperative (e.g., `update xdn-cli`, `bugfix formatter`)
 - Example services in `services/` — each is a standalone Docker app (bookcatalog, todo, chessapp, etc.)
+
+## Further Reading (`docs/`)
+- `docs/developer.md` — formatting, running tests (incl. ConsoleLauncher recipes), logging
+- `docs/request-flow.md` — end-to-end request path through GigaPaxos
+- `docs/HTTP-API.md` — HTTP API surface exposed by ActiveReplicas
+- `docs/paxos-reconfiguration.md`, `docs/paxos-compaction.md` — GigaPaxos internals

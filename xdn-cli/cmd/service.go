@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -517,9 +518,177 @@ var ServiceDestroyCmd = &cobra.Command{
 	},
 }
 
+var ServiceMoveCmd = &cobra.Command{
+	Use:   "move <service-name>",
+	Short: "Relocate a service's active replicas to the specified set of nodes",
+	Long: "Relocate a service's active replicas to the specified set of nodes, " +
+		"optionally setting the coordinator/leader. The leader, if specified, " +
+		"must be one of the nodes in --nodes.",
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		infoColorPrint := color.New(color.FgYellow).Add(color.Bold)
+		successColorPrint := color.New(color.FgGreen).Add(color.Bold).Add(color.Underline)
+		errorColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
+
+		serviceName := args[0]
+		nodesRaw, _ := cmd.Flags().GetString("nodes")
+		leader, _ := cmd.Flags().GetString("leader")
+		leader = strings.TrimSpace(leader)
+
+		rawParts := strings.Split(nodesRaw, ",")
+		nodes := make([]string, 0, len(rawParts))
+		seen := make(map[string]struct{}, len(rawParts))
+		for _, p := range rawParts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			nodes = append(nodes, p)
+		}
+		if len(nodes) == 0 {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" --nodes must contain at least one non-empty node ID\n")
+			return fmt.Errorf("--nodes must contain at least one non-empty node ID")
+		}
+		if leader != "" {
+			if _, ok := seen[leader]; !ok {
+				_, _ = errorColorPrint.Printf("ERROR")
+				fmt.Printf(" --leader=%q must be one of --nodes (%v)\n", leader, nodes)
+				return fmt.Errorf("--leader %q not in --nodes", leader)
+			}
+		}
+
+		input := bufio.NewScanner(os.Stdin)
+		isMoveConfirmed := false
+		for {
+			if leader != "" {
+				fmt.Printf(
+					"Are you sure you want to move `%s` service to nodes [%s] with leader `%s`? [yes/no]\n > ",
+					serviceName, strings.Join(nodes, ", "), leader)
+			} else {
+				fmt.Printf(
+					"Are you sure you want to move `%s` service to nodes [%s]? [yes/no]\n > ",
+					serviceName, strings.Join(nodes, ", "))
+			}
+			if !input.Scan() {
+				fmt.Printf("\n")
+				break
+			}
+			isSureText := input.Text()
+			if isSureText == "yes" {
+				isMoveConfirmed = true
+				break
+			}
+			if isSureText == "no" {
+				break
+			}
+			fmt.Printf(
+				"  '%s' is not a valid answer, "+
+					"please answer with 'yes' or 'no'.\n",
+				isSureText)
+		}
+		if !isMoveConfirmed {
+			fmt.Printf("  '%s' is not moved.\n", serviceName)
+			return fmt.Errorf("'%s' is not moved", serviceName)
+		}
+
+		if err := ValidateControlPlaneConn(); err != nil {
+			return fmt.Errorf("failed to reach the control plane: %s", err.Error())
+		}
+
+		fmt.Printf("Moving service '")
+		_, _ = infoColorPrint.Printf("%s", serviceName)
+		fmt.Printf("' to nodes [%s]", strings.Join(nodes, ", "))
+		if leader != "" {
+			fmt.Printf(" with leader ")
+			_, _ = infoColorPrint.Printf("%s", leader)
+		}
+		fmt.Printf(" ...\n")
+
+		type placementReq struct {
+			Nodes       []string `json:"NODES"`
+			Coordinator string   `json:"COORDINATOR,omitempty"`
+		}
+		bodyBytes, err := json.Marshal(placementReq{Nodes: nodes, Coordinator: leader})
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to encode request body: %s\n", err.Error())
+			return fmt.Errorf("failed to encode request body: %s", err.Error())
+		}
+
+		// URL must have exactly 6 slash-separated components; server asserts this.
+		url := fmt.Sprintf("http://%s/api/v2/services/%s/placement",
+			GetControlPlaneHostPort(), serviceName)
+		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to build request: %s\n", err.Error())
+			return fmt.Errorf("failed to build request: %s", err.Error())
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("XDN", serviceName)
+
+		client := http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Printf(" ")
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" ")
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				fmt.Println("request timed out:", err)
+				os.Exit(100)
+				return netErr
+			}
+			fmt.Printf("failed to move the service: %s\n", err.Error())
+			return fmt.Errorf("failed to move the service: %s", err.Error())
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to read response: %s\n", err.Error())
+			return fmt.Errorf("failed to read response: %s", err.Error())
+		}
+		bodyStr := string(body)
+
+		if resp.StatusCode != 200 || strings.Contains(bodyStr, "\"FAILED\":true") {
+			_, _ = errorColorPrint.Printf("ERROR")
+			var jsonMap map[string]interface{}
+			if json.Unmarshal([]byte(bodyStr), &jsonMap) == nil {
+				if msgIf, ok := jsonMap["RESPONSE_MESSAGE"]; ok {
+					if msg, ok := msgIf.(string); ok && msg != "" {
+						fmt.Printf(" failed to move the service:\n %s\n", msg)
+						return fmt.Errorf("failed to move the service: %s", msg)
+					}
+				}
+			}
+			fmt.Printf(" failed to move the service (HTTP %d): %s\n", resp.StatusCode, bodyStr)
+			return fmt.Errorf("failed to move the service (HTTP %d)", resp.StatusCode)
+		}
+
+		_, _ = successColorPrint.Printf("SUCCESS")
+		fmt.Printf(": service ")
+		_, _ = infoColorPrint.Printf("%s", serviceName)
+		fmt.Printf(" placement updated; run `xdn service info %s` to verify.\n", serviceName)
+		return nil
+	},
+}
+
 func init() {
 	ServiceRootCmd.AddCommand(ServiceDestroyCmd)
 	ServiceRootCmd.AddCommand(ServiceInfoCmd)
+	ServiceRootCmd.AddCommand(ServiceMoveCmd)
+
+	ServiceMoveCmd.Flags().StringP("nodes", "n", "",
+		"Comma-separated node IDs (e.g. AR0,AR2,AR3)")
+	ServiceMoveCmd.Flags().StringP("leader", "l", "",
+		"Optional coordinator node ID; must be one of --nodes")
+	_ = ServiceMoveCmd.MarkFlagRequired("nodes")
 }
 
 type placementReplica struct {
