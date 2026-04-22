@@ -20,7 +20,12 @@ output.txt
 *.png
 .pycache
 jars/google-java-format-*.jar
-bin/xdn
+# bin/ holds both shell scripts and locally-built binaries. Keep scripts
+# under version control; ignore binaries to avoid merge conflicts from
+# frequently-rebuilt artifacts (developers build them locally).
+bin/*
+!bin/*.sh
+!bin/xdnd
 screen_logs
 merge-review
 *-paper/
