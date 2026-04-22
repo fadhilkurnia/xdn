@@ -62,9 +62,10 @@ public final class XdnHttpForwarderClient implements Closeable {
 
   private static final int MAX_RETRIES = 1;
 
-  /** When true, force Connection: keep-alive on all outgoing requests to prevent
-   *  upstream containers (e.g. Apache) from closing pooled connections.
-   *  Enable with -DHTTP_FORCE_KEEPALIVE=true */
+  /**
+   * When true, force Connection: keep-alive on all outgoing requests to prevent upstream containers
+   * (e.g. Apache) from closing pooled connections. Enable with -DHTTP_FORCE_KEEPALIVE=true
+   */
   private static final boolean FORCE_KEEPALIVE =
       Boolean.parseBoolean(System.getProperty("HTTP_FORCE_KEEPALIVE", "false"));
 
@@ -189,8 +190,7 @@ public final class XdnHttpForwarderClient implements Closeable {
                 return;
               }
 
-              ClientResponseHandler handler =
-                  channel.pipeline().get(ClientResponseHandler.class);
+              ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
               if (handler == null) {
                 IllegalStateException ex =
                     new IllegalStateException("Missing response handler in pipeline");
@@ -224,7 +224,8 @@ public final class XdnHttpForwarderClient implements Closeable {
                   channel.write(req);
                 } else {
                   // Flush on the last write.
-                  channel.writeAndFlush(req)
+                  channel
+                      .writeAndFlush(req)
                       .addListener(
                           (ChannelFutureListener)
                               wf -> {
@@ -264,8 +265,7 @@ public final class XdnHttpForwarderClient implements Closeable {
       double totalMs = (System.nanoTime() - t0) / 1_000_000.0;
       LOG.fine(
           String.format(
-              "HTTP pipelined fwd: %d requests in %.2fms (%.2fms/req)",
-              n, totalMs, totalMs / n));
+              "HTTP pipelined fwd: %d requests in %.2fms (%.2fms/req)", n, totalMs, totalMs / n));
     }
 
     return responses;
@@ -307,23 +307,25 @@ public final class XdnHttpForwarderClient implements Closeable {
                   channel.close();
                 }
                 pool.acquire()
-                    .addListener((Future<Channel> retryFuture) -> {
-                      if (!retryFuture.isSuccess()) {
-                        responseFuture.completeExceptionally(retryFuture.cause());
-                        return;
-                      }
-                      Channel fresh = retryFuture.getNow();
-                      if (fresh == null || !fresh.isActive()) {
-                        responseFuture.completeExceptionally(
-                            new IllegalStateException("Acquired inactive HTTP channel after retry"));
-                        if (fresh != null) {
-                          releaseQuietly(pool, fresh);
-                          fresh.close();
-                        }
-                        return;
-                      }
-                      dispatchRequest(fresh, pool, outbound, responseFuture, ts);
-                    });
+                    .addListener(
+                        (Future<Channel> retryFuture) -> {
+                          if (!retryFuture.isSuccess()) {
+                            responseFuture.completeExceptionally(retryFuture.cause());
+                            return;
+                          }
+                          Channel fresh = retryFuture.getNow();
+                          if (fresh == null || !fresh.isActive()) {
+                            responseFuture.completeExceptionally(
+                                new IllegalStateException(
+                                    "Acquired inactive HTTP channel after retry"));
+                            if (fresh != null) {
+                              releaseQuietly(pool, fresh);
+                              fresh.close();
+                            }
+                            return;
+                          }
+                          dispatchRequest(fresh, pool, outbound, responseFuture, ts);
+                        });
                 return;
               }
 
@@ -355,10 +357,16 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
-  /** Dispatch the HTTP request on an active channel. Used by both the initial
-   *  acquire path and the retry-on-inactive path. */
-  private void dispatchRequest(Channel channel, FixedChannelPool pool,
-      FullHttpRequest outbound, CompletableFuture<FullHttpResponse> responseFuture, long[] ts) {
+  /**
+   * Dispatch the HTTP request on an active channel. Used by both the initial acquire path and the
+   * retry-on-inactive path.
+   */
+  private void dispatchRequest(
+      Channel channel,
+      FixedChannelPool pool,
+      FullHttpRequest outbound,
+      CompletableFuture<FullHttpResponse> responseFuture,
+      long[] ts) {
     ClientResponseHandler handler = channel.pipeline().get(ClientResponseHandler.class);
     if (handler == null) {
       responseFuture.completeExceptionally(
@@ -395,10 +403,11 @@ public final class XdnHttpForwarderClient implements Closeable {
             });
   }
 
-  /** Number of TCP connections to pre-create when a pool is first used.
-   *  Set to 0 to disable pre-warming. */
-  private static final int POOL_PREWARM_SIZE =
-      Integer.getInteger("XDN_HTTP_POOL_PREWARM_SIZE", 8);
+  /**
+   * Number of TCP connections to pre-create when a pool is first used. Set to 0 to disable
+   * pre-warming.
+   */
+  private static final int POOL_PREWARM_SIZE = Integer.getInteger("XDN_HTTP_POOL_PREWARM_SIZE", 8);
 
   private FixedChannelPool poolFor(Origin origin) {
     return pools.computeIfAbsent(origin, this::createAndWarmPool);
@@ -431,16 +440,20 @@ public final class XdnHttpForwarderClient implements Closeable {
             ch.close();
           }
         } catch (Exception e) {
-          LOG.log(Level.FINE, "Pool pre-warm connection {0} failed: {1}",
-              new Object[]{i, e.getMessage()});
+          LOG.log(
+              Level.FINE,
+              "Pool pre-warm connection {0} failed: {1}",
+              new Object[] {i, e.getMessage()});
           break;
         }
       }
       for (Channel ch : warmChannels) {
         pool.release(ch);
       }
-      LOG.log(Level.INFO, "Pre-warmed {0} connections to {1}:{2}",
-          new Object[]{warmChannels.size(), origin.host(), origin.port()});
+      LOG.log(
+          Level.INFO,
+          "Pre-warmed {0} connections to {1}:{2}",
+          new Object[] {warmChannels.size(), origin.host(), origin.port()});
     }
 
     return pool;
@@ -556,14 +569,15 @@ public final class XdnHttpForwarderClient implements Closeable {
       // processes the data. This ensures the ACK for the response header
       // segment is sent immediately (the kernel resets TCP_QUICKACK after
       // each receive, so we must re-enable it before each ACK).
-      pipeline.addLast(new io.netty.channel.ChannelInboundHandlerAdapter() {
-        @Override
-        public void channelRead(io.netty.channel.ChannelHandlerContext ctx,
-                                Object msg) throws Exception {
-          setQuickAck(ctx.channel());
-          super.channelRead(ctx, msg);
-        }
-      });
+      pipeline.addLast(
+          new io.netty.channel.ChannelInboundHandlerAdapter() {
+            @Override
+            public void channelRead(io.netty.channel.ChannelHandlerContext ctx, Object msg)
+                throws Exception {
+              setQuickAck(ctx.channel());
+              super.channelRead(ctx, msg);
+            }
+          });
       pipeline.addLast(new HttpObjectAggregator(MAX_CONTENT_LENGTH));
       pipeline.addLast(new ClientResponseHandler());
     }
@@ -576,8 +590,7 @@ public final class XdnHttpForwarderClient implements Closeable {
         java.lang.reflect.Method m =
             io.netty.channel.nio.AbstractNioChannel.class.getDeclaredMethod("javaChannel");
         m.setAccessible(true);
-        java.nio.channels.SocketChannel sc =
-            (java.nio.channels.SocketChannel) m.invoke(ch);
+        java.nio.channels.SocketChannel sc = (java.nio.channels.SocketChannel) m.invoke(ch);
         // TCP_QUICKACK disables delayed ACK; must be re-set after each recv
         sc.setOption(jdk.net.ExtendedSocketOptions.TCP_QUICKACK, true);
       } catch (Exception e) {
@@ -742,9 +755,7 @@ public final class XdnHttpForwarderClient implements Closeable {
     private boolean serverClosedConnection = false;
 
     PipelineContext(
-        Channel channel,
-        FixedChannelPool pool,
-        List<CompletableFuture<FullHttpResponse>> futures) {
+        Channel channel, FixedChannelPool pool, List<CompletableFuture<FullHttpResponse>> futures) {
       this.channel = channel;
       this.pool = pool;
       this.futures = futures;

@@ -70,8 +70,9 @@ public class BaselineCriuReplica implements AutoCloseable {
   private final int listenPort;
   private final int forwardPort;
   private final String forwardHost;
-  private final String containerName;       // container to forward HTTP requests to
-  private final String checkpointContainer; // container to CRIU checkpoint (may differ for multi-container apps)
+  private final String containerName; // container to forward HTTP requests to
+  private final String
+      checkpointContainer; // container to CRIU checkpoint (may differ for multi-container apps)
   private final List<String> replicaAddresses;
   private final BlockingQueue<PendingRequest> queue;
   private final ExecutorService batchExecutor;
@@ -119,8 +120,8 @@ public class BaselineCriuReplica implements AutoCloseable {
     this.forwardPort = forwardPort;
     this.forwardHost = Objects.requireNonNull(forwardHost, "forwardHost");
     this.containerName = Objects.requireNonNull(containerName, "containerName");
-    this.checkpointContainer = CHECKPOINT_CONTAINER_OVERRIDE.isEmpty()
-        ? containerName : CHECKPOINT_CONTAINER_OVERRIDE;
+    this.checkpointContainer =
+        CHECKPOINT_CONTAINER_OVERRIDE.isEmpty() ? containerName : CHECKPOINT_CONTAINER_OVERRIDE;
     this.replicaAddresses = normalizeReplicaAddresses(replicaAddresses);
     this.queue = new ArrayBlockingQueue<>(QUEUE_CAPACITY);
     this.batchExecutor =
@@ -431,7 +432,8 @@ public class BaselineCriuReplica implements AutoCloseable {
           errOutput = new String(err.readAllBytes(), StandardCharsets.UTF_8).trim();
         }
         if (errOutput.isEmpty()) {
-          LOG.warning("Docker checkpoint exited with " + exit + " for container " + checkpointContainer);
+          LOG.warning(
+              "Docker checkpoint exited with " + exit + " for container " + checkpointContainer);
         } else {
           LOG.warning(
               "Docker checkpoint exited with "
@@ -469,7 +471,8 @@ public class BaselineCriuReplica implements AutoCloseable {
               "docker", "inspect", "--format", "{{.State.Pid}}", checkpointContainer);
       pb.redirectErrorStream(true);
       Process proc = pb.start();
-      String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+      String output =
+          new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
       proc.waitFor();
       containerPid = Integer.parseInt(output);
       LOG.info("Container PID for incremental CRIU: " + containerPid);
@@ -486,15 +489,20 @@ public class BaselineCriuReplica implements AutoCloseable {
       new ProcessBuilder("sudo", "mkdir", "-p", preDir).start().waitFor();
       ProcessBuilder pb =
           new ProcessBuilder(
-              "sudo", "criu", "pre-dump",
-              "--tree", String.valueOf(containerPid),
-              "--images-dir", preDir,
+              "sudo",
+              "criu",
+              "pre-dump",
+              "--tree",
+              String.valueOf(containerPid),
+              "--images-dir",
+              preDir,
               "--leave-running",
               "--shell-job",
               "--tcp-established");
       pb.redirectErrorStream(true);
       Process proc = pb.start();
-      String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+      String output =
+          new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
       int exit = proc.waitFor();
       if (exit != 0) {
         LOG.warning("CRIU pre-dump failed with exit " + exit + ": " + output);
@@ -524,17 +532,23 @@ public class BaselineCriuReplica implements AutoCloseable {
       new ProcessBuilder("sudo", "mkdir", "-p", curDir).start().waitFor();
       ProcessBuilder pb =
           new ProcessBuilder(
-              "sudo", "criu", "pre-dump",
-              "--tree", String.valueOf(containerPid),
-              "--images-dir", curDir,
-              "--prev-images-dir", prevImagesDir,
+              "sudo",
+              "criu",
+              "pre-dump",
+              "--tree",
+              String.valueOf(containerPid),
+              "--images-dir",
+              curDir,
+              "--prev-images-dir",
+              prevImagesDir,
               "--leave-running",
               "--shell-job",
               "--tcp-established",
               "--track-mem");
       pb.redirectErrorStream(true);
       Process proc = pb.start();
-      String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+      String output =
+          new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
       int exit = proc.waitFor();
       if (exit != 0) {
         LOG.warning(
@@ -552,13 +566,14 @@ public class BaselineCriuReplica implements AutoCloseable {
       prevImagesDir = curDir;
       if (oldDir != null && !oldDir.equals(curDir)) {
         final String dirToRemove = oldDir;
-        syncExecutor.submit(() -> {
-          try {
-            new ProcessBuilder("sudo", "rm", "-rf", dirToRemove).start().waitFor();
-          } catch (Exception e) {
-            LOG.log(Level.FINE, "Failed to clean up old CRIU dump dir: " + dirToRemove, e);
-          }
-        });
+        syncExecutor.submit(
+            () -> {
+              try {
+                new ProcessBuilder("sudo", "rm", "-rf", dirToRemove).start().waitFor();
+              } catch (Exception e) {
+                LOG.log(Level.FINE, "Failed to clean up old CRIU dump dir: " + dirToRemove, e);
+              }
+            });
       }
 
       LOG.fine("CRIU incremental checkpoint " + criuSnapIdx + " complete: " + curDir);

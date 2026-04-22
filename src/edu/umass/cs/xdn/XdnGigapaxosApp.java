@@ -42,7 +42,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -115,8 +114,7 @@ public class XdnGigapaxosApp
 
   // When true, adds X-XDN-Timing, X-XDN-Forward, and X-XDN-Pipeline response headers
   // with per-request latency breakdown. Enable via -DXDN_TIMING_HEADERS=true.
-  public static final boolean TIMING_HEADERS_ENABLED =
-      Boolean.getBoolean("XDN_TIMING_HEADERS");
+  public static final boolean TIMING_HEADERS_ENABLED = Boolean.getBoolean("XDN_TIMING_HEADERS");
 
   // Maximum number of requests forwarded to the container in parallel within a single
   // batch execution. Limits tail-latency amplification when the backend serializes writes
@@ -284,9 +282,7 @@ public class XdnGigapaxosApp
         xdnHttpRequest
             .getHttpResponse()
             .headers()
-            .set(
-                "X-XDN-Timing",
-                String.format("exec=%.2fms;fwd=%.2fms", totalExecMs, fwdMs));
+            .set("X-XDN-Timing", String.format("exec=%.2fms;fwd=%.2fms", totalExecMs, fwdMs));
       }
       // Post-execution timestamp for HttpActiveReplica to measure callback→response delay.
       if (xdnHttpRequest.getHttpResponse() != null) {
@@ -2720,7 +2716,8 @@ public class XdnGigapaxosApp
     // statediffs going forward. Use only for benchmarking.
     boolean skipInitSync = Boolean.getBoolean("XDN_SKIP_INIT_SYNC");
     if (skipInitSync) {
-      System.out.println("Skipping initContainerSync for " + serviceName + " (XDN_SKIP_INIT_SYNC=true)");
+      System.out.println(
+          "Skipping initContainerSync for " + serviceName + " (XDN_SKIP_INIT_SYNC=true)");
       System.out.println("Completed initContainerSync for " + serviceName);
       service.initializationSucceed = true;
     } else {
@@ -2728,7 +2725,10 @@ public class XdnGigapaxosApp
           Level.INFO,
           "{0}:{1} starting initContainerSync for {2}:{3}",
           new Object[] {
-            this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            placementEpoch
           });
       this.stateDiffRecorder.initContainerSync(
           this.myNodeId, serviceName, ipAddresses, placementEpoch, sshKey);
@@ -2736,7 +2736,10 @@ public class XdnGigapaxosApp
           Level.INFO,
           "{0}:{1} completed initContainerSync for {2}:{3}",
           new Object[] {
-            this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            placementEpoch
           });
       System.out.println("Completed initContainerSync for " + serviceName);
       service.initializationSucceed = true;
