@@ -214,6 +214,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     var serviceName = request.getServiceName();
     var coordinator = this.serviceCoordinator.get(serviceName);
     if (coordinator == null) {
+      System.err.printf(
+          "[XDN-DIAG] %s coord-404 svc=%s reqClass=%s%n",
+          this.myNodeID.toLowerCase(), serviceName, request.getClass().getSimpleName());
       // returns 404 not found back to client
       return createNotFoundResponse(request, callback);
     }
@@ -618,7 +621,15 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
-    return this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
+    boolean result =
+        this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
+    System.err.printf(
+        "[XDN-DIAG] %s createReplicaGroup-done svc=%s epoch=%d registered=%s%n",
+        this.myNodeID.toLowerCase(),
+        serviceName,
+        epoch,
+        this.serviceCoordinator.containsKey(serviceName));
+    return result;
   }
 
   private boolean initializeReplicaGroup(
