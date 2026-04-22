@@ -37,6 +37,18 @@ public class XdnHttpRequest extends XdnRequest
   public static final String XDN_HTTP_REQUEST_ID_HEADER = "XDN-Request-ID";
   public static final String XDN_TIMESTAMP_COOKIE_PREFIX = "XDN-CC-TS-";
 
+  // URL query param used by XDN to name the target service without a dedicated
+  // header or DNS subdomain, so a link like http://host:port/?_xdnsvc=foo works
+  // from a browser. The leading underscore signals that it is an XDN-reserved
+  // param; any param starting with XDN_RESERVED_QUERY_PREFIX is stripped from
+  // the URI before the request is forwarded to the containerized service.
+  public static final String XDN_SVC_QUERY_PARAM = "_xdnsvc";
+  public static final String XDN_RESERVED_QUERY_PREFIX = "_xdn";
+
+  // Cookie name used to carry the service name across browser navigation once
+  // the server sets Set-Cookie: XDN=<service> in response to an _xdnsvc URL.
+  public static final String XDN_SVC_COOKIE_NAME = "XDN";
+
   public static final List<RequestMatcher> defaultSingletonRequestMatchers =
       ServiceProperty.createDefaultMatchers();
 
@@ -46,6 +58,9 @@ public class XdnHttpRequest extends XdnRequest
 
   private final long requestId;
   private final String serviceName;
+  // Whether the service name was provided via the XDN_SVC_QUERY_PARAM URL param.
+  // Used by maybeAddXdnCookieToResponse() to decide whether to set Set-Cookie.
+  private final boolean serviceNameFromQueryParam;
 
   private final HttpRequest httpRequest;
   private final HttpContent httpRequestContent;
@@ -92,9 +107,22 @@ public class XdnHttpRequest extends XdnRequest
                 : ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
     this.httpRequest.headers().set(XDN_HTTP_REQUEST_ID_HEADER, this.requestId);
 
-    // Infers service name from httpRequest.
+    // Infers service name from httpRequest. Also remember whether the name came from
+    // the _xdnsvc query param so the response path knows to emit Set-Cookie: XDN=...
+    this.serviceNameFromQueryParam = readXdnsvcQueryParam(request) != null;
     this.serviceName = inferServiceName(request);
     assert this.serviceName != null : "Failed to infer service name from the given HttpRequest";
+
+    // Normalize the service name into the XDN header so it survives serialization
+    // to Paxos follower replicas, which re-run inferServiceName on the deserialized
+    // wire form. Without this, a request that named its service via _xdnsvc (which
+    // we strip below) would lose the signal in transit and the follower would fail
+    // to decode the batched request with "Mismatched service name".
+    this.httpRequest.headers().set("XDN", this.serviceName);
+
+    // Strip XDN-reserved query params (e.g., _xdnsvc) from the URI so the containerized
+    // service never sees XDN routing internals. Must run after inferServiceName.
+    this.httpRequest.setUri(stripXdnReservedQueryParams(this.httpRequest.uri()));
 
     // Use the default request matcher if not specified
     this.requestMatchers =
@@ -132,24 +160,39 @@ public class XdnHttpRequest extends XdnRequest
     return null;
   }
 
-  // The service's name is encoded in the request header.
-  // For example, the service name is 'hello' for these cases:
-  // - request with "XDN: hello" in the header.
-  // - request with "Host: hello.<domain>.<single-word-tld>:80" in the header,
-  //   for example "Host: hello.xdnapp.com" or "Host: hello.xdn.io".
-  // return null if service's name cannot be inferred
+  // The service's name can be specified in multiple ways. Precedence, highest first:
+  //   1. URL query param "_xdnsvc" (e.g., http://host/path?_xdnsvc=hello) — lets a
+  //      user switch services by clicking a fresh link even if their client sends a
+  //      stale XDN header or cookie.
+  //   2. "XDN" header (e.g., XDN: hello) — the canonical programmatic form (CLI/curl).
+  //   3. "XDN" cookie — set by the server after a _xdnsvc request, so that subsequent
+  //      browser navigation (which drops query params on link clicks) keeps routing
+  //      to the same service.
+  //   4. Host subdomain (e.g., Host: hello.xdn.io) — legacy, requires DNS/hosts setup.
+  // Returns null if service's name cannot be inferred.
   public static String inferServiceName(HttpRequest httpRequest) {
     assert httpRequest != null : "Unspecified httpRequest";
 
-    // Case-1: encoded in the XDN header (e.g., XDN: alice-book-catalog)
+    // Case-1: URL query param _xdnsvc
+    String queryParamName = readXdnsvcQueryParam(httpRequest);
+    if (queryParamName != null && !queryParamName.isEmpty()) {
+      return queryParamName;
+    }
+
+    // Case-2: XDN header
     final String headerKey = "XDN";
     String xdnHeader = httpRequest.headers().get(headerKey);
     if (xdnHeader != null && !xdnHeader.isEmpty()) {
       return xdnHeader;
     }
 
-    // Case-2: encoded in the required Host header
-    //   (e.g., Host: alice-book-catalog.xdnapp.com)
+    // Case-3: XDN cookie
+    String cookieName = readXdnCookie(httpRequest);
+    if (cookieName != null && !cookieName.isEmpty()) {
+      return cookieName;
+    }
+
+    // Case-4: Host subdomain (e.g., Host: alice-book-catalog.xdnapp.com)
     String hostName = httpRequest.headers().get(HttpHeaderNames.HOST);
     if (hostName == null || hostName.isEmpty()) {
       return null;
@@ -165,6 +208,88 @@ public class XdnHttpRequest extends XdnRequest
     }
 
     return null;
+  }
+
+  // Returns true if the request carries a browser-only XDN signal that the legacy
+  // header/Host dispatcher would miss: the _xdnsvc URL query param or the XDN cookie.
+  // Used by HttpActiveReplica's top-level channelRead0 dispatcher so that browser
+  // clicks on http://host/?_xdnsvc=foo (and their follow-up cookie-bearing requests)
+  // are routed to the XDN handler instead of the legacy GigaPaxos path.
+  public static boolean hasXdnBrowserSignal(HttpRequest httpRequest) {
+    if (httpRequest == null) {
+      return false;
+    }
+    return readXdnsvcQueryParam(httpRequest) != null || readXdnCookie(httpRequest) != null;
+  }
+
+  // Returns the first non-empty value of the _xdnsvc query param, or null if absent.
+  private static String readXdnsvcQueryParam(HttpRequest httpRequest) {
+    String uri = httpRequest.uri();
+    if (uri == null || uri.indexOf('?') < 0) {
+      return null;
+    }
+    List<String> values = new QueryStringDecoder(uri).parameters().get(XDN_SVC_QUERY_PARAM);
+    if (values == null) {
+      return null;
+    }
+    for (String v : values) {
+      if (v != null && !v.isEmpty()) {
+        return v;
+      }
+    }
+    return null;
+  }
+
+  // Returns the value of the XDN cookie, or null if absent. This is distinct from
+  // the XDN-CC-TS-* cookies used for causal-consistency vector timestamps; both may
+  // coexist in the same Cookie header.
+  private static String readXdnCookie(HttpRequest httpRequest) {
+    if (httpRequest.headers() == null) {
+      return null;
+    }
+    String cookieRaw = httpRequest.headers().get("Cookie");
+    if (cookieRaw == null || cookieRaw.isEmpty()) {
+      return null;
+    }
+    Set<Cookie> cookies = ServerCookieDecoder.STRICT.decode(cookieRaw);
+    for (Cookie cookie : cookies) {
+      if (XDN_SVC_COOKIE_NAME.equals(cookie.name())) {
+        return cookie.value();
+      }
+    }
+    return null;
+  }
+
+  // Removes any query param whose key starts with XDN_RESERVED_QUERY_PREFIX from
+  // the URI. Returns the URI unchanged when it has no query string or no reserved
+  // params. When the only params are reserved, the resulting URI has no '?'.
+  static String stripXdnReservedQueryParams(String uri) {
+    if (uri == null || uri.indexOf('?') < 0) {
+      return uri;
+    }
+    QueryStringDecoder decoder = new QueryStringDecoder(uri);
+    Map<String, List<String>> params = decoder.parameters();
+    boolean hasReserved = false;
+    for (String key : params.keySet()) {
+      if (key != null && key.startsWith(XDN_RESERVED_QUERY_PREFIX)) {
+        hasReserved = true;
+        break;
+      }
+    }
+    if (!hasReserved) {
+      return uri;
+    }
+    QueryStringEncoder encoder = new QueryStringEncoder(decoder.path());
+    for (Map.Entry<String, List<String>> e : params.entrySet()) {
+      String key = e.getKey();
+      if (key == null || key.startsWith(XDN_RESERVED_QUERY_PREFIX)) {
+        continue;
+      }
+      for (String value : e.getValue()) {
+        encoder.addParam(key, value);
+      }
+    }
+    return encoder.toString();
   }
 
   private Set<RequestBehaviorType> matchRequestBehaviors(List<RequestMatcher> svcReqMatchers) {
@@ -285,6 +410,23 @@ public class XdnHttpRequest extends XdnRequest
     cookie.setPath("/");
     cookie.setHttpOnly(true);
     this.httpResponse.headers().add("Set-Cookie", ServerCookieEncoder.STRICT.encode(cookie));
+  }
+
+  // If this request named the service via the _xdnsvc URL query param, sets
+  // Set-Cookie: XDN=<serviceName>; Path=/ on the given response so subsequent
+  // browser requests (which drop query params on link clicks) still resolve.
+  // No-op otherwise, so header- and Host-based clients don't get clobbered.
+  public void maybeAddXdnCookieToResponse(HttpResponse response) {
+    if (!this.serviceNameFromQueryParam) {
+      return;
+    }
+    if (response == null || response.headers() == null) {
+      return;
+    }
+    Cookie cookie =
+        new io.netty.handler.codec.http.cookie.DefaultCookie(XDN_SVC_COOKIE_NAME, this.serviceName);
+    cookie.setPath("/");
+    response.headers().add("Set-Cookie", ServerCookieEncoder.STRICT.encode(cookie));
   }
 
   @Override

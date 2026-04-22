@@ -89,6 +89,227 @@ public class XdnHttpRequestTest {
   }
 
   @Test
+  public void testHttpRequestServiceName_InferQueryParam() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/?_xdnsvc=myservice");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertEquals("myservice", httpRequest.getServiceName());
+  }
+
+  @Test
+  public void testHttpRequestServiceName_QueryParamBeatsXdnHeader() {
+    // Query param should win over a stale XDN header, so a user switches services
+    // by clicking a fresh link.
+    HttpRequest request = helpCreateQueryParamHttpRequest("/?_xdnsvc=fromQuery");
+    request.headers().set("XDN", "fromHeader");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertEquals("fromQuery", httpRequest.getServiceName());
+  }
+
+  @Test
+  public void testHttpRequestServiceName_InferCookie() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("Cookie", "XDN=fromCookie");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertEquals("fromCookie", httpRequest.getServiceName());
+  }
+
+  @Test
+  public void testHttpRequestServiceName_HeaderBeatsCookie() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("XDN", "fromHeader");
+    request.headers().set("Cookie", "XDN=fromCookie");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertEquals("fromHeader", httpRequest.getServiceName());
+  }
+
+  @Test
+  public void testHttpRequestServiceName_CookieBeatsHostSubdomain() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("Cookie", "XDN=fromCookie");
+    request.headers().set(HttpHeaderNames.HOST, "fromHost.xdn.io");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertEquals("fromCookie", httpRequest.getServiceName());
+  }
+
+  @Test
+  public void testHttpRequestServiceName_CookieAlongsideTimestampCookie() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("Cookie", "XDN-CC-TS-R=foo=bar; XDN=fromCookie; XDN-CC-TS-W=baz=qux");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertEquals("fromCookie", httpRequest.getServiceName());
+  }
+
+  @Test
+  public void testNormalizesServiceNameIntoXdnHeader_FromQueryParam() {
+    // Critical: after construction, the XDN header must carry the service name,
+    // so the request survives serialization/deserialization on Paxos followers.
+    HttpRequest request = helpCreateQueryParamHttpRequest("/?_xdnsvc=bookcatalog");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("bookcatalog", request.headers().get("XDN"));
+  }
+
+  @Test
+  public void testNormalizesServiceNameIntoXdnHeader_FromCookie() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("Cookie", "XDN=fromCookie");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("fromCookie", request.headers().get("XDN"));
+  }
+
+  @Test
+  public void testNormalizesServiceNameIntoXdnHeader_FromHostSubdomain() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set(HttpHeaderNames.HOST, "fromHost.xdn.io");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("fromHost", request.headers().get("XDN"));
+  }
+
+  @Test
+  public void testSurvivesSerializationRoundTrip_FromQueryParam() {
+    // Regression: batched requests named via _xdnsvc must round-trip through
+    // XdnHttpRequest.toBytes() -> createFromString() without losing their name.
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books?_xdnsvc=bookcatalog");
+    HttpContent content = helpCreateDummyHttpContent(32);
+    XdnHttpRequest original = new XdnHttpRequest(request, content);
+    String encoded = original.toString();
+    XdnHttpRequest decoded = XdnHttpRequest.createFromString(encoded);
+    assertNotNull(decoded);
+    assertEquals("bookcatalog", decoded.getServiceName());
+    // URI still stripped; container won't see _xdnsvc on the follower either.
+    assertEquals("/api/books", decoded.getHttpRequest().uri());
+  }
+
+  @Test
+  public void testStripXdnReservedQueryParams_OnlyXdnsvc() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books?_xdnsvc=foo");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("/api/books", request.uri());
+  }
+
+  @Test
+  public void testStripXdnReservedQueryParams_KeepsOtherParams() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books?_xdnsvc=foo&page=2");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("/api/books?page=2", request.uri());
+  }
+
+  @Test
+  public void testStripXdnReservedQueryParams_XdnsvcAfterOtherParams() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books?page=2&_xdnsvc=foo");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("/api/books?page=2", request.uri());
+  }
+
+  @Test
+  public void testStripXdnReservedQueryParams_NoXdnParamUnchanged() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books?page=2");
+    request.headers().set("XDN", "foo"); // needed for service-name inference
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("/api/books?page=2", request.uri());
+  }
+
+  @Test
+  public void testStripXdnReservedQueryParams_NoQueryStringUnchanged() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books");
+    request.headers().set("XDN", "foo");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    new XdnHttpRequest(request, content);
+    assertEquals("/api/books", request.uri());
+  }
+
+  @Test
+  public void testHasXdnBrowserSignal() {
+    // Query param present
+    HttpRequest r1 = helpCreateQueryParamHttpRequest("/?_xdnsvc=foo");
+    assertTrue(XdnHttpRequest.hasXdnBrowserSignal(r1));
+
+    // XDN cookie present
+    HttpRequest r2 = helpCreateQueryParamHttpRequest("/");
+    r2.headers().set("Cookie", "XDN=foo");
+    assertTrue(XdnHttpRequest.hasXdnBrowserSignal(r2));
+
+    // Only header — not a browser signal
+    HttpRequest r3 = helpCreateQueryParamHttpRequest("/");
+    r3.headers().set("XDN", "foo");
+    assertFalse(XdnHttpRequest.hasXdnBrowserSignal(r3));
+
+    // Only Host subdomain — not a browser signal
+    HttpRequest r4 = helpCreateQueryParamHttpRequest("/");
+    r4.headers().set(HttpHeaderNames.HOST, "foo.xdnapp.com");
+    assertFalse(XdnHttpRequest.hasXdnBrowserSignal(r4));
+
+    // Neither
+    HttpRequest r5 = helpCreateQueryParamHttpRequest("/");
+    assertFalse(XdnHttpRequest.hasXdnBrowserSignal(r5));
+
+    // Timestamp cookies present but no XDN cookie
+    HttpRequest r6 = helpCreateQueryParamHttpRequest("/");
+    r6.headers().set("Cookie", "XDN-CC-TS-R=foo=bar");
+    assertFalse(XdnHttpRequest.hasXdnBrowserSignal(r6));
+  }
+
+  @Test
+  public void testMaybeAddXdnCookieToResponse_SetsCookieWhenFromQueryParam() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/api/books?_xdnsvc=foo");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+    HttpResponse response =
+        new DefaultFullHttpResponse(
+            HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER);
+    xdnRequest.maybeAddXdnCookieToResponse(response);
+
+    List<String> setCookies = response.headers().getAll("Set-Cookie");
+    assertEquals(1, setCookies.size());
+    assertTrue(
+        setCookies.get(0).startsWith("XDN=foo"), "expected Set-Cookie to start with XDN=foo");
+    assertTrue(setCookies.get(0).contains("Path=/"), "expected Set-Cookie to contain Path=/");
+  }
+
+  @Test
+  public void testMaybeAddXdnCookieToResponse_NoCookieWhenFromHeader() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("XDN", "foo");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+    HttpResponse response =
+        new DefaultFullHttpResponse(
+            HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER);
+    xdnRequest.maybeAddXdnCookieToResponse(response);
+
+    assertTrue(response.headers().getAll("Set-Cookie").isEmpty());
+  }
+
+  @Test
+  public void testMaybeAddXdnCookieToResponse_NoCookieWhenFromCookie() {
+    HttpRequest request = helpCreateQueryParamHttpRequest("/");
+    request.headers().set("Cookie", "XDN=foo");
+    HttpContent content = helpCreateDummyHttpContent(16);
+    XdnHttpRequest xdnRequest = new XdnHttpRequest(request, content);
+
+    HttpResponse response =
+        new DefaultFullHttpResponse(
+            HttpVersion.HTTP_1_1, HttpResponseStatus.OK, Unpooled.EMPTY_BUFFER);
+    xdnRequest.maybeAddXdnCookieToResponse(response);
+
+    assertTrue(response.headers().getAll("Set-Cookie").isEmpty());
+  }
+
+  @Test
   public void testHttpRequestServiceName_InferHeaderHost() {
     HttpRequest request = helpCreateDummyHttpRequest();
     HttpContent content = helpCreateDummyHttpContent(16);
@@ -382,6 +603,13 @@ public class XdnHttpRequestTest {
             .add("XDN", serviceName)
             .add("Random-Char", "=,;:\"'`")
             .add("Content-Type", "multipart/mixed; boundary=gc0p4Jq0MYt08"));
+  }
+
+  // Minimal HTTP request for service-name inference tests. Caller controls
+  // XDN header / Cookie / Host entirely; no default XDN header is set.
+  private static HttpRequest helpCreateQueryParamHttpRequest(String uri) {
+    return new DefaultHttpRequest(
+        HttpVersion.HTTP_1_1, HttpMethod.GET, uri, new DefaultHttpHeaders());
   }
 
   private static HttpContent helpCreateDummyHttpContent(int contentLength) {
