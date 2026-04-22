@@ -247,7 +247,6 @@ var ServiceInfoCmd = &cobra.Command{
 		}
 
 		_, _ = titleColorPrint.Println("Current service deployment information:")
-		fmt.Println()
 
 		dockerImageName := "unknown"
 		consistencyModel := "unknown"
@@ -283,7 +282,7 @@ var ServiceInfoCmd = &cobra.Command{
 		}
 
 		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Service name "), infoColorPrint.Sprint(serviceNameStr))
-		fmt.Printf(" %s: http://%s.xdnapp.com/ \n", keyColorPrint.Sprint("Service URL  "), serviceNameStr)
+		fmt.Printf(" %s: http://%s.xdnapp.com/ *) \n", keyColorPrint.Sprint("Service URL  "), serviceNameStr)
 		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Docker image "), dockerImageName)
 		fmt.Printf(" %s: %s (internal) \n", keyColorPrint.Sprint("HTTP port    "), httpPortStr)
 		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Consistency  "), consistencyModel)
@@ -291,6 +290,8 @@ var ServiceInfoCmd = &cobra.Command{
 		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("State dir.   "), stateDir)
 		fmt.Printf(" %s: %d \n", keyColorPrint.Sprint("Num. replica "), numReplicas)
 		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Protocol     "), coordinationProtocolName)
+		footnoteColorPrint := color.New(color.FgHiBlack)
+		fmt.Printf(" %s\n", footnoteColorPrint.Sprint("*) service URL is reachable once xdn-dns is configured in the control plane"))
 		fmt.Printf("\n")
 		fmt.Printf(" %s\n", titleColorPrint.Sprintf("Current replicas placement (epoch=%s):", epochNumberStr))
 
