@@ -1,9 +1,0 @@
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/AppConfig.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/Task.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/TodoApplication.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/TodoController.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/backend/Backend.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/backend/RqliteBackend.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/backend/SqliteBackend.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/rqlite/RqliteClient.java
-/Users/fikurnia/Projects/workspace/gigapaxos/services/todo/java/src/main/java/todo/rqlite/TodoRqliteAdapter.java
