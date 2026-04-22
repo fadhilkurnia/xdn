@@ -253,13 +253,19 @@ var ServiceInfoCmd = &cobra.Command{
 		isDeterministic := "unknown"
 		stateDir := "unknown"
 		coordinationProtocolName := "unknown"
+		httpPortStr := "unknown"
 		var requestBehaviors []interface{}
 		if primaryInfo != nil {
 			if c := pickStatefulContainer(primaryInfo); c != nil {
 				dockerImageName = stringOrDash(c["image"])
 			}
-			offered := stringOrDash(primaryInfo["consistency"])
-			requested := stringOrDash(primaryInfo["requestedConsistency"])
+			if c := pickEntryContainer(primaryInfo); c != nil {
+				if p, ok := c["port"].(float64); ok {
+					httpPortStr = strconv.Itoa(int(p))
+				}
+			}
+			offered := toCamelCase(stringOrDash(primaryInfo["consistency"]))
+			requested := toCamelCase(stringOrDash(primaryInfo["requestedConsistency"]))
 			if requested != "-" && requested != offered {
 				consistencyModel = fmt.Sprintf("%s (requested: %s)", offered, requested)
 			} else {
@@ -275,14 +281,15 @@ var ServiceInfoCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf(" service name  : %s \n", serviceNameStr)
-		fmt.Printf(" service url   : http://%s.xdnapp.com/ \n", serviceNameStr)
-		fmt.Printf(" docker image  : %s \n", dockerImageName)
-		fmt.Printf(" consistency   : %s \n", consistencyModel)
-		fmt.Printf(" deterministic : %s \n", isDeterministic)
-		fmt.Printf(" state dir.    : %s \n", stateDir)
-		fmt.Printf(" num. replica  : %d \n", numReplicas)
-		fmt.Printf(" protocol      : %s \n", coordinationProtocolName)
+		fmt.Printf(" Service name  : %s \n", serviceNameStr)
+		fmt.Printf(" Service URL   : http://%s.xdnapp.com/ \n", serviceNameStr)
+		fmt.Printf(" Docker image  : %s \n", dockerImageName)
+		fmt.Printf(" HTTP port     : %s (internal) \n", httpPortStr)
+		fmt.Printf(" Consistency   : %s \n", consistencyModel)
+		fmt.Printf(" Deterministic : %s \n", isDeterministic)
+		fmt.Printf(" State dir.    : %s \n", stateDir)
+		fmt.Printf(" Num. replica  : %d \n", numReplicas)
+		fmt.Printf(" Protocol      : %s \n", coordinationProtocolName)
 		fmt.Printf("\n")
 		fmt.Printf(" Current replicas placement, with epoch=%s:\n", epochNumberStr)
 		fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
@@ -524,11 +531,21 @@ func fetchReplicaInfo(r placementReplica, serviceName string) replicaInfo {
 // info["statefulComponent"], falling back to containers[0]. Returns nil if
 // the response has no container array.
 func pickStatefulContainer(info map[string]interface{}) map[string]interface{} {
+	return pickNamedContainer(info, "statefulComponent")
+}
+
+// pickEntryContainer returns the containers[] entry whose "name" matches
+// info["entryComponent"], falling back to containers[0].
+func pickEntryContainer(info map[string]interface{}) map[string]interface{} {
+	return pickNamedContainer(info, "entryComponent")
+}
+
+func pickNamedContainer(info map[string]interface{}, nameKey string) map[string]interface{} {
 	containersIf, ok := info["containers"].([]interface{})
 	if !ok || len(containersIf) == 0 {
 		return nil
 	}
-	if wantName, ok := info["statefulComponent"].(string); ok && wantName != "" {
+	if wantName, ok := info[nameKey].(string); ok && wantName != "" {
 		for _, c := range containersIf {
 			if cm, ok := c.(map[string]interface{}); ok {
 				if n, _ := cm["name"].(string); n == wantName {
@@ -548,4 +565,29 @@ func stringOrDash(v interface{}) string {
 		return s
 	}
 	return "-"
+}
+
+// toCamelCase converts SCREAMING_SNAKE_CASE (as emitted by ConsistencyModel
+// enum values like LINEARIZABILITY, READ_YOUR_WRITES) to camelCase:
+// "LINEARIZABILITY" → "linearizability", "READ_YOUR_WRITES" → "readYourWrites".
+// Inputs that are already lowercased or the sentinel "-" pass through.
+func toCamelCase(s string) string {
+	if s == "" || s == "-" {
+		return s
+	}
+	parts := strings.Split(s, "_")
+	var b strings.Builder
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		p = strings.ToLower(p)
+		if i == 0 {
+			b.WriteString(p)
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String()
 }
