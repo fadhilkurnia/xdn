@@ -760,6 +760,9 @@ public class HttpActiveReplica {
                     );
                     return;
                 }
+                System.err.printf(
+                        "[XDN-DIAG] frontend-received localAddr=%s svc=%s uri=%s%n",
+                        ctx.channel().localAddress(), serviceName, this.request.uri());
 
                 // Check if this is a request to get replica info
                 // GET /api/v2/services/{name}/replica/info

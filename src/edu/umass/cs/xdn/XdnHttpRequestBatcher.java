@@ -317,6 +317,9 @@ public final class XdnHttpRequestBatcher implements Closeable {
       return;
     }
 
+    String firstSvc = entries.get(0).request.getServiceName();
+    System.err.printf(
+        "[XDN-DIAG] batcher-dispatch svc=%s batchSize=%d%n", firstSvc, entries.size());
     long dispatchTimeNanos = System.nanoTime();
     long oldestWaitMs = 0;
     long newestWaitMs = Long.MAX_VALUE;
@@ -361,10 +364,14 @@ public final class XdnHttpRequestBatcher implements Closeable {
     try {
       accepted = arFunctions.handRequestToAppForHttp(gpRequest, new BatchExecutedCallback(context));
     } catch (RuntimeException e) {
+      System.err.printf(
+          "[XDN-DIAG] batcher-handRequest-threw svc=%s error=%s%n", firstSvc, e.getMessage());
       boolean isInserted = completionQueue.offer(new BatchResult(entries, e));
       assert isInserted : "Failed to insert error into the completion queue";
       return;
     }
+    System.err.printf(
+        "[XDN-DIAG] batcher-handRequest-returned svc=%s accepted=%s%n", firstSvc, accepted);
 
     if (!accepted) {
       boolean isInserted =
