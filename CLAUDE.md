@@ -179,6 +179,9 @@ Each maps to a coordinator in the corresponding protocol package.
 
 Key config properties: `APPLICATION`, `REPLICA_COORDINATOR_CLASS`, `XDN_PB_STATEDIFF_RECORDER_TYPE`, `HTTP_AR_FRONTEND_BATCH_ENABLED`, `NIO_MAX_PAYLOAD_SIZE` (default 128MB).
 
+### Cluster Orchestration (`bin/xdnd`)
+For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifecycle over SSH: `xdnd init-driver` on the driver machine, then `xdnd dist-init -config=... -ssh-key=... -username=...` to initialize remotes, and `xdnd start-all ...` to start xdn instances fleet-wide. `xdnd dist-init-observability` is the optional observability bootstrap.
+
 ## CI Workflows (`.github/workflows/`)
 - **ant-build-test.yml**: Build + run `xdn-full-tests` on push/PR to master/main (JDK 21, Docker, FUSE, rsync)
 - **xdn-cli-ci.yml**: gofmt check + CLI binary build on changes to `xdn-cli/`

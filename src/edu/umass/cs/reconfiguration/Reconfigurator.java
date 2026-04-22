@@ -1311,13 +1311,19 @@ public class Reconfigurator<NodeIDType> implements
         }
         request.setReplicaNodeIds(stringNodeIds);
 
-        // get the server addresses where the replicas are hosted
+        // get the server addresses where the replicas are hosted, both the TCP
+        // listener address and the HTTP frontend address derived from it.
         List<String> addresses = new ArrayList<>();
+        List<String> httpAddresses = new ArrayList<>();
         for (NodeIDType node : nodeIds) {
             InetSocketAddress address = this.consistentNodeConfig.getNodeSocketAddress(node);
             addresses.add(address.toString());
+            int httpPort = ReconfigurationConfig.getHTTPPort(address.getPort());
+            httpAddresses.add(
+                    new InetSocketAddress(address.getAddress(), httpPort).toString());
         }
         request.setReplicaAddresses(addresses);
+        request.setReplicaHttpAddresses(httpAddresses);
         request.setPlacementEpochNumber(record.getEpoch());
 
         // TODO: query the replica roles and metadata by contacting them

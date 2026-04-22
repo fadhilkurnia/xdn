@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
@@ -28,7 +30,6 @@ var ServiceInfoCmd = &cobra.Command{
 		infoColorPrint := color.New(color.FgYellow).Add(color.Bold)
 		successColorPrint := color.New(color.FgGreen).Add(color.Bold).Add(color.Underline)
 		errorColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
-		dummyColorPrint := color.New(color.FgRed)
 
 		err := ValidateControlPlaneConn()
 		if err != nil {
@@ -148,9 +149,6 @@ var ServiceInfoCmd = &cobra.Command{
 		}
 
 		// parse the placement data: num replica, ip address, node id, etc
-		numReplicas := 0
-		replicaAddressList := make([]string, 0)
-		replicaIdList := make([]string, 0)
 		dataIf := jsonMap["DATA"]
 		if dataIf == nil {
 			_, _ = errorColorPrint.Printf("ERROR")
@@ -181,7 +179,8 @@ var ServiceInfoCmd = &cobra.Command{
 				nodesIf)
 			return
 		}
-		numReplicas = len(nodes)
+
+		replicas := make([]placementReplica, 0, len(nodes))
 		for _, node := range nodes {
 			node, ok := node.(map[string]interface{})
 			if !ok {
@@ -192,94 +191,158 @@ var ServiceInfoCmd = &cobra.Command{
 			if !addressExist || !nodeIdExist {
 				continue
 			}
-			rawAddressStr := addressIf.(string)
-			nodeId := nodeIdIf.(string)
+			addressStr, ok := addressIf.(string)
+			if !ok {
+				continue
+			}
+			nodeId, ok := nodeIdIf.(string)
+			if !ok {
+				continue
+			}
+			host, ip, port, ok := parseNodeSocketAddress(addressStr)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "warn: skipping replica %s: unexpected ADDRESS %q\n",
+					nodeId, addressStr)
+				continue
+			}
+			httpBaseURL := ""
+			if httpAddrIf, exists := node["HTTP_ADDRESS"]; exists {
+				if httpAddrStr, ok := httpAddrIf.(string); ok && httpAddrStr != "" {
+					_, httpIP, httpPort, ok := parseNodeSocketAddress(httpAddrStr)
+					if ok {
+						httpBaseURL = fmt.Sprintf("http://%s:%d", httpIP, httpPort)
+					}
+				}
+			}
+			replicas = append(replicas, placementReplica{
+				nodeID:      nodeId,
+				host:        host,
+				ip:          ip,
+				tcpPort:     port,
+				httpBaseURL: httpBaseURL,
+			})
+		}
+		numReplicas := len(replicas)
 
-			// example format: c240g5-110201.wisc.cloudlab.us/128.105.144.59:2000
-			rawAddressComponents := strings.Split(rawAddressStr, ":")
-			if len(rawAddressComponents) != 2 {
-				panic(any("unexpected address format"))
-			}
-			rawHostComponents := strings.Split(rawAddressComponents[0], "/")
-			if len(rawHostComponents) != 2 {
-				panic(any("unexpected address host format"))
-			}
-			host := rawHostComponents[0]
-			ipAddress := rawHostComponents[1]
-			printedFormat := ipAddress
-			if host != "" {
-				printedFormat += " (" + host + ")"
-			}
+		// fan out to each AR's /replica/info endpoint (requires XDN header)
+		replicaInfos := make([]replicaInfo, numReplicas)
+		var wg sync.WaitGroup
+		for i, r := range replicas {
+			wg.Add(1)
+			go func(i int, r placementReplica) {
+				defer wg.Done()
+				replicaInfos[i] = fetchReplicaInfo(r, serviceName)
+			}(i, r)
+		}
+		wg.Wait()
 
-			replicaAddressList = append(replicaAddressList, printedFormat)
-			replicaIdList = append(replicaIdList, nodeId)
+		// pick the first successful AR response to derive service-wide fields
+		var primaryInfo map[string]interface{}
+		for _, ri := range replicaInfos {
+			if ri.fetchErr == nil && ri.raw != nil {
+				primaryInfo = ri.raw
+				break
+			}
 		}
 
 		_, _ = successColorPrint.Printf("SUCCESS")
 		fmt.Printf(", current deployment information:\n\n")
 
-		// TODO: query one of the replica to get more about the service details,
-		//  for now we are populating dummy data here.
-		dockerImageName := dummyColorPrint.Sprint("fadhilkurnia/xdn-bookcatalog")
-		httpPort := dummyColorPrint.Sprint("80")
-		consistencyModel := dummyColorPrint.Sprint("linearizability")
-		isDeterministic := dummyColorPrint.Sprint("true")
-		stateDir := dummyColorPrint.Sprint("/app/data/")
-		coordinationProtocolName := dummyColorPrint.Sprint("MultiPaxos")
+		dockerImageName := "unknown"
+		consistencyModel := "unknown"
+		isDeterministic := "unknown"
+		stateDir := "unknown"
+		coordinationProtocolName := "unknown"
+		var requestBehaviors []interface{}
+		if primaryInfo != nil {
+			if c := pickStatefulContainer(primaryInfo); c != nil {
+				dockerImageName = stringOrDash(c["image"])
+			}
+			offered := stringOrDash(primaryInfo["consistency"])
+			requested := stringOrDash(primaryInfo["requestedConsistency"])
+			if requested != "-" && requested != offered {
+				consistencyModel = fmt.Sprintf("%s (requested: %s)", offered, requested)
+			} else {
+				consistencyModel = offered
+			}
+			if det, ok := primaryInfo["deterministic"].(bool); ok {
+				isDeterministic = strconv.FormatBool(det)
+			}
+			stateDir = stringOrDash(primaryInfo["stateDirectory"])
+			coordinationProtocolName = stringOrDash(primaryInfo["protocol"])
+			if rb, ok := primaryInfo["requestBehaviors"].([]interface{}); ok {
+				requestBehaviors = rb
+			}
+		}
 
 		fmt.Printf(" service name  : %s \n", serviceNameStr)
 		fmt.Printf(" service url   : http://%s.xdnapp.com/ \n", serviceNameStr)
 		fmt.Printf(" docker image  : %s \n", dockerImageName)
-		fmt.Printf(" http port     : %s (internal) \n", httpPort)
 		fmt.Printf(" consistency   : %s \n", consistencyModel)
 		fmt.Printf(" deterministic : %s \n", isDeterministic)
 		fmt.Printf(" state dir.    : %s \n", stateDir)
 		fmt.Printf(" num. replica  : %d \n", numReplicas)
 		fmt.Printf(" protocol      : %s \n", coordinationProtocolName)
 		fmt.Printf("\n")
-		fmt.Printf(" Current replicas placement, with epoch=%s:\n",
-			epochNumberStr)
+		fmt.Printf(" Current replicas placement, with epoch=%s:\n", epochNumberStr)
 		fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
-			fmt.Sprint("MACHINE ID"),
-			fmt.Sprint("PUBLIC IP"),
-			fmt.Sprint("ROLE"),
-			fmt.Sprint("CREATED"),
-			fmt.Sprint("STATUS"))
-		for idx, address := range replicaAddressList {
-			roleStr := dummyColorPrint.Sprint("primary")
-			createdStr := dummyColorPrint.Sprint("2 minutes ago")
-			statusStr := dummyColorPrint.Sprint("Up 2 minutes")
-			if idx != 0 {
-				roleStr = dummyColorPrint.Sprint("backup ")
+			"MACHINE ID", "PUBLIC IP", "ROLE", "CREATED", "STATUS")
+		for idx, r := range replicas {
+			displayAddr := r.ip
+			if r.host != "" {
+				displayAddr += " (" + r.host + ")"
+			}
+			roleStr := "unreachable"
+			createdStr := "unreachable"
+			statusStr := "unreachable"
+			info := replicaInfos[idx]
+			if info.fetchErr == nil && info.raw != nil {
+				roleStr = stringOrDash(info.raw["role"])
+				if c := pickStatefulContainer(info.raw); c != nil {
+					createdStr = stringOrDash(c["createdAt"])
+					statusStr = stringOrDash(c["status"])
+				}
 			}
 			fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
-				fmt.Sprintf("%s", replicaIdList[idx]),
-				fmt.Sprintf("%s", address),
-				fmt.Sprintf("%s   ", roleStr),
-				fmt.Sprintf("%s   ", createdStr),
-				fmt.Sprintf("%s    ", statusStr))
+				r.nodeID, displayAddr, roleStr, createdStr, statusStr)
 		}
 
-		fmt.Printf("\n\n")
-		fmt.Printf(" Declared service's operation properties:\n")
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("GET    /*          read-only"))
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("POST   /*          write-only, read-modify-write"))
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("PUT    /*          write-only, read-modify-write"))
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("PATCH  /*          write-only, read-modify-write"))
-		fmt.Printf("  - %s\n", dummyColorPrint.Sprint("DELETE /*          write-only, read-modify-write"))
+		if primaryInfo == nil {
+			fmt.Printf("\n (control plane reached, but no replica could be contacted)\n")
+		}
+
+		if len(requestBehaviors) > 0 {
+			fmt.Printf("\n\n")
+			fmt.Printf(" Declared service's operation properties:\n")
+			for _, b := range requestBehaviors {
+				bm, ok := b.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				methodsStr := "*"
+				if ms, ok := bm["methods"].([]interface{}); ok && len(ms) > 0 {
+					parts := make([]string, 0, len(ms))
+					for _, m := range ms {
+						if s, ok := m.(string); ok {
+							parts = append(parts, s)
+						}
+					}
+					if len(parts) > 0 {
+						methodsStr = strings.Join(parts, ",")
+					}
+				}
+				prefix := stringOrDash(bm["prefix"])
+				behavior := stringOrDash(bm["behavior"])
+				name, _ := bm["name"].(string)
+				line := fmt.Sprintf("%-6s %-12s %s", methodsStr, prefix, behavior)
+				if name != "" {
+					line += "   [" + name + "]"
+				}
+				fmt.Printf("  - %s\n", line)
+			}
+		}
+
 		fmt.Printf("\n")
-
-		// | AR1        | 172.0.0.1  | primary | 2 minutes ago | Up 2 minutes |
-		// | AR2        | 172.0.0.2  | backup  |               | Up 2 minutes |
-		// | AR3        | 172.0.0.2  | backup  |               | Up 2 minutes |
-		//
-		// Declared service's operation properties:
-		// - GET / read-only
-
-		fmt.Printf("Note that currently %s are still dummy information, "+
-			"we are working to implement them\nafter other prioritized research agendas are done.\n",
-			dummyColorPrint.Sprint("all texts in red"))
-
 	},
 }
 
@@ -391,4 +454,98 @@ var ServiceDestroyCmd = &cobra.Command{
 func init() {
 	ServiceRootCmd.AddCommand(ServiceDestroyCmd)
 	ServiceRootCmd.AddCommand(ServiceInfoCmd)
+}
+
+type placementReplica struct {
+	nodeID      string
+	host        string
+	ip          string
+	tcpPort     int
+	httpBaseURL string // empty if HTTP_ADDRESS missing from the RC response
+}
+
+type replicaInfo struct {
+	raw      map[string]interface{}
+	fetchErr error
+}
+
+// parseNodeSocketAddress parses Java InetSocketAddress.toString() output
+// like "c240g5.wisc.cloudlab.us/128.105.144.59:2000" or "/127.0.0.1:2001".
+// Returns host (may be empty), ip, port; ok=false on malformed input.
+func parseNodeSocketAddress(s string) (host, ip string, port int, ok bool) {
+	hostPort := strings.SplitN(s, ":", 2)
+	if len(hostPort) != 2 {
+		return "", "", 0, false
+	}
+	hostIP := strings.SplitN(hostPort[0], "/", 2)
+	if len(hostIP) != 2 {
+		return "", "", 0, false
+	}
+	p, err := strconv.Atoi(hostPort[1])
+	if err != nil {
+		return "", "", 0, false
+	}
+	return hostIP[0], hostIP[1], p, true
+}
+
+// fetchReplicaInfo queries the AR's /replica/info endpoint. The AR HTTP
+// frontend requires the XDN header to route into XDN-specific handling.
+func fetchReplicaInfo(r placementReplica, serviceName string) replicaInfo {
+	if r.httpBaseURL == "" {
+		return replicaInfo{fetchErr: fmt.Errorf("no HTTP address from control plane")}
+	}
+	url := fmt.Sprintf("%s/api/v2/services/%s/replica/info", r.httpBaseURL, serviceName)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return replicaInfo{fetchErr: err}
+	}
+	req.Header.Set("XDN", serviceName)
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return replicaInfo{fetchErr: err}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return replicaInfo{fetchErr: err}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return replicaInfo{fetchErr: fmt.Errorf("http %d", resp.StatusCode)}
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return replicaInfo{fetchErr: err}
+	}
+	return replicaInfo{raw: raw}
+}
+
+// pickStatefulContainer returns the containers[] entry whose "name" matches
+// info["statefulComponent"], falling back to containers[0]. Returns nil if
+// the response has no container array.
+func pickStatefulContainer(info map[string]interface{}) map[string]interface{} {
+	containersIf, ok := info["containers"].([]interface{})
+	if !ok || len(containersIf) == 0 {
+		return nil
+	}
+	if wantName, ok := info["statefulComponent"].(string); ok && wantName != "" {
+		for _, c := range containersIf {
+			if cm, ok := c.(map[string]interface{}); ok {
+				if n, _ := cm["name"].(string); n == wantName {
+					return cm
+				}
+			}
+		}
+	}
+	if cm, ok := containersIf[0].(map[string]interface{}); ok {
+		return cm
+	}
+	return nil
+}
+
+func stringOrDash(v interface{}) string {
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return "-"
 }
