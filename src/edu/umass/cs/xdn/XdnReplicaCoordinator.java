@@ -299,7 +299,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
           // ── Sampling profiler ──
           // Breakdown: total = wrapper_overhead + coordinator_and_execute
           //   wrapper_overhead = getCoord + prepReq + matcher + cache + lambdaCreation
-          //   coordinator_and_execute = endTime - preCoordTime (includes coordinator dispatch + app.execute + callback overhead)
+          //   coordinator_and_execute = endTime - preCoordTime (includes coordinator dispatch +
+          // app.execute + callback overhead)
           if (COORD_PROFILER_ENABLED) {
             long wrapperNs = preCoordTimeNs - startCoordinationTimeNs;
             long coordAndExecNs = endTimeNs - preCoordTimeNs;
@@ -313,9 +314,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             long n = profilerCount.incrementAndGet();
             if (n % PROFILER_SAMPLE_INTERVAL == 0) {
               System.err.printf(
-                  "[XDN-PROFILER] n=%d avg_total=%.1fus "
-                  + "(wrapper=%.1fus [getCoord=%.1fus prepReq=%.1fus matcher=%.1fus cache=%.1fus] "
-                  + "coordExec=%.1fus)%n",
+                  "[XDN-PROFILER] n=%d avg_total=%.1fus (wrapper=%.1fus [getCoord=%.1fus"
+                      + " prepReq=%.1fus matcher=%.1fus cache=%.1fus] coordExec=%.1fus)%n",
                   n,
                   profilerSumTotal.get() / 1000.0 / n,
                   profilerSumCoord.get() / 1000.0 / n,
