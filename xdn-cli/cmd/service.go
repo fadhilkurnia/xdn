@@ -319,8 +319,11 @@ var ServiceInfoCmd = &cobra.Command{
 		}
 
 		if len(requestBehaviors) > 0 {
-			fmt.Printf("\n\n")
-			fmt.Printf(" Declared service's operation properties:\n")
+			type behaviorRow struct {
+				methods, prefix, behavior, name string
+			}
+			rows := make([]behaviorRow, 0, len(requestBehaviors))
+			methodsW, prefixW := 0, 0
 			for _, b := range requestBehaviors {
 				bm, ok := b.(map[string]interface{})
 				if !ok {
@@ -341,9 +344,21 @@ var ServiceInfoCmd = &cobra.Command{
 				prefix := stringOrDash(bm["prefix"])
 				behavior := stringOrDash(bm["behavior"])
 				name, _ := bm["name"].(string)
-				line := fmt.Sprintf("%-6s %-12s %s", methodsStr, prefix, behavior)
-				if name != "" {
-					line += "   [" + name + "]"
+				rows = append(rows, behaviorRow{methodsStr, prefix, behavior, name})
+				if len(methodsStr) > methodsW {
+					methodsW = len(methodsStr)
+				}
+				if len(prefix) > prefixW {
+					prefixW = len(prefix)
+				}
+			}
+
+			fmt.Printf("\n\n")
+			fmt.Printf(" Declared service's operation behaviors:\n")
+			for _, r := range rows {
+				line := fmt.Sprintf("%-*s  %-*s  %s", methodsW, r.methods, prefixW, r.prefix, r.behavior)
+				if r.name != "" {
+					line += "   [" + r.name + "]"
 				}
 				fmt.Printf("  - %s\n", line)
 			}
