@@ -214,9 +214,18 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     var serviceName = request.getServiceName();
     var coordinator = this.serviceCoordinator.get(serviceName);
     if (coordinator == null) {
+      System.err.printf(
+          "[XDN-DIAG] %s coord-entry svc=%s NO-COORDINATOR (404)%n",
+          this.myNodeID.toLowerCase(), serviceName);
       // returns 404 not found back to client
       return createNotFoundResponse(request, callback);
     }
+    System.err.printf(
+        "[XDN-DIAG] %s coord-entry svc=%s coordinator=%s reqClass=%s%n",
+        this.myNodeID.toLowerCase(),
+        serviceName,
+        coordinator.getClass().getSimpleName(),
+        request.getClass().getSimpleName());
     long endGetCoordinatorTimeNs = System.nanoTime();
 
     // one edge case, handling XdnGetProtocolRoleRequest
@@ -331,11 +340,20 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
             }
           }
 
+          System.err.printf(
+              "[XDN-DIAG] %s coord-callback-fired svc=%s handled=%s respNull=%s%n",
+              this.myNodeID.toLowerCase(), serviceName, handled, (response == null));
           callback.executed(response, handled);
         };
 
     // asynchronously coordinate the request
+    System.err.printf(
+        "[XDN-DIAG] %s coord-delegating svc=%s to=%s%n",
+        this.myNodeID.toLowerCase(), serviceName, coordinator.getClass().getSimpleName());
     boolean isCoordinated = coordinator.coordinateRequest(gpRequest, loggedCallback);
+    System.err.printf(
+        "[XDN-DIAG] %s coord-delegate-returned svc=%s isCoordinated=%s%n",
+        this.myNodeID.toLowerCase(), serviceName, isCoordinated);
     if (!isCoordinated) {
       logger.log(
           Level.FINE,
@@ -433,39 +451,48 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   }
 
   private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {
-    // handle only if the request is a Http request coming from client.
+    // Unwrap the XDN payload. Single requests and batches follow different shapes.
     String serviceName = request.getServiceName();
-    XdnHttpRequest httpRequest = null;
-    if (request instanceof ReplicableClientRequest rcr
-        && rcr.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
-      httpRequest = xdnHttpRequest;
-    }
-    if (request instanceof XdnHttpRequest xdnHttpRequest) {
-      httpRequest = xdnHttpRequest;
-    }
-    if (httpRequest == null) {
-      throw new RuntimeException(
-          "Unknown coordinator for name="
-              + serviceName
-              + " with request type of "
-              + request.getClass().getSimpleName());
+    Request innerRequest = request;
+    if (request instanceof ReplicableClientRequest rcr) {
+      innerRequest = rcr.getRequest();
     }
 
-    // generate 404 response
+    // Build the shared 404 payload.
     String errorMessage =
         String.format("Service '%s' does not exist in this XDN deployment", serviceName);
     HttpHeaders headers = new DefaultHttpHeaders();
     headers.add(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
-    HttpResponse notFoundResponse =
-        new DefaultFullHttpResponse(
-            HttpVersion.HTTP_1_1,
-            HttpResponseStatus.NOT_FOUND,
-            Unpooled.copiedBuffer(errorMessage.getBytes()),
-            headers,
-            new DefaultHttpHeaders());
-    httpRequest.setHttpResponse(notFoundResponse);
-    callback.executed(httpRequest, true);
-    return true;
+
+    if (innerRequest instanceof XdnHttpRequest httpRequest) {
+      httpRequest.setHttpResponse(buildNotFoundResponse(errorMessage, headers));
+      callback.executed(httpRequest, true);
+      return true;
+    }
+
+    if (innerRequest instanceof XdnHttpRequestBatch batch) {
+      // Every request in the batch targets the same missing service; respond 404 to each.
+      for (XdnHttpRequest req : batch.getRequests()) {
+        req.setHttpResponse(buildNotFoundResponse(errorMessage, headers));
+      }
+      callback.executed(batch, true);
+      return true;
+    }
+
+    throw new RuntimeException(
+        "Unknown coordinator for name="
+            + serviceName
+            + " with request type of "
+            + request.getClass().getSimpleName());
+  }
+
+  private static HttpResponse buildNotFoundResponse(String errorMessage, HttpHeaders headers) {
+    return new DefaultFullHttpResponse(
+        HttpVersion.HTTP_1_1,
+        HttpResponseStatus.NOT_FOUND,
+        Unpooled.copiedBuffer(errorMessage.getBytes()),
+        headers,
+        new DefaultHttpHeaders());
   }
 
   private void handleXdnGetProtocolRoleRequest(
@@ -591,6 +618,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       String state,
       Set<NodeIDType> nodes,
       String placementMetadata) {
+    System.err.printf(
+        "[XDN-DIAG] %s createReplicaGroup-entry svc=%s epoch=%d nodes=%s stateNull=%s%n",
+        this.myNodeID.toLowerCase(), serviceName, epoch, nodes, (state == null));
     logger.log(
         Level.FINEST,
         "{0}:XdnReplicaCoordinator - createReplicaGroup "
@@ -609,7 +639,12 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
-    return this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
+    boolean result =
+        this.initializeReplicaGroup(serviceName, state, nodes, epoch, placementMetadata);
+    System.err.printf(
+        "[XDN-DIAG] %s createReplicaGroup-done svc=%s registered=%s%n",
+        this.myNodeID.toLowerCase(), serviceName, this.serviceCoordinator.containsKey(serviceName));
+    return result;
   }
 
   private boolean initializeReplicaGroup(
