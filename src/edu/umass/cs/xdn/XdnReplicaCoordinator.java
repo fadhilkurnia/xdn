@@ -72,6 +72,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   private static final java.util.concurrent.atomic.AtomicLong profilerSumCallback =
       new java.util.concurrent.atomic.AtomicLong();
 
+  // Bounded poll used when this node is asked to become the Paxos coordinator for a service.
+  private static final long PAXOS_LEADER_CHANGE_POLL_INTERVAL_MS = 500L;
+  private static final long PAXOS_LEADER_CHANGE_TIMEOUT_MS = 10_000L;
+
   private final String myNodeID;
   private final XdnGigapaxosApp xdnGigapaxosApp;
 
@@ -367,12 +371,39 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     if (coordinator instanceof PaxosReplicaCoordinator<NodeIDType> pc
         && setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
-      if (!pc.isPaxosCoordinator(serviceName)) {
-        pc.tryToBeCoordinator(serviceName);
+      if (pc.isPaxosCoordinator(serviceName)) {
+        setCoordinatorNodeRequest.setResponseMessage("OK");
+        callback.executed(setCoordinatorNodeRequest, true);
+        return;
       }
-      setCoordinatorNodeRequest.setResponseMessage("OK");
-      callback.executed(setCoordinatorNodeRequest, true);
-      return;
+      long deadline = System.currentTimeMillis() + PAXOS_LEADER_CHANGE_TIMEOUT_MS;
+      int attempts = 0;
+      while (true) {
+        pc.tryToBeCoordinator(serviceName);
+        attempts++;
+        try {
+          Thread.sleep(PAXOS_LEADER_CHANGE_POLL_INTERVAL_MS);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new RuntimeException(
+              "Interrupted while waiting to become Paxos coordinator for " + serviceName, e);
+        }
+        if (pc.isPaxosCoordinator(serviceName)) {
+          setCoordinatorNodeRequest.setResponseMessage("OK");
+          callback.executed(setCoordinatorNodeRequest, true);
+          return;
+        }
+        if (System.currentTimeMillis() >= deadline) {
+          throw new RuntimeException(
+              "Failed to become Paxos coordinator for service '"
+                  + serviceName
+                  + "' after "
+                  + PAXOS_LEADER_CHANGE_TIMEOUT_MS
+                  + "ms ("
+                  + attempts
+                  + " attempts)");
+        }
+      }
     }
 
     if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pb

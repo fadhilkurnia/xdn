@@ -54,37 +54,22 @@ public class XdnSetCoordinatorNodeTest {
 
       for (String newLeader : DEFAULT_REPLICAS) {
         System.out.println(">>> Changing leader into " + newLeader);
-        int currAttempt = 0;
+        HttpResponse<String> setCoordinatorResponse =
+            sendSetCoordinatorRequest(cluster, serviceName, newLeader);
+        assertEquals(
+            200,
+            setCoordinatorResponse.statusCode(),
+            "Set coordinator request failed: " + setCoordinatorResponse.body());
+
+        Map<String, String> roles = fetchReplicaRoles(cluster, serviceName);
         String detectedLeader = null;
         Set<String> detectedFollowers = new HashSet<>();
-        while (currAttempt < MAX_SET_COORDINATOR_ATTEMPT) {
-          detectedLeader = null;
-          detectedFollowers.clear();
-          HttpResponse<String> setCoordinatorResponse =
-              sendSetCoordinatorRequest(cluster, serviceName, newLeader);
-          assertEquals(
-              200,
-              setCoordinatorResponse.statusCode(),
-              "Set coordinator request failed: " + setCoordinatorResponse.body());
-
-          Map<String, String> roles = fetchReplicaRoles(cluster, serviceName);
-          for (var pair : roles.entrySet()) {
-            if (pair.getValue().equals("leader")) {
-              detectedLeader = pair.getKey();
-            }
-            if (pair.getValue().equals("follower")) {
-              detectedFollowers.add(pair.getKey());
-            }
+        for (var pair : roles.entrySet()) {
+          if (pair.getValue().equals("leader")) {
+            detectedLeader = pair.getKey();
           }
-
-          if (newLeader.equals(detectedLeader)) {
-            break;
-          }
-
-          Thread.sleep(Duration.ofSeconds(1));
-          currAttempt++;
-          if (currAttempt != MAX_SET_COORDINATOR_ATTEMPT) {
-            System.out.println(">>> Fail to change the leader, retrying ...");
+          if (pair.getValue().equals("follower")) {
+            detectedFollowers.add(pair.getKey());
           }
         }
 
@@ -95,7 +80,6 @@ public class XdnSetCoordinatorNodeTest {
 
         assertEquals(newLeader, detectedLeader);
         assertEquals(detectedFollowers, expectedFollowers);
-        assertTrue(currAttempt <= MAX_SET_COORDINATOR_ATTEMPT);
       }
     }
   }

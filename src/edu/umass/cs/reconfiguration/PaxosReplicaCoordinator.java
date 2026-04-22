@@ -55,6 +55,11 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
 	protected static final Logger log = (ReconfigurationConfig.getLogger());
 	private final Logger logger = Logger.getLogger(PaxosReplicaCoordinator.class.getName());
 
+	// Bounded poll used when this node is asked to become the Paxos coordinator
+	// at group-creation time via the preferred-coordinator placement metadata.
+	private static final long PREFERRED_COORDINATOR_POLL_INTERVAL_MS = 500L;
+	private static final long PREFERRED_COORDINATOR_TIMEOUT_MS = 30_000L;
+
 	/**
 	 * @param app
 	 * @param myID
@@ -285,34 +290,42 @@ public class PaxosReplicaCoordinator<NodeIDType> extends
         }
 
 		// Attempts to be the coordinator, if this node is the preferred coordinator
-		// specified in the placement metadata. Here, we need to wait for 30 second,
-		// ensuring other replicas are alive and can respond the PREPARE message.
-		// We also try to send the prepare message twice, increasing our chance to
-		// be the coordinator.
-        // Added by Fadhil on January 31, 2025
+		// specified in the placement metadata. We poll isPaxosCoordinator() every
+		// PREFERRED_COORDINATOR_POLL_INTERVAL_MS after re-issuing a PREPARE via
+		// tryToBePaxosCoordinator, up to PREFERRED_COORDINATOR_TIMEOUT_MS total.
+		// On timeout we log a warning and return — the group remains usable with
+		// whichever coordinator Paxos elects.
 		if (this.getMyID().toString().equals(preferredCoordinatorNodeId)) {
-			Thread electionThread = new Thread(() -> {
-				System.out.println(">>>>>>>>>> [1] Waiting 30s for " + this.getMyID() + " to be coordinator of " + groupName);
-                try {
-                    Thread.sleep(30_000);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-				System.out.println(">>>>>>>>>> [1] Making " + this.getMyID() + " as coordinator for " + groupName);
-                this.paxosManager.tryToBePaxosCoordinator(groupName);
-				System.out.println(">>>>>>>>>> [1] Done making " + this.getMyID() + " as coordinator for " + groupName);
-
-				System.out.println(">>>>>>>>>> [2] Waiting 30s for " + this.getMyID() + " to be coordinator of " + groupName);
-				try {
-					Thread.sleep(30_000);
-				} catch (InterruptedException e) {
-					throw new RuntimeException(e);
-				}
-				System.out.println(">>>>>>>>>> [2] Making " + this.getMyID() + " as coordinator for " + groupName);
+			if (this.paxosManager.isPaxosCoordinator(groupName)) {
+				return;
+			}
+			long deadline = System.currentTimeMillis() + PREFERRED_COORDINATOR_TIMEOUT_MS;
+			int attempts = 0;
+			while (true) {
 				this.paxosManager.tryToBePaxosCoordinator(groupName);
-				System.out.println(">>>>>>>>>> [2] Done making " + this.getMyID() + " as coordinator for " + groupName);
-			});
-			electionThread.start();
+				attempts++;
+				try {
+					Thread.sleep(PREFERRED_COORDINATOR_POLL_INTERVAL_MS);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					log.log(Level.WARNING,
+							"{0} interrupted while waiting to become Paxos coordinator for {1}",
+							new Object[] { this, groupName });
+					return;
+				}
+				if (this.paxosManager.isPaxosCoordinator(groupName)) {
+					log.log(Level.INFO,
+							"{0} became Paxos coordinator for {1} after {2} attempts",
+							new Object[] { this, groupName, attempts });
+					return;
+				}
+				if (System.currentTimeMillis() >= deadline) {
+					log.log(Level.WARNING,
+							"{0} failed to become Paxos coordinator for {1} after {2}ms ({3} attempts)",
+							new Object[] { this, groupName, PREFERRED_COORDINATOR_TIMEOUT_MS, attempts });
+					return;
+				}
+			}
 		}
     }
 
