@@ -168,7 +168,7 @@ public final class XdnHttpRequestBatcher implements Closeable {
               // writes must remain isolated.
               if (isNotBehavioralReadOnly(first)
                   && !arFunctions.usesPrimaryBackup(first.request.getServiceName())
-                  && !first.request.isCommutativeRequest()) {
+                  && !first.request.isAnyCommutativeRequest()) {
                 dispatchBatch(Collections.singletonList(first));
                 continue;
               }
@@ -181,16 +181,18 @@ public final class XdnHttpRequestBatcher implements Closeable {
               // For PB services, dispatch each request as a singleton unless
               // the request is commutative.
               if (arFunctions.usesPrimaryBackup(batchServiceName)
-                  && !first.request.isCommutativeRequest()) {
+                  && !first.request.isAnyCommutativeRequest()) {
                 dispatchBatch(new ArrayList<>(buffer));
                 buffer.clear();
                 continue;
               }
 
-              // Track seen URIs for commutative path dedup within a batch
+              // Track seen URIs for key-commutative path dedup within a batch.
+              // Fully commutative requests skip URI dedup entirely.
               Set<String> seenUris = null;
-              boolean isCommutativeBatch = first.request.isCommutativeRequest();
-              if (isCommutativeBatch) {
+              boolean isCommutativeBatch = first.request.isAnyCommutativeRequest();
+              boolean isKeyCommutativeBatch = first.request.isKeyCommutativeRequest();
+              if (isKeyCommutativeBatch) {
                 seenUris = new HashSet<>();
                 seenUris.add(first.request.getHttpRequest().uri());
               }
@@ -205,7 +207,7 @@ public final class XdnHttpRequestBatcher implements Closeable {
                 // Non-commutative write for non-PB: singleton
                 if (isNotBehavioralReadOnly(next)
                     && !arFunctions.usesPrimaryBackup(next.request.getServiceName())
-                    && !next.request.isCommutativeRequest()) {
+                    && !next.request.isAnyCommutativeRequest()) {
                   dispatchBatch(new ArrayList<>(buffer));
                   buffer.clear();
                   dispatchBatch(Collections.singletonList(next));
@@ -219,8 +221,9 @@ public final class XdnHttpRequestBatcher implements Closeable {
                   buffer.clear();
                   buffer.add(next);
                   batchServiceName = nextServiceName;
-                  isCommutativeBatch = next.request.isCommutativeRequest();
-                  if (isCommutativeBatch) {
+                  isCommutativeBatch = next.request.isAnyCommutativeRequest();
+                  isKeyCommutativeBatch = next.request.isKeyCommutativeRequest();
+                  if (isKeyCommutativeBatch) {
                     seenUris = new HashSet<>();
                     seenUris.add(next.request.getHttpRequest().uri());
                   } else {
@@ -229,8 +232,9 @@ public final class XdnHttpRequestBatcher implements Closeable {
                   continue;
                 }
 
-                // Path dedup for commutative: flush if same URI already in batch
-                if (isCommutativeBatch && seenUris != null) {
+                // Path dedup for key-commutative: flush if same URI already in batch.
+                // Fully commutative requests skip this — all same-URI requests can batch.
+                if (isKeyCommutativeBatch && seenUris != null) {
                   String uri = next.request.getHttpRequest().uri();
                   if (!seenUris.add(uri)) {
                     // Same resource already in batch — flush, start new batch

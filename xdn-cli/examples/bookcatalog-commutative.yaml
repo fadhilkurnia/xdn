@@ -8,7 +8,7 @@ deterministic: true
 requests:
   - path_prefix: "/api/books/"
     methods: "PUT"
-    behavior: commutative
+    behavior: key_commutative
   - path_prefix: "/"
     methods: "GET,HEAD,OPTIONS,TRACE"
     behavior: read_only

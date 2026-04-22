@@ -1,0 +1,16 @@
+---
+name: "svc"
+image: "fadhilkurnia/xdn-todo-go"
+port: 80
+state: /app/data/
+consistency: linearizability
+deterministic: true
+environments:
+  - ENABLE_WAL: "true"
+requests:
+  - path_prefix: "/api/todo/tasks"
+    methods: "POST,DELETE"
+    behavior: commutative
+  - path_prefix: "/"
+    methods: "GET,HEAD,OPTIONS,TRACE"
+    behavior: read_only

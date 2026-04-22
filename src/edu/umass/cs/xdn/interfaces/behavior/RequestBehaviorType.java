@@ -6,7 +6,8 @@ public enum RequestBehaviorType {
   READ_MODIFY_WRITE,
   NIL_EXTERNAL,
   MONOTONIC,
-  COMMUTATIVE;
+  COMMUTATIVE,
+  KEY_COMMUTATIVE;
 
   public static RequestBehaviorType fromString(String behavior) throws IllegalArgumentException {
     if (behavior == null) {
