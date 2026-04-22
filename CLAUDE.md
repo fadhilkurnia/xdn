@@ -29,10 +29,17 @@ ant jar                          # Compile and create JAR files (gigapaxos + nio
 ./bin/build_xdn_cli.sh           # Build CLI binaries (linux/amd64, darwin/arm64)
 ```
 
-**Rust/C++ filesystem layer:**
+**Rust/C++ filesystem layer (Linux only):**
 ```bash
-./bin/build_xdn_fuselog.sh       # Build FUSE-based recorder filesystem
+./bin/build_xdn_fuselog.sh       # Build both C++ (fuselog, fuselog-apply) and Rust (fuserust, fuserust-apply)
+./bin/build_xdn_fuselog.sh cpp   # C++ only
+./bin/build_xdn_fuselog.sh rust  # Rust only
 ```
+
+> **Note**: compiled binaries in `bin/` (`xdn-darwin-arm64`, `xdn-linux-amd64`,
+> `fuselog`, `fuselog-apply`, `fuserust`, `fuserust-apply`) are gitignored —
+> developers build them locally via the scripts above. Only shell scripts
+> and `bin/xdnd` (also a shell script) are checked in.
 
 ## Test Commands
 
@@ -101,7 +108,7 @@ Local ports: Reconfigurator at :3000, ActiveReplicas at :2000-2002, HTTP proxy a
 
 ## CloudLab Cluster Deployment
 
-Use the `bin/xdnd` Go binary (driver-machine orchestrator) for multi-host deployment:
+Use the `bin/xdnd` shell script (driver-machine orchestrator) for multi-host deployment:
 
 ```bash
 ./bin/xdnd init-driver                                                          # prepare driver machine

@@ -46,7 +46,17 @@ with the following system requirements:
     ```
    ./bin/build_xdn_cli.sh
     ```
-   Make sure to add XDN's `bin` directory into your `$PATH` so you can access `xdn` from anywhere in your machine. 
+   Make sure to add XDN's `bin` directory into your `$PATH` so you can access `xdn` from anywhere in your machine.
+4. (Linux only, optional) Build the FUSE-based state-diff recorders. Skip this
+   if you're using the default `rsync` recorder for local development.
+    ```
+   ./bin/build_xdn_fuselog.sh
+    ```
+
+> **Note**: binaries produced by the build scripts above (`xdn-linux-amd64`,
+> `xdn-darwin-arm64`, `fuselog`, `fuselog-apply`, `fuserust`, `fuserust-apply`)
+> live in `bin/` but are **gitignored** — every developer builds them locally.
+> Only shell scripts (including `bin/xdnd`) are checked into the repo.
 
 ## [Temporarily Unavailable] Deployment with existing provider
 We have prepared a ready-to-use XDN provider at `xdnapp.com`. 
@@ -205,7 +215,7 @@ Assuming we have 5 machines with the following role and IP address:
 - `10.10.1.4` for the reconfiguration.
 - `10.10.1.5` for the driver machine where we run all the command.
 
-We are using the `xdnd` binary for most of the command here.
+We are using the `xdnd` shell script for most of the command here.
 
 1. Initialize the driver machine: `./bin/xdnd init-driver`.
 2. Initialize all the remote machines: 
