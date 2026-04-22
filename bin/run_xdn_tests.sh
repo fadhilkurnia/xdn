@@ -74,6 +74,11 @@ for CLASS_FILE in $TEST_CLASSES; do
             echo "FAILED: $CLASS_NAME#$METHOD"
 
             if [ "$VERBOSE" != "true" ]; then
+                if grep -qE "^\[[^]]+\] (STEP|sendGetRequest)" "$LOG_FILE" 2>/dev/null; then
+                    echo "--- Diagnostic markers (STEP / sendGetRequest) ---"
+                    grep -E "^\[[^]]+\] (STEP|sendGetRequest)" "$LOG_FILE"
+                    echo "--- End diagnostic markers ---"
+                fi
                 echo "--- Last 30 lines of log ---"
                 tail -30 "$LOG_FILE"
                 echo "--- End log ---"
