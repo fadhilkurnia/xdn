@@ -433,39 +433,48 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   }
 
   private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {
-    // handle only if the request is a Http request coming from client.
+    // Unwrap the XDN payload. Single requests and batches follow different shapes.
     String serviceName = request.getServiceName();
-    XdnHttpRequest httpRequest = null;
-    if (request instanceof ReplicableClientRequest rcr
-        && rcr.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
-      httpRequest = xdnHttpRequest;
-    }
-    if (request instanceof XdnHttpRequest xdnHttpRequest) {
-      httpRequest = xdnHttpRequest;
-    }
-    if (httpRequest == null) {
-      throw new RuntimeException(
-          "Unknown coordinator for name="
-              + serviceName
-              + " with request type of "
-              + request.getClass().getSimpleName());
+    Request innerRequest = request;
+    if (request instanceof ReplicableClientRequest rcr) {
+      innerRequest = rcr.getRequest();
     }
 
-    // generate 404 response
+    // Build the shared 404 payload.
     String errorMessage =
         String.format("Service '%s' does not exist in this XDN deployment", serviceName);
     HttpHeaders headers = new DefaultHttpHeaders();
     headers.add(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
-    HttpResponse notFoundResponse =
-        new DefaultFullHttpResponse(
-            HttpVersion.HTTP_1_1,
-            HttpResponseStatus.NOT_FOUND,
-            Unpooled.copiedBuffer(errorMessage.getBytes()),
-            headers,
-            new DefaultHttpHeaders());
-    httpRequest.setHttpResponse(notFoundResponse);
-    callback.executed(httpRequest, true);
-    return true;
+
+    if (innerRequest instanceof XdnHttpRequest httpRequest) {
+      httpRequest.setHttpResponse(buildNotFoundResponse(errorMessage, headers));
+      callback.executed(httpRequest, true);
+      return true;
+    }
+
+    if (innerRequest instanceof XdnHttpRequestBatch batch) {
+      // Every request in the batch targets the same missing service; respond 404 to each.
+      for (XdnHttpRequest req : batch.getRequests()) {
+        req.setHttpResponse(buildNotFoundResponse(errorMessage, headers));
+      }
+      callback.executed(batch, true);
+      return true;
+    }
+
+    throw new RuntimeException(
+        "Unknown coordinator for name="
+            + serviceName
+            + " with request type of "
+            + request.getClass().getSimpleName());
+  }
+
+  private static HttpResponse buildNotFoundResponse(String errorMessage, HttpHeaders headers) {
+    return new DefaultFullHttpResponse(
+        HttpVersion.HTTP_1_1,
+        HttpResponseStatus.NOT_FOUND,
+        Unpooled.copiedBuffer(errorMessage.getBytes()),
+        headers,
+        new DefaultHttpHeaders());
   }
 
   private void handleXdnGetProtocolRoleRequest(

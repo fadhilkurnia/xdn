@@ -54,9 +54,14 @@ public final class XdnHttpRequestBatcher implements Closeable {
   private final ExecutorService batchingExecutor;
   private final ExecutorService completionExecutor;
 
-  // TODO: explain the impact of enabling/disabling submission workers.
-  //  - these dedicated workers are beneficial to bump up the size of a batch.
-  private final boolean isSeparateSubmissionWorkers = true;
+  // Separate submission workers drain submissionQueue → batchingQueue, intended to enlarge
+  // batch size under load. They busy-spin on poll() via Thread.onSpinWait(), which pins
+  // their carrier threads when implemented as virtual threads. On hosts with few carriers
+  // (e.g. 2-vCPU CI runners), multiple nodes sharing a JVM starve one node's worker for
+  // extended periods — its submissionQueue is never drained and requests time out. Disabled
+  // by default until the submission path is reworked to block on a BlockingQueue instead of
+  // spinning.
+  private final boolean isSeparateSubmissionWorkers = false;
   private final ExecutorService submissionExecutor;
   private final Queue<BatchEntry> submissionQueue = new ConcurrentLinkedQueue<>();
   private static final int NUM_SUBMISSION_WORKERS = 2;
