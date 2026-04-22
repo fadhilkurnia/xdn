@@ -195,9 +195,57 @@ public class XdnTestCluster implements AutoCloseable {
       TimeUnit.SECONDS.sleep(1);
     }
 
+    dumpReplicaDiagnostics(serviceName, replicaIdx);
     throw new RuntimeException(
         "Timed out waiting for replica %d of service '%s'".formatted(replicaIdx, serviceName),
         lastError);
+  }
+
+  /** Dumps cluster/container state to stderr when a per-replica wait times out. */
+  private void dumpReplicaDiagnostics(String serviceName, int replicaIdx) {
+    String nodeId = ACTIVE_REPLICA_IDS.get(replicaIdx);
+    int httpPort = getActiveHttpPort(nodeId);
+    System.err.printf(
+        "=== Replica %d (%s, http port %d) diagnostics for service %s ===%n",
+        replicaIdx, nodeId, httpPort, serviceName);
+    runDiagnostic("docker ps -a --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'");
+    runDiagnostic("ls -la /tmp/xdn/compose/" + nodeId + "/" + serviceName + "/ 2>&1 || true");
+    runDiagnostic(
+        "find /tmp/xdn/compose/"
+            + nodeId
+            + "/"
+            + serviceName
+            + " -name 'docker-compose.yml'"
+            + " -exec sh -c 'echo === {} ===; cat {}' \\; 2>&1 || true");
+    runDiagnostic("ss -ltn '( sport = :" + httpPort + " )' 2>&1 || true");
+    // Container names follow pattern: c<idx>.e<epoch>.<serviceName>.<nodeIdLower>.xdn.io
+    runDiagnostic(
+        "docker logs --tail 50 c0.e0."
+            + serviceName
+            + "."
+            + nodeId.toLowerCase()
+            + ".xdn.io"
+            + " 2>&1 || true");
+    System.err.println("=== End replica " + replicaIdx + " diagnostics ===");
+  }
+
+  private static void runDiagnostic(String shellCommand) {
+    System.err.println("$ " + shellCommand);
+    try {
+      Process p = new ProcessBuilder("sh", "-c", shellCommand).redirectErrorStream(true).start();
+      try (InputStream in = p.getInputStream()) {
+        String out = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        if (!out.isEmpty()) {
+          System.err.print(out);
+          if (!out.endsWith("\n")) {
+            System.err.println();
+          }
+        }
+      }
+      p.waitFor();
+    } catch (IOException | InterruptedException e) {
+      System.err.println("(diagnostic failed: " + e.getMessage() + ")");
+    }
   }
 
   /** Invokes the service through the ActiveReplica HTTP frontend. */
