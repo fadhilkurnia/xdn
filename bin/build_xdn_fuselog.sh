@@ -58,7 +58,30 @@ function main() {
   esac
 
   stage_project_binaries
+  symlink_into_system_bin
   echo "Build complete."
+}
+
+function symlink_into_system_bin() {
+  echo "=== Symlinking binaries into /usr/local/bin/ ==="
+
+  local INSTALL_DIR="/usr/local/bin"
+  local SUDO=""
+  if [[ ! -w "$INSTALL_DIR" ]]; then
+    if command -v sudo &>/dev/null; then
+      SUDO="sudo"
+    else
+      echo "  Warning: $INSTALL_DIR is not writable and sudo is unavailable; skipping."
+      return 0
+    fi
+  fi
+
+  for name in fuselog fuselog-apply fuserust fuserust-apply; do
+    if [[ -f "$BIN_DIR/$name" ]]; then
+      $SUDO ln -sf "$BIN_DIR/$name" "$INSTALL_DIR/$name"
+      echo "  Symlinked $INSTALL_DIR/$name -> $BIN_DIR/$name"
+    fi
+  done
 }
 
 function build_cpp() {
@@ -100,8 +123,11 @@ function build_rust() {
     exit 1
   fi
 
-  echo "  Building fuselog_core (release) ..."
-  cd "$RUST_DIR" && cargo build --release
+  echo "  Building fuselog_core and fuselog_apply (release) ..."
+  # --workspace is required: xdn-fs/rust/Cargo.toml is a root-package workspace,
+  # so a bare `cargo build` only builds the root package and skips the
+  # fuselog_core / fuselog_apply members whose binaries we stage below.
+  cd "$RUST_DIR" && cargo build --release --workspace
 
   echo "  Rust binaries built:"
   ls -lh "$RUST_DIR/target/release/fuselog_core" 2>/dev/null || true

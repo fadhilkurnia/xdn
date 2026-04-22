@@ -50,6 +50,23 @@ function main() {
       ;;
   esac
 
+  if [[ -f "${BIN_DIR}/xdn" ]]; then
+    local INSTALL_DIR="/usr/local/bin"
+    local SUDO=""
+    if [[ ! -w "${INSTALL_DIR}" ]]; then
+      if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+      else
+        echo "Warning: ${INSTALL_DIR} is not writable and sudo is unavailable; skipping system-wide symlink."
+        INSTALL_DIR=""
+      fi
+    fi
+    if [[ -n "${INSTALL_DIR}" ]]; then
+      $SUDO ln -sf "${BIN_DIR}/xdn" "${INSTALL_DIR}/xdn"
+      echo "Symlinked ${INSTALL_DIR}/xdn -> ${BIN_DIR}/xdn"
+    fi
+  fi
+
   echo "Success! binaries generated:"
   echo "  ${LINUX_AMD64_BIN}"
   echo "  ${DARWIN_ARM64_BIN}"
