@@ -102,7 +102,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       Messenger<NodeIDType, JSONObject> messenger) {
     super(app, messenger);
 
-    System.out.printf(">> XDNReplicaCoordinator - init at node %s\n", myID);
+    System.out.printf(">> XdnReplicaCoordinator - init at node %s\n", myID);
 
     assert app.getClass().getSimpleName().equals(XdnGigapaxosApp.class.getSimpleName())
         : "XdnReplicaCoordinator must be used with XdnGigapaxosApp";

@@ -326,7 +326,7 @@ public class XdnTestCluster implements AutoCloseable {
   }
 
   private static void configureGigapaxos() {
-    Path configPath = Paths.get("conf", "gigapaxos.local.properties").toAbsolutePath();
+    Path configPath = Paths.get("conf", "gigapaxos.xdn.local.properties").toAbsolutePath();
     System.setProperty(PaxosConfig.GIGAPAXOS_CONFIG_FILE_KEY, configPath.toString());
     Config.register(
         new String[] {
@@ -334,6 +334,7 @@ public class XdnTestCluster implements AutoCloseable {
           "ENABLE_RECONFIGURATOR_HTTP=true",
           "REPLICA_COORDINATOR_CLASS=edu.umass.cs.xdn.XdnReplicaCoordinator",
           "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
+          "INITIAL_STATE_NUM_REPLICAS_EXTRACTOR_CLASS=edu.umass.cs.xdn.XdnServiceNumReplicasExtractor",
           "XDN_PB_STATEDIFF_RECORDER_TYPE=RSYNC"
         });
   }

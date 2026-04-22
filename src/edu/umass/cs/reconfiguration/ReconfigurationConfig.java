@@ -448,6 +448,15 @@ public class ReconfigurationConfig {
         INITIAL_STATE_VALIDATOR_CLASS(""),
 
         /**
+         * Optional hook used by the {@link Reconfigurator} to extract a per-service
+         * replica-count override from the initial state. Implementations must implement
+         * {@link edu.umass.cs.reconfiguration.interfaces.InitialStateNumReplicasExtractor}.
+         * The default empty string disables the override so the global DEFAULT_NUM_REPLICAS
+         * is used for every new service.
+         */
+        INITIAL_STATE_NUM_REPLICAS_EXTRACTOR_CLASS(""),
+
+        /**
          * Type of state-diff recorder used in the (@link XdnGigapaxosApp}
          * TODO: this should be specific to XDN, and not Gigapaxos config.
          */
