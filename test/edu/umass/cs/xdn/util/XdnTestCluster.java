@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -215,7 +216,30 @@ public class XdnTestCluster implements AutoCloseable {
             .header("XDN", serviceName)
             .GET()
             .build();
-    return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    long startNanos = System.nanoTime();
+    System.err.printf(
+        "[%s] sendGetRequest start: service=%s replica=%d port=%d endpoint=%s timeout=%dms%n",
+        Instant.now(), serviceName, replicaIdx, httpPort, endpoint, effectiveTimeout.toMillis());
+    try {
+      HttpResponse<String> response =
+          httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
+      System.err.printf(
+          "[%s] sendGetRequest done: service=%s replica=%d status=%d duration=%dms%n",
+          Instant.now(), serviceName, replicaIdx, response.statusCode(), durationMs);
+      return response;
+    } catch (IOException e) {
+      long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
+      System.err.printf(
+          "[%s] sendGetRequest FAILED: service=%s replica=%d duration=%dms error=%s: %s%n",
+          Instant.now(),
+          serviceName,
+          replicaIdx,
+          durationMs,
+          e.getClass().getSimpleName(),
+          e.getMessage());
+      throw e;
+    }
   }
 
   /** Issues a HTTP GET request with the default timeout. */
