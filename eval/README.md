@@ -278,6 +278,35 @@ Extra flags: `--sanity-check`, `--txns 1,2,3,5,8,10,15`, `--n-samples 50`,
 Results go to `eval/results/microbench_coordination_<system>_<timestamp>/`.
 Use `plot_coordination_granularity.py` to combine results into a paper figure.
 
+## Failure Scenarios
+
+### `run_eval_failure_replica_crashes.py`
+
+Reproduces Figure 19a: measures per-second throughput of SQLite-backed TodoApp
+(80% reads) under three consistency models (linearizability, sequential,
+eventual) while gradually crashing non-leader replicas at scheduled times.
+
+For each consistency model, the script deploys a 3-replica cluster, runs a
+constant offered load, and kills non-leader AR JVMs at configurable times
+(default: t=60s and t=120s). The Go load client writes per-second throughput
+to CSV via `--per-second-output`.
+
+```
+python eval/run_eval_failure_replica_crashes.py
+python eval/run_eval_failure_replica_crashes.py --consistency linearizability,eventual
+python eval/run_eval_failure_replica_crashes.py --crash-times 60,120 --duration 180
+python eval/run_eval_failure_replica_crashes.py --rate 500 --read-ratio 80
+python eval/run_eval_failure_replica_crashes.py --local
+```
+
+Results go to `eval/results/eval_failure_replica_crashes_<timestamp>/` with
+per-consistency CSVs (`eval_failure_linearizable.csv`, etc.). After all models
+complete, the script copies CSVs to `reflex-paper/data/`, runs
+`combine_failure_csvs.py` and `plot_eval_failure_figures.py` to generate the
+final plot at `reflex-paper/figures/eval_replica_failures.pdf`.
+
+Extra flags: `--skip-plot`, `--local`.
+
 ## Debugging / Investigation
 
 These `investigate_*.py` scripts are for debugging and profiling, not final
@@ -349,11 +378,15 @@ from `load_pb_wordpress_reflex/`, `load_pb_wordpress_openebs/`,
 
 ### `get_latency_at_rate.go`
 
-Go load generator with Poisson arrivals. Sends POST requests at a target rate
-for a fixed duration and prints latency percentiles.
+Go load generator with Poisson arrivals. Sends requests at a target rate
+for a fixed duration and prints latency percentiles. Supports mixed read/write
+workloads via `-read-ratio` and per-second throughput CSV output via
+`-per-second-output`.
 
 ```
 go run eval/get_latency_at_rate.go <url> <json_payload> <duration_seconds> <target_rate>
+go run eval/get_latency_at_rate.go -read-ratio 0.80 -read-url <read_url> <write_url> <payload> <duration> <rate>
+go run eval/get_latency_at_rate.go -per-second-output /tmp/throughput.csv <url> <payload> <duration> <rate>
 ```
 
 ### `init_openebs.py`
