@@ -483,16 +483,19 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       String statefulComponent = null;
       List<String> componentNames = null;
       List<String> imageNames = null;
+      List<Integer> entryPorts = null;
       if (instance != null) {
         isDeterministic = instance.property.isDeterministic();
         stateDirectory = instance.stateDirectory;
         componentNames = new ArrayList<>();
         imageNames = new ArrayList<>();
+        entryPorts = new ArrayList<>();
         for (var c : instance.property.getComponents()) {
           var componentName =
               c.getComponentName() != null ? c.getComponentName() : c.getImageName();
           componentNames.add(componentName);
           imageNames.add(c.getImageName());
+          entryPorts.add(c.getEntryPort());
           if (c.isEntryComponent()) {
             entryComponent = componentName;
           }
@@ -512,6 +515,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
           statefulComponent,
           componentNames,
           imageNames,
+          entryPorts,
           containerIds,
           createdAtInfo,
           containerStatus);

@@ -13,6 +13,7 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
     // response data
     private List<String> replicaNodeIds;
     private List<String> replicaAddresses;
+    private List<String> replicaHttpAddresses;
     private List<String> replicaRoles;
     private List<String> replicaMetadata;
     private String serviceMetadata;
@@ -22,6 +23,7 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
 
         replicaNodeIds = new ArrayList<>();
         replicaAddresses = new ArrayList<>();
+        replicaHttpAddresses = new ArrayList<>();
         replicaRoles = new ArrayList<>();
         replicaMetadata = new ArrayList<>();
         serviceMetadata = "";
@@ -33,6 +35,10 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
 
     public void setReplicaAddresses(List<String> replicaAddresses) {
         this.replicaAddresses = replicaAddresses;
+    }
+
+    public void setReplicaHttpAddresses(List<String> replicaHttpAddresses) {
+        this.replicaHttpAddresses = replicaHttpAddresses;
     }
 
     public void setPlacementEpochNumber(int epochNumber) {
@@ -61,6 +67,8 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
             JSONObject nodeInfo = new JSONObject();
             nodeInfo.put("ID", replicaNodeIds.get(i));
             nodeInfo.put("ADDRESS", replicaAddresses.size() >= i+1 ? replicaAddresses.get(i) : "");
+            nodeInfo.put("HTTP_ADDRESS",
+                    replicaHttpAddresses.size() >= i+1 ? replicaHttpAddresses.get(i) : "");
             nodeInfo.put("ROLE", replicaRoles.size() >= i+1 ? replicaRoles.get(i) : "");
             nodeInfo.put("METADATA", replicaMetadata.size() >= i+1 ? replicaMetadata.get(i) : "");
             nodeArray.put(i, nodeInfo);

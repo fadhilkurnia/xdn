@@ -27,6 +27,7 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
   String statefulComponent;
   List<String> componentNames;
   List<String> imageNames;
+  List<Integer> entryPorts;
   List<String> containerIds;
   List<String> createdAtInfo;
   List<String> containerStatus;
@@ -88,6 +89,7 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
       String statefulComponent,
       List<String> componentNames,
       List<String> imageNames,
+      List<Integer> entryPorts,
       List<String> containerIds,
       List<String> createdAtInfo,
       List<String> containerStatus) {
@@ -98,6 +100,7 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
     this.stateDirectory = stateDirectory;
     this.componentNames = componentNames;
     this.imageNames = imageNames;
+    this.entryPorts = entryPorts;
     this.containerIds = containerIds;
     this.createdAtInfo = createdAtInfo;
     this.containerStatus = containerStatus;
@@ -147,6 +150,9 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
               componentNames != null && componentNames.size() > i ? componentNames.get(i) : "?");
           if (imageNames != null && imageNames.size() > i && imageNames.get(i) != null) {
             container.put("image", imageNames.get(i));
+          }
+          if (entryPorts != null && entryPorts.size() > i && entryPorts.get(i) != null) {
+            container.put("port", entryPorts.get(i));
           }
           container.put(
               "createdAt",
