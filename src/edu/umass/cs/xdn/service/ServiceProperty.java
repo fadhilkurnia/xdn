@@ -31,19 +31,29 @@ public class ServiceProperty {
 
   private final List<RequestMatcher> requestMatchers;
 
+  private final Integer numReplicas;
+  private final Integer minReplicas;
+  private final Integer maxReplicas;
+
   private ServiceProperty(
       String serviceName,
       boolean isDeterministic,
       String stateDirectory,
       ConsistencyModel consistencyModel,
       List<ServiceComponent> components,
-      List<RequestMatcher> requestMatchers) {
+      List<RequestMatcher> requestMatchers,
+      Integer numReplicas,
+      Integer minReplicas,
+      Integer maxReplicas) {
     this.serviceName = serviceName;
     this.isDeterministic = isDeterministic;
     this.stateDirectory = stateDirectory;
     this.consistencyModel = consistencyModel;
     this.components = components;
     this.requestMatchers = requestMatchers;
+    this.numReplicas = numReplicas;
+    this.minReplicas = minReplicas;
+    this.maxReplicas = maxReplicas;
   }
 
   public ServiceComponent getEntryComponent() {
@@ -173,6 +183,11 @@ public class ServiceProperty {
       parsedRequestMatchers = createDefaultMatchers();
     }
 
+    Integer numReplicas = optionalReplicaField(json, "num_replicas");
+    Integer minReplicas = optionalReplicaField(json, "min_replicas");
+    Integer maxReplicas = optionalReplicaField(json, "max_replicas");
+    validateReplicaConfig(numReplicas, minReplicas, maxReplicas);
+
     ServiceProperty prop =
         new ServiceProperty(
             serviceName,
@@ -180,7 +195,10 @@ public class ServiceProperty {
             stateDirectory,
             consistencyModel,
             components,
-            parsedRequestMatchers);
+            parsedRequestMatchers,
+            numReplicas,
+            minReplicas,
+            maxReplicas);
 
     // automatically infer is-stateful of component via the state directory
     if (stateDirectory != null && stateDirectory.split(":").length == 2) {
@@ -210,6 +228,37 @@ public class ServiceProperty {
     }
 
     return prop;
+  }
+
+  private static Integer optionalReplicaField(JSONObject json, String key) throws JSONException {
+    if (!json.has(key) || json.isNull(key)) {
+      return null;
+    }
+    return json.getInt(key);
+  }
+
+  private static void validateReplicaConfig(Integer num, Integer min, Integer max) {
+    if (num != null && num < 1) {
+      throw new IllegalStateException("num_replicas must be >= 1 (got " + num + ")");
+    }
+    if (min != null && min < 1) {
+      throw new IllegalStateException("min_replicas must be >= 1 (got " + min + ")");
+    }
+    if (max != null && max < 1) {
+      throw new IllegalStateException("max_replicas must be >= 1 (got " + max + ")");
+    }
+    if (min != null && max != null && min > max) {
+      throw new IllegalStateException(
+          "min_replicas (" + min + ") cannot exceed max_replicas (" + max + ")");
+    }
+    if (num != null && min != null && num < min) {
+      throw new IllegalStateException(
+          "num_replicas (" + num + ") cannot be less than min_replicas (" + min + ")");
+    }
+    if (num != null && max != null && num > max) {
+      throw new IllegalStateException(
+          "num_replicas (" + num + ") cannot exceed max_replicas (" + max + ")");
+    }
   }
 
   private static List<RequestMatcher> parseRequestMatchers(JSONArray matcherJsonArray)
@@ -518,6 +567,18 @@ public class ServiceProperty {
     return requestMatchers;
   }
 
+  public Integer getNumReplicas() {
+    return numReplicas;
+  }
+
+  public Integer getMinReplicas() {
+    return minReplicas;
+  }
+
+  public Integer getMaxReplicas() {
+    return maxReplicas;
+  }
+
   public String toJsonString() {
     assert !this.components.isEmpty() : "unexpected empty component";
 
@@ -531,6 +592,7 @@ public class ServiceProperty {
         jsonObject.put("state", this.stateDirectory);
         jsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
         jsonObject.put("deterministic", this.isDeterministic);
+        putReplicaFields(jsonObject);
       } catch (JSONException e) {
         throw new RuntimeException(e);
       }
@@ -550,10 +612,23 @@ public class ServiceProperty {
         componentArray.put(componentJsonObject);
       }
       servicePropertyJsonObject.put("components", componentArray);
+      putReplicaFields(servicePropertyJsonObject);
     } catch (JSONException e) {
       throw new RuntimeException(e);
     }
 
     return servicePropertyJsonObject.toString();
+  }
+
+  private void putReplicaFields(JSONObject target) throws JSONException {
+    if (this.numReplicas != null) {
+      target.put("num_replicas", this.numReplicas.intValue());
+    }
+    if (this.minReplicas != null) {
+      target.put("min_replicas", this.minReplicas.intValue());
+    }
+    if (this.maxReplicas != null) {
+      target.put("max_replicas", this.maxReplicas.intValue());
+    }
   }
 }

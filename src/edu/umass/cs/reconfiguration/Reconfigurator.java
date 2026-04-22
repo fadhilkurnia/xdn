@@ -114,6 +114,7 @@ public class Reconfigurator<NodeIDType> implements
     private PendingBatchCreates pendingBatchCreations = new PendingBatchCreates();
     private boolean recovering = true;
     private InitialStateValidator initialStateValidator = null;
+    private InitialStateNumReplicasExtractor numReplicasExtractor = null;
 
     /**
      * For profiling statistics in {@link DelayProfiler}.
@@ -201,6 +202,18 @@ public class Reconfigurator<NodeIDType> implements
             ReconfigurationConfig.log.log(Level.INFO, "Using initial state validator of {0}",
                     new Object[]{this.initialStateValidator.getClass().getSimpleName()});
         }
+
+        // Initialize the InitialStateNumReplicasExtractor, if configured correctly.
+        String numReplicasExtractorClassName =
+                Config.getGlobalString(RC.INITIAL_STATE_NUM_REPLICAS_EXTRACTOR_CLASS);
+        if (numReplicasExtractorClassName != null && !numReplicasExtractorClassName.isEmpty()) {
+            this.configureNumReplicasExtractor(numReplicasExtractorClassName);
+        }
+        if (this.numReplicasExtractor != null) {
+            ReconfigurationConfig.log.log(Level.INFO,
+                    "Using initial-state num-replicas extractor of {0}",
+                    new Object[]{this.numReplicasExtractor.getClass().getSimpleName()});
+        }
     }
 
     private void initHTTPServer(boolean ssl) {
@@ -281,6 +294,57 @@ public class Reconfigurator<NodeIDType> implements
                             "is failed to be instantiated (Error: {1}). We fallback " +
                             "to the default behavior with no initial state validation.",
                     new Object[]{validatorClassName, e.toString()});
+        }
+    }
+
+    /**
+     * Sets the extractor in {@link Reconfigurator#numReplicasExtractor} given the class name.
+     * If unsuccessful, the extractor stays null and warnings are logged; creation falls back
+     * to the global DEFAULT_NUM_REPLICAS for every service.
+     *
+     * @param extractorClassName class name for InitialStateNumReplicasExtractor
+     */
+    private void configureNumReplicasExtractor(String extractorClassName) {
+        Class<?> clazz;
+        try {
+            clazz = Class.forName(extractorClassName);
+        } catch (ClassNotFoundException e) {
+            ReconfigurationConfig.log.log(Level.WARNING,
+                    "Unknown InitialStateNumReplicasExtractor with class name of {0}, " +
+                            "fallback to the default placement using DEFAULT_NUM_REPLICAS.",
+                    extractorClassName);
+            return;
+        }
+
+        if (!InitialStateNumReplicasExtractor.class.isAssignableFrom(clazz)) {
+            ReconfigurationConfig.log.log(Level.WARNING,
+                    "The specified InitialStateNumReplicasExtractor with class name of {0}, " +
+                            "does not implement InitialStateNumReplicasExtractor interface, " +
+                            "so we fallback to the default placement using DEFAULT_NUM_REPLICAS.",
+                    extractorClassName);
+            return;
+        }
+
+        Constructor<?> constructor;
+        try {
+            constructor = clazz.getConstructor();
+        } catch (NoSuchMethodException e) {
+            ReconfigurationConfig.log.log(Level.WARNING,
+                    "The specified InitialStateNumReplicasExtractor with class name of {0}, " +
+                            "does not have a default constructor, so we fallback " +
+                            "to the default placement using DEFAULT_NUM_REPLICAS.",
+                    extractorClassName);
+            return;
+        }
+
+        try {
+            this.numReplicasExtractor =
+                    (InitialStateNumReplicasExtractor) constructor.newInstance();
+        } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+            ReconfigurationConfig.log.log(Level.WARNING,
+                    "The specified InitialStateNumReplicasExtractor with class name of {0}, " +
+                            "failed to instantiate (Error: {1}). Falling back to default placement.",
+                    new Object[]{extractorClassName, e.toString()});
         }
     }
 
@@ -697,6 +761,23 @@ public class Reconfigurator<NodeIDType> implements
             }
         }
 
+        // Per-service replica-count override extracted from the initial state, if configured.
+        Integer numReplicasOverride = null;
+        if (this.numReplicasExtractor != null && create.getInitGroup() == null) {
+            numReplicasOverride =
+                    this.numReplicasExtractor.extract(create.getInitialState());
+            if (numReplicasOverride != null) {
+                int numActives = this.consistentNodeConfig.getActiveReplicas().size();
+                if (numReplicasOverride < 1 || numReplicasOverride > numActives) {
+                    callback.processResponse(create
+                            .setFailed(ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST)
+                            .setResponseMessage("Requested num_replicas=" + numReplicasOverride
+                                    + " is out of range [1, " + numActives + "]"));
+                    return null;
+                }
+            }
+        }
+
         ReconfigurationRecord<NodeIDType> record = null;
         /* Check if record doesn't already exist. This check is meaningful only
          * for unbatched create requests. For batched creates, we optimistically
@@ -707,13 +788,21 @@ public class Reconfigurator<NodeIDType> implements
                 this.callbacksCRP.put(getCRPKey(create), callback);
             }
 
+            Set<NodeIDType> initialActives;
+            if (create.getInitGroup() != null) {
+                initialActives = getNodeIDsFromSocketAddresses(create.getInitGroup());
+            } else if (numReplicasOverride != null) {
+                initialActives = this.consistentNodeConfig.getReplicatedActives(
+                        create.getServiceName(), numReplicasOverride);
+            } else {
+                initialActives = this.consistentNodeConfig.getReplicatedActives(
+                        create.getServiceName());
+            }
+
             this.initiateReconfiguration(
                     create.getServiceName(),
                     record,
-                    create.getInitGroup() != null
-                            ? getNodeIDsFromSocketAddresses(create.getInitGroup())
-                            : this.consistentNodeConfig.getReplicatedActives(
-                            create.getServiceName()),
+                    initialActives,
                     create.getCreator(),
                     create.getMyReceiver(),
                     create.getForwader(),

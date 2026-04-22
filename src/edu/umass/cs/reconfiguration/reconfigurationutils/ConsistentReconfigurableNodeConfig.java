@@ -255,6 +255,21 @@ public class ConsistentReconfigurableNodeConfig<NodeIDType> extends
 	}
 
 	/**
+	 * Variant of {@link #getReplicatedActives(String)} that lets the caller
+	 * override the replica-group size for this specific service, without
+	 * mutating the shared {@link ConsistentHashing} instance.
+	 *
+	 * @param name         service name to hash
+	 * @param numReplicas  desired group size (must be &gt;= 1)
+	 * @return active replica node IDs for this service
+	 */
+	public Set<NodeIDType> getReplicatedActives(String name, int numReplicas) {
+		this.refreshActives();
+		return new HashSet<NodeIDType>(
+				this.CH_AR.getReplicatedServersArray(name, numReplicas));
+	}
+
+	/**
 	 * @param name
 	 * @return Set of active replica IPs to which {@code name} hashes on the
 	 *         consistent hash ring of all active replica nodes.

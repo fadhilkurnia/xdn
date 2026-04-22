@@ -32,6 +32,9 @@ type CommonProperties struct {
 	stateDir          string
 	rawJsonProperties string
 	envVars           []EnvPair
+	numReplicas       *int
+	minReplicas       *int
+	maxReplicas       *int
 }
 
 type EnvPair struct {
@@ -90,6 +93,9 @@ func init() {
 	LaunchCmd.PersistentFlags().BoolP("deterministic", "d", false, "indicate whether the service is deterministic (default: false)")
 	LaunchCmd.PersistentFlags().StringP("methods", "m", "", "HTTP methods allowed by the replicated service")
 	LaunchCmd.PersistentFlags().StringArrayP("env", "e", []string{}, "environment variables for the service (repeat: --env KEY=VALUE)")
+	LaunchCmd.PersistentFlags().IntP("num-replicas", "n", 0, "fixed number of replicas at creation (overrides cluster default)")
+	LaunchCmd.PersistentFlags().Int("min-replicas", 0, "minimum number of replicas (lower bound for reconfiguration)")
+	LaunchCmd.PersistentFlags().Int("max-replicas", 0, "maximum number of replicas (upper bound for reconfiguration)")
 
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")
@@ -192,6 +198,11 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		seenEnv[key] = struct{}{}
 	}
 
+	if err := parseReplicaFlags(flags, &prop); err != nil {
+		fmt.Printf("%s\n", err.Error())
+		return prop, err
+	}
+
 	config := map[string]interface{}{
 		"name":          prop.serviceName,
 		"image":         prop.imageName,
@@ -209,6 +220,16 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 			})
 		}
 		config["environments"] = envList
+	}
+
+	if prop.numReplicas != nil {
+		config["num_replicas"] = *prop.numReplicas
+	}
+	if prop.minReplicas != nil {
+		config["min_replicas"] = *prop.minReplicas
+	}
+	if prop.maxReplicas != nil {
+		config["max_replicas"] = *prop.maxReplicas
 	}
 
 	jsonBody, err := json.Marshal(config)
@@ -308,7 +329,99 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 
 	// TODO: validate state directory
 
+	if err := parseReplicaFromFileMap(propMap, &prop); err != nil {
+		return prop, err
+	}
+
 	return prop, nil
+}
+
+func parseReplicaFromFileMap(propMap map[string]interface{}, prop *CommonProperties) error {
+	read := func(key string) (*int, error) {
+		raw, ok := propMap[key]
+		if !ok || raw == nil {
+			return nil, nil
+		}
+		f, ok := raw.(float64)
+		if !ok {
+			return nil, fmt.Errorf("%q must be an integer", key)
+		}
+		v := int(f)
+		if float64(v) != f {
+			return nil, fmt.Errorf("%q must be an integer", key)
+		}
+		if v < 1 {
+			return nil, fmt.Errorf("%q must be >= 1 (got %d)", key, v)
+		}
+		return &v, nil
+	}
+	num, err := read("num_replicas")
+	if err != nil {
+		return err
+	}
+	min, err := read("min_replicas")
+	if err != nil {
+		return err
+	}
+	max, err := read("max_replicas")
+	if err != nil {
+		return err
+	}
+	if err := validateReplicaBounds(num, min, max); err != nil {
+		return err
+	}
+	prop.numReplicas = num
+	prop.minReplicas = min
+	prop.maxReplicas = max
+	return nil
+}
+
+func parseReplicaFlags(flags *pflag.FlagSet, prop *CommonProperties) error {
+	readIntFlag := func(name string) (*int, error) {
+		if !flags.Changed(name) {
+			return nil, nil
+		}
+		v, err := flags.GetInt(name)
+		if err != nil {
+			return nil, err
+		}
+		if v < 1 {
+			return nil, fmt.Errorf("--%s must be >= 1 (got %d)", name, v)
+		}
+		return &v, nil
+	}
+	num, err := readIntFlag("num-replicas")
+	if err != nil {
+		return err
+	}
+	min, err := readIntFlag("min-replicas")
+	if err != nil {
+		return err
+	}
+	max, err := readIntFlag("max-replicas")
+	if err != nil {
+		return err
+	}
+	if err := validateReplicaBounds(num, min, max); err != nil {
+		return err
+	}
+	prop.numReplicas = num
+	prop.minReplicas = min
+	prop.maxReplicas = max
+	return nil
+}
+
+func validateReplicaBounds(num, min, max *int) error {
+	if min != nil && max != nil && *min > *max {
+		return fmt.Errorf("--min-replicas (%d) cannot exceed --max-replicas (%d)", *min, *max)
+	}
+	if num != nil && min != nil && *num < *min {
+		return fmt.Errorf("--num-replicas (%d) cannot be less than --min-replicas (%d)", *num, *min)
+	}
+	if num != nil && max != nil && *num > *max {
+		return fmt.Errorf("--num-replicas (%d) cannot exceed --max-replicas (%d)", *num, *max)
+	}
+	return nil
 }
 
 func validateImageName(imageName string) error {
@@ -333,7 +446,17 @@ func runLaunchCommand(prop CommonProperties) error {
 	fmt.Printf(" http port     : %d\n", prop.httpPort)
 	fmt.Printf(" consistency   : %s\n", prop.consistencyModel)
 	fmt.Printf(" deterministic : %t\n", prop.isDeterministic)
-	fmt.Printf(" state dir     : %s\n\n", prop.stateDir)
+	fmt.Printf(" state dir     : %s\n", prop.stateDir)
+	if prop.numReplicas != nil {
+		fmt.Printf(" num replicas  : %d\n", *prop.numReplicas)
+	}
+	if prop.minReplicas != nil {
+		fmt.Printf(" min replicas  : %d\n", *prop.minReplicas)
+	}
+	if prop.maxReplicas != nil {
+		fmt.Printf(" max replicas  : %d\n", *prop.maxReplicas)
+	}
+	fmt.Println()
 
 	// checking connection to the control plane
 	timeout := 1 * time.Second

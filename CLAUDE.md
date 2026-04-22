@@ -71,7 +71,7 @@ Go code uses standard `gofmt`.
 
 ```bash
 # Start local control plane (1 Reconfigurator) + 3 ActiveReplicas
-./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.local.properties start all
+./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.local.properties start all
 
 # Set control plane and deploy a service
 export XDN_CONTROL_PLANE=localhost
@@ -80,12 +80,26 @@ xdn launch bookcatalog --image=fadhilkurnia/xdn-bookcatalog --state=/app/data/ -
 # Access replicas (service name via XDN header)
 curl http://localhost:2300/ -H "XDN: bookcatalog"
 
+# Alternative: add entries to /etc/hosts (bookcatalog.ar{0,1,2}.xdn.io → 127.0.0.1)
+# and drop the XDN header: curl http://bookcatalog.ar0.xdn.io:2300/
+
 # Stop and clean up
-sudo ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.local.properties forceclear all
+sudo ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.local.properties forceclear all
 sudo rm -rf /tmp/gigapaxos /tmp/xdn
 ```
 
 Local ports: Reconfigurator at :3000, ActiveReplicas at :2000-2002, HTTP proxy at :2300-2302.
+
+## CloudLab Cluster Deployment
+
+Use the `bin/xdnd` Go binary (driver-machine orchestrator) for multi-host deployment:
+
+```bash
+./bin/xdnd init-driver                                                          # prepare driver machine
+./bin/xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=u # prepare remote hosts
+./bin/xdnd start-all -config=gigapaxos.properties -ssh-key=/ssh/key -username=u # launch all nodes
+# optional: dist-init-observability for Prometheus/Grafana stack
+```
 
 ## Architecture
 
@@ -157,8 +171,10 @@ Each maps to a coordinator in the corresponding protocol package.
 
 ### Configuration
 - `gigapaxos.properties` — Main deployment config
-- `conf/gigapaxos.xdn.local.properties` — Local development
-- `conf/gigapaxos.xdn.cloudlab.properties` — CloudLab cluster deployment
+- `conf/gigapaxos.xdn.local.properties` — Local development (1 RC + 3 AR on loopback)
+- `conf/gigapaxos.cloudlab.properties` — CloudLab cluster deployment
+- `conf/gigapaxos.xdn.cloudlab.local.{10,13}nodes.properties` — Multi-node CloudLab variants
+- `conf/gigapaxos.xdn.3way.properties` — 3-way replication variant
 - `testing.properties` — Test configuration (nodes, load, batch settings)
 
 Key config properties: `APPLICATION`, `REPLICA_COORDINATOR_CLASS`, `XDN_PB_STATEDIFF_RECORDER_TYPE`, `HTTP_AR_FRONTEND_BATCH_ENABLED`, `NIO_MAX_PAYLOAD_SIZE` (default 128MB).
