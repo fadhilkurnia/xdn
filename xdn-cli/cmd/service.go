@@ -518,6 +518,129 @@ var ServiceDestroyCmd = &cobra.Command{
 	},
 }
 
+var ServiceLeaderCmd = &cobra.Command{
+	Use:   "leader <service-name> <node-id>",
+	Short: "Set the coordinator/leader of a service's current epoch",
+	Long: "Set the coordinator (Paxos) or primary (PrimaryBackup) of a service " +
+		"to the given node in the current epoch. The target node must already " +
+		"be an active replica of the service.",
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		infoColorPrint := color.New(color.FgYellow).Add(color.Bold)
+		successColorPrint := color.New(color.FgGreen).Add(color.Bold).Add(color.Underline)
+		errorColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
+
+		err := ValidateControlPlaneConn()
+		if err != nil {
+			return fmt.Errorf("failed to reach the control plane: %s", err.Error())
+		}
+
+		serviceName := args[0]
+		nodeID := args[1]
+
+		isValidInput := false
+		isChangeConfirmed := false
+		for !isValidInput {
+			fmt.Printf(
+				"Are you sure you want to change the leader of `%s` to `%s`? [yes/no]\n > ",
+				serviceName, nodeID)
+			input := bufio.NewScanner(os.Stdin)
+			input.Scan()
+			isSureText := input.Text()
+			if isSureText == "yes" || isSureText == "no" {
+				isValidInput = true
+				if isSureText == "yes" {
+					isChangeConfirmed = true
+				}
+				break
+			}
+			fmt.Printf(
+				"  '%s' is not a valid answer, "+
+					"please answer with 'yes' or 'no'.\n",
+				isSureText)
+		}
+
+		if !isChangeConfirmed {
+			fmt.Printf("  leader of '%s' is not changed.\n", serviceName)
+			return fmt.Errorf("leader of '%s' is not changed", serviceName)
+		}
+
+		fmt.Printf("Changing leader of '")
+		_, _ = infoColorPrint.Printf("%s", serviceName)
+		fmt.Printf("' to '")
+		_, _ = infoColorPrint.Printf("%s", nodeID)
+		fmt.Printf("' ...\n")
+
+		type setCoordinatorReq struct {
+			NewCoordinatorNodeId string `json:"newCoordinatorNodeId"`
+		}
+		bodyBytes, err := json.Marshal(setCoordinatorReq{NewCoordinatorNodeId: nodeID})
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to encode request body: %s\n", err.Error())
+			return fmt.Errorf("failed to encode request body: %s", err.Error())
+		}
+
+		url := fmt.Sprintf("http://%s/api/v2/services/%s/coordinator",
+			GetControlPlaneHostPort(), serviceName)
+		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(bodyBytes))
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to build request: %s\n", err.Error())
+			return fmt.Errorf("failed to build request: %s", err.Error())
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("XDN", serviceName)
+
+		client := http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Printf(" ")
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" ")
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				fmt.Println("request timed out:", err)
+				os.Exit(100)
+				return netErr
+			}
+			fmt.Printf("failed to change the leader: %s\n", err.Error())
+			return fmt.Errorf("failed to change the leader: %s", err.Error())
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to read response: %s\n", err.Error())
+			return fmt.Errorf("failed to read response: %s", err.Error())
+		}
+		bodyStr := string(body)
+
+		if resp.StatusCode != 200 || strings.Contains(bodyStr, "\"FAILED\":true") {
+			_, _ = errorColorPrint.Printf("ERROR")
+			var jsonMap map[string]interface{}
+			if json.Unmarshal([]byte(bodyStr), &jsonMap) == nil {
+				if msgIf, ok := jsonMap["RESPONSE_MESSAGE"]; ok {
+					if msg, ok := msgIf.(string); ok && msg != "" {
+						fmt.Printf(" failed to change the leader:\n %s\n", msg)
+						return fmt.Errorf("failed to change the leader: %s", msg)
+					}
+				}
+			}
+			fmt.Printf(" failed to change the leader (HTTP %d): %s\n", resp.StatusCode, bodyStr)
+			return fmt.Errorf("failed to change the leader (HTTP %d)", resp.StatusCode)
+		}
+
+		_, _ = successColorPrint.Printf("SUCCESS")
+		fmt.Printf(": leader of service ")
+		_, _ = infoColorPrint.Printf("%s", serviceName)
+		fmt.Printf(" is now ")
+		_, _ = infoColorPrint.Printf("%s", nodeID)
+		fmt.Printf(".\n")
+		return nil
+	},
+}
+
 var ServiceMoveCmd = &cobra.Command{
 	Use:   "move <service-name>",
 	Short: "Relocate a service's active replicas to the specified set of nodes",
@@ -682,6 +805,7 @@ var ServiceMoveCmd = &cobra.Command{
 func init() {
 	ServiceRootCmd.AddCommand(ServiceDestroyCmd)
 	ServiceRootCmd.AddCommand(ServiceInfoCmd)
+	ServiceRootCmd.AddCommand(ServiceLeaderCmd)
 	ServiceRootCmd.AddCommand(ServiceMoveCmd)
 
 	ServiceMoveCmd.Flags().StringP("nodes", "n", "",
