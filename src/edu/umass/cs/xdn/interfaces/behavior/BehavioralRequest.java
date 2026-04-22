@@ -42,4 +42,13 @@ public interface BehavioralRequest {
   default boolean isCommutativeRequest() {
     return this.getBehaviors().contains(RequestBehaviorType.COMMUTATIVE);
   }
+
+  default boolean isKeyCommutativeRequest() {
+    return this.getBehaviors().contains(RequestBehaviorType.KEY_COMMUTATIVE);
+  }
+
+  /** Returns true if the request is commutative in any form. */
+  default boolean isAnyCommutativeRequest() {
+    return isCommutativeRequest() || isKeyCommutativeRequest();
+  }
 }
