@@ -28,8 +28,10 @@ var ServiceInfoCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		infoColorPrint := color.New(color.FgYellow).Add(color.Bold)
-		successColorPrint := color.New(color.FgGreen).Add(color.Bold).Add(color.Underline)
 		errorColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
+		titleColorPrint := color.New(color.FgWhite).Add(color.Bold)
+		columnColorPrint := color.New(color.FgWhite).Add(color.Bold)
+		keyColorPrint := color.New(color.FgHiBlue)
 
 		err := ValidateControlPlaneConn()
 		if err != nil {
@@ -38,10 +40,6 @@ var ServiceInfoCmd = &cobra.Command{
 		}
 
 		serviceName := args[0]
-		fmt.Printf("Getting info for '")
-		_, _ = infoColorPrint.Printf("%s", serviceName)
-		fmt.Printf("' ...\n")
-
 		controlPlaneHost := GetControlPlaneHostPort()
 		infoEndpoint := fmt.Sprintf("http://%s/api/v2/services/%s/placement",
 			controlPlaneHost, serviceName)
@@ -206,11 +204,13 @@ var ServiceInfoCmd = &cobra.Command{
 				continue
 			}
 			httpBaseURL := ""
+			httpPort := 0
 			if httpAddrIf, exists := node["HTTP_ADDRESS"]; exists {
 				if httpAddrStr, ok := httpAddrIf.(string); ok && httpAddrStr != "" {
-					_, httpIP, httpPort, ok := parseNodeSocketAddress(httpAddrStr)
+					_, httpIP, parsedPort, ok := parseNodeSocketAddress(httpAddrStr)
 					if ok {
-						httpBaseURL = fmt.Sprintf("http://%s:%d", httpIP, httpPort)
+						httpBaseURL = fmt.Sprintf("http://%s:%d", httpIP, parsedPort)
+						httpPort = parsedPort
 					}
 				}
 			}
@@ -219,6 +219,7 @@ var ServiceInfoCmd = &cobra.Command{
 				host:        host,
 				ip:          ip,
 				tcpPort:     port,
+				httpPort:    httpPort,
 				httpBaseURL: httpBaseURL,
 			})
 		}
@@ -245,8 +246,8 @@ var ServiceInfoCmd = &cobra.Command{
 			}
 		}
 
-		_, _ = successColorPrint.Printf("SUCCESS")
-		fmt.Printf(", current deployment information:\n\n")
+		_, _ = titleColorPrint.Println("Current service deployment information:")
+		fmt.Println()
 
 		dockerImageName := "unknown"
 		consistencyModel := "unknown"
@@ -281,23 +282,30 @@ var ServiceInfoCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Printf(" Service name  : %s \n", serviceNameStr)
-		fmt.Printf(" Service URL   : http://%s.xdnapp.com/ \n", serviceNameStr)
-		fmt.Printf(" Docker image  : %s \n", dockerImageName)
-		fmt.Printf(" HTTP port     : %s (internal) \n", httpPortStr)
-		fmt.Printf(" Consistency   : %s \n", consistencyModel)
-		fmt.Printf(" Deterministic : %s \n", isDeterministic)
-		fmt.Printf(" State dir.    : %s \n", stateDir)
-		fmt.Printf(" Num. replica  : %d \n", numReplicas)
-		fmt.Printf(" Protocol      : %s \n", coordinationProtocolName)
+		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Service name "), infoColorPrint.Sprint(serviceNameStr))
+		fmt.Printf(" %s: http://%s.xdnapp.com/ \n", keyColorPrint.Sprint("Service URL  "), serviceNameStr)
+		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Docker image "), dockerImageName)
+		fmt.Printf(" %s: %s (internal) \n", keyColorPrint.Sprint("HTTP port    "), httpPortStr)
+		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Consistency  "), consistencyModel)
+		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Deterministic"), isDeterministic)
+		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("State dir.   "), stateDir)
+		fmt.Printf(" %s: %d \n", keyColorPrint.Sprint("Num. replica "), numReplicas)
+		fmt.Printf(" %s: %s \n", keyColorPrint.Sprint("Protocol     "), coordinationProtocolName)
 		fmt.Printf("\n")
-		fmt.Printf(" Current replicas placement, with epoch=%s:\n", epochNumberStr)
-		fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
-			"MACHINE ID", "PUBLIC IP", "ROLE", "CREATED", "STATUS")
+		fmt.Printf(" %s\n", titleColorPrint.Sprintf("Current replicas placement (epoch=%s):", epochNumberStr))
+
+		type replicaRow struct {
+			machineID, ipAddress, webPort, role, created, status string
+		}
+		rows := make([]replicaRow, len(replicas))
 		for idx, r := range replicas {
 			displayAddr := r.ip
 			if r.host != "" {
 				displayAddr += " (" + r.host + ")"
+			}
+			webPortStr := "-"
+			if r.httpPort != 0 {
+				webPortStr = strconv.Itoa(r.httpPort)
 			}
 			roleStr := "unreachable"
 			createdStr := "unreachable"
@@ -310,8 +318,43 @@ var ServiceInfoCmd = &cobra.Command{
 					statusStr = stringOrDash(c["status"])
 				}
 			}
-			fmt.Printf("  | %-10s | %-48s | %-10s | %-16s | %-16s |\n",
-				r.nodeID, displayAddr, roleStr, createdStr, statusStr)
+			rows[idx] = replicaRow{r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr}
+		}
+		wID, wIP, wPort := len("NODE ID"), len("IP ADDRESS"), len("WEB PORT")
+		wRole, wCreated, wStatus := len("ROLE"), len("CREATED"), len("STATUS")
+		for _, row := range rows {
+			if n := len(row.machineID); n > wID {
+				wID = n
+			}
+			if n := len(row.ipAddress); n > wIP {
+				wIP = n
+			}
+			if n := len(row.webPort); n > wPort {
+				wPort = n
+			}
+			if n := len(row.role); n > wRole {
+				wRole = n
+			}
+			if n := len(row.created); n > wCreated {
+				wCreated = n
+			}
+			if n := len(row.status); n > wStatus {
+				wStatus = n
+			}
+		}
+		fmt.Printf("  | %s | %s | %s | %s | %s | %s |\n",
+			columnColorPrint.Sprintf("%-*s", wID, "NODE ID"),
+			columnColorPrint.Sprintf("%-*s", wIP, "IP ADDRESS"),
+			columnColorPrint.Sprintf("%-*s", wPort, "WEB PORT"),
+			columnColorPrint.Sprintf("%-*s", wRole, "ROLE"),
+			columnColorPrint.Sprintf("%-*s", wCreated, "CREATED"),
+			columnColorPrint.Sprintf("%-*s", wStatus, "STATUS"))
+		for _, row := range rows {
+			roleCell := colorForRole(row.role).Sprint(fmt.Sprintf("%-*s", wRole, row.role))
+			statusCell := colorForStatus(row.status).Sprint(fmt.Sprintf("%-*s", wStatus, row.status))
+			fmt.Printf("  | %-*s | %-*s | %-*s | %s | %-*s | %s |\n",
+				wID, row.machineID, wIP, row.ipAddress, wPort, row.webPort,
+				roleCell, wCreated, row.created, statusCell)
 		}
 
 		if primaryInfo == nil {
@@ -354,7 +397,7 @@ var ServiceInfoCmd = &cobra.Command{
 			}
 
 			fmt.Printf("\n\n")
-			fmt.Printf(" Declared service's operation behaviors:\n")
+			fmt.Printf(" %s\n", titleColorPrint.Sprint("Declared service's operation behaviors:"))
 			for _, r := range rows {
 				line := fmt.Sprintf("%-*s  %-*s  %s", methodsW, r.methods, prefixW, r.prefix, r.behavior)
 				if r.name != "" {
@@ -483,6 +526,7 @@ type placementReplica struct {
 	host        string
 	ip          string
 	tcpPort     int
+	httpPort    int    // 0 if HTTP_ADDRESS missing from the RC response
 	httpBaseURL string // empty if HTTP_ADDRESS missing from the RC response
 }
 
@@ -573,6 +617,36 @@ func pickNamedContainer(info map[string]interface{}, nameKey string) map[string]
 		return cm
 	}
 	return nil
+}
+
+// colorForRole highlights the leader-equivalent role (leader/coordinator/
+// primary) in bold and dims secondary roles (follower/backup/replica/…).
+// "unreachable" stays red so it matches the status cell signalling.
+func colorForRole(s string) *color.Color {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "leader", "coordinator", "primary":
+		return color.New(color.FgGreen)
+	case "unreachable":
+		return color.New(color.FgRed)
+	default:
+		return color.New(color.FgHiBlack)
+	}
+}
+
+// colorForStatus picks a color for a container status / replica reachability
+// string. Healthy states go green, failure states go red; anything else
+// renders in the terminal default.
+func colorForStatus(s string) *color.Color {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "running":
+		return color.New(color.FgGreen)
+	case "unreachable", "exited", "dead":
+		return color.New(color.FgRed)
+	case "created", "starting", "restarting", "paused":
+		return color.New(color.FgYellow)
+	default:
+		return color.New()
+	}
 }
 
 func stringOrDash(v interface{}) string {
