@@ -171,6 +171,35 @@ public class XdnTestCluster implements AutoCloseable {
         "Timed out waiting for service '%s'".formatted(serviceName), lastError);
   }
 
+  /**
+   * Waits for a specific replica's HTTP frontend to answer with a successful status. Uses a short
+   * per-probe timeout so a replica whose forwarding is wedged does not stall the whole polling
+   * budget.
+   */
+  public HttpResponse<String> awaitReplicaReady(
+      String serviceName, int replicaIdx, Duration timeout) throws Exception {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    Duration probeTimeout = Duration.ofSeconds(2);
+    Exception lastError = null;
+
+    while (System.nanoTime() < deadline) {
+      try {
+        HttpResponse<String> response = sendGetRequest(serviceName, replicaIdx, "/", probeTimeout);
+        if (response.statusCode() >= 200 && response.statusCode() < 500) {
+          return response;
+        }
+        lastError = new IllegalStateException("Unexpected HTTP status " + response.statusCode());
+      } catch (IOException e) {
+        lastError = e;
+      }
+      TimeUnit.SECONDS.sleep(1);
+    }
+
+    throw new RuntimeException(
+        "Timed out waiting for replica %d of service '%s'".formatted(replicaIdx, serviceName),
+        lastError);
+  }
+
   /** Invokes the service through the ActiveReplica HTTP frontend. */
   public HttpResponse<String> invokeService(String serviceName)
       throws IOException, InterruptedException {
