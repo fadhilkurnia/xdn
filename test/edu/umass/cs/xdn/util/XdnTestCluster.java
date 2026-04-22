@@ -181,23 +181,15 @@ public class XdnTestCluster implements AutoCloseable {
     long deadline = System.nanoTime() + timeout.toNanos();
     Duration probeTimeout = Duration.ofSeconds(2);
     Exception lastError = null;
-    int attempts = 0;
 
     while (System.nanoTime() < deadline) {
-      attempts++;
       try {
         HttpResponse<String> response = sendGetRequest(serviceName, replicaIdx, "/", probeTimeout);
-        System.err.printf(
-            "[XDN-DIAG] await-replica-probe svc=%s replica=%d attempt=%d status=%d%n",
-            serviceName, replicaIdx, attempts, response.statusCode());
         if (response.statusCode() >= 200 && response.statusCode() < 500) {
           return response;
         }
         lastError = new IllegalStateException("Unexpected HTTP status " + response.statusCode());
       } catch (IOException e) {
-        System.err.printf(
-            "[XDN-DIAG] await-replica-probe svc=%s replica=%d attempt=%d io-error=%s%n",
-            serviceName, replicaIdx, attempts, e.getClass().getSimpleName());
         lastError = e;
       }
       TimeUnit.SECONDS.sleep(1);
