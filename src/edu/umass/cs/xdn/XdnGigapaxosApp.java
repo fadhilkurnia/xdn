@@ -1892,7 +1892,7 @@ public class XdnGigapaxosApp
       containerNames.add(c.getImageName());
     }
     for (String imageName : containerNames) {
-      String command = String.format("docker pull %s:latest", imageName);
+      String command = String.format("docker pull %s", imageName);
       int errCode = Shell.runCommand(command, true);
       if (errCode != 0) {
         String exceptionMessage =
@@ -2604,7 +2604,13 @@ public class XdnGigapaxosApp
           this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, placementEpoch
         });
 
-    String databaseImage = service.property.getStatefulComponent().getImageName().split(":")[0];
+    // Strip the :tag suffix from the image reference (e.g., "mysql:5.7" -> "mysql").
+    // The tag separator is the last ':' after the last '/'; earlier ':' belongs to
+    // a registry port such as "registry.io:5000/image".
+    String fullImageName = service.property.getStatefulComponent().getImageName();
+    int lastSlash = fullImageName.lastIndexOf('/');
+    int tagSep = fullImageName.lastIndexOf(':');
+    String databaseImage = tagSep > lastSlash ? fullImageName.substring(0, tagSep) : fullImageName;
 
     // There's no way to detect if SQLite is used
     String dbReadyMsg = null;
