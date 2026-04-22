@@ -24,3 +24,5 @@ bin/xdn
 screen_logs
 merge-review
 *-paper/
+.claude
+
