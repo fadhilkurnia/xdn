@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -297,7 +298,7 @@ var ServiceInfoCmd = &cobra.Command{
 		fmt.Printf(" %s\n", titleColorPrint.Sprintf("Current replicas placement (epoch=%s):", epochNumberStr))
 
 		type replicaRow struct {
-			machineID, ipAddress, webPort, role, created, status string
+			machineID, ipAddress, webPort, role, created, status, svcReplicaURL string
 		}
 		rows := make([]replicaRow, len(replicas))
 		for idx, r := range replicas {
@@ -308,6 +309,11 @@ var ServiceInfoCmd = &cobra.Command{
 			webPortStr := "-"
 			if r.httpPort != 0 {
 				webPortStr = strconv.Itoa(r.httpPort)
+			}
+			svcReplicaURLStr := "-"
+			if r.httpBaseURL != "" {
+				svcReplicaURLStr = fmt.Sprintf("%s/?_xdnsvc=%s",
+					r.httpBaseURL, url.QueryEscape(serviceName))
 			}
 			roleStr := "unreachable"
 			createdStr := "unreachable"
@@ -320,10 +326,13 @@ var ServiceInfoCmd = &cobra.Command{
 					statusStr = stringOrDash(c["status"])
 				}
 			}
-			rows[idx] = replicaRow{r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr}
+			rows[idx] = replicaRow{
+				r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr, svcReplicaURLStr,
+			}
 		}
 		wID, wIP, wPort := len("NODE ID"), len("IP ADDRESS"), len("WEB PORT")
 		wRole, wCreated, wStatus := len("ROLE"), len("CREATED"), len("STATUS")
+		wURL := len("SVC REPLICA URL")
 		for _, row := range rows {
 			if n := len(row.machineID); n > wID {
 				wID = n
@@ -343,20 +352,24 @@ var ServiceInfoCmd = &cobra.Command{
 			if n := len(row.status); n > wStatus {
 				wStatus = n
 			}
+			if n := len(row.svcReplicaURL); n > wURL {
+				wURL = n
+			}
 		}
-		fmt.Printf("  | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Printf("  | %s | %s | %s | %s | %s | %s | %s |\n",
 			columnColorPrint.Sprintf("%-*s", wID, "NODE ID"),
 			columnColorPrint.Sprintf("%-*s", wIP, "IP ADDRESS"),
 			columnColorPrint.Sprintf("%-*s", wPort, "WEB PORT"),
 			columnColorPrint.Sprintf("%-*s", wRole, "ROLE"),
 			columnColorPrint.Sprintf("%-*s", wCreated, "CREATED"),
-			columnColorPrint.Sprintf("%-*s", wStatus, "STATUS"))
+			columnColorPrint.Sprintf("%-*s", wStatus, "STATUS"),
+			columnColorPrint.Sprintf("%-*s", wURL, "SVC REPLICA URL"))
 		for _, row := range rows {
 			roleCell := colorForRole(row.role).Sprint(fmt.Sprintf("%-*s", wRole, row.role))
 			statusCell := colorForStatus(row.status).Sprint(fmt.Sprintf("%-*s", wStatus, row.status))
-			fmt.Printf("  | %-*s | %-*s | %-*s | %s | %-*s | %s |\n",
+			fmt.Printf("  | %-*s | %-*s | %-*s | %s | %-*s | %s | %-*s |\n",
 				wID, row.machineID, wIP, row.ipAddress, wPort, row.webPort,
-				roleCell, wCreated, row.created, statusCell)
+				roleCell, wCreated, row.created, statusCell, wURL, row.svcReplicaURL)
 		}
 
 		if primaryInfo == nil {

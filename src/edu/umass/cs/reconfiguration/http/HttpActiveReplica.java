@@ -515,6 +515,7 @@ public class HttpActiveReplica {
                         httpResponse.headers().set("X-XDN-Pipeline",
                                 String.format("callback=%dms", callbackElapsedMs));
                     }
+                    httpRequest.maybeAddXdnCookieToResponse(httpResponse);
                     HttpActiveReplicaHandler.writeHttpResponse(
                             httpRequest.getRequestID(),
                             httpResponse,
@@ -569,9 +570,11 @@ public class HttpActiveReplica {
         protected void channelRead0(ChannelHandlerContext ctx, Object msg)
                 throws Exception {
 
-            // redirect handling to xdn, if either of these two conditions are met:
+            // redirect handling to xdn, if any of these conditions are met:
             // (1) the HttpRequest contains non-empty XDN header, or
-            // (2) the HttpRequest contains Host header ending in "xdnapp.com".
+            // (2) the HttpRequest contains Host header ending in "xdnapp.com", or
+            // (3) the HttpRequest carries a browser-only XDN signal: the _xdnsvc
+            //     URL query param, or an XDN cookie (set by a prior _xdnsvc request).
             // Note that "Host" header is required since HTTP 1.1
             if (msg instanceof HttpRequest httpRequest) {
                 boolean isXdnRequest = false;
@@ -592,6 +595,15 @@ public class HttpActiveReplica {
                             isXdnRequest = true;
                         }
                     }
+                }
+
+                // Handle the third condition: _xdnsvc query param or XDN cookie.
+                // Needed so a browser click on http://host:port/?_xdnsvc=foo reaches
+                // the XDN handler; without this, the request falls through to the
+                // legacy GigaPaxos path which tries to parse query params as a
+                // GigaPaxos JSON request and throws "missing key NAME".
+                if (!isXdnRequest && XdnHttpRequest.hasXdnBrowserSignal(httpRequest)) {
+                    isXdnRequest = true;
                 }
 
                 if (isXdnRequest) {
@@ -1006,6 +1018,7 @@ public class HttpActiveReplica {
                 httpResponse.headers().setInt(
                         HttpHeaderNames.CONTENT_LENGTH,
                         httpResponse.content().readableBytes());
+                httpRequest.maybeAddXdnCookieToResponse(httpResponse);
                 HttpActiveReplicaHandler.writeHttpResponse(
                         httpRequest.getRequestID(),
                         httpResponse,
@@ -1067,6 +1080,7 @@ public class HttpActiveReplica {
                                     }
 
                                     // Success handling
+                                    httpRequest.maybeAddXdnCookieToResponse(httpResponse);
                                     HttpActiveReplicaHandler.writeHttpResponse(
                                             httpRequest.getRequestID(),
                                             httpResponse,
@@ -1162,6 +1176,7 @@ public class HttpActiveReplica {
                                     }
 
                                     // Success handling
+                                    httpRequest.maybeAddXdnCookieToResponse(httpResponse);
                                     HttpActiveReplicaHandler.writeHttpResponse(
                                             httpRequest.getRequestID(),
                                             httpResponse,
