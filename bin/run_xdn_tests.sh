@@ -74,8 +74,8 @@ for CLASS_FILE in $TEST_CLASSES; do
             echo "FAILED: $CLASS_NAME#$METHOD"
 
             if [ "$VERBOSE" != "true" ]; then
-                echo "--- Last 200 lines of log ---"
-                tail -200 "$LOG_FILE"
+                echo "--- Last 30 lines of log ---"
+                tail -30 "$LOG_FILE"
                 echo "--- End log ---"
             fi
             ((FAILED++)) || true

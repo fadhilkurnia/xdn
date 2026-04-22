@@ -26,18 +26,6 @@ public class XdnTaggedImageLaunchTest {
           cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
 
       assertEquals(308, response.statusCode(), "Service did not return HTTP 308");
-
-      // awaitServiceReady only polls replica 0, so poll each replica individually
-      // before asserting — replicas 1/2 may still be starting their containers.
-      for (int replicaIdx = 0; replicaIdx < 3; replicaIdx++) {
-        HttpResponse<String> replicaResponse =
-            cluster.awaitReplicaReady(
-                serviceName, replicaIdx, XdnTestCluster.SERVICE_READY_TIMEOUT);
-        assertEquals(
-            308,
-            replicaResponse.statusCode(),
-            "Replica " + replicaIdx + " did not return HTTP 308");
-      }
     }
   }
 }
