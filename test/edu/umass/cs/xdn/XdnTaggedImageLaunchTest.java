@@ -5,8 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import edu.umass.cs.xdn.util.XdnTestCluster;
 import java.net.http.HttpResponse;
-import java.time.Duration;
-import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
 public class XdnTaggedImageLaunchTest {
@@ -20,42 +18,26 @@ public class XdnTaggedImageLaunchTest {
     String imageName = "fadhilkurnia/xdn-bookcatalog:latest";
 
     try (XdnTestCluster cluster = new XdnTestCluster()) {
-      logStep("cluster.start");
-      long t0 = System.nanoTime();
       cluster.start();
-      logStepDone("cluster.start", t0);
 
-      logStep("launchService image=" + imageName);
-      long t1 = System.nanoTime();
       cluster.launchService(serviceName, imageName, "/app/data/", "LINEARIZABLE", true);
-      logStepDone("launchService", t1);
 
-      logStep("awaitServiceReady (polls replica 0 only)");
-      long t2 = System.nanoTime();
       HttpResponse<String> response =
           cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
-      logStepDone("awaitServiceReady status=" + response.statusCode(), t2);
 
       assertEquals(308, response.statusCode(), "Service did not return HTTP 308");
 
-      // Ensure all replicas are running and return HTTP 308
+      // awaitServiceReady only polls replica 0, so poll each replica individually
+      // before asserting — replicas 1/2 may still be starting their containers.
       for (int replicaIdx = 0; replicaIdx < 3; replicaIdx++) {
         HttpResponse<String> replicaResponse =
-            cluster.sendGetRequest(serviceName, replicaIdx, "/", Duration.ofSeconds(10));
+            cluster.awaitReplicaReady(
+                serviceName, replicaIdx, XdnTestCluster.SERVICE_READY_TIMEOUT);
         assertEquals(
             308,
             replicaResponse.statusCode(),
             "Replica " + replicaIdx + " did not return HTTP 308");
       }
     }
-  }
-
-  private static void logStep(String label) {
-    System.err.printf("[%s] STEP: %s%n", Instant.now(), label);
-  }
-
-  private static void logStepDone(String label, long startNanos) {
-    long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
-    System.err.printf("[%s] STEP done: %s duration=%dms%n", Instant.now(), label, durationMs);
   }
 }

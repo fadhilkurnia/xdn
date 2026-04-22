@@ -21,7 +21,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -172,6 +171,35 @@ public class XdnTestCluster implements AutoCloseable {
         "Timed out waiting for service '%s'".formatted(serviceName), lastError);
   }
 
+  /**
+   * Waits for a specific replica to respond with a successful HTTP status. Uses a short per-probe
+   * timeout so a replica whose container is still starting up (HTTP frontend accepts the connection
+   * but blocks forwarding) does not stall the whole polling budget.
+   */
+  public HttpResponse<String> awaitReplicaReady(
+      String serviceName, int replicaIdx, Duration timeout) throws Exception {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    Duration probeTimeout = Duration.ofSeconds(2);
+    Exception lastError = null;
+
+    while (System.nanoTime() < deadline) {
+      try {
+        HttpResponse<String> response = sendGetRequest(serviceName, replicaIdx, "/", probeTimeout);
+        if (response.statusCode() >= 200 && response.statusCode() < 500) {
+          return response;
+        }
+        lastError = new IllegalStateException("Unexpected HTTP status " + response.statusCode());
+      } catch (IOException e) {
+        lastError = e;
+      }
+      TimeUnit.SECONDS.sleep(1);
+    }
+
+    throw new RuntimeException(
+        "Timed out waiting for replica %d of service '%s'".formatted(replicaIdx, serviceName),
+        lastError);
+  }
+
   /** Invokes the service through the ActiveReplica HTTP frontend. */
   public HttpResponse<String> invokeService(String serviceName)
       throws IOException, InterruptedException {
@@ -216,30 +244,7 @@ public class XdnTestCluster implements AutoCloseable {
             .header("XDN", serviceName)
             .GET()
             .build();
-    long startNanos = System.nanoTime();
-    System.err.printf(
-        "[%s] sendGetRequest start: service=%s replica=%d port=%d endpoint=%s timeout=%dms%n",
-        Instant.now(), serviceName, replicaIdx, httpPort, endpoint, effectiveTimeout.toMillis());
-    try {
-      HttpResponse<String> response =
-          httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-      long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
-      System.err.printf(
-          "[%s] sendGetRequest done: service=%s replica=%d status=%d duration=%dms%n",
-          Instant.now(), serviceName, replicaIdx, response.statusCode(), durationMs);
-      return response;
-    } catch (IOException e) {
-      long durationMs = (System.nanoTime() - startNanos) / 1_000_000L;
-      System.err.printf(
-          "[%s] sendGetRequest FAILED: service=%s replica=%d duration=%dms error=%s: %s%n",
-          Instant.now(),
-          serviceName,
-          replicaIdx,
-          durationMs,
-          e.getClass().getSimpleName(),
-          e.getMessage());
-      throw e;
-    }
+    return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
   }
 
   /** Issues a HTTP GET request with the default timeout. */
