@@ -2,7 +2,7 @@
     <head>
         <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%2210 0 100 100%22><text y=%22.90em%22 font-size=%2290%22>📓</text></svg>"></link>
         <title>Nondeterministic Book Catalog</title>
-        <link rel="stylesheet" type="text/css" href="https://rawgit.com/vitmalina/w2ui/master/dist/w2ui.min.css">
+        <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/gh/vitmalina/w2ui@master/dist/w2ui.min.css">
     </head>
     <body>
         <div style="margin:auto; width: 700px; text-align: center; padding-top: 20px; font-family:verdana">
@@ -15,7 +15,7 @@
             <small>including <i>created_at</i>, <i>updated_at</i>, and <i>deleted_at</i> (for soft deletion)</small>
         </div>
         <script type="module">
-            import { w2grid, w2popup, w2form, w2confirm } from 'https://rawgit.com/vitmalina/w2ui/master/dist/w2ui.es6.min.js'
+            import { w2grid, w2popup, w2form, w2confirm } from 'https://cdn.jsdelivr.net/gh/vitmalina/w2ui@master/dist/w2ui.es6.min.js'
             let apiEndpoint = "/api";
             
             let loadData = function(successCallback) {
