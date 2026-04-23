@@ -111,6 +111,11 @@ public class SimpleReconfiguratorNodeConfig<NodeIDType> implements
 	}
 
 	@Override
+	public edu.umass.cs.nio.interfaces.Geolocation getNodeGeolocation(NodeIDType id) {
+		return this.nodeConfig.getNodeGeolocation(id);
+	}
+
+	@Override
 	public NodeIDType valueOf(String strValue) {
 		return this.nodeConfig.valueOf(strValue);
 	}

@@ -129,17 +129,26 @@ Use the `bin/xdnd` shell script (driver-machine orchestrator) for multi-host dep
 - `reconfiguration/` — Control plane, replica management; entry point: `ReconfigurableNode.java`
 - `xdn/` — Core XDN logic (see subpackages and key classes below)
 - `nio/` — NIO networking framework
-- `primarybackup/`, `chainreplication/`, `causal/`, `eventual/` — Replication protocol variants
+- `protocoltask/` — Protocol task orchestration framework used by coordinators
+- `primarybackup/`, `chainreplication/`, `causal/`, `eventual/`, `sequential/`, `pram/`, `clientcentric/`, `txn/` — Replication/consistency protocol variants (each maps to a `ConsistencyModel`)
 
 ### XDN Package Substructure (`src/edu/umass/cs/xdn/`)
 - `docker/` — Container management (`DockerComposeManager`)
 - `recorder/` — State diff strategies (`AbstractStateDiffRecorder` and four implementations)
-- `request/` — HTTP request parsing (`XdnRequestParser`, `XdnHttpRequest`, `XdnHttpRequestBatch`)
-- `service/` — Service metadata (`ServiceProperty`, `ServiceComponent`, `ConsistencyModel`)
+- `request/` — HTTP request parsing (`XdnRequestParser`, `XdnHttpRequest`, `XdnHttpRequestBatch`) and internal request types (`XdnGetReplicaInfoRequest`, `XdnStopRequest`, `XDNHttpForwardRequest`, `XDNStatediffApplyRequest`)
+- `service/` — Service metadata (`ServiceProperty`, `ServiceComponent`, `ConsistencyModel`, `ServiceInstance`, `RequestMatcher`)
 - `utils/` — Shell execution helpers, hosts file editing
-- `interfaces/behavior/` — Request behavior abstractions
+- `interfaces/behavior/` — Request behavior abstractions (commutative, key-commutative, etc.)
 - `proto/` — Protocol buffer classes
 - `eval/` — Evaluation and experiment utilities
+- `experiment/` — Experiment harness code and ad-hoc clients (e.g. `XdnBookCatalogAppClient`)
+
+### Top-level XDN helpers (in `src/edu/umass/cs/xdn/`)
+- `XdnServiceProperties` — service-property helpers and defaults consumed elsewhere
+- `XdnHttpRequestBatcher` — batches HTTP requests at the AR frontend when batching is enabled
+- `XdnGeoDemandProfiler`, `XdnReplicaPlacementProfile` — geo-demand tracking and replica placement policies
+- `XdnServiceInitialStateValidator`, `XdnServiceNumReplicasExtractor` — launch-time validators/extractors
+- `HttpDebugProxy`, `HttpDebugWaitProxy`, `HttpDebugIndirectProxy` — diagnostic HTTP proxies used in debugging/tests
 
 ### Key Classes and Request Flow
 
@@ -185,6 +194,12 @@ Supported via `ConsistencyModel`: linearizability (default), sequential, causal,
 eventual, pram, and client-centric variants. 
 Each maps to a coordinator in the corresponding protocol package.
 
+### `xdn-cli` subcommands (`xdn-cli/cmd/`)
+Cobra-based CLI. Top-level verbs include `launch`, `status`, `check`, and the `service` command group. `service` covers: `info`, `destroy`, `move` (relocate a service to new replica hosts; drives synchronous paxos leader change), `leader` (inspect/set the paxos leader). `launch` accepts `--num-replicas`, `--min-replicas`, `--max-replicas` in addition to `--image`, `--state`, `--deterministic`, etc. Mutating subcommands prompt for yes/no confirmation on stdin.
+
+### XDN-internal URL params
+URL query parameters prefixed with `_xdn` (e.g. `_xdnsvc`) are consumed at the XDN/proxy layer and must be stripped from the request URI before it is forwarded to the containerized service. `_xdnsvc` provides the service name directly as a URL param and is used as a developer-experience alternative to setting the `XDN:` header.
+
 ### Configuration
 - `gigapaxos.properties` — Main deployment config
 - `conf/gigapaxos.xdn.local.properties` — Local development (1 RC + 3 AR on loopback)
@@ -202,6 +217,7 @@ For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifec
 - **ant-build-test.yml**: Build + run `xdn-full-tests` on push/PR to master/main (JDK 21, Docker, FUSE, rsync)
 - **xdn-cli-ci.yml**: gofmt check + CLI binary build on changes to `xdn-cli/`
 - **google-java-format.yml**: Formatting check on XDN Java file changes
+- **test-report.yml**: JUnit test-result reporter (currently disabled — `if: false` — gated on the XDN test workflow)
 
 ## Conventions
 - Java code follows Google Java Style (enforced by formatter)

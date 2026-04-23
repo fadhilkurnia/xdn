@@ -1,5 +1,6 @@
 package edu.umass.cs.reconfiguration.reconfigurationpackets;
 
+import edu.umass.cs.nio.interfaces.Geolocation;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -16,6 +17,7 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
     private List<String> replicaHttpAddresses;
     private List<String> replicaRoles;
     private List<String> replicaMetadata;
+    private List<Geolocation> replicaGeolocations;
     private String serviceMetadata;
 
     public GetReplicaPlacementRequest(InetSocketAddress initiator, String name) {
@@ -26,6 +28,7 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
         replicaHttpAddresses = new ArrayList<>();
         replicaRoles = new ArrayList<>();
         replicaMetadata = new ArrayList<>();
+        replicaGeolocations = new ArrayList<>();
         serviceMetadata = "";
     }
 
@@ -53,6 +56,10 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
         this.replicaMetadata = replicaMetadata;
     }
 
+    public void setReplicaGeolocations(List<Geolocation> replicaGeolocations) {
+        this.replicaGeolocations = replicaGeolocations;
+    }
+
     public void setServiceMetadata(String serviceMetadata) {
         this.serviceMetadata = serviceMetadata;
     }
@@ -71,6 +78,15 @@ public class GetReplicaPlacementRequest extends ClientReconfigurationPacket {
                     replicaHttpAddresses.size() >= i+1 ? replicaHttpAddresses.get(i) : "");
             nodeInfo.put("ROLE", replicaRoles.size() >= i+1 ? replicaRoles.get(i) : "");
             nodeInfo.put("METADATA", replicaMetadata.size() >= i+1 ? replicaMetadata.get(i) : "");
+            Geolocation geo = replicaGeolocations.size() >= i+1 ? replicaGeolocations.get(i) : null;
+            if (geo != null) {
+                JSONObject geoJson = new JSONObject();
+                geoJson.put("LATITUDE", geo.latitude());
+                geoJson.put("LONGITUDE", geo.longitude());
+                nodeInfo.put("GEOLOCATION", geoJson);
+            } else {
+                nodeInfo.put("GEOLOCATION", JSONObject.NULL);
+            }
             nodeArray.put(i, nodeInfo);
         }
         dataJsonObject.put("NODES", nodeArray);

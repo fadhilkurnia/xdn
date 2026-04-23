@@ -29,6 +29,7 @@ import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONException;
 
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.nio.nioutils.RTTEstimator;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.RC;
@@ -116,6 +117,11 @@ public class ConsistentReconfigurableNodeConfig<NodeIDType> extends
 	@Override
 	public Set<NodeIDType> getActiveReplicas() {
 		return this.nodeConfig.getActiveReplicas();
+	}
+
+	@Override
+	public Geolocation getNodeGeolocation(NodeIDType id) {
+		return this.nodeConfig.getNodeGeolocation(id);
 	}
 
 	/**
