@@ -1,0 +1,66 @@
+#!/usr/bin/env bpftrace
+/*
+ * interreplica_bandwidth.bt
+ *
+ * Measure per-peer TCP bandwidth between XDN ActiveReplicas.
+ *
+ * This is the standalone, hand-runnable version with the local-dev AR ports
+ * hardcoded (2000/2001/2002). For fleet-wide CloudLab measurements, use the
+ * driver CLI at eval/run_interreplica_bandwidth.py which discovers ports from
+ * the gigapaxos config file and renders an equivalent script at runtime.
+ *
+ * Usage (local 3-AR loopback cluster):
+ *   sudo bpftrace eval/interreplica_bandwidth.bt
+ *   # ... drive workload in another terminal ...
+ *   # ^C to print results
+ *
+ * Output keys (all maps keyed by local_port, peer_ip, peer_port):
+ *   @tx_bytes  — bytes handed to tcp_sendmsg (app-generated TX)
+ *   @tx_msgs   — count of tcp_sendmsg calls
+ *   @rx_bytes  — bytes delivered via tcp_cleanup_rbuf (app-consumed RX)
+ *   @rx_msgs   — count of tcp_cleanup_rbuf calls with copied > 0
+ *
+ * Requires CAP_BPF / root. Edit the @watched inits below if your AR ports
+ * differ from the local defaults.
+ */
+
+#include <net/sock.h>
+
+BEGIN
+{
+  @watched[2000] = 1;
+  @watched[2001] = 1;
+  @watched[2002] = 1;
+  printf("interreplica_bandwidth: attached, watching ports 2000/2001/2002\n");
+}
+
+kprobe:tcp_sendmsg
+{
+  $sk = (struct sock *)arg0;
+  $lport = (uint16)$sk->__sk_common.skc_num;
+  $draw  = (uint16)$sk->__sk_common.skc_dport;
+  $dport = (uint16)(($draw >> 8) | ($draw << 8));
+  if (@watched[$lport] || @watched[$dport]) {
+    @tx_bytes[$lport, ntop($sk->__sk_common.skc_daddr), $dport] = sum(arg2);
+    @tx_msgs [$lport, ntop($sk->__sk_common.skc_daddr), $dport] = count();
+  }
+}
+
+kprobe:tcp_cleanup_rbuf
+{
+  $sk = (struct sock *)arg0;
+  $copied = (int32)arg1;
+  if ($copied <= 0) { return; }
+  $lport = (uint16)$sk->__sk_common.skc_num;
+  $draw  = (uint16)$sk->__sk_common.skc_dport;
+  $dport = (uint16)(($draw >> 8) | ($draw << 8));
+  if (@watched[$lport] || @watched[$dport]) {
+    @rx_bytes[$lport, ntop($sk->__sk_common.skc_daddr), $dport] = sum((uint64)$copied);
+    @rx_msgs [$lport, ntop($sk->__sk_common.skc_daddr), $dport] = count();
+  }
+}
+
+END
+{
+  clear(@watched);
+}
