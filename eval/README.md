@@ -278,6 +278,77 @@ Extra flags: `--sanity-check`, `--txns 1,2,3,5,8,10,15`, `--n-samples 50`,
 Results go to `eval/results/microbench_coordination_<system>_<timestamp>/`.
 Use `plot_coordination_granularity.py` to combine results into a paper figure.
 
+## Inter-Replica Bandwidth
+
+### `run_interreplica_bandwidth.py`
+
+Captures per-peer TCP bandwidth between ActiveReplicas during a measurement
+window, using bpftrace kprobes on `tcp_sendmsg` and `tcp_cleanup_rbuf`. Unlike
+whole-NIC counters from `/proc/net/dev` or `node_exporter`, this attributes
+bytes to specific peer sockets keyed by `(local_port, peer_ip, peer_port)`, so
+client HTTP ingress and SSH noise are excluded from the per-replica total.
+
+AR hosts and coordination ports are discovered from the gigapaxos properties
+file (`active.ARn=host:port` entries). Reconfigurator traffic is excluded by
+default; pass `--include-rc` to also watch `reconfigurator.RCn=...` ports.
+
+Local 3-AR loopback cluster:
+
+```
+sudo python3 eval/run_interreplica_bandwidth.py \
+    --config conf/gigapaxos.xdn.local.properties \
+    --local --duration 30 --out /tmp/bw-smoke/
+# drive workload in another shell during the 30s window
+```
+
+CloudLab multi-host:
+
+```
+python3 eval/run_interreplica_bandwidth.py \
+    --config conf/gigapaxos.xdn.cloudlab.local.13nodes.properties \
+    --ssh-key /ssh/key --user <user> \
+    --duration 60 --out eval/results/bw-<timestamp>/ \
+    [--include-rc]
+```
+
+Requires `sudo` (CAP_BPF) on every traced host and bpftrace on PATH. For SSH
+targets the script tries to auto-install bpftrace via apt/snap when `--ssh-key`
+and `--user` are unset; when those flags are supplied, install it beforehand
+(e.g. via `xdnd dist-init-observability` or manually).
+
+Output in `--out/`:
+- `interreplica_bandwidth.csv` — columns `host, local_port, peer_ip, peer_port,
+  tx_bytes, tx_msgs, rx_bytes, rx_msgs`. One row per observed peer socket.
+- `bpftrace_raw_<host>.txt` — raw bpftrace dump per host for debugging.
+
+Byte semantics: `tx_bytes` is the app-generated payload handed to
+`tcp_sendmsg` (pre-segmentation, no retransmits); `rx_bytes` is bytes delivered
+through `tcp_cleanup_rbuf` (consumed from the receive buffer). Both are
+replication-payload bytes, not wire bytes.
+
+**Limitations**
+
+- **No per-service attribution.** All services on an AR multiplex over one NIO
+  coordination socket. To isolate a single service's traffic, run only that
+  service during the measurement window.
+- **State diffs are included** in the totals for all recorder types that ship
+  over NIO (ZIP, FUSELOG, FUSERUST). The `RSYNC` recorder copies state locally
+  and won't show up.
+- **Kernel probes.** Relies on `tcp_sendmsg` / `tcp_cleanup_rbuf` symbols,
+  stable on Linux 5.15+.
+
+### `interreplica_bandwidth.bt`
+
+Standalone bpftrace script with the local-dev AR ports (2000/2001/2002)
+hardcoded, for quick ad-hoc inspection without going through the CLI:
+
+```
+sudo bpftrace eval/interreplica_bandwidth.bt
+# ^C to print results
+```
+
+Edit the `@watched` inits at the top of the file if your AR ports differ.
+
 ## Failure Scenarios
 
 ### `run_eval_failure_replica_crashes.py`
