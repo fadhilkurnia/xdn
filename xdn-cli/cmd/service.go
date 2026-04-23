@@ -98,6 +98,7 @@ var ServiceInfoCmd = &cobra.Command{
 		//        "ID": "AR1",
 		//        "ROLE": "replica",										// This is not implemented yet (TODO)
 		//        "METADATA": "Created 2 minutes ago; Up 2 minutes", 		// This is not implemented yet (TODO)
+		//        "GEOLOCATION": {"LATITUDE": 3.1490, "LONGITUDE": 37.0425}, // null if node has no configured geolocation
 		//      },
 		//      {
 		//        "ADDRESS": "/127.0.0.1:2002",
@@ -216,6 +217,14 @@ var ServiceInfoCmd = &cobra.Command{
 					}
 				}
 			}
+			geoStr := ""
+			if geoIf, ok := node["GEOLOCATION"].(map[string]interface{}); ok {
+				lat, latOK := geoIf["LATITUDE"].(float64)
+				lon, lonOK := geoIf["LONGITUDE"].(float64)
+				if latOK && lonOK {
+					geoStr = fmt.Sprintf("%.4f,%.4f", lat, lon)
+				}
+			}
 			replicas = append(replicas, placementReplica{
 				nodeID:      nodeId,
 				host:        host,
@@ -223,6 +232,7 @@ var ServiceInfoCmd = &cobra.Command{
 				tcpPort:     port,
 				httpPort:    httpPort,
 				httpBaseURL: httpBaseURL,
+				geolocation: geoStr,
 			})
 		}
 		numReplicas := len(replicas)
@@ -298,7 +308,7 @@ var ServiceInfoCmd = &cobra.Command{
 		fmt.Printf(" %s\n", titleColorPrint.Sprintf("Current replicas placement (epoch=%s):", epochNumberStr))
 
 		type replicaRow struct {
-			machineID, ipAddress, webPort, role, created, status, svcReplicaURL string
+			geolocation, machineID, ipAddress, webPort, role, created, status, svcReplicaURL string
 		}
 		rows := make([]replicaRow, len(replicas))
 		for idx, r := range replicas {
@@ -309,6 +319,10 @@ var ServiceInfoCmd = &cobra.Command{
 			webPortStr := "-"
 			if r.httpPort != 0 {
 				webPortStr = strconv.Itoa(r.httpPort)
+			}
+			geoStr := "-"
+			if r.geolocation != "" {
+				geoStr = r.geolocation
 			}
 			svcReplicaURLStr := "-"
 			if r.httpBaseURL != "" {
@@ -327,10 +341,10 @@ var ServiceInfoCmd = &cobra.Command{
 				}
 			}
 			rows[idx] = replicaRow{
-				r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr, svcReplicaURLStr,
+				geoStr, r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr, svcReplicaURLStr,
 			}
 		}
-		wID, wIP, wPort := len("NODE ID"), len("IP ADDRESS"), len("WEB PORT")
+		wID, wIP, wGeo, wPort := len("NODE ID"), len("IP ADDRESS"), len("GEOLOCATION"), len("WEB PORT")
 		wRole, wCreated, wStatus := len("ROLE"), len("CREATED"), len("STATUS")
 		wURL := len("SVC REPLICA URL")
 		for _, row := range rows {
@@ -339,6 +353,9 @@ var ServiceInfoCmd = &cobra.Command{
 			}
 			if n := len(row.ipAddress); n > wIP {
 				wIP = n
+			}
+			if n := len(row.geolocation); n > wGeo {
+				wGeo = n
 			}
 			if n := len(row.webPort); n > wPort {
 				wPort = n
@@ -356,7 +373,8 @@ var ServiceInfoCmd = &cobra.Command{
 				wURL = n
 			}
 		}
-		fmt.Printf("  | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Printf("  | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			columnColorPrint.Sprintf("%-*s", wGeo, "GEOLOCATION"),
 			columnColorPrint.Sprintf("%-*s", wID, "NODE ID"),
 			columnColorPrint.Sprintf("%-*s", wIP, "IP ADDRESS"),
 			columnColorPrint.Sprintf("%-*s", wPort, "WEB PORT"),
@@ -367,9 +385,10 @@ var ServiceInfoCmd = &cobra.Command{
 		for _, row := range rows {
 			roleCell := colorForRole(row.role).Sprint(fmt.Sprintf("%-*s", wRole, row.role))
 			statusCell := colorForStatus(row.status).Sprint(fmt.Sprintf("%-*s", wStatus, row.status))
-			fmt.Printf("  | %-*s | %-*s | %-*s | %s | %-*s | %s | %-*s |\n",
-				wID, row.machineID, wIP, row.ipAddress, wPort, row.webPort,
-				roleCell, wCreated, row.created, statusCell, wURL, row.svcReplicaURL)
+			fmt.Printf("  | %-*s | %-*s | %-*s | %-*s | %s | %-*s | %s | %-*s |\n",
+				wGeo, row.geolocation, wID, row.machineID, wIP, row.ipAddress,
+				wPort, row.webPort, roleCell, wCreated, row.created,
+				statusCell, wURL, row.svcReplicaURL)
 		}
 
 		if primaryInfo == nil {
@@ -835,6 +854,7 @@ type placementReplica struct {
 	tcpPort     int
 	httpPort    int    // 0 if HTTP_ADDRESS missing from the RC response
 	httpBaseURL string // empty if HTTP_ADDRESS missing from the RC response
+	geolocation string // "lat,lon" display string; empty if not configured
 }
 
 type replicaInfo struct {
