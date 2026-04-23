@@ -108,7 +108,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
         SQLReconfiguratorDB.dropState(server,
                 new ConsistentReconfigurableNodeConfig<String>(
                         new DefaultNodeConfig<String>(PaxosConfig.getActives(),
-                                ReconfigurationConfig.getReconfigurators())));
+                                ReconfigurationConfig.getReconfigurators(),
+                                PaxosConfig.getActiveGeolocations())));
 
     }
 
@@ -490,7 +491,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
                             + ReconfigurableNode.class);
         ReconfigurableNodeConfig<String> nodeConfig = new DefaultNodeConfig<String>(
                 PaxosConfig.getActives(),
-                ReconfigurationConfig.getReconfigurators());
+                ReconfigurationConfig.getReconfigurators(),
+                PaxosConfig.getActiveGeolocations());
         PaxosConfig.sanityCheck(nodeConfig);
 
         if (Config.getGlobalBoolean(PC.EMULATE_DELAYS))
@@ -507,7 +509,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
                                     new DefaultNodeConfig<String>(PaxosConfig
                                             .getActives(),
                                             ReconfigurationConfig
-                                                    .getReconfigurators())));
+                                                    .getReconfigurators(),
+                                            PaxosConfig.getActiveGeolocations())));
                 } catch (Exception e) {
                     /* ignore all exceptions as they correspond to non-local
                      * nodes */
@@ -551,7 +554,8 @@ public abstract class ReconfigurableNode<NodeIDType> {
                             // must use a different nodeConfig for each
                             new DefaultNodeConfig<String>(
                                     PaxosConfig.getActives(),
-                                    ReconfigurationConfig.getReconfigurators()),
+                                    ReconfigurationConfig.getReconfigurators(),
+                                    PaxosConfig.getActiveGeolocations()),
                             appArgs,
                             false
                     )

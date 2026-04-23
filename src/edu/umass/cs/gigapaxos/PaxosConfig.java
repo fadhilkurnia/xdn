@@ -39,6 +39,7 @@ import edu.umass.cs.gigapaxos.paxosutil.E2ELatencyAwareRedirector;
 import edu.umass.cs.nio.NIOTransport;
 import edu.umass.cs.nio.SSLDataProcessingWorker;
 import edu.umass.cs.nio.SSLDataProcessingWorker.SSL_MODES;
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
@@ -167,6 +168,52 @@ public class PaxosConfig {
 						Util.getInetSocketAddressFromString(config
 								.getProperty(key)));
 			}
+		}
+		return map;
+	}
+
+	/**
+	 * Geolocation suffix for per-active-replica geolocation property keys,
+	 * as in {@code active.<name>.geolocation="latitude,longitude"}.
+	 */
+	public static final String GEOLOCATION_SUFFIX = ".geolocation";
+
+	/**
+	 * @return A map of active-replica names to their parsed {@link Geolocation}
+	 *         as declared in properties like
+	 *         {@code active.<name>.geolocation="lat,lon"}. Entries with
+	 *         unparseable or out-of-range values are skipped with a
+	 *         {@code WARNING} log so one malformed line does not prevent the
+	 *         rest of the map from loading. Actives declared without a
+	 *         matching geolocation property do not appear in the map.
+	 */
+	public static Map<String, Geolocation> getActiveGeolocations() {
+		Map<String, Geolocation> map = new HashMap<String, Geolocation>();
+		Properties config = getAsProperties();
+
+		Set<String> keys = config.stringPropertyNames();
+		String geoKeyRegexPattern = String.format(
+				"^[ \t]*%s[a-zA-Z0-9\\-_]*%s$",
+				DEFAULT_SERVER_PREFIX, java.util.regex.Pattern.quote(GEOLOCATION_SUFFIX));
+		for (String key : keys) {
+			String trimmed = key.trim();
+			if (!trimmed.startsWith(DEFAULT_SERVER_PREFIX)
+					|| !trimmed.endsWith(GEOLOCATION_SUFFIX)
+					|| !key.matches(geoKeyRegexPattern)) {
+				continue;
+			}
+			String nodeName = trimmed
+					.substring(DEFAULT_SERVER_PREFIX.length(),
+							trimmed.length() - GEOLOCATION_SUFFIX.length());
+			String raw = config.getProperty(key);
+			Geolocation geo = Geolocation.parse(raw);
+			if (geo == null) {
+				getLogger().log(Level.WARNING,
+						"Ignoring malformed geolocation for {0}: {1}",
+						new Object[]{nodeName, raw});
+				continue;
+			}
+			map.put(nodeName, geo);
 		}
 		return map;
 	}

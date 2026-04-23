@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.nio.interfaces.NodeConfig;
 
 /**
@@ -61,6 +62,16 @@ public interface ReconfigurableNodeConfig<NodeIDType> extends
 							.getNodePort(node)));
 		}
 		return map;
+	}
+
+	/**
+	 * @param id
+	 * @return Geolocation for the given node, or {@code null} if none is
+	 *         configured. Default returns {@code null} so pre-existing
+	 *         implementations compile unchanged.
+	 */
+	default Geolocation getNodeGeolocation(NodeIDType id) {
+		return null;
 	}
 
 }

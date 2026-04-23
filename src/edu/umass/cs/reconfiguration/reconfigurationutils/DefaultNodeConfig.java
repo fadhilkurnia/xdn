@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.json.JSONArray;
 import org.json.JSONException;
 
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.reconfiguration.interfaces.ModifiableReconfigurableNodeConfig;
 
 /**
@@ -25,6 +26,7 @@ public class DefaultNodeConfig<NodeIDType> implements
 
 	final ConcurrentHashMap<NodeIDType, InetSocketAddress> actives = new ConcurrentHashMap<NodeIDType, InetSocketAddress>();
 	final ConcurrentHashMap<NodeIDType, InetSocketAddress> reconfigurators = new ConcurrentHashMap<NodeIDType, InetSocketAddress>();
+	final ConcurrentHashMap<NodeIDType, Geolocation> geolocations = new ConcurrentHashMap<NodeIDType, Geolocation>();
 
 	/**
 	 * @param actives
@@ -32,8 +34,21 @@ public class DefaultNodeConfig<NodeIDType> implements
 	 */
 	public DefaultNodeConfig(Map<NodeIDType, InetSocketAddress> actives,
 			Map<NodeIDType, InetSocketAddress> reconfigurators) {
+		this(actives, reconfigurators, Collections.emptyMap());
+	}
+
+	/**
+	 * @param actives
+	 * @param reconfigurators
+	 * @param geolocations Per-node geolocation; nodes with no entry will
+	 *        return {@code null} from {@link #getNodeGeolocation}.
+	 */
+	public DefaultNodeConfig(Map<NodeIDType, InetSocketAddress> actives,
+			Map<NodeIDType, InetSocketAddress> reconfigurators,
+			Map<NodeIDType, Geolocation> geolocations) {
 		this.actives.putAll(actives);
 		this.reconfigurators.putAll(reconfigurators);
+		this.geolocations.putAll(geolocations);
 	}
 
 	@Override
@@ -83,6 +98,11 @@ public class DefaultNodeConfig<NodeIDType> implements
 		Set<NodeIDType> nodes = this.getActiveReplicas();
 		nodes.addAll(this.getReconfigurators());
 		return nodes;
+	}
+
+	@Override
+	public Geolocation getNodeGeolocation(NodeIDType id) {
+		return this.geolocations.get(id);
 	}
 
 	@SuppressWarnings("unchecked")

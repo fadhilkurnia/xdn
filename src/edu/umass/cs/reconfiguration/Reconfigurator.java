@@ -46,6 +46,7 @@ import edu.umass.cs.nio.JSONMessenger;
 import edu.umass.cs.nio.MessageNIOTransport;
 import edu.umass.cs.nio.SSLDataProcessingWorker.SSL_MODES;
 import edu.umass.cs.nio.interfaces.AddressMessenger;
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.PacketDemultiplexer;
 import edu.umass.cs.nio.interfaces.SSLMessenger;
@@ -1325,6 +1326,14 @@ public class Reconfigurator<NodeIDType> implements
         request.setReplicaAddresses(addresses);
         request.setReplicaHttpAddresses(httpAddresses);
         request.setPlacementEpochNumber(record.getEpoch());
+
+        // attach per-node geolocation parsed from the gigapaxos config (may be null
+        // if a node has no configured geolocation)
+        List<Geolocation> geolocations = new ArrayList<>();
+        for (NodeIDType node : nodeIds) {
+            geolocations.add(this.consistentNodeConfig.getNodeGeolocation(node));
+        }
+        request.setReplicaGeolocations(geolocations);
 
         // TODO: query the replica roles and metadata by contacting them
         // TODO: add service/name metadata in the reconfiguration record.
