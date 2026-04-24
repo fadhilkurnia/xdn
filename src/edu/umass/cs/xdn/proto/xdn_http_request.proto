@@ -37,6 +37,14 @@ message XdnHttpRequest {
     string value = 2;
   }
 
+  // Geographic location as (latitude, longitude) in decimal degrees.
+  // Range validation lives on the Java side (Geolocation record); the
+  // proto itself just carries raw doubles.
+  message Geolocation {
+    double latitude = 1;
+    double longitude = 2;
+  }
+
   // Defines Http Response, embedded inside a Request.
   message Response {
     // Protocol used for the response. Examples: "HTTP/1.1", "HTTP/2".
@@ -70,4 +78,9 @@ message XdnHttpRequest {
 
   // The response for this request, empty if there is no response yet.
   optional Response response = 7;
+
+  // End-user/client geolocation. Populated at the entry replica from the
+  // X-Client-Location HTTP header; replaces the raw-header wire encoding
+  // so followers don't pay the ~40-byte header cost per request.
+  optional Geolocation client_geolocation = 8;
 }

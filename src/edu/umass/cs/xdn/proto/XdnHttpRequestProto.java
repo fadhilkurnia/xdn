@@ -243,6 +243,50 @@ public final class XdnHttpRequestProto {
      */
     edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.ResponseOrBuilder
         getResponseOrBuilder();
+
+    /**
+     *
+     *
+     * <pre>
+     * End-user/client geolocation. Populated at the entry replica from the
+     * X-Client-Location HTTP header; replaces the raw-header wire encoding
+     * so followers don't pay the ~40-byte header cost per request.
+     * </pre>
+     *
+     * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+     *
+     * @return Whether the clientGeolocation field is set.
+     */
+    boolean hasClientGeolocation();
+
+    /**
+     *
+     *
+     * <pre>
+     * End-user/client geolocation. Populated at the entry replica from the
+     * X-Client-Location HTTP header; replaces the raw-header wire encoding
+     * so followers don't pay the ~40-byte header cost per request.
+     * </pre>
+     *
+     * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+     *
+     * @return The clientGeolocation.
+     */
+    edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation getClientGeolocation();
+
+    /**
+     *
+     *
+     * <pre>
+     * End-user/client geolocation. Populated at the entry replica from the
+     * X-Client-Location HTTP header; replaces the raw-header wire encoding
+     * so followers don't pay the ~40-byte header cost per request.
+     * </pre>
+     *
+     * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+     */
+    edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder
+        getClientGeolocationOrBuilder();
   }
 
   /** Protobuf type {@code xdn.XdnHttpRequest} */
@@ -1291,6 +1335,591 @@ public final class XdnHttpRequestProto {
 
       @java.lang.Override
       public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Header
+          getDefaultInstanceForType() {
+        return DEFAULT_INSTANCE;
+      }
+    }
+
+    public interface GeolocationOrBuilder
+        extends
+        // @@protoc_insertion_point(interface_extends:xdn.XdnHttpRequest.Geolocation)
+        com.google.protobuf.MessageOrBuilder {
+
+      /**
+       * <code>double latitude = 1;</code>
+       *
+       * @return The latitude.
+       */
+      double getLatitude();
+
+      /**
+       * <code>double longitude = 2;</code>
+       *
+       * @return The longitude.
+       */
+      double getLongitude();
+    }
+
+    /**
+     *
+     *
+     * <pre>
+     * Geographic location as (latitude, longitude) in decimal degrees.
+     * Range validation lives on the Java side (Geolocation record); the
+     * proto itself just carries raw doubles.
+     * </pre>
+     *
+     * Protobuf type {@code xdn.XdnHttpRequest.Geolocation}
+     */
+    public static final class Geolocation extends com.google.protobuf.GeneratedMessage
+        implements
+        // @@protoc_insertion_point(message_implements:xdn.XdnHttpRequest.Geolocation)
+        GeolocationOrBuilder {
+      private static final long serialVersionUID = 0L;
+
+      static {
+        com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+            com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+            /* major= */ 4,
+            /* minor= */ 28,
+            /* patch= */ 2,
+            /* suffix= */ "",
+            Geolocation.class.getName());
+      }
+
+      // Use Geolocation.newBuilder() to construct.
+      private Geolocation(com.google.protobuf.GeneratedMessage.Builder<?> builder) {
+        super(builder);
+      }
+
+      private Geolocation() {}
+
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.xdn.proto.XdnHttpRequestProto
+            .internal_static_xdn_XdnHttpRequest_Geolocation_descriptor;
+      }
+
+      @java.lang.Override
+      protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+          internalGetFieldAccessorTable() {
+        return edu.umass.cs.xdn.proto.XdnHttpRequestProto
+            .internal_static_xdn_XdnHttpRequest_Geolocation_fieldAccessorTable
+            .ensureFieldAccessorsInitialized(
+                edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.class,
+                edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder
+                    .class);
+      }
+
+      public static final int LATITUDE_FIELD_NUMBER = 1;
+      private double latitude_ = 0D;
+
+      /**
+       * <code>double latitude = 1;</code>
+       *
+       * @return The latitude.
+       */
+      @java.lang.Override
+      public double getLatitude() {
+        return latitude_;
+      }
+
+      public static final int LONGITUDE_FIELD_NUMBER = 2;
+      private double longitude_ = 0D;
+
+      /**
+       * <code>double longitude = 2;</code>
+       *
+       * @return The longitude.
+       */
+      @java.lang.Override
+      public double getLongitude() {
+        return longitude_;
+      }
+
+      private byte memoizedIsInitialized = -1;
+
+      @java.lang.Override
+      public final boolean isInitialized() {
+        byte isInitialized = memoizedIsInitialized;
+        if (isInitialized == 1) return true;
+        if (isInitialized == 0) return false;
+
+        memoizedIsInitialized = 1;
+        return true;
+      }
+
+      @java.lang.Override
+      public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
+        if (java.lang.Double.doubleToRawLongBits(latitude_) != 0) {
+          output.writeDouble(1, latitude_);
+        }
+        if (java.lang.Double.doubleToRawLongBits(longitude_) != 0) {
+          output.writeDouble(2, longitude_);
+        }
+        getUnknownFields().writeTo(output);
+      }
+
+      @java.lang.Override
+      public int getSerializedSize() {
+        int size = memoizedSize;
+        if (size != -1) return size;
+
+        size = 0;
+        if (java.lang.Double.doubleToRawLongBits(latitude_) != 0) {
+          size += com.google.protobuf.CodedOutputStream.computeDoubleSize(1, latitude_);
+        }
+        if (java.lang.Double.doubleToRawLongBits(longitude_) != 0) {
+          size += com.google.protobuf.CodedOutputStream.computeDoubleSize(2, longitude_);
+        }
+        size += getUnknownFields().getSerializedSize();
+        memoizedSize = size;
+        return size;
+      }
+
+      @java.lang.Override
+      public boolean equals(final java.lang.Object obj) {
+        if (obj == this) {
+          return true;
+        }
+        if (!(obj
+            instanceof edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation)) {
+          return super.equals(obj);
+        }
+        edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation other =
+            (edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation) obj;
+
+        if (java.lang.Double.doubleToLongBits(getLatitude())
+            != java.lang.Double.doubleToLongBits(other.getLatitude())) return false;
+        if (java.lang.Double.doubleToLongBits(getLongitude())
+            != java.lang.Double.doubleToLongBits(other.getLongitude())) return false;
+        if (!getUnknownFields().equals(other.getUnknownFields())) return false;
+        return true;
+      }
+
+      @java.lang.Override
+      public int hashCode() {
+        if (memoizedHashCode != 0) {
+          return memoizedHashCode;
+        }
+        int hash = 41;
+        hash = (19 * hash) + getDescriptor().hashCode();
+        hash = (37 * hash) + LATITUDE_FIELD_NUMBER;
+        hash =
+            (53 * hash)
+                + com.google.protobuf.Internal.hashLong(
+                    java.lang.Double.doubleToLongBits(getLatitude()));
+        hash = (37 * hash) + LONGITUDE_FIELD_NUMBER;
+        hash =
+            (53 * hash)
+                + com.google.protobuf.Internal.hashLong(
+                    java.lang.Double.doubleToLongBits(getLongitude()));
+        hash = (29 * hash) + getUnknownFields().hashCode();
+        memoizedHashCode = hash;
+        return hash;
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          java.nio.ByteBuffer data) throws com.google.protobuf.InvalidProtocolBufferException {
+        return PARSER.parseFrom(data);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return PARSER.parseFrom(data, extensionRegistry);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          com.google.protobuf.ByteString data)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return PARSER.parseFrom(data);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          com.google.protobuf.ByteString data,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return PARSER.parseFrom(data, extensionRegistry);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          byte[] data) throws com.google.protobuf.InvalidProtocolBufferException {
+        return PARSER.parseFrom(data);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws com.google.protobuf.InvalidProtocolBufferException {
+        return PARSER.parseFrom(data, extensionRegistry);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          java.io.InputStream input) throws java.io.IOException {
+        return com.google.protobuf.GeneratedMessage.parseWithIOException(PARSER, input);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        return com.google.protobuf.GeneratedMessage.parseWithIOException(
+            PARSER, input, extensionRegistry);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+          parseDelimitedFrom(java.io.InputStream input) throws java.io.IOException {
+        return com.google.protobuf.GeneratedMessage.parseDelimitedWithIOException(PARSER, input);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+          parseDelimitedFrom(
+              java.io.InputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws java.io.IOException {
+        return com.google.protobuf.GeneratedMessage.parseDelimitedWithIOException(
+            PARSER, input, extensionRegistry);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+        return com.google.protobuf.GeneratedMessage.parseWithIOException(PARSER, input);
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation parseFrom(
+          com.google.protobuf.CodedInputStream input,
+          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+          throws java.io.IOException {
+        return com.google.protobuf.GeneratedMessage.parseWithIOException(
+            PARSER, input, extensionRegistry);
+      }
+
+      @java.lang.Override
+      public Builder newBuilderForType() {
+        return newBuilder();
+      }
+
+      public static Builder newBuilder() {
+        return DEFAULT_INSTANCE.toBuilder();
+      }
+
+      public static Builder newBuilder(
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation prototype) {
+        return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
+      }
+
+      @java.lang.Override
+      public Builder toBuilder() {
+        return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
+      }
+
+      @java.lang.Override
+      protected Builder newBuilderForType(
+          com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+        Builder builder = new Builder(parent);
+        return builder;
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * Geographic location as (latitude, longitude) in decimal degrees.
+       * Range validation lives on the Java side (Geolocation record); the
+       * proto itself just carries raw doubles.
+       * </pre>
+       *
+       * Protobuf type {@code xdn.XdnHttpRequest.Geolocation}
+       */
+      public static final class Builder
+          extends com.google.protobuf.GeneratedMessage.Builder<Builder>
+          implements
+          // @@protoc_insertion_point(builder_implements:xdn.XdnHttpRequest.Geolocation)
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder {
+        public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+          return edu.umass.cs.xdn.proto.XdnHttpRequestProto
+              .internal_static_xdn_XdnHttpRequest_Geolocation_descriptor;
+        }
+
+        @java.lang.Override
+        protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
+            internalGetFieldAccessorTable() {
+          return edu.umass.cs.xdn.proto.XdnHttpRequestProto
+              .internal_static_xdn_XdnHttpRequest_Geolocation_fieldAccessorTable
+              .ensureFieldAccessorsInitialized(
+                  edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.class,
+                  edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder
+                      .class);
+        }
+
+        // Construct using
+        // edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.newBuilder()
+        private Builder() {}
+
+        private Builder(com.google.protobuf.GeneratedMessage.BuilderParent parent) {
+          super(parent);
+        }
+
+        @java.lang.Override
+        public Builder clear() {
+          super.clear();
+          bitField0_ = 0;
+          latitude_ = 0D;
+          longitude_ = 0D;
+          return this;
+        }
+
+        @java.lang.Override
+        public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+          return edu.umass.cs.xdn.proto.XdnHttpRequestProto
+              .internal_static_xdn_XdnHttpRequest_Geolocation_descriptor;
+        }
+
+        @java.lang.Override
+        public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+            getDefaultInstanceForType() {
+          return edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+              .getDefaultInstance();
+        }
+
+        @java.lang.Override
+        public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation build() {
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation result =
+              buildPartial();
+          if (!result.isInitialized()) {
+            throw newUninitializedMessageException(result);
+          }
+          return result;
+        }
+
+        @java.lang.Override
+        public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+            buildPartial() {
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation result =
+              new edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation(this);
+          if (bitField0_ != 0) {
+            buildPartial0(result);
+          }
+          onBuilt();
+          return result;
+        }
+
+        private void buildPartial0(
+            edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation result) {
+          int from_bitField0_ = bitField0_;
+          if (((from_bitField0_ & 0x00000001) != 0)) {
+            result.latitude_ = latitude_;
+          }
+          if (((from_bitField0_ & 0x00000002) != 0)) {
+            result.longitude_ = longitude_;
+          }
+        }
+
+        @java.lang.Override
+        public Builder mergeFrom(com.google.protobuf.Message other) {
+          if (other
+              instanceof edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation) {
+            return mergeFrom(
+                (edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation) other);
+          } else {
+            super.mergeFrom(other);
+            return this;
+          }
+        }
+
+        public Builder mergeFrom(
+            edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation other) {
+          if (other
+              == edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+                  .getDefaultInstance()) return this;
+          if (other.getLatitude() != 0D) {
+            setLatitude(other.getLatitude());
+          }
+          if (other.getLongitude() != 0D) {
+            setLongitude(other.getLongitude());
+          }
+          this.mergeUnknownFields(other.getUnknownFields());
+          onChanged();
+          return this;
+        }
+
+        @java.lang.Override
+        public final boolean isInitialized() {
+          return true;
+        }
+
+        @java.lang.Override
+        public Builder mergeFrom(
+            com.google.protobuf.CodedInputStream input,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+          if (extensionRegistry == null) {
+            throw new java.lang.NullPointerException();
+          }
+          try {
+            boolean done = false;
+            while (!done) {
+              int tag = input.readTag();
+              switch (tag) {
+                case 0:
+                  done = true;
+                  break;
+                case 9:
+                  {
+                    latitude_ = input.readDouble();
+                    bitField0_ |= 0x00000001;
+                    break;
+                  } // case 9
+                case 17:
+                  {
+                    longitude_ = input.readDouble();
+                    bitField0_ |= 0x00000002;
+                    break;
+                  } // case 17
+                default:
+                  {
+                    if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                      done = true; // was an endgroup tag
+                    }
+                    break;
+                  } // default:
+              } // switch (tag)
+            } // while (!done)
+          } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+            throw e.unwrapIOException();
+          } finally {
+            onChanged();
+          } // finally
+          return this;
+        }
+
+        private int bitField0_;
+
+        private double latitude_;
+
+        /**
+         * <code>double latitude = 1;</code>
+         *
+         * @return The latitude.
+         */
+        @java.lang.Override
+        public double getLatitude() {
+          return latitude_;
+        }
+
+        /**
+         * <code>double latitude = 1;</code>
+         *
+         * @param value The latitude to set.
+         * @return This builder for chaining.
+         */
+        public Builder setLatitude(double value) {
+
+          latitude_ = value;
+          bitField0_ |= 0x00000001;
+          onChanged();
+          return this;
+        }
+
+        /**
+         * <code>double latitude = 1;</code>
+         *
+         * @return This builder for chaining.
+         */
+        public Builder clearLatitude() {
+          bitField0_ = (bitField0_ & ~0x00000001);
+          latitude_ = 0D;
+          onChanged();
+          return this;
+        }
+
+        private double longitude_;
+
+        /**
+         * <code>double longitude = 2;</code>
+         *
+         * @return The longitude.
+         */
+        @java.lang.Override
+        public double getLongitude() {
+          return longitude_;
+        }
+
+        /**
+         * <code>double longitude = 2;</code>
+         *
+         * @param value The longitude to set.
+         * @return This builder for chaining.
+         */
+        public Builder setLongitude(double value) {
+
+          longitude_ = value;
+          bitField0_ |= 0x00000002;
+          onChanged();
+          return this;
+        }
+
+        /**
+         * <code>double longitude = 2;</code>
+         *
+         * @return This builder for chaining.
+         */
+        public Builder clearLongitude() {
+          bitField0_ = (bitField0_ & ~0x00000002);
+          longitude_ = 0D;
+          onChanged();
+          return this;
+        }
+
+        // @@protoc_insertion_point(builder_scope:xdn.XdnHttpRequest.Geolocation)
+      }
+
+      // @@protoc_insertion_point(class_scope:xdn.XdnHttpRequest.Geolocation)
+      private static final edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+          DEFAULT_INSTANCE;
+
+      static {
+        DEFAULT_INSTANCE =
+            new edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation();
+      }
+
+      public static edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+          getDefaultInstance() {
+        return DEFAULT_INSTANCE;
+      }
+
+      private static final com.google.protobuf.Parser<Geolocation> PARSER =
+          new com.google.protobuf.AbstractParser<Geolocation>() {
+            @java.lang.Override
+            public Geolocation parsePartialFrom(
+                com.google.protobuf.CodedInputStream input,
+                com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+                throws com.google.protobuf.InvalidProtocolBufferException {
+              Builder builder = newBuilder();
+              try {
+                builder.mergeFrom(input, extensionRegistry);
+              } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+                throw e.setUnfinishedMessage(builder.buildPartial());
+              } catch (com.google.protobuf.UninitializedMessageException e) {
+                throw e.asInvalidProtocolBufferException()
+                    .setUnfinishedMessage(builder.buildPartial());
+              } catch (java.io.IOException e) {
+                throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                    .setUnfinishedMessage(builder.buildPartial());
+              }
+              return builder.buildPartial();
+            }
+          };
+
+      public static com.google.protobuf.Parser<Geolocation> parser() {
+        return PARSER;
+      }
+
+      @java.lang.Override
+      public com.google.protobuf.Parser<Geolocation> getParserForType() {
+        return PARSER;
+      }
+
+      @java.lang.Override
+      public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
           getDefaultInstanceForType() {
         return DEFAULT_INSTANCE;
       }
@@ -3117,6 +3746,70 @@ public final class XdnHttpRequestProto {
           : response_;
     }
 
+    public static final int CLIENT_GEOLOCATION_FIELD_NUMBER = 8;
+    private edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+        clientGeolocation_;
+
+    /**
+     *
+     *
+     * <pre>
+     * End-user/client geolocation. Populated at the entry replica from the
+     * X-Client-Location HTTP header; replaces the raw-header wire encoding
+     * so followers don't pay the ~40-byte header cost per request.
+     * </pre>
+     *
+     * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+     *
+     * @return Whether the clientGeolocation field is set.
+     */
+    @java.lang.Override
+    public boolean hasClientGeolocation() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+
+    /**
+     *
+     *
+     * <pre>
+     * End-user/client geolocation. Populated at the entry replica from the
+     * X-Client-Location HTTP header; replaces the raw-header wire encoding
+     * so followers don't pay the ~40-byte header cost per request.
+     * </pre>
+     *
+     * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+     *
+     * @return The clientGeolocation.
+     */
+    @java.lang.Override
+    public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+        getClientGeolocation() {
+      return clientGeolocation_ == null
+          ? edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+              .getDefaultInstance()
+          : clientGeolocation_;
+    }
+
+    /**
+     *
+     *
+     * <pre>
+     * End-user/client geolocation. Populated at the entry replica from the
+     * X-Client-Location HTTP header; replaces the raw-header wire encoding
+     * so followers don't pay the ~40-byte header cost per request.
+     * </pre>
+     *
+     * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+     */
+    @java.lang.Override
+    public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder
+        getClientGeolocationOrBuilder() {
+      return clientGeolocation_ == null
+          ? edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+              .getDefaultInstance()
+          : clientGeolocation_;
+    }
+
     private byte memoizedIsInitialized = -1;
 
     @java.lang.Override
@@ -3155,6 +3848,9 @@ public final class XdnHttpRequestProto {
       if (((bitField0_ & 0x00000002) != 0)) {
         output.writeMessage(7, getResponse());
       }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        output.writeMessage(8, getClientGeolocation());
+      }
       getUnknownFields().writeTo(output);
     }
 
@@ -3188,6 +3884,9 @@ public final class XdnHttpRequestProto {
       if (((bitField0_ & 0x00000002) != 0)) {
         size += com.google.protobuf.CodedOutputStream.computeMessageSize(7, getResponse());
       }
+      if (((bitField0_ & 0x00000004) != 0)) {
+        size += com.google.protobuf.CodedOutputStream.computeMessageSize(8, getClientGeolocation());
+      }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
       return size;
@@ -3216,6 +3915,10 @@ public final class XdnHttpRequestProto {
       if (hasResponse() != other.hasResponse()) return false;
       if (hasResponse()) {
         if (!getResponse().equals(other.getResponse())) return false;
+      }
+      if (hasClientGeolocation() != other.hasClientGeolocation()) return false;
+      if (hasClientGeolocation()) {
+        if (!getClientGeolocation().equals(other.getClientGeolocation())) return false;
       }
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
@@ -3247,6 +3950,10 @@ public final class XdnHttpRequestProto {
       if (hasResponse()) {
         hash = (37 * hash) + RESPONSE_FIELD_NUMBER;
         hash = (53 * hash) + getResponse().hashCode();
+      }
+      if (hasClientGeolocation()) {
+        hash = (37 * hash) + CLIENT_GEOLOCATION_FIELD_NUMBER;
+        hash = (53 * hash) + getClientGeolocation().hashCode();
       }
       hash = (29 * hash) + getUnknownFields().hashCode();
       memoizedHashCode = hash;
@@ -3384,6 +4091,7 @@ public final class XdnHttpRequestProto {
         if (com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders) {
           getRequestHeadersFieldBuilder();
           getResponseFieldBuilder();
+          getClientGeolocationFieldBuilder();
         }
       }
 
@@ -3407,6 +4115,11 @@ public final class XdnHttpRequestProto {
         if (responseBuilder_ != null) {
           responseBuilder_.dispose();
           responseBuilder_ = null;
+        }
+        clientGeolocation_ = null;
+        if (clientGeolocationBuilder_ != null) {
+          clientGeolocationBuilder_.dispose();
+          clientGeolocationBuilder_ = null;
         }
         return this;
       }
@@ -3479,6 +4192,13 @@ public final class XdnHttpRequestProto {
           result.response_ = responseBuilder_ == null ? response_ : responseBuilder_.build();
           to_bitField0_ |= 0x00000002;
         }
+        if (((from_bitField0_ & 0x00000080) != 0)) {
+          result.clientGeolocation_ =
+              clientGeolocationBuilder_ == null
+                  ? clientGeolocation_
+                  : clientGeolocationBuilder_.build();
+          to_bitField0_ |= 0x00000004;
+        }
         result.bitField0_ |= to_bitField0_;
       }
 
@@ -3541,6 +4261,9 @@ public final class XdnHttpRequestProto {
         }
         if (other.hasResponse()) {
           mergeResponse(other.getResponse());
+        }
+        if (other.hasClientGeolocation()) {
+          mergeClientGeolocation(other.getClientGeolocation());
         }
         this.mergeUnknownFields(other.getUnknownFields());
         onChanged();
@@ -3618,6 +4341,13 @@ public final class XdnHttpRequestProto {
                   bitField0_ |= 0x00000040;
                   break;
                 } // case 58
+              case 66:
+                {
+                  input.readMessage(
+                      getClientGeolocationFieldBuilder().getBuilder(), extensionRegistry);
+                  bitField0_ |= 0x00000080;
+                  break;
+                } // case 66
               default:
                 {
                   if (!super.parseUnknownField(input, extensionRegistry, tag)) {
@@ -4679,6 +5409,230 @@ public final class XdnHttpRequestProto {
         return responseBuilder_;
       }
 
+      private edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+          clientGeolocation_;
+      private com.google.protobuf.SingleFieldBuilder<
+              edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation,
+              edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder,
+              edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder>
+          clientGeolocationBuilder_;
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       *
+       * @return Whether the clientGeolocation field is set.
+       */
+      public boolean hasClientGeolocation() {
+        return ((bitField0_ & 0x00000080) != 0);
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       *
+       * @return The clientGeolocation.
+       */
+      public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+          getClientGeolocation() {
+        if (clientGeolocationBuilder_ == null) {
+          return clientGeolocation_ == null
+              ? edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+                  .getDefaultInstance()
+              : clientGeolocation_;
+        } else {
+          return clientGeolocationBuilder_.getMessage();
+        }
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      public Builder setClientGeolocation(
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation value) {
+        if (clientGeolocationBuilder_ == null) {
+          if (value == null) {
+            throw new NullPointerException();
+          }
+          clientGeolocation_ = value;
+        } else {
+          clientGeolocationBuilder_.setMessage(value);
+        }
+        bitField0_ |= 0x00000080;
+        onChanged();
+        return this;
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      public Builder setClientGeolocation(
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder
+              builderForValue) {
+        if (clientGeolocationBuilder_ == null) {
+          clientGeolocation_ = builderForValue.build();
+        } else {
+          clientGeolocationBuilder_.setMessage(builderForValue.build());
+        }
+        bitField0_ |= 0x00000080;
+        onChanged();
+        return this;
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      public Builder mergeClientGeolocation(
+          edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation value) {
+        if (clientGeolocationBuilder_ == null) {
+          if (((bitField0_ & 0x00000080) != 0)
+              && clientGeolocation_ != null
+              && clientGeolocation_
+                  != edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+                      .getDefaultInstance()) {
+            getClientGeolocationBuilder().mergeFrom(value);
+          } else {
+            clientGeolocation_ = value;
+          }
+        } else {
+          clientGeolocationBuilder_.mergeFrom(value);
+        }
+        if (clientGeolocation_ != null) {
+          bitField0_ |= 0x00000080;
+          onChanged();
+        }
+        return this;
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      public Builder clearClientGeolocation() {
+        bitField0_ = (bitField0_ & ~0x00000080);
+        clientGeolocation_ = null;
+        if (clientGeolocationBuilder_ != null) {
+          clientGeolocationBuilder_.dispose();
+          clientGeolocationBuilder_ = null;
+        }
+        onChanged();
+        return this;
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder
+          getClientGeolocationBuilder() {
+        bitField0_ |= 0x00000080;
+        onChanged();
+        return getClientGeolocationFieldBuilder().getBuilder();
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      public edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder
+          getClientGeolocationOrBuilder() {
+        if (clientGeolocationBuilder_ != null) {
+          return clientGeolocationBuilder_.getMessageOrBuilder();
+        } else {
+          return clientGeolocation_ == null
+              ? edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation
+                  .getDefaultInstance()
+              : clientGeolocation_;
+        }
+      }
+
+      /**
+       *
+       *
+       * <pre>
+       * End-user/client geolocation. Populated at the entry replica from the
+       * X-Client-Location HTTP header; replaces the raw-header wire encoding
+       * so followers don't pay the ~40-byte header cost per request.
+       * </pre>
+       *
+       * <code>optional .xdn.XdnHttpRequest.Geolocation client_geolocation = 8;</code>
+       */
+      private com.google.protobuf.SingleFieldBuilder<
+              edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation,
+              edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder,
+              edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder>
+          getClientGeolocationFieldBuilder() {
+        if (clientGeolocationBuilder_ == null) {
+          clientGeolocationBuilder_ =
+              new com.google.protobuf.SingleFieldBuilder<
+                  edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation,
+                  edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.Geolocation.Builder,
+                  edu.umass.cs.xdn.proto.XdnHttpRequestProto.XdnHttpRequest.GeolocationOrBuilder>(
+                  getClientGeolocation(), getParentForChildren(), isClean());
+          clientGeolocation_ = null;
+        }
+        return clientGeolocationBuilder_;
+      }
+
       // @@protoc_insertion_point(builder_scope:xdn.XdnHttpRequest)
     }
 
@@ -4740,6 +5694,10 @@ public final class XdnHttpRequestProto {
   private static final com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_xdn_XdnHttpRequest_Header_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
+      internal_static_xdn_XdnHttpRequest_Geolocation_descriptor;
+  private static final com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_xdn_XdnHttpRequest_Geolocation_fieldAccessorTable;
+  private static final com.google.protobuf.Descriptors.Descriptor
       internal_static_xdn_XdnHttpRequest_Response_descriptor;
   private static final com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_xdn_XdnHttpRequest_Response_fieldAccessorTable;
@@ -4753,7 +5711,7 @@ public final class XdnHttpRequestProto {
   static {
     java.lang.String[] descriptorData = {
       "\n"
-          + "1src/edu/umass/cs/xdn/proto/xdn_http_request.proto\022\003xdn\"\326\005\n"
+          + "1src/edu/umass/cs/xdn/proto/xdn_http_request.proto\022\003xdn\"\343\006\n"
           + "\016XdnHttpRequest\022\022\n\n"
           + "request_id\030\001 \001(\003\022A\n"
           + "\020protocol_version\030\002 \001("
@@ -4763,16 +5721,20 @@ public final class XdnHttpRequestProto {
           + "\017request_headers\030\005 \003(\0132\032.xdn.XdnHttpRequest.Header\022\031\n"
           + "\014request_body\030\006 \001(\014H\000\210\001\001\0223\n"
           + "\010response\030\007"
-          + " \001(\0132\034.xdn.XdnHttpRequest.ResponseH\001\210\001\001\032%\n"
+          + " \001(\0132\034.xdn.XdnHttpRequest.ResponseH\001\210\001\001\022@\n"
+          + "\022client_geolocation\030\010 \001(\013"
+          + "2\037.xdn.XdnHttpRequest.GeolocationH\002\210\001\001\032%\n"
           + "\006Header\022\014\n"
           + "\004name\030\001 \001(\t\022\r\n"
-          + "\005value\030\002 \001(\t\032\275\001\n"
+          + "\005value\030\002 \001(\t\0322\n"
+          + "\013Geolocation\022\020\n"
+          + "\010latitude\030\001 \001(\001\022\021\n"
+          + "\tlongitude\030\002 \001(\001\032\275\001\n"
           + "\010Response\022A\n"
           + "\020protocol_version\030\001"
           + " \001(\0162\'.xdn.XdnHttpRequest.HttpProtocolVersion\022\023\n"
           + "\013status_code\030\002 \001(\005\022+\n"
-          + "\007headers\030\003 \003(\0132\032.xdn.XdnHttpRequest.Header\022\032\n"
-          + "\r"
+          + "\007headers\030\003 \003(\0132\032.xdn.XdnHttpRequest.Header\022\032\n\r"
           + "response_body\030\004 \001(\014H\000\210\001\001B\020\n"
           + "\016_response_body\"c\n\n"
           + "HttpMethod\022\007\n"
@@ -4788,7 +5750,8 @@ public final class XdnHttpRequestProto {
           + "\010HTTP_1_0\020\000\022\014\n"
           + "\010HTTP_1_1\020\001B\017\n\r"
           + "_request_bodyB\013\n"
-          + "\t_responseB-\n"
+          + "\t_responseB\025\n"
+          + "\023_client_geolocationB-\n"
           + "\026edu.umass.cs.xdn.protoB\023XdnHttpRequestProtob\006proto3"
     };
     descriptor =
@@ -4806,6 +5769,7 @@ public final class XdnHttpRequestProto {
               "RequestHeaders",
               "RequestBody",
               "Response",
+              "ClientGeolocation",
             });
     internal_static_xdn_XdnHttpRequest_Header_descriptor =
         internal_static_xdn_XdnHttpRequest_descriptor.getNestedTypes().get(0);
@@ -4815,8 +5779,16 @@ public final class XdnHttpRequestProto {
             new java.lang.String[] {
               "Name", "Value",
             });
-    internal_static_xdn_XdnHttpRequest_Response_descriptor =
+    internal_static_xdn_XdnHttpRequest_Geolocation_descriptor =
         internal_static_xdn_XdnHttpRequest_descriptor.getNestedTypes().get(1);
+    internal_static_xdn_XdnHttpRequest_Geolocation_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+            internal_static_xdn_XdnHttpRequest_Geolocation_descriptor,
+            new java.lang.String[] {
+              "Latitude", "Longitude",
+            });
+    internal_static_xdn_XdnHttpRequest_Response_descriptor =
+        internal_static_xdn_XdnHttpRequest_descriptor.getNestedTypes().get(2);
     internal_static_xdn_XdnHttpRequest_Response_fieldAccessorTable =
         new com.google.protobuf.GeneratedMessage.FieldAccessorTable(
             internal_static_xdn_XdnHttpRequest_Response_descriptor,

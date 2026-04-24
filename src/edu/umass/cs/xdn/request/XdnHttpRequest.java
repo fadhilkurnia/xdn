@@ -93,7 +93,7 @@ public class XdnHttpRequest extends XdnRequest
   private List<RequestMatcher> requestMatchers;
 
   public XdnHttpRequest(HttpRequest request, HttpContent content) {
-    this(null, request, content, null, false);
+    this(null, request, content, null, false, null);
   }
 
   private XdnHttpRequest(
@@ -101,7 +101,8 @@ public class XdnHttpRequest extends XdnRequest
       HttpRequest request,
       HttpContent content,
       List<RequestMatcher> requestMatchers,
-      boolean isCreatedFromString) {
+      boolean isCreatedFromString,
+      Geolocation providedClientGeolocation) {
     assert request != null : "HttpRequest must be specified";
     assert content != null : "HttpContent must be specified";
 
@@ -144,10 +145,15 @@ public class XdnHttpRequest extends XdnRequest
 
     this.isCreatedFromString = isCreatedFromString;
 
-    // Parse X-Client-Location into a typed Geolocation. Left in the headers so
-    // followers reconstruct the same value from the proto wire form; stripped
-    // later at the forwarder boundary so the containerized service never sees it.
-    this.clientGeolocation = parseClientGeolocation(this.httpRequest);
+    // Parse X-Client-Location into a typed Geolocation. On entry replicas the
+    // value comes from the header; on followers reconstructed via createFromString,
+    // a typed value from the proto's client_geolocation field is passed in and
+    // takes precedence over the header. The forwarder-boundary strip keeps the
+    // raw header away from the containerized service.
+    this.clientGeolocation =
+        providedClientGeolocation != null
+            ? providedClientGeolocation
+            : parseClientGeolocation(this.httpRequest);
   }
 
   // In general, we infer the HTTP request ID based on these headers:
@@ -526,6 +532,16 @@ public class XdnHttpRequest extends XdnRequest
       builder.setResponse(buildResponseProto());
     }
 
+    // Prefer the typed wire encoding. getHeaderList filters X-Client-Location
+    // out of request_headers so the proto doesn't carry a duplicate copy.
+    if (this.clientGeolocation != null) {
+      builder.setClientGeolocation(
+          XdnHttpRequestProto.XdnHttpRequest.Geolocation.newBuilder()
+              .setLatitude(this.clientGeolocation.latitude())
+              .setLongitude(this.clientGeolocation.longitude())
+              .build());
+    }
+
     byte[] protoBytes = builder.build().toByteArray();
     byte[] serialized = new byte[Integer.BYTES + protoBytes.length];
     ByteBuffer.wrap(serialized).putInt(packetType).put(protoBytes);
@@ -548,6 +564,12 @@ public class XdnHttpRequest extends XdnRequest
     List<XdnHttpRequestProto.XdnHttpRequest.Header> headerList = new ArrayList<>();
     while (it.hasNext()) {
       Map.Entry<String, String> e = it.next();
+      // Skip X-Client-Location: it is carried on the wire as the typed
+      // client_geolocation proto field instead, to avoid the ~40-byte
+      // string-header cost. Case-insensitive per HTTP semantics.
+      if (X_CLIENT_LOCATION_HEADER.equalsIgnoreCase(e.getKey())) {
+        continue;
+      }
       XdnHttpRequestProto.XdnHttpRequest.Header header =
           XdnHttpRequestProto.XdnHttpRequest.Header.newBuilder()
               .setName(e.getKey())
@@ -679,8 +701,24 @@ public class XdnHttpRequest extends XdnRequest
     HttpResponse httpResponse =
         decodedProto.hasResponse() ? buildHttpResponse(decodedProto.getResponse()) : null;
 
+    // Prefer the typed client_geolocation proto field (new wire form). If the
+    // sender is an older binary that didn't emit the typed field, the private
+    // constructor falls back to parsing the X-Client-Location header from
+    // request_headers.
+    Geolocation clientGeo = null;
+    if (decodedProto.hasClientGeolocation()) {
+      XdnHttpRequestProto.XdnHttpRequest.Geolocation protoGeo = decodedProto.getClientGeolocation();
+      try {
+        clientGeo = new Geolocation(protoGeo.getLatitude(), protoGeo.getLongitude());
+      } catch (IllegalArgumentException e) {
+        // Out-of-range doubles on the wire → treat as absent.
+        clientGeo = null;
+      }
+    }
+
     XdnHttpRequest decodedRequest =
-        new XdnHttpRequest(decodedProto.getRequestId(), httpRequest, httpContent, null, true);
+        new XdnHttpRequest(
+            decodedProto.getRequestId(), httpRequest, httpContent, null, true, clientGeo);
     if (httpResponse != null) {
       decodedRequest.setHttpResponse(httpResponse);
     }
