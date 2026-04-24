@@ -108,7 +108,7 @@ To deploy a stateful service with this existing provider, simply follow the step
 1. Start the control plane (i.e., Reconfigurator/RC) and the edge servers (i.e., ActiveReplica/AR), 
    using the default configuration.
    ```bash
-   ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.local.properties start all
+   ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.local.properties start all
    ```
    Which will start these 4 local servers:
     - 1 Reconfigurator at localhost:3000.
@@ -172,7 +172,7 @@ To deploy a stateful service with this existing provider, simply follow the step
 
 > To stop xdn, we need to stop the Reconfigurator and ActiveReplicas and clean all the state:
 > ```bash
->  sudo ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.local.properties forceclear all
+>  sudo ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.local.properties forceclear all
 >  sudo rm -rf /tmp/gigapaxos
 >  sudo rm -rf /tmp/xdn
 > ```

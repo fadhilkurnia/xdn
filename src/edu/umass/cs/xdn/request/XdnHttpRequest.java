@@ -10,6 +10,7 @@ import edu.umass.cs.clientcentric.interfaces.TimestampedRequest;
 import edu.umass.cs.clientcentric.interfaces.TimestampedResponse;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.nio.interfaces.Byteable;
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
@@ -49,6 +50,12 @@ public class XdnHttpRequest extends XdnRequest
   // the server sets Set-Cookie: XDN=<service> in response to an _xdnsvc URL.
   public static final String XDN_SVC_COOKIE_NAME = "XDN";
 
+  // HTTP header carrying the end-user/client geolocation as "lat,lon" (commas
+  // per Geolocation.parse, though "lat; lon" from the eval latency proxy is
+  // also tolerated). Consumed at the XDN layer (parsed into a typed
+  // Geolocation and stripped before the request reaches the container).
+  public static final String X_CLIENT_LOCATION_HEADER = "X-Client-Location";
+
   public static final List<RequestMatcher> defaultSingletonRequestMatchers =
       ServiceProperty.createDefaultMatchers();
 
@@ -74,6 +81,11 @@ public class XdnHttpRequest extends XdnRequest
   // node, and thus we can discard and release the httpResponse immediately.
   private final boolean isCreatedFromString;
 
+  // Parsed client geolocation from the X-Client-Location header, or null when
+  // the header is absent or malformed. Populated at construction on both the
+  // entry replica and on followers (the raw header survives proto transit).
+  private final Geolocation clientGeolocation;
+
   // The set for BehavioralRequest interface that requires returning
   // the behaviors of this HttpRequest. Note that requestMatcher must
   // be set to know the behaviors of this HttpRequest.
@@ -81,7 +93,7 @@ public class XdnHttpRequest extends XdnRequest
   private List<RequestMatcher> requestMatchers;
 
   public XdnHttpRequest(HttpRequest request, HttpContent content) {
-    this(null, request, content, null, false);
+    this(null, request, content, null, false, null);
   }
 
   private XdnHttpRequest(
@@ -89,7 +101,8 @@ public class XdnHttpRequest extends XdnRequest
       HttpRequest request,
       HttpContent content,
       List<RequestMatcher> requestMatchers,
-      boolean isCreatedFromString) {
+      boolean isCreatedFromString,
+      Geolocation providedClientGeolocation) {
     assert request != null : "HttpRequest must be specified";
     assert content != null : "HttpContent must be specified";
 
@@ -131,6 +144,16 @@ public class XdnHttpRequest extends XdnRequest
             : defaultSingletonRequestMatchers;
 
     this.isCreatedFromString = isCreatedFromString;
+
+    // Parse X-Client-Location into a typed Geolocation. On entry replicas the
+    // value comes from the header; on followers reconstructed via createFromString,
+    // a typed value from the proto's client_geolocation field is passed in and
+    // takes precedence over the header. The forwarder-boundary strip keeps the
+    // raw header away from the containerized service.
+    this.clientGeolocation =
+        providedClientGeolocation != null
+            ? providedClientGeolocation
+            : parseClientGeolocation(this.httpRequest);
   }
 
   // In general, we infer the HTTP request ID based on these headers:
@@ -258,6 +281,22 @@ public class XdnHttpRequest extends XdnRequest
       }
     }
     return null;
+  }
+
+  // Returns the client geolocation from the X-Client-Location header, or null
+  // if the header is absent or malformed. Accepts both "lat,lon" and the
+  // "lat; lon" form emitted by the eval latency proxy by normalizing the
+  // separator before delegating to Geolocation.parse (which already handles
+  // whitespace, surrounding quotes, range checks, and null-on-error).
+  private static Geolocation parseClientGeolocation(HttpRequest httpRequest) {
+    if (httpRequest.headers() == null) {
+      return null;
+    }
+    String raw = httpRequest.headers().get(X_CLIENT_LOCATION_HEADER);
+    if (raw == null || raw.isEmpty()) {
+      return null;
+    }
+    return Geolocation.parse(raw.replace(';', ','));
   }
 
   // Removes any query param whose key starts with XDN_RESERVED_QUERY_PREFIX from
@@ -448,6 +487,12 @@ public class XdnHttpRequest extends XdnRequest
     return this.httpRequest;
   }
 
+  // Returns the parsed end-user/client geolocation from X-Client-Location, or
+  // null if the header was absent or malformed at construction time.
+  public Geolocation getClientGeolocation() {
+    return this.clientGeolocation;
+  }
+
   public HttpContent getHttpRequestContent() {
     return httpRequestContent;
   }
@@ -487,6 +532,16 @@ public class XdnHttpRequest extends XdnRequest
       builder.setResponse(buildResponseProto());
     }
 
+    // Prefer the typed wire encoding. getHeaderList filters X-Client-Location
+    // out of request_headers so the proto doesn't carry a duplicate copy.
+    if (this.clientGeolocation != null) {
+      builder.setClientGeolocation(
+          XdnHttpRequestProto.XdnHttpRequest.Geolocation.newBuilder()
+              .setLatitude(this.clientGeolocation.latitude())
+              .setLongitude(this.clientGeolocation.longitude())
+              .build());
+    }
+
     byte[] protoBytes = builder.build().toByteArray();
     byte[] serialized = new byte[Integer.BYTES + protoBytes.length];
     ByteBuffer.wrap(serialized).putInt(packetType).put(protoBytes);
@@ -509,6 +564,12 @@ public class XdnHttpRequest extends XdnRequest
     List<XdnHttpRequestProto.XdnHttpRequest.Header> headerList = new ArrayList<>();
     while (it.hasNext()) {
       Map.Entry<String, String> e = it.next();
+      // Skip X-Client-Location: it is carried on the wire as the typed
+      // client_geolocation proto field instead, to avoid the ~40-byte
+      // string-header cost. Case-insensitive per HTTP semantics.
+      if (X_CLIENT_LOCATION_HEADER.equalsIgnoreCase(e.getKey())) {
+        continue;
+      }
       XdnHttpRequestProto.XdnHttpRequest.Header header =
           XdnHttpRequestProto.XdnHttpRequest.Header.newBuilder()
               .setName(e.getKey())
@@ -640,8 +701,24 @@ public class XdnHttpRequest extends XdnRequest
     HttpResponse httpResponse =
         decodedProto.hasResponse() ? buildHttpResponse(decodedProto.getResponse()) : null;
 
+    // Prefer the typed client_geolocation proto field (new wire form). If the
+    // sender is an older binary that didn't emit the typed field, the private
+    // constructor falls back to parsing the X-Client-Location header from
+    // request_headers.
+    Geolocation clientGeo = null;
+    if (decodedProto.hasClientGeolocation()) {
+      XdnHttpRequestProto.XdnHttpRequest.Geolocation protoGeo = decodedProto.getClientGeolocation();
+      try {
+        clientGeo = new Geolocation(protoGeo.getLatitude(), protoGeo.getLongitude());
+      } catch (IllegalArgumentException e) {
+        // Out-of-range doubles on the wire → treat as absent.
+        clientGeo = null;
+      }
+    }
+
     XdnHttpRequest decodedRequest =
-        new XdnHttpRequest(decodedProto.getRequestId(), httpRequest, httpContent, null, true);
+        new XdnHttpRequest(
+            decodedProto.getRequestId(), httpRequest, httpContent, null, true, clientGeo);
     if (httpResponse != null) {
       decodedRequest.setHttpResponse(httpResponse);
     }

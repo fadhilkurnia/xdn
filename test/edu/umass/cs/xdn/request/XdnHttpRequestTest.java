@@ -6,11 +6,14 @@ import edu.umass.cs.clientcentric.VectorTimestamp;
 import edu.umass.cs.gigapaxos.interfaces.ClientRequest;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.XdnGigapaxosApp;
+import edu.umass.cs.xdn.proto.XdnHttpRequestProto;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.Disabled;
@@ -584,6 +587,188 @@ public class XdnHttpRequestTest {
   @Test
   public void testBehavioralWriteOnlyRequest() {
     throw new RuntimeException("unimplemented");
+  }
+
+  @Test
+  public void testClientGeolocation_Absent() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNull(httpRequest.getClientGeolocation());
+  }
+
+  @Test
+  public void testClientGeolocation_CommaFormat() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "39.9526,-75.1652");
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNotNull(httpRequest.getClientGeolocation());
+    assertEquals(39.9526, httpRequest.getClientGeolocation().latitude(), 1e-9);
+    assertEquals(-75.1652, httpRequest.getClientGeolocation().longitude(), 1e-9);
+  }
+
+  @Test
+  public void testClientGeolocation_SemicolonSpaceFormat() {
+    // The eval latency proxy emits "lat; lon"; XdnHttpRequest normalizes it
+    // to "lat,lon" before calling Geolocation.parse.
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "39.9526; -75.1652");
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNotNull(httpRequest.getClientGeolocation());
+    assertEquals(39.9526, httpRequest.getClientGeolocation().latitude(), 1e-9);
+    assertEquals(-75.1652, httpRequest.getClientGeolocation().longitude(), 1e-9);
+  }
+
+  @Test
+  public void testClientGeolocation_Empty() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "");
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNull(httpRequest.getClientGeolocation());
+  }
+
+  @Test
+  public void testClientGeolocation_MalformedNonNumeric() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "abc,def");
+    // Must not throw; Geolocation.parse returns null on bad input.
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNull(httpRequest.getClientGeolocation());
+  }
+
+  @Test
+  public void testClientGeolocation_MalformedOutOfRange() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "100,200");
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNull(httpRequest.getClientGeolocation());
+  }
+
+  @Test
+  public void testClientGeolocation_MalformedWrongCardinality() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "42.0");
+    XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
+    assertNull(httpRequest.getClientGeolocation());
+  }
+
+  @Test
+  public void testClientGeolocation_HeaderSurvivesConstruction() {
+    // The constructor must leave the raw header in place so followers that
+    // deserialize the proto see it and re-parse into the same typed value.
+    // Stripping happens later, at the forwarder boundary in XdnGigapaxosApp.
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "39.9526,-75.1652");
+    new XdnHttpRequest(request, content);
+    assertEquals("39.9526,-75.1652", request.headers().get("X-Client-Location"));
+  }
+
+  @Test
+  public void testClientGeolocation_SurvivesProtoRoundTrip() {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "39.9526,-75.1652");
+    XdnHttpRequest original = new XdnHttpRequest(request, content);
+
+    byte[] bytes = original.toBytes();
+    XdnHttpRequest rehydrated =
+        XdnHttpRequest.createFromString(new String(bytes, StandardCharsets.ISO_8859_1));
+
+    assertNotNull(rehydrated);
+    assertNotNull(rehydrated.getClientGeolocation());
+    assertEquals(39.9526, rehydrated.getClientGeolocation().latitude(), 1e-9);
+    assertEquals(-75.1652, rehydrated.getClientGeolocation().longitude(), 1e-9);
+  }
+
+  @Test
+  public void testClientGeolocation_ProtoUsesTypedFieldNotHeader() throws Exception {
+    // Direct gate on the wire-size win: the typed field must be populated,
+    // and the raw X-Client-Location header must NOT appear in request_headers.
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    request.headers().add("X-Client-Location", "39.9526,-75.1652");
+    XdnHttpRequest xdnReq = new XdnHttpRequest(request, content);
+
+    byte[] bytes = xdnReq.toBytes();
+    // Strip the 4-byte packet-type prefix that XdnHttpRequest prepends in toBytes().
+    byte[] protoBytes = Arrays.copyOfRange(bytes, Integer.BYTES, bytes.length);
+    XdnHttpRequestProto.XdnHttpRequest proto =
+        XdnHttpRequestProto.XdnHttpRequest.parseFrom(protoBytes);
+
+    assertTrue(proto.hasClientGeolocation());
+    assertEquals(39.9526, proto.getClientGeolocation().getLatitude(), 1e-9);
+    assertEquals(-75.1652, proto.getClientGeolocation().getLongitude(), 1e-9);
+
+    for (XdnHttpRequestProto.XdnHttpRequest.Header h : proto.getRequestHeadersList()) {
+      assertFalse(
+          "X-Client-Location".equalsIgnoreCase(h.getName()),
+          "X-Client-Location must not be carried in request_headers; found: " + h.getName());
+    }
+  }
+
+  @Test
+  public void testClientGeolocation_AbsentRoundTrip() throws Exception {
+    HttpRequest request = helpCreateDummyHttpRequest();
+    HttpContent content = helpCreateDummyHttpContent(64);
+    XdnHttpRequest original = new XdnHttpRequest(request, content);
+
+    byte[] bytes = original.toBytes();
+    byte[] protoBytes = Arrays.copyOfRange(bytes, Integer.BYTES, bytes.length);
+    XdnHttpRequestProto.XdnHttpRequest proto =
+        XdnHttpRequestProto.XdnHttpRequest.parseFrom(protoBytes);
+    assertFalse(proto.hasClientGeolocation());
+
+    XdnHttpRequest rehydrated =
+        XdnHttpRequest.createFromString(new String(bytes, StandardCharsets.ISO_8859_1));
+    assertNotNull(rehydrated);
+    assertNull(rehydrated.getClientGeolocation());
+  }
+
+  @Test
+  public void testClientGeolocation_BackwardCompatHeaderFallback() {
+    // Simulate an old-binary sender: proto has no client_geolocation field,
+    // but carries X-Client-Location in request_headers. The new decode path
+    // must still populate the typed value from the header.
+    XdnHttpRequestProto.XdnHttpRequest proto =
+        XdnHttpRequestProto.XdnHttpRequest.newBuilder()
+            .setRequestId(12345L)
+            .setProtocolVersion(XdnHttpRequestProto.XdnHttpRequest.HttpProtocolVersion.HTTP_1_1)
+            .setRequestMethod(XdnHttpRequestProto.XdnHttpRequest.HttpMethod.GET)
+            .setRequestUri("/")
+            .addRequestHeaders(
+                XdnHttpRequestProto.XdnHttpRequest.Header.newBuilder()
+                    .setName("XDN")
+                    .setValue("dummyServiceName")
+                    .build())
+            .addRequestHeaders(
+                XdnHttpRequestProto.XdnHttpRequest.Header.newBuilder()
+                    .setName("X-Client-Location")
+                    .setValue("42.3736,-71.1097")
+                    .build())
+            .build();
+
+    byte[] protoBytes = proto.toByteArray();
+    byte[] packetTypePrefix = new byte[Integer.BYTES];
+    java.nio.ByteBuffer.wrap(packetTypePrefix)
+        .putInt(edu.umass.cs.xdn.request.XdnRequestType.XDN_SERVICE_HTTP_REQUEST.getInt());
+    byte[] wire = new byte[Integer.BYTES + protoBytes.length];
+    System.arraycopy(packetTypePrefix, 0, wire, 0, Integer.BYTES);
+    System.arraycopy(protoBytes, 0, wire, Integer.BYTES, protoBytes.length);
+
+    XdnHttpRequest rehydrated =
+        XdnHttpRequest.createFromString(new String(wire, StandardCharsets.ISO_8859_1));
+    assertNotNull(rehydrated);
+    Geolocation geo = rehydrated.getClientGeolocation();
+    assertNotNull(geo);
+    assertEquals(42.3736, geo.latitude(), 1e-9);
+    assertEquals(-71.1097, geo.longitude(), 1e-9);
   }
 
   private static HttpRequest helpCreateDummyHttpRequest() {
