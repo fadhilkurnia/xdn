@@ -15,9 +15,10 @@ import (
 
 // Proxy is our proxy handler that holds shared config data.
 type Proxy struct {
-	serverLocations map[string]ServerLocation
-	slowdownFactor  float64
-	httpClient      *http.Client
+	serverLocations       map[string]ServerLocation
+	slowdownFactor        float64
+	forwardClientLocation bool
+	httpClient            *http.Client
 }
 
 // ServeHTTP implements the http.Handler interface, handling each request.
@@ -66,9 +67,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	delayCalcDone := time.Now()
 
-	// Remove the special headers so they won't be forwarded upstream
+	// Remove the special headers so they won't be forwarded upstream.
+	// X-Request-Delay is always proxy-only. X-Client-Location is stripped by
+	// default (legacy behavior); set -forward-client-location to pass it
+	// through so the upstream XDN replica can parse it for demand profiling.
 	r.Header.Del("X-Request-Delay")
-	r.Header.Del("X-Client-Location")
+	if !p.forwardClientLocation {
+		r.Header.Del("X-Client-Location")
+	}
 
 	// Emulate the delay with sleep.
 	if requestDelayNs > 0 {
@@ -144,6 +150,9 @@ func main() {
 		os.Exit(1)
 	}
 	configPath := flag.String("config", "", "Path to JSON config file")
+	forwardClientLoc := flag.Bool("forward-client-location", false,
+		"If true, pass X-Client-Location through to the upstream server. "+
+			"Default: strip it (legacy behavior).")
 	flag.Parse()
 	if *configPath == "" {
 		flag.Usage()
@@ -170,9 +179,13 @@ func main() {
 
 	// Prepare our proxy and attach it to the default server mux.
 	proxy := &Proxy{
-		serverLocations: cfg.ServerLocations,
-		slowdownFactor:  cfg.SlowdownFactor,
-		httpClient:      client,
+		serverLocations:       cfg.ServerLocations,
+		slowdownFactor:        cfg.SlowdownFactor,
+		forwardClientLocation: *forwardClientLoc,
+		httpClient:            client,
+	}
+	if proxy.forwardClientLocation {
+		log.Printf(" Forwarding X-Client-Location header to upstream")
 	}
 	http.Handle("/", proxy)
 

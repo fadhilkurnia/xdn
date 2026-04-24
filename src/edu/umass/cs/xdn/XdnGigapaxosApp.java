@@ -2442,6 +2442,10 @@ public class XdnGigapaxosApp
             httpRequest.getHttpRequest().uri(),
             copiedContent);
     copy.headers().set(httpRequest.getHttpRequest().headers());
+    // Drop XDN-layer signals from the outbound copy so the containerized
+    // service never sees them. The header is preserved on the original
+    // request so followers can still reconstruct the parsed geolocation.
+    copy.headers().remove(XdnHttpRequest.X_CLIENT_LOCATION_HEADER);
     if (httpRequest.getHttpRequest() instanceof FullHttpRequest fullHttpRequest) {
       copy.trailingHeaders().set(fullHttpRequest.trailingHeaders());
     }
