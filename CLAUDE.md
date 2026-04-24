@@ -194,6 +194,13 @@ Supported via `ConsistencyModel`: linearizability (default), sequential, causal,
 eventual, pram, and client-centric variants. 
 Each maps to a coordinator in the corresponding protocol package.
 
+### Node Geolocation
+Each node's `(lat, lon)` can be set in the gigapaxos properties file (see
+`conf/gigapaxos.xdnlat.template.properties`) and is parsed via
+`PaxosConfig` / `DefaultNodeConfig` into the `edu.umass.cs.nio.interfaces.Geolocation`
+type. It flows through `ReconfigurableNodeConfig` and `Reconfigurator` into
+`GetReplicaPlacementRequest`, and is surfaced by `xdn service info`.
+
 ### `xdn-cli` subcommands (`xdn-cli/cmd/`)
 Cobra-based CLI. Top-level verbs include `launch`, `status`, `check`, and the `service` command group. `service` covers: `info`, `destroy`, `move` (relocate a service to new replica hosts; drives synchronous paxos leader change), `leader` (inspect/set the paxos leader). `launch` accepts `--num-replicas`, `--min-replicas`, `--max-replicas` in addition to `--image`, `--state`, `--deterministic`, etc. Mutating subcommands prompt for yes/no confirmation on stdin.
 
