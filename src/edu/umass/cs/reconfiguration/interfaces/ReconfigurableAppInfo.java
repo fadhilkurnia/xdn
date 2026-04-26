@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Set;
 
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
+import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 
 /**
@@ -42,4 +43,14 @@ public interface ReconfigurableAppInfo {
 	 *         to or removed from the system.
 	 */
 	public Map<String, InetSocketAddress> getAllActiveReplicas();
+
+	/**
+	 * @return A map from active-replica node ID to its configured
+	 *         {@link Geolocation}, for those nodes that have one configured.
+	 *         Nodes without a geolocation are omitted. Implementations that do
+	 *         not surface geolocation should return an empty map (the default).
+	 */
+	default Map<String, Geolocation> getActiveReplicaGeolocations() {
+		return Map.of();
+	}
 }
