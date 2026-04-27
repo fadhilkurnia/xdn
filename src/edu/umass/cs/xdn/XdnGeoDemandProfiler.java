@@ -6,6 +6,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableAppInfo;
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.NodeIdsMetadataPair;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -118,22 +119,22 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
       return false;
     }
     // Prototype: only clients that supply X-Client-Location contribute demand.
-    if (!(request instanceof XdnHttpRequest xdnReq)) {
-      return false;
-    }
-    Geolocation clientGeo = xdnReq.getClientGeolocation();
-    if (clientGeo == null) {
-      return false;
-    }
-
-    if (!eventQueue.offer(clientGeo)) {
-      LOGGER.log(
-          Level.FINE,
-          "XdnGeoDemandProfiler event queue full, dropping demand sample for {0}",
-          this.name);
+    // When HTTP batching is enabled requests arrive as XdnHttpRequestBatch; iterate
+    // its entries so per-request client locations still flow through.
+    boolean enqueuedAny = false;
+    if (request instanceof XdnHttpRequest xdnReq) {
+      enqueuedAny = enqueueIfGeo(xdnReq);
+    } else if (request instanceof XdnHttpRequestBatch batch) {
+      for (XdnHttpRequest sub : batch.getRequests()) {
+        enqueuedAny |= enqueueIfGeo(sub);
+      }
     } else {
-      ensureWorkerStarted();
+      return false;
     }
+    if (!enqueuedAny) {
+      return false;
+    }
+    ensureWorkerStarted();
 
     long now = System.currentTimeMillis();
     long last = lastDemandReportTimestamp.get();
@@ -147,6 +148,21 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
       return true;
     }
     return false;
+  }
+
+  private boolean enqueueIfGeo(XdnHttpRequest req) {
+    Geolocation geo = req.getClientGeolocation();
+    if (geo == null) {
+      return false;
+    }
+    if (!eventQueue.offer(geo)) {
+      LOGGER.log(
+          Level.FINE,
+          "XdnGeoDemandProfiler event queue full, dropping demand sample for {0}",
+          this.name);
+      return false;
+    }
+    return true;
   }
 
   private void ensureWorkerStarted() {
