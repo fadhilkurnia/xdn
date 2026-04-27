@@ -1,0 +1,78 @@
+// inter_replica_bw.bt
+//
+// Per-interval TCP byte counter for XDN inter-replica bandwidth tracing.
+// Aggregates bytes per (peer_ip, peer_port) per direction across all flows
+// where either endpoint port lies within an AR NIO port range.
+//
+// Positional args:
+//   $1 = port_low   (uint16)  e.g. 2000
+//   $2 = port_high  (uint16)  e.g. 2002
+//   $3 = interval_s (uint32)  snapshot interval in seconds
+//
+// Stdout protocol (parsed by trace_bw.py):
+//   # trace start: ports=[<low>,<high>] interval=<sec>s
+//   SNAP
+//   @out[<peer_ip>, <peer_port>]: <bytes>
+//   ...
+//   @in[<peer_ip>, <peer_port>]: <bytes>
+//   ...
+//   END
+
+#include <linux/socket.h>
+#include <net/sock.h>
+
+BEGIN {
+    printf("# trace start: ports=[%d,%d] interval=%ds\n", $1, $2, $3);
+}
+
+kprobe:tcp_sendmsg {
+    $sk = (struct sock *)arg0;
+    if ($sk->__sk_common.skc_family != 2 /* AF_INET */) { return; }
+
+    $size = (uint64)arg2;
+    $dport = bswap((uint16)$sk->__sk_common.skc_dport);
+    $sport = (uint16)$sk->__sk_common.skc_num;
+
+    // Match if either endpoint sits in the AR NIO port range. This catches
+    // both directions of a symmetric inter-AR connection regardless of which
+    // side opened it.
+    if (($dport >= (uint16)$1 && $dport <= (uint16)$2) ||
+        ($sport >= (uint16)$1 && $sport <= (uint16)$2)) {
+        @out[ntop($sk->__sk_common.skc_daddr), $dport] = sum($size);
+    }
+}
+
+kprobe:tcp_cleanup_rbuf {
+    $sk = (struct sock *)arg0;
+    if ($sk->__sk_common.skc_family != 2) { return; }
+
+    $copied = (int64)arg1;
+    if ($copied <= 0) { return; }
+
+    $dport = bswap((uint16)$sk->__sk_common.skc_dport);
+    $sport = (uint16)$sk->__sk_common.skc_num;
+    if (($dport >= (uint16)$1 && $dport <= (uint16)$2) ||
+        ($sport >= (uint16)$1 && $sport <= (uint16)$2)) {
+        @in[ntop($sk->__sk_common.skc_daddr), $dport] = sum((uint64)$copied);
+    }
+}
+
+interval:s:$3 {
+    printf("SNAP\n");
+    print(@out);
+    print(@in);
+    printf("END\n");
+    clear(@out);
+    clear(@in);
+}
+
+// On SIGINT/SIGTERM, flush any partial interval as one last frame so
+// trace_bw.py captures the tail rather than losing it.
+END {
+    printf("SNAP\n");
+    print(@out);
+    print(@in);
+    printf("END\n");
+    clear(@out);
+    clear(@in);
+}
