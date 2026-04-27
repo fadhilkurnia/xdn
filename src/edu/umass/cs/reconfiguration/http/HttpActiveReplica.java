@@ -943,6 +943,10 @@ public class HttpActiveReplica {
                     sendAsyncResponse(rctx, null, timeoutTask,
                             new RuntimeException("Request was not handled"));
                 }
+                if (handled) {
+                    this.arFunctions.updateDemandStatsFromHttp(
+                            httpRequest, clientInetSocketAddress.getAddress());
+                }
             });
         }
 
@@ -965,6 +969,8 @@ public class HttpActiveReplica {
                         } else {
                             sendAsyncResponse(
                                     rctx, completedRequest.getHttpResponse(), timeoutTask, null);
+                            arFunctions.updateDemandStatsFromHttp(
+                                    completedRequest, clientInetSocketAddress.getAddress());
                         }
                     });
         }

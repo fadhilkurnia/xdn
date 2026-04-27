@@ -1,0 +1,182 @@
+name: "Geo-demand placement smoke test"
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "src/edu/umass/cs/xdn/**"
+      - "src/edu/umass/cs/reconfiguration/**"
+      - "src/edu/umass/cs/nio/interfaces/Geolocation.java"
+      - "conf/gigapaxos.xdn.local.geodemand.properties"
+      - "xdn-cli/**"
+      - "bin/gpServer.sh"
+      - "bin/gpEnv.sh"
+      - "bin/build_xdn_cli.sh"
+      - "eval/geo_demand_smoke.py"
+      - ".github/workflows/geo-demand-smoke.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "src/edu/umass/cs/xdn/**"
+      - "src/edu/umass/cs/reconfiguration/**"
+      - "src/edu/umass/cs/nio/interfaces/Geolocation.java"
+      - "conf/gigapaxos.xdn.local.geodemand.properties"
+      - "xdn-cli/**"
+      - "bin/gpServer.sh"
+      - "bin/gpEnv.sh"
+      - "bin/build_xdn_cli.sh"
+      - "eval/geo_demand_smoke.py"
+      - ".github/workflows/geo-demand-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'oracle'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: xdn-cli/go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: pip install requests
+
+      - name: Set up Docker
+        uses: docker-practice/actions-setup-docker@master
+        timeout-minutes: 12
+
+      - name: Verify Docker and pre-pull bookcatalog image
+        run: |
+          set -x
+          docker version
+          docker pull fadhilkurnia/xdn-bookcatalog
+
+      - name: Set up rsync
+        uses: GuillaumeFalourd/setup-rsync@v1.2
+
+      - name: Build XDN jar and CLI
+        run: |
+          set -x
+          ant jar
+          bash bin/build_xdn_cli.sh
+          # build_xdn_cli.sh creates bin/xdn as a symlink to the host binary
+          # (matches the pattern used in ant-build-test.yml).
+          ln -sf "$(pwd)/bin/xdn" /usr/local/bin/xdn
+
+      - name: Start XDN cluster with geodemand config
+        run: |
+          set -x
+          mkdir -p /tmp/xdn /tmp/gigapaxos
+          # gpServer.sh forks JVMs and detaches; redirect its output to a log we
+          # can inspect after the fact for reconfiguration evidence.
+          ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.local.geodemand.properties start all > /tmp/xdn-cluster.log 2>&1
+          # Wait until the Reconfigurator HTTP endpoint is up (max 90s).
+          for i in $(seq 1 90); do
+            if grep -q "HttpReconfigurator ready" /tmp/xdn-cluster.log; then
+              echo "Cluster ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          grep -q "HttpReconfigurator ready" /tmp/xdn-cluster.log || {
+            echo "Cluster failed to come up. Tail of log:"
+            tail -100 /tmp/xdn-cluster.log
+            exit 1
+          }
+
+      - name: Launch bookcatalog service
+        env:
+          XDN_CONTROL_PLANE: localhost
+        run: |
+          set -x
+          xdn launch bookcatalog \
+            --image=fadhilkurnia/xdn-bookcatalog \
+            --state=/app/data/ \
+            --deterministic=true
+          # Give containers a few seconds to actually start.
+          sleep 5
+          xdn service info bookcatalog | tee /tmp/initial-placement.txt
+          # Sanity: must be at epoch=0 right after launch.
+          grep -q "epoch=0" /tmp/initial-placement.txt
+
+      - name: Send us-east-1 biased traffic
+        run: |
+          set -x
+          # 600 requests over ~24s spans at least two demand-report windows
+          # (MIN_DEMAND_REPORT_PERIOD_MS = 10s).
+          python3 eval/geo_demand_smoke.py --region us-east-1 --requests 600 --rate 25
+
+      - name: Verify reconfiguration toward us-east-1
+        env:
+          XDN_CONTROL_PLANE: localhost
+        run: |
+          set -x
+          # Poll for the active set to advance past epoch=0 (max 60s).
+          for i in $(seq 1 30); do
+            xdn service info bookcatalog > /tmp/final-placement.txt 2>&1 || true
+            if grep -qE "epoch=[1-9]" /tmp/final-placement.txt; then
+              echo "Reconfiguration observed after ${i} polls"
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/final-placement.txt
+          if ! grep -qE "epoch=[1-9]" /tmp/final-placement.txt; then
+            echo "FAIL: reconfiguration never fired"
+            exit 1
+          fi
+          # Biasing demand to us-east-1 puts the centroid near (38.5, -78).
+          # The 3 closest actives to that point are east1a, east1b, and the
+          # nearer of {west1a, west1b}, so the post-reconfig group must contain
+          # both us-east-1 nodes. Counting placement-table lines that mention an
+          # east1* node gives us a structural invariant that does not depend on
+          # which initial group the RC happened to pick.
+          east_count=$(grep -cE "east1[ab]" /tmp/final-placement.txt || true)
+          if [ "${east_count}" -lt 2 ]; then
+            echo "FAIL: expected >=2 us-east-1 nodes in active set, saw ${east_count}"
+            echo "--- placement ---"
+            cat /tmp/final-placement.txt
+            echo "--- relevant log lines ---"
+            grep -E "shouldReport=true|getNewActivesPlacement|received DemandReport|shouldReconfigure2" /tmp/xdn-cluster.log | tail -30
+            exit 1
+          fi
+          # The preferred coordinator should be in us-east-1 too; the placement
+          # table renders the leader on its own row with role=leader.
+          leader_line=$(grep "leader" /tmp/final-placement.txt || true)
+          if ! echo "${leader_line}" | grep -qE "east1[ab]"; then
+            echo "FAIL: leader is not in us-east-1: ${leader_line}"
+            exit 1
+          fi
+
+      - name: Dump cluster log on failure
+        if: failure()
+        run: |
+          echo "=== cluster log (last 200 lines) ==="
+          tail -200 /tmp/xdn-cluster.log || true
+          echo "=== docker ps ==="
+          docker ps -a || true
+          echo "=== xdn service info ==="
+          XDN_CONTROL_PLANE=localhost xdn service info bookcatalog || true
+
+      - name: Tear down cluster
+        if: always()
+        run: |
+          ./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.local.geodemand.properties forceclear all || true
+          docker rm -f $(docker ps -aq --filter "name=bookcatalog") 2>/dev/null || true

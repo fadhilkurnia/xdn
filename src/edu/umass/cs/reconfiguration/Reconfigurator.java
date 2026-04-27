@@ -2240,6 +2240,20 @@ public class Reconfigurator<NodeIDType> implements
                 return Reconfigurator.this.consistentNodeConfig
                         .getAllActiveReplicas();
             }
+
+            @Override
+            public Map<String, Geolocation> getActiveReplicaGeolocations() {
+                Map<String, Geolocation> result = new HashMap<>();
+                for (NodeIDType id : Reconfigurator.this.consistentNodeConfig
+                        .getActiveReplicas()) {
+                    Geolocation geo = Reconfigurator.this.consistentNodeConfig
+                            .getNodeGeolocation(id);
+                    if (geo != null) {
+                        result.put(id.toString(), geo);
+                    }
+                }
+                return result;
+            }
         };
     }
 
