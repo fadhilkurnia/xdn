@@ -75,10 +75,9 @@ jobs:
         run: |
           set -x
           ant jar
+          # build_xdn_cli.sh builds the host binary, symlinks bin/xdn to it,
+          # and installs /usr/local/bin/xdn (with sudo fallback if needed).
           bash bin/build_xdn_cli.sh
-          # build_xdn_cli.sh creates bin/xdn as a symlink to the host binary
-          # (matches the pattern used in ant-build-test.yml).
-          ln -sf "$(pwd)/bin/xdn" /usr/local/bin/xdn
 
       - name: Start XDN cluster with geodemand config
         run: |

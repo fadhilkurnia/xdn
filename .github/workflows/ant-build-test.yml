@@ -42,20 +42,31 @@ jobs:
       run: |
         set -x  # Enable command echo for debugging
         sudo apt-get update
-        sudo apt-get install -y pkg-config libfuse3-dev fuse3
+        sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
         sudo modprobe fuse  # Ensure FUSE kernel module is loaded
         sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
         # Verify FUSE setup
         ls -l /dev/fuse
         grep user_allow_other /etc/fuse.conf
         fusermount3 -V
+    - name: 🐹 Set up Go  # Required for build_xdn_cli.sh
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: xdn-cli/go.mod
+    - name: 🦀 Set up Rust  # Required for build_xdn_fuselog.sh (fuserust)
+      uses: dtolnay/rust-toolchain@stable
     - name: 🏗️ Compiling the source code into a jar archive and prepare binaries ...
       run: |
+        set -x
         ant jar
-        ln -s -- "$(pwd)/bin/fuselog" /usr/local/bin/fuselog
-        ln -s -- "$(pwd)/bin/fuselog-apply" /usr/local/bin/fuselog-apply
-        ln -s -- "$(pwd)/bin/xdn" /usr/local/bin/xdn
-        ln -s -- "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
+        # Both build scripts compile their host binaries and install them
+        # under /usr/local/bin/ themselves. The Java state-diff recorders
+        # (FuselogStateDiffRecorder, FuseRustStateDiffRecorder) hardcode
+        # those absolute paths.
+        bash bin/build_xdn_cli.sh
+        bash bin/build_xdn_fuselog.sh install
+        # xdnd is a checked-in shell script; no build script wraps it.
+        ln -sf "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
     # - name: 🧪 Running reconfiguration tests with ant ...
     #   run: ant test
     - name: 🧪 Running XDN unit tests with ant ...

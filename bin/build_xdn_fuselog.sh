@@ -7,7 +7,11 @@
 #   ./bin/build_xdn_fuselog.sh           # Build both C++ and Rust
 #   ./bin/build_xdn_fuselog.sh cpp       # Build C++ only
 #   ./bin/build_xdn_fuselog.sh rust      # Build Rust only
-#   ./bin/build_xdn_fuselog.sh install   # Build both and install to /usr/local/bin
+#   ./bin/build_xdn_fuselog.sh install   # Synonym for `all` (kept for back-compat)
+#
+# Every target installs /usr/local/bin/ symlinks for whatever was built.
+# The Java state-diff recorders (FuselogStateDiffRecorder, FuseRustStateDiffRecorder)
+# look up these binaries by absolute path under /usr/local/bin/.
 
 set -e
 
@@ -41,12 +45,7 @@ function main() {
     rust)
       build_rust
       ;;
-    install)
-      build_cpp
-      build_rust
-      install_binaries
-      ;;
-    all)
+    all|install)
       build_cpp
       build_rust
       ;;
@@ -58,6 +57,7 @@ function main() {
   esac
 
   stage_project_binaries
+  install_symlinks
   echo "Build complete."
 }
 
@@ -130,32 +130,32 @@ function stage_project_binaries() {
   fi
 }
 
-function install_binaries() {
-  echo "=== Installing binaries to /usr/local/bin/ ==="
+function install_symlinks() {
+  echo "=== Installing symlinks at /usr/local/bin/ ==="
 
   local INSTALL_DIR="/usr/local/bin"
+  local names=(fuselog fuselog-apply fuserust fuserust-apply)
+  local name src dst
 
-  # C++ binaries
-  if [[ -f "$CPP_DIR/fuselog" ]]; then
-    cp "$CPP_DIR/fuselog" "$INSTALL_DIR/fuselog"
-    echo "  Installed fuselog"
-  fi
-  if [[ -f "$CPP_DIR/fuselog-apply" ]]; then
-    cp "$CPP_DIR/fuselog-apply" "$INSTALL_DIR/fuselog-apply"
-    echo "  Installed fuselog-apply"
-  fi
+  for name in "${names[@]}"; do
+    src="$BIN_DIR/$name"
+    dst="$INSTALL_DIR/$name"
 
-  # Rust binaries
-  if [[ -f "$RUST_DIR/target/release/fuselog_core" ]]; then
-    cp "$RUST_DIR/target/release/fuselog_core" "$INSTALL_DIR/fuserust"
-    echo "  Installed fuserust"
-  fi
-  if [[ -f "$RUST_DIR/target/release/fuselog_apply" ]]; then
-    cp "$RUST_DIR/target/release/fuselog_apply" "$INSTALL_DIR/fuserust-apply"
-    echo "  Installed fuserust-apply"
-  fi
+    # Only symlink binaries that this invocation actually built+staged.
+    # `cpp` runs leave fuserust* missing; `rust` runs leave fuselog* missing.
+    [[ -f "$src" ]] || continue
 
-  echo "  Installation complete."
+    # Try without sudo first (works on CI runners and on macOS where
+    # /usr/local/bin is user-writable); fall back to sudo on Linux dev machines.
+    if ln -sf "$src" "$dst" 2>/dev/null; then
+      echo "  Symlinked: $dst -> $src"
+    elif command -v sudo &>/dev/null && sudo ln -sf "$src" "$dst"; then
+      echo "  Symlinked (with sudo): $dst -> $src"
+    else
+      echo "  Warning: could not create $dst. To install manually:"
+      echo "    sudo ln -sf $src $dst"
+    fi
+  done
 }
 
 main "$@"

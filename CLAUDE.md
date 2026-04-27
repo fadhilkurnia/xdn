@@ -201,6 +201,15 @@ Each node's `(lat, lon)` can be set in the gigapaxos properties file (see
 type. It flows through `ReconfigurableNodeConfig` and `Reconfigurator` into
 `GetReplicaPlacementRequest`, and is surfaced by `xdn service info`.
 
+### Client Geolocation and Geo-Demand Profiling
+Clients can advertise their location via the `X-Client-Location: <lat>,<lon>`
+HTTP header. `XdnGeoDemandProfiler` parses that header on the AR frontend and
+accumulates per-region demand in a background worker; the demand distribution
+feeds into `XdnReplicaPlacementProfile` so the Reconfigurator can re-place
+replicas closer to where load is actually coming from. The geo-demand
+end-to-end pipeline is exercised by `eval/geo_demand_smoke.py` (driven by
+the `geo-demand-smoke.yml` CI job).
+
 ### `xdn-cli` subcommands (`xdn-cli/cmd/`)
 Cobra-based CLI. Top-level verbs include `launch`, `status`, `check`, and the `service` command group. `service` covers: `info`, `destroy`, `move` (relocate a service to new replica hosts; drives synchronous paxos leader change), `leader` (inspect/set the paxos leader). `launch` accepts `--num-replicas`, `--min-replicas`, `--max-replicas` in addition to `--image`, `--state`, `--deterministic`, etc. Mutating subcommands prompt for yes/no confirmation on stdin.
 
@@ -213,6 +222,8 @@ URL query parameters prefixed with `_xdn` (e.g. `_xdnsvc`) are consumed at the X
 - `conf/gigapaxos.cloudlab.properties` — CloudLab cluster deployment
 - `conf/gigapaxos.xdn.cloudlab.local.{10,13}nodes.properties` — Multi-node CloudLab variants
 - `conf/gigapaxos.xdn.3way.properties` — 3-way replication variant
+- `conf/gigapaxos.xdn.local.geodemand.properties` — Local config used by the geo-demand smoke test (multi-region nodes on loopback)
+- `conf/gigapaxos.xdnlat.template.properties` — Template showing the `(lat, lon)` syntax for node geolocation
 - `testing.properties` — Test configuration (nodes, load, batch settings)
 
 Key config properties: `APPLICATION`, `REPLICA_COORDINATOR_CLASS`, `XDN_PB_STATEDIFF_RECORDER_TYPE`, `HTTP_AR_FRONTEND_BATCH_ENABLED`, `NIO_MAX_PAYLOAD_SIZE` (default 128MB).
@@ -224,6 +235,7 @@ For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifec
 - **ant-build-test.yml**: Build + run `xdn-full-tests` on push/PR to master/main (JDK 21, Docker, FUSE, rsync)
 - **xdn-cli-ci.yml**: gofmt check + CLI binary build on changes to `xdn-cli/`
 - **google-java-format.yml**: Formatting check on XDN Java file changes
+- **geo-demand-smoke.yml**: End-to-end smoke test for geo-demand-driven replica placement (runs `eval/geo_demand_smoke.py` against a loopback cluster started with `gigapaxos.xdn.local.geodemand.properties`, then asserts reconfiguration and leader move into us-east-1)
 - **test-report.yml**: JUnit test-result reporter (currently disabled — `if: false` — gated on the XDN test workflow)
 
 ## Conventions
