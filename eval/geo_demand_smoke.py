@@ -100,6 +100,14 @@ def parse_args() -> argparse.Namespace:
         default=5.0,
         help="Per-request timeout in seconds. Default: 5",
     )
+    parser.add_argument(
+        "--max-fail-pct",
+        type=float,
+        default=5.0,
+        help="Exit non-zero if the percentage of failed requests exceeds this. "
+        "Default: 5.0. Brief failures are expected during the leader-change "
+        "window that this test deliberately triggers.",
+    )
     return parser.parse_args()
 
 
@@ -162,12 +170,23 @@ def main() -> int:
                 time.sleep(sleep_for)
 
     elapsed = time.monotonic() - start
-    print(f"done. sent={sent} ok={ok} failed={failed} elapsed={elapsed:.1f}s")
+    fail_pct = (100.0 * failed / sent) if sent > 0 else 0.0
+    print(
+        f"done. sent={sent} ok={ok} failed={failed} ({fail_pct:.2f}%) "
+        f"elapsed={elapsed:.1f}s"
+    )
     print(
         "Wait > 10s for the demand report to flush, then run "
         f"`xdn service info {args.service}` to check the new active set."
     )
-    return 0 if failed == 0 else 1
+    if fail_pct > args.max_fail_pct:
+        print(
+            f"FAIL: failure rate {fail_pct:.2f}% exceeds threshold "
+            f"{args.max_fail_pct:.2f}%",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
