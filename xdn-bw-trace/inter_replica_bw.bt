@@ -1,50 +1,73 @@
 // inter_replica_bw.bt
 //
-// Per-interval TCP byte counter for XDN inter-replica bandwidth tracing.
-// Aggregates bytes per (peer_ip, peer_port) per direction across all flows
-// where either endpoint port lies within an AR NIO port range.
+// Per-interval TCP byte counter for XDN bandwidth tracing. Captures both
+// inter-replica TCP flows (NIO listener ports) and client<->replica HTTP
+// flows (AR HTTP frontend ports). A flow is matched if either endpoint
+// sits in EITHER configured port range.
 //
 // Positional args:
-//   $1 = port_low   (uint16)  e.g. 2000
-//   $2 = port_high  (uint16)  e.g. 2002
-//   $3 = interval_s (uint32)  snapshot interval in seconds
+//   $1 = nio_low    (uint16)  AR NIO listener range low,  e.g. 2000
+//   $2 = nio_high   (uint16)  AR NIO listener range high, e.g. 2004
+//   $3 = http_low   (uint16)  AR HTTP frontend range low,  e.g. 2300
+//   $4 = http_high  (uint16)  AR HTTP frontend range high, e.g. 2304
+//   $5 = interval_s (uint32)  snapshot interval in seconds
 //
 // Stdout protocol (parsed by trace_bw.py):
 //   # trace start: ports=[<low>,<high>] interval=<sec>s
 //   SNAP
-//   @out[<peer_ip>, <peer_port>]: <bytes>
+//   @out[<pid>, <local_port>, <peer_ip>, <peer_port>]: <bytes>
 //   ...
-//   @in[<peer_ip>, <peer_port>]: <bytes>
+//   @in[<pid>, <local_port>, <peer_ip>, <peer_port>]: <bytes>
 //   ...
 //   END
-
-#include <linux/socket.h>
-#include <net/sock.h>
+//
+// Events are keyed by the tuple (pid, local_port, peer_ip, peer_port). Both
+// kprobes fire in the JVM thread's user context (sendmsg via send()/write(),
+// cleanup_rbuf via the recv() path), so the kernel pid identifies the local
+// AR. trace_bw.py post-processes these tuples into a (local_id -> peer_id)
+// bandwidth matrix; ephemeral peer ports are resolved by cross-referencing
+// against rows where the same port appears as someone's local_port.
+//
+// `struct sock` is resolved from kernel BTF (/sys/kernel/btf/vmlinux);
+// no kernel-header #includes are needed on bpftrace 0.21+.
 
 BEGIN {
-    printf("# trace start: ports=[%d,%d] interval=%ds\n", $1, $2, $3);
+    printf("# trace start: nio=[%d,%d] http=[%d,%d] interval=%ds\n",
+           $1, $2, $3, $4, $5);
 }
 
+// Java NIO (gigapaxos) opens IPv6 sockets even for 127.0.0.1 — peers appear
+// as ::ffff:127.0.0.1. We accept both AF_INET (2) and AF_INET6 (10) and
+// format the peer address with the family-appropriate ntop() call.
 kprobe:tcp_sendmsg {
     $sk = (struct sock *)arg0;
-    if ($sk->__sk_common.skc_family != 2 /* AF_INET */) { return; }
+    $fam = $sk->__sk_common.skc_family;
+    if ($fam != 2 && $fam != 10) { return; }
 
     $size = (uint64)arg2;
     $dport = bswap((uint16)$sk->__sk_common.skc_dport);
     $sport = (uint16)$sk->__sk_common.skc_num;
 
-    // Match if either endpoint sits in the AR NIO port range. This catches
-    // both directions of a symmetric inter-AR connection regardless of which
-    // side opened it.
+    // Match if either endpoint sits in the AR NIO range (inter-replica
+    // Paxos/NIO traffic) OR in the AR HTTP frontend range (client<->AR
+    // HTTP traffic). This catches both directions of either kind of flow
+    // regardless of which side opened the connection.
     if (($dport >= (uint16)$1 && $dport <= (uint16)$2) ||
-        ($sport >= (uint16)$1 && $sport <= (uint16)$2)) {
-        @out[ntop($sk->__sk_common.skc_daddr), $dport] = sum($size);
+        ($sport >= (uint16)$1 && $sport <= (uint16)$2) ||
+        ($dport >= (uint16)$3 && $dport <= (uint16)$4) ||
+        ($sport >= (uint16)$3 && $sport <= (uint16)$4)) {
+        if ($fam == 2) {
+            @out[pid, $sport, ntop($sk->__sk_common.skc_daddr), $dport] = sum($size);
+        } else {
+            @out[pid, $sport, ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8), $dport] = sum($size);
+        }
     }
 }
 
 kprobe:tcp_cleanup_rbuf {
     $sk = (struct sock *)arg0;
-    if ($sk->__sk_common.skc_family != 2) { return; }
+    $fam = $sk->__sk_common.skc_family;
+    if ($fam != 2 && $fam != 10) { return; }
 
     $copied = (int64)arg1;
     if ($copied <= 0) { return; }
@@ -52,12 +75,18 @@ kprobe:tcp_cleanup_rbuf {
     $dport = bswap((uint16)$sk->__sk_common.skc_dport);
     $sport = (uint16)$sk->__sk_common.skc_num;
     if (($dport >= (uint16)$1 && $dport <= (uint16)$2) ||
-        ($sport >= (uint16)$1 && $sport <= (uint16)$2)) {
-        @in[ntop($sk->__sk_common.skc_daddr), $dport] = sum((uint64)$copied);
+        ($sport >= (uint16)$1 && $sport <= (uint16)$2) ||
+        ($dport >= (uint16)$3 && $dport <= (uint16)$4) ||
+        ($sport >= (uint16)$3 && $sport <= (uint16)$4)) {
+        if ($fam == 2) {
+            @in[pid, $sport, ntop($sk->__sk_common.skc_daddr), $dport] = sum((uint64)$copied);
+        } else {
+            @in[pid, $sport, ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8), $dport] = sum((uint64)$copied);
+        }
     }
 }
 
-interval:s:$3 {
+interval:s:$5 {
     printf("SNAP\n");
     print(@out);
     print(@in);

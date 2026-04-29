@@ -1,126 +1,233 @@
 # xdn-bw-trace
 
-Per-service inter-replica TCP bandwidth tracer for XDN.
+Per-service inter-replica + client⇄replica TCP bandwidth tracer for XDN,
+plus a small set of plotting utilities for turning the resulting CSV
+into bandwidth/latency graphs.
 
-A bpftrace probe (`inter_replica_bw.bt`) counts TCP bytes per
-`(peer_ip, peer_port)` per direction across the AR NIO port range, and a
-Python driver (`trace_bw.py`) parses the gigapaxos properties file for
-cluster discovery, launches the probe, drives HTTP traffic at a single
-service, and writes a per-interval CSV.
+## What's in this directory
 
-This first cut assumes **one service per cluster at a time** — under that
-assumption, the cluster-wide `(peer_i, peer_j)` byte matrix from bpftrace
-*is* the per-service bandwidth map; no application instrumentation is
-needed. Multi-service attribution and AR-JVM integration are deferred.
+| File | Purpose |
+|------|---------|
+| `inter_replica_bw.bt` | bpftrace probe: kprobes on `tcp_sendmsg` / `tcp_cleanup_rbuf`, aggregates bytes by `(pid, local_port, peer_ip, peer_port)` and emits per-interval snapshots. |
+| `trace_bw.py` | driver: discovers the cluster via the RC HTTP API, launches the probe, drives a mixed read/write workload at every replica in parallel, writes a per-event CSV plus a `.meta.json` sidecar. |
+| `plot_bw_graph.py` | renders a directed bandwidth graph (`DiGraph`) from the CSV: replicas on a circle, per-replica `client-ARx` vertices on an outer ring. |
+| `plot_lat_graph.py` | renders an inter-replica latency graph computed analytically from each replica's `(lat, lon)` (Haversine / fiber-speed); supports `circle` and `geo` layouts. |
+| `_plotutil.py` | helpers shared by the two plot scripts (Bezier label placement, AR-on-circle layout). |
+| `results/` | default output directory for CSVs / PNGs / meta.json. |
 
 ## Pre-flight
 
-- Linux host with `bpftrace` installed (`apt install bpftrace`).
-- An XDN cluster running with the same properties file you'll pass via
-  `--config`.
-- A service deployed, e.g.:
+- Linux host with `bpftrace` ≥ 0.21 (uses kernel BTF, no kernel headers
+  required). The `inter_replica_bw.bt` script does not `#include` any
+  Linux header.
+- An XDN cluster running with the same `gigapaxos.properties` file you
+  pass via `--config`.
+- The service deployed, e.g.:
   ```
   xdn launch bookcatalog --image=fadhilkurnia/xdn-bookcatalog \
       --state=/app/data/ --deterministic=true
   ```
 - Run as root, or with passwordless `sudo` (bpftrace requires `CAP_BPF`).
+- Python deps: `requests`, `networkx`, `matplotlib`, `numpy`.
 
 ## Quick start
 
 ```bash
+# 1. Trace: drives 80% GET / 20% PUT at every replica in parallel.
 sudo python3 xdn-bw-trace/trace_bw.py \
     --config conf/gigapaxos.xdn.local.properties \
     --service bookcatalog \
     --duration 30 --interval 5 --rate 20
+
+# 2. Bandwidth graph.
+python3 xdn-bw-trace/plot_bw_graph.py \
+    xdn-bw-trace/results/bookcatalog-<ts>.csv
+
+# 3. Latency graph (estimated from geolocations, no live measurement).
+python3 xdn-bw-trace/plot_lat_graph.py \
+    --config conf/gigapaxos.xdn.local.properties \
+    --service bookcatalog
 ```
 
-Default output: `xdn-bw-trace/results/<service>-<unix-ts>.csv`.
+`trace_bw.py` produces `<service>-<unix-ts>.csv` plus a sibling
+`<service>-<unix-ts>.meta.json` in `xdn-bw-trace/results/`. The plot
+scripts auto-pick up the meta sidecar to render a workload subtitle.
+
+## What `trace_bw.py` captures
+
+The bpftrace probe matches every TCP flow where either endpoint sits in
+the AR NIO range **or** the AR HTTP frontend range, so the CSV includes
+both inter-replica Paxos traffic (NIO listeners) and client⇄replica
+HTTP traffic (HTTP frontends, port = NIO port + 300).
+
+Replica identity is reconstructed in userspace by:
+
+- mapping the kernel `pid` for each event to an AR id via a one-shot
+  scan of `/proc/<pid>/cmdline` for `…ReconfigurableNode AR<N>` (so
+  bpftrace can attach to an already-running cluster — no need to start
+  before the JVMs);
+- mapping listener-port → AR id from the RC's placement endpoint;
+- cross-correlating ephemeral ports against rows where the same number
+  appears as someone else's `local_port` (recovers `(i, j)` even on
+  loopback).
+
+Non-AR participants in HTTP flows collapse into one `client-<AR>`
+vertex per replica (so each replica's external traffic is visible as
+its own pair of edges instead of a shared client hub).
 
 ## CSV schema
 
-One row per `(snapshot, direction, peer_ip, peer_port)`:
-
 ```
-interval_start_unix,interval_end_unix,direction,peer_ip,peer_port,bytes
-1730000005,1730000010,out,127.0.0.2,2001,1832412
-1730000005,1730000010,in,127.0.0.2,2001,512768
-1730000010,1730000015,out,127.0.0.2,2001,1755904
-...
+interval_start_unix,interval_end_unix,direction,
+local_id,local_pid,local_port,
+peer_id,peer_ip,peer_port,
+bytes
 ```
 
-Long-form so you can pivot in pandas/CSV/Excel into matrices, time series,
-or directional rollups without the tool prejudging the use case.
+`local_id` and `peer_id` are AR ids (`AR0`, `AR1`, …) for inter-replica
+flows or `client-AR<X>` for the client side of HTTP flows. The raw
+`local_pid`, `local_port`, `peer_ip`, `peer_port` columns are kept for
+debugging / re-resolution.
 
-## CLI flags
+## Meta sidecar
+
+Alongside each CSV, `trace_bw.py` writes a `.meta.json` with:
+service name, target ids, rate / duration / interval / warmup, read
+ratio, read & write request specs, run totals (sent/ok/failed/reads/
+writes/elapsed), and a `service_info` block populated from each AR's
+`/api/v2/services/<svc>/replica/info` endpoint (`protocol`,
+`consistency`, `requested_consistency`, `deterministic`).
+
+`plot_bw_graph.py` renders these fields as the figure's subtitle:
+
+```
+service=bookcatalog · protocol=PaxosReplicaCoordinator ·
+consistency=Linearizability · r/w=80%/20% · rate=20 req/s × 5 replicas ·
+duration=30s
+read=GET /api/books/1 · write=PUT /api/books/1 · sent reads=… writes=…
+```
+
+## Workload mix and seeding
+
+By default the driver sends 80% reads (`GET /api/books/1`) and 20%
+writes (`PUT /api/books/1`) — the read targets a specific id so the
+response payload size is constant per request. Before traffic starts,
+the driver probes `--path` on the first target; if that returns 404 it
+POSTs `--seed-body` to `--seed-path` (default `/api/books`) so the
+read/write targets resolve cleanly.
+
+For services other than bookcatalog, override `--path`, `--write-path`,
+`--write-body`, `--write-method`, and either `--seed-path`/`--seed-body`
+or pass `--no-seed`.
+
+## CLI flags — `trace_bw.py`
+
+Discovery / topology:
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--config` | (required) | path to gigapaxos properties file |
-| `--service` | (required) | service name (sent in `XDN:` header) |
-| `--target` | first `active.*` in config | which AR to drive HTTP traffic against |
-| `--path` | `/` | HTTP request path |
-| `--method` | `GET` | HTTP method |
-| `--rate` | `20` | request rate (req/s) |
-| `--duration` | `60` | total trace duration (seconds) |
+| `--config` | (required) | gigapaxos properties (used to derive RC endpoint and report node geolocations) |
+| `--service` | (required) | service name; sent in `XDN:` header and used to query the RC's placement endpoint |
+| `--reconfigurator` | derived from `--config` | `host[:port]` override for the RC HTTP endpoint (port defaults to NIO port + 300) |
+| `--target` | every replica in the placement | comma-separated allowlist of replica ids (e.g. `AR1,AR3`) to drive traffic at |
+
+Workload:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--rate` | `20` | per-replica request rate (req/s); aggregate offered load is `rate × len(targets)` |
+| `--duration` | `60` | trace duration (seconds) |
+| `--read-ratio` | `0.8` | fraction of requests that are reads (vs. writes); use `1.0` / `0.0` for read- or write-only |
+| `--path`, `--method` | `/api/books/1`, `GET` | read request path / method |
+| `--write-path`, `--write-method` | `/api/books/1`, `PUT` | write request path / method |
+| `--write-body`, `--write-content-type` | small JSON / `application/json` | write request body and `Content-Type` |
+| `--seed-path`, `--seed-body`, `--no-seed` | `/api/books`, JSON, off | one-shot seeding of the target item before traffic starts |
+| `--timeout` | `5` | per-request HTTP timeout (seconds) |
+| `--warmup` | `2` | wait between bpftrace start and traffic start (seconds) |
+
+Probe:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
 | `--interval` | `5` | bpftrace snapshot interval (seconds) |
-| `--warmup` | `2` | wait between bpftrace start and traffic start |
-| `--output` | auto | CSV output path |
 | `--bpftrace-script` | sibling `inter_replica_bw.bt` | override probe script |
-| `--timeout` | `5` | per-request HTTP timeout |
+| `--output` | auto | CSV path; meta sidecar lives next to it |
 
-## How it works
+## CLI flags — `plot_bw_graph.py`
 
-1. **Discovery.** Reads `active.<name>=host:port` and
-   `reconfigurator.<name>=host:port` from the properties file. Computes
-   each AR's HTTP frontend port as `nio_port + 300` (the offset is
-   hardcoded in the XDN codebase per `CLAUDE.md`).
-2. **Probe.** `bpftrace` hooks `kprobe:tcp_sendmsg` (outbound) and
-   `kprobe:tcp_cleanup_rbuf` (inbound). Filters to flows where either
-   endpoint port is within `[min(nio_ports), max(nio_ports)]`. Aggregates
-   bytes per `(peer_ip, peer_port)` per direction. Snapshots+resets every
-   `--interval` seconds, plus once on shutdown.
-3. **Traffic.** A single `requests.Session()` drives `--rate` req/s at
-   `http://<target_host>:<target_http><--path>` with `XDN: <service>` for
-   `--duration` seconds.
-4. **CSV.** Snapshot frames are tagged with the wall-clock time at which
-   the driver observed each `SNAP` line; intervals are
-   `[prev_snap, current_snap]`.
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `csv` (positional) | (required) | path to a `trace_bw.py` CSV |
+| `--direction` | `out` | `out` (sender-side, counts each flow once), `in` (receiver-side), or `both` (double-count, sanity only) |
+| `--include-unknown` | off | keep rows whose `local_id` / `peer_id` is `unknown` |
+| `--unit` | `KB` | `B` / `KB` / `MB` for matrix and edge labels |
+| `--output` | sibling PNG | output image path |
+
+Vertices: ARs on an inner unit circle (round, blue); each
+`client-ARx` on an outer ring at the matching angle (square, orange).
+Directed edges, two arcs per pair, edge labels positioned along their
+own arc with a fixed data-coordinate offset before the arrowhead so
+labels never cover the arrow.
+
+## CLI flags — `plot_lat_graph.py`
+
+Latency is computed analytically from each replica's `(lat, lon)`:
+Haversine great-circle distance divided by `c × fiber_fraction`. This
+is a propagation-only lower bound — real internet RTT is typically
+1.5–2× higher.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--config` | (required if no `--service`) | gigapaxos properties; reads `active.<id>.geolocation` |
+| `--service` | — | if set, queries the RC's placement endpoint and uses only the replicas hosting this service (and their geolocations) |
+| `--reconfigurator` | derived from `--config` | RC endpoint override, same shape as `trace_bw.py` |
+| `--unit` | `ms` | `ms` or `us` for labels and the printed matrix |
+| `--rtt` | off (one-way) | display 2× one-way |
+| `--fiber-fraction` | `0.667` | effective signal speed as a fraction of c |
+| `--layout` | `circle` | `circle` (matches `plot_bw_graph.py`) or `geo` (equirectangular projection of `(lon, lat)`) |
+| `--min-node-spacing` | `0.20` | (geo only) minimum distance in normalized data units between any two replicas after projection; tunable to trade ratio fidelity against label readability |
+| `--output` | auto | output image path |
+
+`geo` mode forces equal lat/lon aspect (`set_aspect("equal",
+adjustable="datalim")`), so 1° lat renders the same length as 1° lon.
+Replicas closer than `--min-node-spacing` after projection are pushed
+apart along their connecting line by the smallest amount that prevents
+disk overlap, so geographic ratios remain close to the real ones.
+
+## Distributed deployment
+
+`bpftrace` only sees its host's kernel, so today's `trace_bw.py` is a
+single-host tool: it captures everything cleanly when the AR JVMs and
+the driver run on the same host (loopback / single-machine), and only
+the local AR's traffic when run on one node of a real distributed
+cluster. To assemble a global matrix on a real cluster, either:
+
+1. run one `trace_bw.py` per AR host and concatenate CSVs (each
+   instance's `pid_to_ar` resolves the single AR JVM on its host;
+   `local_id` is implicit), or
+2. (TODO) split the script into separate capture / drive entry points
+   so the driver can be a single client elsewhere.
 
 ## Caveats
 
-- **Linux + root.** No macOS path. Use a Linux dev box, a CloudLab node,
-  or a VM.
-- **Wire bytes.** Counts include TCP/TLS framing and any retransmits, not
-  just application payload. That's fine for placement; flag it if
+- **Linux + root.** No macOS path.
+- **Wire bytes.** Counts include TCP/TLS framing and retransmits, not
+  just application payload. Fine for placement decisions; flag if
   publishing numbers.
-- **Single-host trace.** This iteration runs bpftrace only on the host
-  where the script is executed, so the resulting CSV is one row of the
-  inter-replica matrix from that host's perspective. Run the tool on each
-  AR (with the same `--config`, `--service`, etc.) to assemble the full
-  symmetric matrix.
-- **Port range filtering.** Any TCP flow on a port within
-  `[min(nio_ports), max(nio_ports)]` is counted, including non-AR
-  processes. On a dedicated AR host this is fine; on shared hosts you
-  may want to narrow the filter.
-
-## Verifying the output
-
-Quick sanity checks on a single CSV:
-
-- With `--rate 0` (no driven traffic), per-interval totals are small and
-  roughly constant — paxos heartbeats only.
-- Doubling `--rate` roughly doubles per-interval `out` and `in` bytes.
-- Per-AR-pair `out` from host A toward host B over an interval should
-  approximately equal `in` reported by host B from host A over the same
-  interval. (Run the tool on both sides with synced clocks to compare.)
+- **Linearizable reads go through Paxos.** With the default
+  `linearizability` consistency, every GET also runs through consensus,
+  so the bandwidth graph reflects all traffic, not just writes.
+- **Latency graph is geodesic.** `plot_lat_graph.py` reports a
+  propagation lower bound (great-circle / fiber). Real RTT typically
+  exceeds it by 1.5–2× because of routing/queueing/serialization.
 
 ## Deferred follow-ons
 
-- SSH harness so a single driver invocation starts bpftrace on every AR
-  and assembles the full matrix.
-- A `XdnBandwidthProfiler` Java worker (analog of `XdnGeoDemandProfiler`)
-  that reports bandwidth deltas to the Reconfigurator.
-- Wire bandwidth into `XdnReplicaPlacementProfile` next to geo-demand for
-  placement decisions.
+- SSH harness so a single driver invocation runs bpftrace on every AR
+  and merges the CSVs.
+- A `XdnBandwidthProfiler` Java worker (analog of
+  `XdnGeoDemandProfiler`) that reports bandwidth deltas to the
+  Reconfigurator and feeds `XdnReplicaPlacementProfile`.
 - Per-service attribution via per-service virtual ports (the
-  blackbox-per-port architecture discussed in design).
+  blackbox-per-port architecture).
+- Live RTT measurement to cross-validate the analytical latency graph.
