@@ -1248,11 +1248,22 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 + executedRequest.getClass().getSimpleName();
 
                 ClientRequest requestWithResponse = (ClientRequest) executedRequest;
+                // ResponsePacket is the one wire form that intentionally carries
+                // the locally-computed response back to the entry replica, so
+                // opt in to including it. The default toBytes() now strips it.
+                byte[] encodedWithResponse;
+                if (requestWithResponse instanceof XdnHttpRequest xhr) {
+                    encodedWithResponse = xhr.toBytes(true);
+                } else if (requestWithResponse instanceof XdnHttpRequestBatch batch) {
+                    encodedWithResponse = batch.toBytes(true);
+                } else {
+                    encodedWithResponse = requestWithResponse.getResponse().toString()
+                            .getBytes(StandardCharsets.ISO_8859_1);
+                }
                 ResponsePacket resp = new ResponsePacket(
                         executedRequest.getServiceName(),
                         rp.getRequestID(),
-                        requestWithResponse.getResponse().toString().
-                                getBytes(StandardCharsets.ISO_8859_1));
+                        encodedWithResponse);
                 String entryNodeIDStr = forwardedRequestPacket.getEntryNodeId();
                 NodeIDType entryNodeID = nodeIDTypeStringifiable.valueOf(entryNodeIDStr);
                 GenericMessagingTask<NodeIDType, ResponsePacket> m =

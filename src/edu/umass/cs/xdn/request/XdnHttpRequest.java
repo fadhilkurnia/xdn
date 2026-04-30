@@ -515,8 +515,20 @@ public class XdnHttpRequest extends XdnRequest
     this.httpResponseBody = null;
   }
 
+  // The default wire form is the *request* only — execution state (the locally
+  // computed httpResponse) is intentionally not included. Inter-replica
+  // forwarding paths (causal/pram/lazy write-after, paxos propose) all
+  // serialize via plain Byteable.toBytes(), and shipping a sender-computed
+  // response would trip XdnGigapaxosApp's "response must be null on entry"
+  // assertion when peers re-execute. The one path that *does* need the
+  // response on the wire (PB primary→entry response forwarding) opts in via
+  // toBytes(true).
   @Override
   public byte[] toBytes() {
+    return toBytes(false);
+  }
+
+  public byte[] toBytes(boolean includeResponse) {
     final int packetType = this.getRequestType().getInt();
 
     XdnHttpRequestProto.XdnHttpRequest.Builder builder =
@@ -528,7 +540,7 @@ public class XdnHttpRequest extends XdnRequest
             .addAllRequestHeaders(getHeaderList(this.httpRequest.headers()))
             .setRequestBody(extractBodyByteString(this.httpRequestContent.content()));
 
-    if (this.httpResponse != null) {
+    if (includeResponse && this.httpResponse != null) {
       builder.setResponse(buildResponseProto());
     }
 

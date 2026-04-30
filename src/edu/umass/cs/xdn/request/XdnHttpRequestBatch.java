@@ -167,13 +167,19 @@ public final class XdnHttpRequestBatch extends XdnRequest
     return this.behaviors;
   }
 
+  // See XdnHttpRequest#toBytes — default wire form is request-only. PB's
+  // response-forwarding path opts in via toBytes(true).
   @Override
   public byte[] toBytes() {
+    return toBytes(false);
+  }
+
+  public byte[] toBytes(boolean includeResponse) {
     byte[][] encodedRequests = new byte[this.requests.length][];
 
     int rawSize = Integer.BYTES; // number of requests
     for (int i = 0; i < this.requests.length; i++) {
-      byte[] encoded = this.requests[i].toBytes();
+      byte[] encoded = this.requests[i].toBytes(includeResponse);
       Objects.requireNonNull(encoded, "Request " + i + " produced null serialization");
       encodedRequests[i] = encoded;
       rawSize += Integer.BYTES + encoded.length;

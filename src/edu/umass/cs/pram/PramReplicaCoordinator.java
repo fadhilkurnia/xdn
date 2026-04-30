@@ -264,12 +264,9 @@ public class PramReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
             try {
                 PramWriteAfterPacket writePacket;
                 while ((writePacket = queue.poll()) != null) {
+                    // PramWriteAfterPacket#toBytes strips the sender's response
+                    // from the wire, so app.execute() sees a response-less request.
                     ClientRequest appRequest = writePacket.getClientWriteRequest();
-                    // Clear stale response from sender's execution so
-                    // forwardHttpRequestToContainerizedService can set a fresh one.
-                    if (appRequest instanceof XdnHttpRequest xhr && xhr.getHttpResponse() != null) {
-                        xhr.clearHttpResponse();
-                    }
                     boolean isExecuted = app.execute(appRequest);
                     assert isExecuted : "failed to execute write-after request";
                 }

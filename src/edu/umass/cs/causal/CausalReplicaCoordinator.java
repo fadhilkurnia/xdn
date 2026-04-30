@@ -379,16 +379,13 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
             return;
         }
 
-        // Execute the write-only request. The deserialized request may carry a
-        // stale httpResponse from the sender's execution — clear it so
-        // forwardHttpRequestToContainerizedService can set a fresh response.
+        // Execute the write-only request. The forwarded packet's wire form
+        // strips the sender's response (CausalWriteForwardPacket calls
+        // toBytes(false)), so app.execute() always sees a response-less request.
         ClientRequest clientRequest = packet.getClientWriteOnlyRequest();
         assert clientRequest instanceof BehavioralRequest behavioralRequest &&
                 behavioralRequest.isWriteOnlyRequest() :
                 "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
-        if (clientRequest instanceof XdnHttpRequest xhr && xhr.getHttpResponse() != null) {
-            xhr.clearHttpResponse();
-        }
         boolean isExecSuccess = this.app.execute(clientRequest);
         assert isExecSuccess;
 
@@ -454,14 +451,13 @@ public class CausalReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordin
 
             CausalWriteForwardPacket currPacket = entry.getValue();
 
-            // Execute the pending write-only request
+            // Execute the pending write-only request. The forwarded packet's
+            // wire form strips the sender's response (see
+            // CausalWriteForwardPacket#encodeRequestForForwarding).
             ClientRequest clientRequest = currPacket.getClientWriteOnlyRequest();
             assert clientRequest instanceof BehavioralRequest behavioralRequest &&
                     behavioralRequest.isWriteOnlyRequest() :
                     "Expecting WriteOnlyRequest but got " + clientRequest.getClass().getSimpleName();
-            if (clientRequest instanceof XdnHttpRequest xhr && xhr.getHttpResponse() != null) {
-                xhr.clearHttpResponse();
-            }
             boolean isExecSuccess = this.app.execute(clientRequest);
             assert isExecSuccess : "Failed to execute the pending write request";
 
