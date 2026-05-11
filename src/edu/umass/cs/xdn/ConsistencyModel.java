@@ -12,6 +12,7 @@ package edu.umass.cs.xdn;
  */
 public enum ConsistencyModel {
     LINEARIZABILITY("Majority", "Majority"),
+    LINEARIZABLE("Majority", "Majority"),
     SEQUENTIAL("Closest", "Majority"),
     EVENTUAL("Closest", "Closest"),
     PRIMARY_BACKUP("Source", "Source");
