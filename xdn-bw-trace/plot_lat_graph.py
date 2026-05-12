@@ -63,8 +63,9 @@ def parse_args():
                         "(default: derive host from the first reconfigurator "
                         "in --config, port = NIO port + 300).")
     p.add_argument("--output",
-                   help="output PNG path. Default: <service-or-config>-"
-                        "latency.png next to the input.")
+                   help="output PNG path. Default: "
+                        "xdn-bw-trace/results/<service-or-config>-latency.png "
+                        "(same dir plot_bw_graph.py writes to).")
     p.add_argument("--unit", choices=["ms", "us"], default="ms",
                    help="latency unit for labels and the printed matrix. "
                         "Default: ms.")
@@ -419,9 +420,8 @@ def main():
     else:
         stem = args.service or (Path(args.config).stem if args.config
                                 else "latency")
-        parent = (Path(args.config).parent if args.config
-                  else Path.cwd())
-        out_path = parent / f"{stem}-latency.png"
+        out_path = (Path(__file__).resolve().parent / "results"
+                    / f"{stem}-latency.png")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     render_graph(replicas, latencies, out_path, args)
     print(f"# wrote {out_path}", file=sys.stderr)

@@ -277,11 +277,38 @@ def select_targets(nodes, target_arg):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
+    # Execution mode. Default is the legacy single-host "everything in one
+    # process" path. The other modes split the work across hosts so each AR
+    # can capture local-kernel events on the host it runs on. See
+    # `trace_bw_distributed.py` for the SSH orchestrator that ties them
+    # together.
+    p.add_argument("--mode",
+                   choices=["local", "probe", "driver", "aggregate"],
+                   default="local",
+                   help="local (default): drive workload AND run bpftrace "
+                        "AND resolve, all on this host. probe: only run "
+                        "bpftrace, write raw CSV + pid_to_ar.json sidecar "
+                        "(no workload, no resolution). driver: only drive "
+                        "the HTTP workload (no bpftrace). aggregate: merge "
+                        "per-host probe CSVs, run resolve_rows on the "
+                        "union, write a final resolved CSV.")
+    p.add_argument("--ar-id",
+                   help="probe mode only: the AR id this probe is capturing "
+                        "for. If omitted, all AR JVMs found in /proc on this "
+                        "host are included; supplying it constrains the "
+                        "pid_to_ar map to one entry, useful when several AR "
+                        "JVMs share a host but you only want one in the trace.")
+    p.add_argument("--inputs",
+                   help="aggregate mode only: comma-separated list of raw "
+                        "probe CSVs (e.g. 'host_a.csv,host_b.csv'). Each "
+                        "CSV must have a sibling '<basename>.pid_to_ar.json' "
+                        "written by probe mode.")
     p.add_argument("--config", required=True,
                    help="path to gigapaxos.properties (used to locate the "
-                        "reconfigurator host:port)")
+                        "reconfigurator host:port and, in aggregate mode, "
+                        "the host:port of each AR for peer_ip resolution).")
     p.add_argument("--service", required=True,
-                   help="XDN service name (sent in the XDN: header)")
+                   help="XDN service name (sent in the XDN: header).")
     p.add_argument("--target",
                    help="comma-separated allowlist of replica ids (e.g. "
                         "'AR1,AR3') to drive traffic at. Each id must be in "
@@ -626,9 +653,431 @@ def seed_target_item(base_url, headers, args):
               f"{r.status_code}: {r.text[:200]}", file=sys.stderr)
 
 
+def _resolve_rc_endpoint(args):
+    """Return (rc_host, rc_http_port). Honors --reconfigurator if set,
+    otherwise derives from the first reconfigurator entry in --config."""
+    _actives, reconfigurators, _geolocations = parse_properties(args.config)
+    if args.reconfigurator:
+        endpoint = args.reconfigurator
+        if ":" in endpoint:
+            host, _, port_s = endpoint.rpartition(":")
+            try:
+                return host, int(port_s)
+            except ValueError:
+                sys.exit(f"error: invalid --reconfigurator '{endpoint}'")
+        return endpoint, 3000 + HTTP_PORT_OFFSET
+    if not reconfigurators:
+        sys.exit(f"error: no reconfigurator.<name>=host:port entries in "
+                 f"{args.config}; pass --reconfigurator host[:port]")
+    rc_name = sorted(reconfigurators.keys())[0]
+    rc_host, rc_nio_port = reconfigurators[rc_name]
+    return rc_host, rc_nio_port + HTTP_PORT_OFFSET
+
+
+def _build_port_maps(nodes):
+    """Compute the bpftrace port range + listener-port → AR-id maps from a
+    placement node list. Shared by every mode that touches bpftrace output."""
+    nio_ports = sorted({n["nio_port"] for n in nodes})
+    http_ports = sorted({n["http_port"] for n in nodes})
+    return {
+        "nio_low": min(nio_ports),
+        "nio_high": max(nio_ports),
+        "http_low": min(http_ports),
+        "http_high": max(http_ports),
+        "nio_port_to_ar": {n["nio_port"]: n["id"] for n in nodes},
+        "http_port_to_ar": {n["http_port"]: n["id"] for n in nodes},
+    }
+
+
+def _resolve_output_path(args):
+    """Default output path. Mirrors the rule used by local mode."""
+    if args.output:
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        return out_path
+    DEFAULT_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    return DEFAULT_RESULTS_DIR / f"{args.service}-{int(time.time())}.csv"
+
+
+def _launch_bpftrace(args, port_maps):
+    """Launch bpftrace, return (proc, reader, header_event). Common to local
+    and probe modes."""
+    script_path = str(Path(args.bpftrace_script).resolve())
+    bpf_cmd = [
+        "bpftrace", script_path,
+        str(port_maps["nio_low"]), str(port_maps["nio_high"]),
+        str(port_maps["http_low"]), str(port_maps["http_high"]),
+        str(args.interval),
+    ]
+    if os.geteuid() != 0:
+        bpf_cmd = ["sudo"] + bpf_cmd
+    print(f"launching: {' '.join(bpf_cmd)}", file=sys.stderr)
+    proc = subprocess.Popen(
+        bpf_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    header_event = threading.Event()
+    reader = BpftraceReader(
+        proc, on_header=header_event.set, interval_seconds=args.interval,
+    )
+    reader.start()
+    if not header_event.wait(timeout=15.0):
+        try:
+            stderr_data = proc.stderr.read() if proc.stderr else ""
+        except Exception:
+            stderr_data = ""
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        sys.exit("error: bpftrace did not emit '# trace start:' within 15s.\n"
+                 f"stderr:\n{stderr_data}")
+    return proc, reader
+
+
+def _stop_bpftrace(proc, reader, args):
+    """Send SIGINT, drain reader, return rows. Mirrors the local-mode
+    teardown sequence so probe mode behaves identically on the wire."""
+    final_wait = max(args.interval + 1, 2)
+    print(f"waiting {final_wait}s for final bpftrace snapshot ...",
+          file=sys.stderr)
+    time.sleep(final_wait)
+    print("stopping bpftrace ...", file=sys.stderr)
+    try:
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    reader.join(timeout=5)
+    if reader.error:
+        print(f"warning: reader thread error: {reader.error}", file=sys.stderr)
+    return reader.snapshot_rows()
+
+
+# CSV column order used by local mode and aggregate mode (resolved output).
+RESOLVED_FIELDNAMES = [
+    "interval_start_unix", "interval_end_unix", "direction",
+    "local_id", "local_pid", "local_port",
+    "peer_id", "peer_ip", "peer_port",
+    "bytes",
+]
+# Probe mode emits the same columns but with local_id/peer_id left blank;
+# the aggregator fills them in from the union of pid_to_ar maps.
+RAW_FIELDNAMES = RESOLVED_FIELDNAMES
+
+
+def _write_rows(out_path, rows, fieldnames):
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: r.get(k, "") for k in fieldnames})
+
+
+# ---------------------------------------------------------------------------
+# probe mode: bpftrace only, no workload, no resolution. Writes raw CSV +
+# pid_to_ar.json sidecar so the aggregator can reconstruct the full picture.
+# ---------------------------------------------------------------------------
+
+def _run_probe(args):
+    rc_host, rc_http_port = _resolve_rc_endpoint(args)
+    print(f"reconfigurator: http://{rc_host}:{rc_http_port}", file=sys.stderr)
+    nodes = fetch_service_placement(rc_host, rc_http_port, args.service)
+    port_maps = _build_port_maps(nodes)
+    print(f"placement ({len(nodes)} replicas), bpftrace: "
+          f"nio=[{port_maps['nio_low']},{port_maps['nio_high']}] "
+          f"http=[{port_maps['http_low']},{port_maps['http_high']}] "
+          f"interval={args.interval}s duration={args.duration}s",
+          file=sys.stderr)
+
+    pid_to_ar = build_pid_to_ar()
+    placement_ids = {n["id"] for n in nodes}
+    if args.ar_id:
+        if args.ar_id not in placement_ids:
+            sys.exit(f"error: --ar-id '{args.ar_id}' not in placement "
+                     f"{sorted(placement_ids)}")
+        # Constrain the map to a single AR — useful when multiple AR JVMs
+        # share a host but only one is in scope for this probe run.
+        pid_to_ar = {pid: ar for pid, ar in pid_to_ar.items()
+                     if ar == args.ar_id}
+        if not pid_to_ar:
+            print(f"warning: no JVM with cmdline 'ReconfigurableNode "
+                  f"{args.ar_id}' found in /proc on this host", file=sys.stderr)
+    else:
+        pid_to_ar = {pid: ar for pid, ar in pid_to_ar.items()
+                     if ar in placement_ids}
+        if not pid_to_ar:
+            print("warning: no AR JVMs from this placement found in /proc on "
+                  "this host; aggregate mode will fall back to port-based "
+                  "resolution for events captured here", file=sys.stderr)
+
+    if pid_to_ar:
+        pid_str = ", ".join(f"{ar}=pid {pid}"
+                            for pid, ar in sorted(pid_to_ar.items(),
+                                                  key=lambda kv: kv[1]))
+        print(f"local AR pids: {pid_str}", file=sys.stderr)
+
+    out_path = _resolve_output_path(args)
+    pidmap_path = out_path.with_name(out_path.stem + ".pid_to_ar.json")
+
+    proc, reader = _launch_bpftrace(args, port_maps)
+
+    # Run for the full duration window. Unlike local mode, there's no
+    # in-process workload here — the orchestrator (or a separate driver
+    # invocation) drives traffic during this window.
+    print(f"probe running for {args.duration}s ...", file=sys.stderr)
+    time.sleep(args.duration)
+
+    rows = _stop_bpftrace(proc, reader, args)
+    _write_rows(out_path, rows, RAW_FIELDNAMES)
+    print(f"wrote {len(rows)} raw rows -> {out_path}", file=sys.stderr)
+
+    with open(pidmap_path, "w") as f:
+        json.dump({str(pid): ar for pid, ar in pid_to_ar.items()}, f, indent=2)
+    print(f"wrote pid_to_ar -> {pidmap_path}", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# driver mode: only drive HTTP traffic. No bpftrace, no CSV. Writes a
+# meta.json with workload totals so the aggregator can stitch it in.
+# ---------------------------------------------------------------------------
+
+def _run_driver(args):
+    rc_host, rc_http_port = _resolve_rc_endpoint(args)
+    print(f"reconfigurator: http://{rc_host}:{rc_http_port}", file=sys.stderr)
+    nodes = fetch_service_placement(rc_host, rc_http_port, args.service)
+    targets = select_targets(nodes, args.target)
+
+    targets_str = ", ".join(
+        f"{n['id']}->http://{n['http_host']}:{n['http_port']}{args.path}"
+        for n in targets
+    )
+    print(f"targets ({len(targets)}, driven in parallel @ {args.rate} req/s "
+          f"each): {targets_str}", file=sys.stderr)
+
+    service_info = fetch_replica_info(
+        targets[0]["http_host"], targets[0]["http_port"], args.service,
+        timeout=args.timeout,
+    )
+    if service_info.get("protocol") or service_info.get("consistency"):
+        print(f"service info: protocol={service_info.get('protocol', '?')} "
+              f"consistency={service_info.get('consistency', '?')}",
+              file=sys.stderr)
+
+    if not 0.0 <= args.read_ratio <= 1.0:
+        sys.exit(f"error: --read-ratio must be in [0,1] (got {args.read_ratio})")
+
+    headers = {"XDN": args.service}
+    read_spec = {"method": args.method, "path": args.path}
+    write_spec = {"method": args.write_method, "path": args.write_path,
+                  "body": args.write_body,
+                  "content_type": args.write_content_type}
+
+    seed_base = (f"http://{targets[0]['http_host']}:"
+                 f"{targets[0]['http_port']}")
+    seed_target_item(seed_base, headers, args)
+
+    if args.warmup > 0:
+        time.sleep(args.warmup)
+
+    write_ratio = 1.0 - args.read_ratio
+    print(f"driving traffic in parallel: {len(targets)} replicas @ "
+          f"{args.rate} req/s each (total ~{args.rate * len(targets):g} req/s) "
+          f"for {args.duration}s, mix=read {args.read_ratio:.0%} "
+          f"({args.method} {args.path}) / write {write_ratio:.0%} "
+          f"({args.write_method} {args.write_path}) ...", file=sys.stderr)
+
+    results, errors, elapsed = _drive_workload_threads(
+        targets, headers, args, read_spec, write_spec,
+    )
+    total_sent = sum(r["sent"] for r in results.values())
+    total_ok = sum(r["ok"] for r in results.values())
+    total_failed = sum(r["failed"] for r in results.values())
+    total_reads = sum(r["reads"] for r in results.values())
+    total_writes = sum(r["writes"] for r in results.values())
+    per_replica = ", ".join(
+        f"{nid}: sent={results[nid]['sent']} ok={results[nid]['ok']} "
+        f"failed={results[nid]['failed']} "
+        f"r/w={results[nid]['reads']}/{results[nid]['writes']}"
+        for nid in (n["id"] for n in targets)
+    )
+    print(f"traffic done: sent={total_sent} ok={total_ok} "
+          f"failed={total_failed} reads={total_reads} writes={total_writes} "
+          f"elapsed={elapsed:.1f}s | per-replica: {per_replica}",
+          file=sys.stderr)
+    for nid, e in errors.items():
+        print(f"warning: client thread for {nid} crashed: {e}",
+              file=sys.stderr)
+
+    out_path = _resolve_output_path(args)
+    meta_path = out_path.with_name(out_path.stem + ".meta.json")
+    meta = _build_meta(args, service_info, nodes, targets, results,
+                       total_sent, total_ok, total_failed,
+                       total_reads, total_writes, elapsed)
+    try:
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        print(f"wrote metadata -> {meta_path}", file=sys.stderr)
+    except OSError as e:
+        print(f"warning: could not write {meta_path}: {e}", file=sys.stderr)
+    return 0
+
+
+def _drive_workload_threads(targets, headers, args, read_spec, write_spec):
+    """One client thread per target replica. Returns (results, errors,
+    elapsed). Factored out so local + driver modes share the workload code."""
+    results = {}
+    errors = {}
+    threads = []
+    base_seed = int(time.time() * 1e6)
+
+    def worker(node, seed):
+        base = f"http://{node['http_host']}:{node['http_port']}"
+        try:
+            results[node["id"]] = http_loop(
+                base, headers, args.rate, args.duration,
+                read_spec, write_spec, args.read_ratio, args.timeout,
+                rng=random.Random(seed),
+            )
+        except Exception as e:
+            errors[node["id"]] = e
+            results[node["id"]] = {"sent": 0, "ok": 0, "failed": 0,
+                                   "reads": 0, "writes": 0}
+
+    t0 = time.monotonic()
+    for idx, n in enumerate(targets):
+        th = threading.Thread(target=worker, args=(n, base_seed + idx),
+                              daemon=True, name=f"client-{n['id']}")
+        th.start()
+        threads.append(th)
+    for th in threads:
+        th.join()
+    elapsed = time.monotonic() - t0
+    return results, errors, elapsed
+
+
+def _build_meta(args, service_info, nodes, targets, results,
+                 total_sent, total_ok, total_failed,
+                 total_reads, total_writes, elapsed):
+    return {
+        "service": args.service,
+        "service_info": service_info,
+        "rate_per_replica_rps": args.rate,
+        "duration_seconds": args.duration,
+        "interval_seconds": args.interval,
+        "warmup_seconds": args.warmup,
+        "num_targets": len(targets),
+        "target_ids": [n["id"] for n in targets],
+        "placement_ids": [n["id"] for n in nodes],
+        "read_ratio": args.read_ratio,
+        "read": {"method": args.method, "path": args.path},
+        "write": {"method": args.write_method, "path": args.write_path,
+                  "content_type": args.write_content_type},
+        "totals": {
+            "sent": total_sent, "ok": total_ok, "failed": total_failed,
+            "reads": total_reads, "writes": total_writes,
+            "elapsed_seconds": elapsed,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# aggregate mode: take N raw probe CSVs (each from a different host's
+# bpftrace), union their events, fold their pid_to_ar maps, and run
+# resolve_rows on the merged stream. Outputs a single resolved CSV.
+# ---------------------------------------------------------------------------
+
+def _run_aggregate(args):
+    if not args.inputs:
+        sys.exit("error: --inputs is required for aggregate mode "
+                 "(comma-separated list of probe CSVs)")
+    input_paths = [Path(p.strip()) for p in args.inputs.split(",") if p.strip()]
+    if not input_paths:
+        sys.exit("error: --inputs is empty")
+
+    rc_host, rc_http_port = _resolve_rc_endpoint(args)
+    print(f"reconfigurator: http://{rc_host}:{rc_http_port}", file=sys.stderr)
+    nodes = fetch_service_placement(rc_host, rc_http_port, args.service)
+    port_maps = _build_port_maps(nodes)
+
+    rows = []
+    pid_to_ar = {}
+    for csv_path in input_paths:
+        if not csv_path.exists():
+            sys.exit(f"error: input csv not found: {csv_path}")
+        pidmap_path = csv_path.with_name(csv_path.stem + ".pid_to_ar.json")
+        if pidmap_path.exists():
+            try:
+                with open(pidmap_path) as f:
+                    for pid_str, ar in json.load(f).items():
+                        pid_to_ar[int(pid_str)] = ar
+            except Exception as e:
+                print(f"warning: could not parse {pidmap_path}: {e}",
+                      file=sys.stderr)
+        else:
+            print(f"warning: missing sidecar {pidmap_path} — pid-based "
+                  f"resolution may be incomplete for events from this csv",
+                  file=sys.stderr)
+        rows_before = len(rows)
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                # Coerce numeric fields to ints (csv loads as str).
+                try:
+                    r["interval_start_unix"] = int(r["interval_start_unix"])
+                    r["interval_end_unix"] = int(r["interval_end_unix"])
+                    r["local_pid"] = int(r["local_pid"])
+                    r["local_port"] = int(r["local_port"])
+                    r["peer_port"] = int(r["peer_port"])
+                    r["bytes"] = int(r["bytes"])
+                except (KeyError, ValueError) as e:
+                    print(f"warning: skipping malformed row in {csv_path}: {e}",
+                          file=sys.stderr)
+                    continue
+                rows.append(r)
+        print(f"loaded {csv_path.name}: {len(rows) - rows_before} rows "
+              f"(running total: {len(rows)})", file=sys.stderr)
+
+    print(f"merged {len(rows)} rows from {len(input_paths)} probe(s); "
+          f"pid_to_ar has {len(pid_to_ar)} entries", file=sys.stderr)
+
+    resolve_rows(rows, pid_to_ar, port_maps["nio_port_to_ar"],
+                  port_maps["http_port_to_ar"])
+    unresolved_local = sum(1 for r in rows if r["local_id"] == "unknown")
+    unresolved_peer = sum(1 for r in rows if r["peer_id"] == "unknown")
+    if unresolved_local or unresolved_peer:
+        print(f"warning: {unresolved_local}/{len(rows)} rows with unresolved "
+              f"local_id, {unresolved_peer}/{len(rows)} with unresolved peer_id",
+              file=sys.stderr)
+
+    out_path = _resolve_output_path(args)
+    _write_rows(out_path, rows, RESOLVED_FIELDNAMES)
+    print(f"wrote {len(rows)} resolved rows -> {out_path}", file=sys.stderr)
+    return 0
+
+
 def main():
     args = parse_args()
+    if args.mode == "probe":
+        return _run_probe(args)
+    if args.mode == "driver":
+        return _run_driver(args)
+    if args.mode == "aggregate":
+        return _run_aggregate(args)
+    return _run_local(args)
 
+
+def _run_local(args):
     _actives, reconfigurators, _geolocations = parse_properties(args.config)
     if args.reconfigurator:
         rc_endpoint = args.reconfigurator

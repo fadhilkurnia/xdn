@@ -9,17 +9,30 @@ into bandwidth/latency graphs.
 | File | Purpose |
 |------|---------|
 | `inter_replica_bw.bt` | bpftrace probe: kprobes on `tcp_sendmsg` / `tcp_cleanup_rbuf`, aggregates bytes by `(pid, local_port, peer_ip, peer_port)` and emits per-interval snapshots. |
-| `trace_bw.py` | driver: discovers the cluster via the RC HTTP API, launches the probe, drives a mixed read/write workload at every replica in parallel, writes a per-event CSV plus a `.meta.json` sidecar. |
+| `trace_bw.py` | driver: discovers the cluster via the RC HTTP API, launches the probe, drives a mixed read/write workload at every replica in parallel, writes a per-event CSV plus a `.meta.json` sidecar. Supports four `--mode`s (`local` / `probe` / `driver` / `aggregate`) — see "Distributed deployment" below. |
+| `trace_bw_distributed.py` | SSH orchestrator that runs `trace_bw.py --mode probe` on every AR host, drives the HTTP workload locally, then merges per-host CSVs into a single resolved trace via `--mode aggregate`. |
 | `plot_bw_graph.py` | renders a directed bandwidth graph (`DiGraph`) from the CSV: replicas on a circle, per-replica `client-ARx` vertices on an outer ring. |
 | `plot_lat_graph.py` | renders an inter-replica latency graph computed analytically from each replica's `(lat, lon)` (Haversine / fiber-speed); supports `circle` and `geo` layouts. |
 | `_plotutil.py` | helpers shared by the two plot scripts (Bezier label placement, AR-on-circle layout). |
-| `results/` | default output directory for CSVs / PNGs / meta.json. |
+| `install_bpftrace.sh` | one-shot installer: pulls the upstream static `bpftrace` AppImage, transparently falls back to `--appimage-extract` on hosts where FUSE auto-mount is broken, symlinks `/usr/local/bin/bpftrace`, and is idempotent + self-healing. |
+| `results/` | default output directory for CSVs, both bandwidth and latency PNGs, and `.meta.json` sidecars. |
 
 ## Pre-flight
 
 - Linux host with `bpftrace` ≥ 0.21 (uses kernel BTF, no kernel headers
   required). The `inter_replica_bw.bt` script does not `#include` any
-  Linux header.
+  Linux header. **Distro packages are usually too old** — Ubuntu jammy's
+  apt ships 0.14, which rejects builtins like `bswap` used by the probe.
+  Use `install_bpftrace.sh` to grab a current upstream build:
+  ```bash
+  xdn-bw-trace/install_bpftrace.sh                  # pinned default
+  xdn-bw-trace/install_bpftrace.sh --version v0.25.1
+  xdn-bw-trace/install_bpftrace.sh --force          # force reinstall
+  ```
+  The script is self-healing: re-running it detects a previously broken
+  install (e.g. a bare AppImage on a host where FUSE auto-mount fails)
+  and reinstalls into `/opt/bpftrace-<ver>/AppRun` with a symlink at
+  `/usr/local/bin/bpftrace`.
 - An XDN cluster running with the same `gigapaxos.properties` file you
   pass via `--config`.
 - The service deployed, e.g.:
@@ -186,7 +199,7 @@ is a propagation-only lower bound — real internet RTT is typically
 | `--fiber-fraction` | `0.667` | effective signal speed as a fraction of c |
 | `--layout` | `circle` | `circle` (matches `plot_bw_graph.py`) or `geo` (equirectangular projection of `(lon, lat)`) |
 | `--min-node-spacing` | `0.20` | (geo only) minimum distance in normalized data units between any two replicas after projection; tunable to trade ratio fidelity against label readability |
-| `--output` | auto | output image path |
+| `--output` | `xdn-bw-trace/results/<service-or-config>-latency.png` | output image path; default lives next to the bandwidth PNGs in `results/` |
 
 `geo` mode forces equal lat/lon aspect (`set_aspect("equal",
 adjustable="datalim")`), so 1° lat renders the same length as 1° lon.
@@ -196,17 +209,104 @@ disk overlap, so geographic ratios remain close to the real ones.
 
 ## Distributed deployment
 
-`bpftrace` only sees its host's kernel, so today's `trace_bw.py` is a
-single-host tool: it captures everything cleanly when the AR JVMs and
-the driver run on the same host (loopback / single-machine), and only
-the local AR's traffic when run on one node of a real distributed
-cluster. To assemble a global matrix on a real cluster, either:
+`bpftrace` only sees its host's kernel, so a single `trace_bw.py
+--mode local` invocation captures everything cleanly only when the AR
+JVMs and the driver share a host (loopback / single-machine). For a
+real distributed cluster, `trace_bw.py` exposes three split-mode entry
+points and `trace_bw_distributed.py` ties them together over SSH.
 
-1. run one `trace_bw.py` per AR host and concatenate CSVs (each
-   instance's `pid_to_ar` resolves the single AR JVM on its host;
-   `local_id` is implicit), or
-2. (TODO) split the script into separate capture / drive entry points
-   so the driver can be a single client elsewhere.
+### Modes
+
+`trace_bw.py --mode {local | probe | driver | aggregate}` (default `local`).
+
+| Mode | What it does | Where to run it | Outputs |
+|------|--------------|-----------------|---------|
+| `local` | drive workload **and** run bpftrace **and** resolve in one process — single-host all-in-one path. **Backward-compatible default.** | one host where every AR JVM lives | `<service>-<ts>.csv` (resolved) + `.meta.json` |
+| `probe` | run bpftrace only, dump raw events + a `pid_to_ar.json` sidecar | each AR host (one probe per host) | `<output>.csv` (raw, no `local_id`/`peer_id`) + `<output>.pid_to_ar.json` |
+| `driver` | drive HTTP workload only (no bpftrace) | any host that can reach all AR HTTP frontends | `<output>.meta.json` |
+| `aggregate` | union N raw probe CSVs + sidecars, run `resolve_rows`, write a single resolved CSV | the orchestrator (or anywhere the per-host CSVs are gathered) | `<output>.csv` (resolved) |
+
+The aggregator's resolution works because GigaPaxos uses long-lived
+TCP connections between replicas: AR-i's outbound ephemeral port shows
+up as `peer_port` in AR-j's probe, and as `local_port` in AR-i's probe.
+Unioning the events lets the existing `ephemeral_owner` cross-correlation
+in `resolve_rows` recover the `(i, j)` pair across hosts.
+
+### Orchestrator: `trace_bw_distributed.py`
+
+End-to-end multi-host run with SSH fan-out:
+
+```bash
+python3 xdn-bw-trace/trace_bw_distributed.py \
+    --config conf/gigapaxos.cloudlab.properties \
+    --service bookcatalog \
+    --ssh-key ~/.ssh/cloudlab \
+    --username fadhil \
+    --duration 60 --interval 5 --rate 50 --read-ratio 0.0
+```
+
+The orchestrator:
+
+1. Reads `--config` to enumerate AR hosts (or honors `--hosts host1,host2,…`).
+2. For each host, opens an SSH session and starts `trace_bw.py --mode probe`
+   under `sudo -n` (bpftrace needs `CAP_BPF`). Probes write raw CSVs +
+   sidecars into the remote `--tmpdir`.
+3. Sleeps `--probe-startup-buffer` seconds (default 3) so kprobes attach
+   before traffic begins.
+4. Locally runs `trace_bw.py --mode driver` to drive the HTTP workload
+   against every replica in the placement.
+5. Waits for all probes to finish.
+6. SCPs each per-host CSV + sidecar back to `xdn-bw-trace/results/`.
+7. Runs `trace_bw.py --mode aggregate` over all retrieved CSVs to write a
+   single resolved CSV, identical in shape to a `--mode local` output.
+8. Cleans up remote tmp files (skip with `--keep-remote-files`).
+
+Pre-flight on remote hosts:
+- `bpftrace` ≥ 0.21 installed (use `xdn-bw-trace/install_bpftrace.sh`).
+- `python3` + `requests`.
+- The xdn checkout at the same path as locally, or pass
+  `--remote-xdn-path /path/to/remote/xdn`.
+- `gigapaxos.properties` at the same path as `--config`, or pass
+  `--remote-config-path /path/to/remote/properties`.
+- Passwordless SSH from the orchestrator and passwordless `sudo` for
+  `bpftrace` on each AR host.
+
+### Manual split-mode invocation
+
+If you don't want SSH orchestration, you can run the modes by hand. For
+each AR host:
+
+```bash
+sudo python3 xdn-bw-trace/trace_bw.py \
+    --mode probe \
+    --config /path/to/gigapaxos.properties \
+    --service bookcatalog \
+    --duration 65 --interval 5 \
+    --output /tmp/probe-host-A.csv
+```
+
+On any host that can reach all AR frontends:
+
+```bash
+python3 xdn-bw-trace/trace_bw.py \
+    --mode driver \
+    --config /path/to/gigapaxos.properties \
+    --service bookcatalog \
+    --rate 50 --duration 60 --read-ratio 0.0 \
+    --output /tmp/driver.csv
+```
+
+Once all per-host probes finish and you've collected their CSVs +
+`.pid_to_ar.json` sidecars to the same directory:
+
+```bash
+python3 xdn-bw-trace/trace_bw.py \
+    --mode aggregate \
+    --config /path/to/gigapaxos.properties \
+    --service bookcatalog \
+    --inputs /tmp/probe-host-A.csv,/tmp/probe-host-B.csv,/tmp/probe-host-C.csv \
+    --output xdn-bw-trace/results/bookcatalog-distributed.csv
+```
 
 ## Caveats
 
@@ -220,6 +320,13 @@ cluster. To assemble a global matrix on a real cluster, either:
 - **Latency graph is geodesic.** `plot_lat_graph.py` reports a
   propagation lower bound (great-circle / fiber). Real RTT typically
   exceeds it by 1.5–2× because of routing/queueing/serialization.
+- **`trace_bw.py` runs under sudo**, so the CSV / `.meta.json` and the
+  `results/` directory end up root-owned. The plot scripts run as your
+  user and will hit `PermissionError` when writing the PNG. Either run
+  the plot scripts with `sudo` too, or chown after each trace:
+  ```bash
+  sudo chown -R "$USER:$USER" xdn-bw-trace/results/
+  ```
 
 ## Deferred follow-ons
 

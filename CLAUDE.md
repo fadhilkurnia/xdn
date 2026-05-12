@@ -123,6 +123,7 @@ Use the `bin/xdnd` shell script (driver-machine orchestrator) for multi-host dep
 - **Java**: Core platform — GigaPaxos consensus, replication protocols, reconfiguration, XDN service management
 - **Go**: CLI tool (`xdn-cli/`) using Cobra; DNS server (`xdn-dns/`) built on CoreDNS — each is a separate Go module
 - **Rust/C++**: Filesystem layer (`xdn-fs/`) for state differential recording via FUSE
+- **Python**: Top-level `eval/` (experiment harness, k6 load drivers, plot/analysis scripts) and `xdn-bw-trace/` (bpftrace-based bandwidth tracer + plotters). Note this is distinct from the Java `eval/` *subpackage* under `src/edu/umass/cs/xdn/eval/`.
 
 ### Key Java Packages (`src/edu/umass/cs/`)
 - `gigapaxos/` — Paxos consensus protocol implementation
@@ -215,6 +216,9 @@ Cobra-based CLI. Top-level verbs include `launch`, `status`, `check`, and the `s
 
 ### XDN-internal URL params
 URL query parameters prefixed with `_xdn` (e.g. `_xdnsvc`) are consumed at the XDN/proxy layer and must be stripped from the request URI before it is forwarded to the containerized service. `_xdnsvc` provides the service name directly as a URL param and is used as a developer-experience alternative to setting the `XDN:` header.
+
+### Bandwidth/Latency Tracing (`xdn-bw-trace/`)
+Per-service inter-replica + client⇄replica TCP bandwidth tracer built on bpftrace, with companion plotting scripts. `inter_replica_bw.bt` attaches kprobes on `tcp_sendmsg`/`tcp_cleanup_rbuf` and aggregates bytes by `(pid, local_port, peer_ip, peer_port)`. `trace_bw.py` discovers cluster topology from the RC HTTP API, drives a mixed read/write workload across replicas, and emits a CSV + `.meta.json` sidecar to `xdn-bw-trace/results/`. `plot_bw_graph.py` and `plot_lat_graph.py` render directed bandwidth graphs and analytic (Haversine + fiber-speed) latency graphs from the geolocation in `gigapaxos.properties`. Linux only; requires `bpftrace` ≥ 0.21 and `CAP_BPF` (run as root or passwordless sudo).
 
 ### Configuration
 - `gigapaxos.properties` — Main deployment config
