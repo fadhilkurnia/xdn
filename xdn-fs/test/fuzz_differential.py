@@ -50,9 +50,10 @@ STATEDIFF_FILE = BASE_DIR / "statediff.bin"
 FUSELOG_BIN = PROJECT_ROOT / "bin" / "fuselog"
 APPLY_BIN = PROJECT_ROOT / "bin" / "fuselog-apply"
 
-FILE_POOL = [f"f{i}" for i in range(8)]
-DIR_POOL = [f"d{i}" for i in range(4)]
-PATH_POOL = FILE_POOL + DIR_POOL  # union, used for symlink targets
+FILE_NAMES = ["a", "b", "c"]            # leaf names for files/symlinks/hardlinks
+DIR_NAMES = ["x", "y"]                  # leaf names for directories
+MAX_DEPTH = 3                           # "x/y/a" is depth 3
+SYMLINK_TARGETS = ["a", "x/a", "x/y/b", "../foo", "/nonexistent", "z"]
 SIZE_CHOICES = [1, 16, 256, 4096, 65536, 262144]
 MODE_CHOICES = [0o644, 0o600, 0o664, 0o755, 0o750, 0o700]
 DIR_MODE_CHOICES = [0o755, 0o750, 0o700, 0o770]
@@ -210,6 +211,46 @@ def files_of_type(entries, t):
     return [p for p, e in entries.items() if e["type"] == t]
 
 
+def depth_of(path):
+    """Depth counting: root '.' is 0, top-level entries are 1."""
+    return 0 if path == "." else path.count("/") + 1
+
+
+def join_path(parent, leaf):
+    return leaf if parent == "." else parent + "/" + leaf
+
+
+def existing_dirs(entries):
+    """List of all dir paths, including the synthetic root '.'."""
+    return ["."] + files_of_type(entries, "dir")
+
+
+def pick_new_path(rng, entries, leaf_names):
+    """Find a parent dir (anywhere up to MAX_DEPTH - 1) and a leaf name
+    such that join(parent, leaf) doesn't already exist. Returns the new
+    path or None if all combinations collide."""
+    dirs = existing_dirs(entries)
+    rng.shuffle(dirs)
+    for parent in dirs:
+        if depth_of(parent) >= MAX_DEPTH:
+            continue
+        leafs = list(leaf_names)
+        rng.shuffle(leafs)
+        for leaf in leafs:
+            cand = join_path(parent, leaf)
+            if cand not in entries:
+                return cand
+    return None
+
+
+def is_empty_dir(entries, dir_path):
+    """True if dir_path has no direct or transitive children."""
+    if dir_path == ".":
+        return False
+    prefix = dir_path + "/"
+    return not any(p.startswith(prefix) for p in entries)
+
+
 def pick_op(rng, entries):
     """Pick a random op given current entries state.
     Returns a fully-realized op dict, or None if no valid op is possible."""
@@ -222,13 +263,12 @@ def pick_op(rng, entries):
     for _ in range(40):
         op_type = rng.choice(op_types)
         if op_type == OP_WRITE_NEW:
-            free = [p for p in FILE_POOL if p not in entries]
-            if not free:
+            new_path = pick_new_path(rng, entries, FILE_NAMES)
+            if new_path is None:
                 continue
-            path = rng.choice(free)
             size = rng.choice(SIZE_CHOICES)
             data = rng.randbytes(size)
-            return {"type": op_type, "path": path, "data": data}
+            return {"type": op_type, "path": new_path, "data": data}
         if op_type == OP_OVERWRITE:
             existing = [p for p in files_of_type(entries, "file")
                         if entries[p]["size"] > 0]
@@ -271,24 +311,25 @@ def pick_op(rng, entries):
             return {"type": op_type, "path": path}
         if op_type == OP_RENAME:
             existing = files_of_type(entries, "file")
-            free = [p for p in FILE_POOL if p not in entries]
-            if not existing or not free:
+            new_path = pick_new_path(rng, entries, FILE_NAMES)
+            if not existing or new_path is None:
                 continue
             return {"type": op_type, "from": rng.choice(existing),
-                    "to": rng.choice(free)}
+                    "to": new_path}
         if op_type == OP_MKDIR:
-            free = [p for p in DIR_POOL if p not in entries]
-            if not free:
+            new_path = pick_new_path(rng, entries, DIR_NAMES)
+            if new_path is None:
                 continue
-            return {"type": op_type, "path": rng.choice(free),
+            return {"type": op_type, "path": new_path,
                     "mode": rng.choice(DIR_MODE_CHOICES)}
         if op_type == OP_RMDIR:
-            existing = files_of_type(entries, "dir")
+            existing = [p for p in files_of_type(entries, "dir")
+                        if is_empty_dir(entries, p)]
             if not existing:
                 continue
             return {"type": op_type, "path": rng.choice(existing)}
         if op_type == OP_CHMOD:
-            # Skip symlinks: chmod(2) follows symlinks, and our symlink
+            # Skip symlinks: chmod(2) follows symlinks and our symlink
             # targets may not exist as real files.
             candidates = (files_of_type(entries, "file") +
                           files_of_type(entries, "dir"))
@@ -308,18 +349,17 @@ def pick_op(rng, entries):
                     "uid": cur_uid, "gid": cur_gid}
         if op_type == OP_LINK:
             srcs = files_of_type(entries, "file")
-            free = [p for p in FILE_POOL if p not in entries]
-            if not srcs or not free:
+            new_path = pick_new_path(rng, entries, FILE_NAMES)
+            if not srcs or new_path is None:
                 continue
             return {"type": op_type, "src": rng.choice(srcs),
-                    "dst": rng.choice(free)}
+                    "dst": new_path}
         if op_type == OP_SYMLINK:
-            free = [p for p in FILE_POOL if p not in entries]
-            if not free:
+            new_path = pick_new_path(rng, entries, FILE_NAMES)
+            if new_path is None:
                 continue
-            target = rng.choice(PATH_POOL)
-            return {"type": op_type, "path": rng.choice(free),
-                    "target": target}
+            return {"type": op_type, "path": new_path,
+                    "target": rng.choice(SYMLINK_TARGETS)}
     return None
 
 
