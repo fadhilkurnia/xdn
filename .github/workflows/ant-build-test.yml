@@ -1,8 +1,25 @@
-# This workflow will test and build a Java project with Ant
-# For more information see: 
-# https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-ant
-
 name: "XDN test workflow"
+
+# Parallelized split of `ant xdn-full-tests`:
+#
+#   - unit-tests          — JDK only (no Docker/FUSE/rsync). Runs the
+#                           non-Xdn unit tests via `ant xdn-regular-unit-tests`
+#                           plus the Xdn*Test classes that don't use
+#                           XdnTestCluster (XdnHttpRequestTest,
+#                           XdnHttpRequestBatchTest, XdnGeoDemandProfilerTest).
+#
+#   - xdn-integration     — Matrix, one entry per Xdn*Test class that drives
+#                           XdnTestCluster. Each entry runs on its own runner
+#                           because the cluster hardcodes loopback ports
+#                           (RC :3000, AR :2000-2002, proxy :2300-2302) and
+#                           /tmp/{gigapaxos,xdn} — see XdnTestCluster.java:44-49.
+#                           Concurrent cluster boots on one host would collide,
+#                           so per-host isolation (separate runners) is the
+#                           only way to parallelize these. Each matrix entry
+#                           sets up Docker/FUSE/rsync independently.
+#
+# Reconfiguration tests (ant test), TESTPaxosMain, RequestPacketTest, and
+# E2ELatencyAwareRedirectorTest run in .github/workflows/gigapaxos-correctness.yml.
 
 on:
   push:
@@ -16,100 +33,166 @@ permissions:
   checks: write
 
 jobs:
-  build:
-
+  unit-tests:
+    name: "Unit tests"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v4
+
     - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
         java-version: '21'
         distribution: 'oracle'
-    - name: 📦 Set up Docker  # Required for XdnTestCluster tests
+
+    - name: 🏗️ Build jar
+      run: ant jar
+
+    - name: 🧪 Non-Xdn unit tests
+      run: |
+        set -o pipefail
+        ant xdn-regular-unit-tests 2>&1 | tee junit-test-output.log
+
+    - name: 🧪 Xdn unit tests (no cluster)
+      run: |
+        # These Xdn*Test classes don't use XdnTestCluster — safe to run
+        # on a JDK-only host without Docker/FUSE/rsync setup.
+        bin/run_xdn_tests.sh XdnHttpRequestTest
+        bin/run_xdn_tests.sh XdnHttpRequestBatchTest
+        bin/run_xdn_tests.sh XdnGeoDemandProfilerTest
+
+    - name: 📝 Reporting the test results ...
+      uses: dorny/test-reporter@v2
+      if: ${{ !cancelled() }}
+      with:
+        name: 'Unit tests'
+        path: 'out/**/*.xml'
+        reporter: 'java-junit'
+
+    - name: 🪲 Debug info on failure
+      if: failure()
+      run: |
+        echo "=== System Information ==="
+        uname -a
+        free -h
+        df -h
+        echo "=== Test output files ==="
+        find out -type f 2>/dev/null | head -50 || true
+        echo "=== Build/test log ==="
+        cat junit-test-output.log 2>/dev/null || true
+
+    - name: 📦 Upload test output on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: 'unit-test-output'
+        path: |
+          out/
+          junit-test-output.log
+        if-no-files-found: ignore
+
+  xdn-integration:
+    name: "${{ matrix.test_class }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        test_class:
+          - XdnEventualConsistencyBatchingTest
+          - XdnGetReplicaInfoTest
+          - XdnMultiServiceTest
+          - XdnPerReplicaRequestTest
+          - XdnSetCoordinatorNodeTest
+          - XdnTaggedImageLaunchTest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'oracle'
+
+    - name: 📦 Set up Docker
       uses: docker-practice/actions-setup-docker@master
       timeout-minutes: 12
-    - name: 📦 Verify Docker installation
+
+    - name: 📦 Verify Docker and pre-pull bookcatalog image
       run: |
         set -x
         docker version
         docker run --rm hello-world
         docker pull fadhilkurnia/xdn-bookcatalog
-    - name: 🔄 Set up Rsync  # Required for default PrimaryBackup setup
+
+    - name: 🔄 Set up Rsync
       uses: GuillaumeFalourd/setup-rsync@v1.2
-    - name: 🔄 Set up Fuse  # Required for PrimaryBackup setup
+
+    - name: 🔄 Set up Fuse
       run: |
-        set -x  # Enable command echo for debugging
+        set -x
         sudo apt-get update
         sudo apt-get install -y pkg-config libfuse3-dev fuse3
-        sudo modprobe fuse  # Ensure FUSE kernel module is loaded
+        sudo modprobe fuse
         sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
-        # Verify FUSE setup
         ls -l /dev/fuse
         grep user_allow_other /etc/fuse.conf
         fusermount3 -V
-    - name: 🏗️ Compiling the source code into a jar archive and prepare binaries ...
+
+    - name: 🏗️ Build jar and link binaries
       run: |
         ant jar
-        ln -s -- "$(pwd)/bin/fuselog" /usr/local/bin/fuselog
-        ln -s -- "$(pwd)/bin/fuselog-apply" /usr/local/bin/fuselog-apply
-        ln -s -- "$(pwd)/bin/xdn" /usr/local/bin/xdn
-        ln -s -- "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
-    # Reconfiguration tests (ant test), TESTPaxosMain, RequestPacketTest, and
-    # E2ELatencyAwareRedirectorTest run in parallel in .github/workflows/gigapaxos-correctness.yml.
-    - name: 🧪 Running XDN unit tests with ant ...
+        ln -sf "$(pwd)/bin/fuselog" /usr/local/bin/fuselog
+        ln -sf "$(pwd)/bin/fuselog-apply" /usr/local/bin/fuselog-apply
+        ln -sf "$(pwd)/bin/xdn" /usr/local/bin/xdn
+        ln -sf "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
+
+    - name: 🏗️ Compile tests
+      run: ant xdn-compile-tests
+
+    - name: 🧪 Run ${{ matrix.test_class }}
       run: |
         set -o pipefail
-        ant xdn-full-tests 2>&1 | tee junit-test-output.log
-    - name: 🪲 Display test log and debug info
-      if: always()  # Run even if tests fail
+        bin/run_xdn_tests.sh ${{ matrix.test_class }} 2>&1 | tee junit-test-output.log
+
+    - name: 📝 Reporting the test results ...
+      uses: dorny/test-reporter@v2
+      if: ${{ !cancelled() }}
+      with:
+        name: '${{ matrix.test_class }}'
+        path: 'out/**/*.xml'
+        reporter: 'java-junit'
+
+    - name: 🪲 Debug info on failure
+      if: failure()
       run: |
         echo "=== System Information ==="
         uname -a
         free -h
         df -h
         mount | grep fuse || true
-        
-        echo "=== Java Environment ==="
-        java -version
-        echo $JAVA_HOME
-        echo $ANT_OPTS
-        
-        echo "=== Directory Structure ==="
-        ls -R lib/
-        ls -R out/
-        
-        echo "=== Test Output Files ==="
-        find out/junit5-test-output -type f -ls
-        
-        echo "=== Test Results ==="
-        for each in out/junit5-test-output/TEST-edu.umass.cs.xdn.*.txt; do
-          [ -f "$each" ] || continue
-          echo "============ BEGIN $each ============"
-          cat "$each"
-          echo "============ END $each ============"
+        echo "=== Per-method test logs ==="
+        for f in out/junit5-test-output/*.log; do
+          [ -f "$f" ] || continue
+          echo "============ BEGIN $f ============"
+          cat "$f"
+          echo "============ END $f ============"
         done
-        
-        echo "=== Build and Test Log ==="
-        cat junit-test-output.log
-        
-        echo "=== System Logs ==="
+        echo "=== docker ps ==="
+        docker ps -a || true
+        echo "=== dmesg tail ==="
         dmesg | tail -n 100 || true
-        journalctl -n 100 || true
-    - name: 🔎 Checking the output directory structure ...
-      run: ls out/**/*.xml
-    - name: 📝 Reporting the test results ...
-      uses: dorny/test-reporter@v2
-      if: ${{ !cancelled() }}                     # run this step even if previous step failed
+
+    - name: 📦 Upload test output on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
       with:
-        name: 'Unit tests'
-        path: 'out/**/*.xml'
-        reporter: 'java-junit'
-#    We disable the step below, but this might be needed for checking PR from forked repositories.
-#    - name: 📝 Gathering the test result ...
-#      uses: actions/upload-artifact@v4            # upload test results
-#      if: ${{ !cancelled() }}                     # run this step even if previous step failed
-#      with:
-#        name: test-results
-#        path: 'out/**/*.xml'
+        name: 'integration-${{ matrix.test_class }}-output'
+        path: |
+          out/
+          junit-test-output.log
+        if-no-files-found: ignore
