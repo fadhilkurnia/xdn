@@ -382,31 +382,33 @@ static int send_gathered_statediffs(int conn_fd) {
 
   statediff_action* serialized = head;
   if (is_sd_prune) {
-    // Pruning: O(n) two-pass scan.
-    // Pass 1: classify fids.
-    //   - unlinked_fids: fid is the victim of an UNLINK/RMDIR in this batch
-    //   - renamed_fids:  fid appears as from_fid or to_fid in a RENAME/LINK
-    // A fid in renamed_fids is excluded from pruning entirely: its lifetime
-    // may span multiple incarnations of the same path, and a fid being
-    // unlinked under one incarnation says nothing about whether actions
-    // under a previous/subsequent incarnation (now connected via rename to
-    // another path) should be preserved. A proper analysis would track
-    // per-lifetime spans; this conservative rule avoids that complexity.
+    // Pruning: O(n) two-pass scan. A fid's actions are only safe to drop
+    // when its lifecycle in this batch is unambiguous: exactly one
+    // create-equivalent action, an unlink-equivalent action, and no
+    // rename/link references. Multi-lifecycle fids (file deleted then
+    // recreated under the same fid) and rename-touched fids preserve all
+    // their actions, because a proper lifetime/rename-chain analysis is
+    // out of scope here.
     unordered_set<uint64_t> unlinked_fids;
     unordered_set<uint64_t> renamed_fids;
+    unordered_map<uint64_t, int> create_count;
     for (statediff_action* p = head; p; p = p->next) {
       if (p->sd_type == SD_TYPE_UNLINK || p->sd_type == SD_TYPE_RMDIR) {
         unlinked_fids.insert(p->fid);
       } else if (p->sd_type == SD_TYPE_RENAME ||
                  p->sd_type == SD_TYPE_LINK) {
-        renamed_fids.insert(p->fid);     // from_fid
-        renamed_fids.insert(p->offset);  // to_fid
+        renamed_fids.insert(p->fid);
+        renamed_fids.insert(p->offset);
+      } else if (p->sd_type == SD_TYPE_CREATE ||
+                 p->sd_type == SD_TYPE_MKDIR ||
+                 p->sd_type == SD_TYPE_SYMLINK) {
+        create_count[p->fid]++;
       }
     }
 
-    // Pass 2: drop writes/metadata/creates for fids that are unlinked AND
-    // not involved in any rename/link. Keep the unlink itself so the
-    // backup actually removes the file. Apply tolerates ENOENT on unlink.
+    // Pass 2: drop is_prunable actions for fids with a clean single-life
+    // cycle. Keep the UNLINK itself so the backup actually removes the
+    // file. Apply tolerates ENOENT on unlink.
     statediff_action* pruned = nullptr;
     for (statediff_action* p = head; p; ) {
       statediff_action* nxt = p->next;
@@ -415,8 +417,11 @@ static int send_gathered_statediffs(int conn_fd) {
                           p->sd_type == SD_TYPE_CHMOD ||
                           p->sd_type == SD_TYPE_CHOWN ||
                           p->sd_type == SD_TYPE_CREATE);
+      auto cc = create_count.find(p->fid);
+      int ccount = (cc == create_count.end()) ? 0 : cc->second;
       bool fid_prunable = unlinked_fids.count(p->fid) &&
-                          !renamed_fids.count(p->fid);
+                          !renamed_fids.count(p->fid) &&
+                          ccount <= 1;
       bool keep = !(is_prunable && fid_prunable);
       if (keep) {
         p->next = pruned;

@@ -31,6 +31,7 @@ import random
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -49,8 +50,12 @@ STATEDIFF_FILE = BASE_DIR / "statediff.bin"
 FUSELOG_BIN = PROJECT_ROOT / "bin" / "fuselog"
 APPLY_BIN = PROJECT_ROOT / "bin" / "fuselog-apply"
 
-PATH_POOL = [f"f{i}" for i in range(8)]
+FILE_POOL = [f"f{i}" for i in range(8)]
+DIR_POOL = [f"d{i}" for i in range(4)]
+PATH_POOL = FILE_POOL + DIR_POOL  # union, used for symlink targets
 SIZE_CHOICES = [1, 16, 256, 4096, 65536, 262144]
+MODE_CHOICES = [0o644, 0o600, 0o664, 0o755, 0o750, 0o700]
+DIR_MODE_CHOICES = [0o755, 0o750, 0o700, 0o770]
 
 OP_WRITE_NEW = "write_new"
 OP_OVERWRITE = "overwrite_at_offset"
@@ -58,6 +63,17 @@ OP_EXTEND = "extending_write"
 OP_TRUNCATE = "truncate"
 OP_UNLINK = "unlink"
 OP_RENAME = "rename"
+OP_MKDIR = "mkdir"
+OP_RMDIR = "rmdir"
+OP_CHMOD = "chmod"
+OP_CHOWN = "chown"
+OP_LINK = "link"
+OP_SYMLINK = "symlink"
+
+# Per-entry state shape:
+#   {'type': 'file', 'size': int}    # mutable; shared by hardlinks
+#   {'type': 'dir'}
+#   {'type': 'symlink', 'target': str}
 
 
 def log(msg):
@@ -155,14 +171,7 @@ def apply_op(op, base_dir):
         path = base_dir / op["path"]
         with open(path, "wb") as f:
             f.write(op["data"])
-    elif op_type == OP_OVERWRITE:
-        path = base_dir / op["path"]
-        fd = os.open(path, os.O_WRONLY)
-        try:
-            os.pwrite(fd, op["data"], op["offset"])
-        finally:
-            os.close(fd)
-    elif op_type == OP_EXTEND:
+    elif op_type == OP_OVERWRITE or op_type == OP_EXTEND:
         path = base_dir / op["path"]
         fd = os.open(path, os.O_WRONLY)
         try:
@@ -177,21 +186,43 @@ def apply_op(op, base_dir):
         os.unlink(path)
     elif op_type == OP_RENAME:
         os.rename(base_dir / op["from"], base_dir / op["to"])
+    elif op_type == OP_MKDIR:
+        os.mkdir(base_dir / op["path"], op["mode"])
+    elif op_type == OP_RMDIR:
+        os.rmdir(base_dir / op["path"])
+    elif op_type == OP_CHMOD:
+        # follow_symlinks=True matches fuselog_chmod which calls chmod(2).
+        os.chmod(base_dir / op["path"], op["mode"])
+    elif op_type == OP_CHOWN:
+        # lchown semantics match fuselog_chown. Chown to the current uid/gid
+        # so we don't need root; fuselog still emits a CHOWN statediff.
+        os.chown(base_dir / op["path"], op["uid"], op["gid"],
+                 follow_symlinks=False)
+    elif op_type == OP_LINK:
+        os.link(base_dir / op["src"], base_dir / op["dst"])
+    elif op_type == OP_SYMLINK:
+        os.symlink(op["target"], base_dir / op["path"])
     else:
         raise ValueError(f"unknown op: {op_type}")
 
 
-def pick_op(rng, files):
-    """Pick a random op given current file state (dict: path -> size).
-    Returns a fully-realized op dict, or None if no valid op is possible
-    (very unlikely with our pool of 8 paths)."""
+def files_of_type(entries, t):
+    return [p for p, e in entries.items() if e["type"] == t]
+
+
+def pick_op(rng, entries):
+    """Pick a random op given current entries state.
+    Returns a fully-realized op dict, or None if no valid op is possible."""
     op_types = [OP_WRITE_NEW, OP_OVERWRITE, OP_EXTEND, OP_TRUNCATE,
-                OP_UNLINK, OP_RENAME]
-    # Try a few times to find a valid op given current state.
-    for _ in range(20):
+                OP_UNLINK, OP_RENAME, OP_MKDIR, OP_RMDIR, OP_CHMOD,
+                OP_CHOWN, OP_LINK, OP_SYMLINK]
+    cur_uid = os.getuid()
+    cur_gid = os.getgid()
+
+    for _ in range(40):
         op_type = rng.choice(op_types)
         if op_type == OP_WRITE_NEW:
-            free = [p for p in PATH_POOL if p not in files]
+            free = [p for p in FILE_POOL if p not in entries]
             if not free:
                 continue
             path = rng.choice(free)
@@ -199,23 +230,23 @@ def pick_op(rng, files):
             data = rng.randbytes(size)
             return {"type": op_type, "path": path, "data": data}
         if op_type == OP_OVERWRITE:
-            existing = [p for p, sz in files.items() if sz > 0]
+            existing = [p for p in files_of_type(entries, "file")
+                        if entries[p]["size"] > 0]
             if not existing:
                 continue
             path = rng.choice(existing)
-            file_sz = files[path]
+            file_sz = entries[path]["size"]
             length = rng.randint(1, min(file_sz, max(SIZE_CHOICES)))
             offset = rng.randint(0, max(0, file_sz - length))
             data = rng.randbytes(length)
             return {"type": op_type, "path": path,
                     "offset": offset, "data": data}
         if op_type == OP_EXTEND:
-            existing = list(files.keys())
+            existing = files_of_type(entries, "file")
             if not existing:
                 continue
             path = rng.choice(existing)
-            file_sz = files[path]
-            # Pick an offset that may overlap; new end > file_sz.
+            file_sz = entries[path]["size"]
             extra = rng.choice(SIZE_CHOICES)
             offset = rng.randint(0, file_sz)
             length = (file_sz - offset) + extra
@@ -223,77 +254,160 @@ def pick_op(rng, files):
             return {"type": op_type, "path": path,
                     "offset": offset, "data": data}
         if op_type == OP_TRUNCATE:
-            existing = list(files.keys())
+            existing = files_of_type(entries, "file")
             if not existing:
                 continue
             path = rng.choice(existing)
             new_size = rng.choice([0] + SIZE_CHOICES)
             return {"type": op_type, "path": path, "size": new_size}
         if op_type == OP_UNLINK:
-            existing = list(files.keys())
+            # Unlink regular files and symlinks. Hard links are also files;
+            # unlinking one is fine (the other names persist).
+            existing = (files_of_type(entries, "file") +
+                        files_of_type(entries, "symlink"))
             if not existing:
                 continue
             path = rng.choice(existing)
             return {"type": op_type, "path": path}
         if op_type == OP_RENAME:
-            existing = list(files.keys())
-            free = [p for p in PATH_POOL if p not in files]
+            existing = files_of_type(entries, "file")
+            free = [p for p in FILE_POOL if p not in entries]
             if not existing or not free:
                 continue
             return {"type": op_type, "from": rng.choice(existing),
                     "to": rng.choice(free)}
+        if op_type == OP_MKDIR:
+            free = [p for p in DIR_POOL if p not in entries]
+            if not free:
+                continue
+            return {"type": op_type, "path": rng.choice(free),
+                    "mode": rng.choice(DIR_MODE_CHOICES)}
+        if op_type == OP_RMDIR:
+            existing = files_of_type(entries, "dir")
+            if not existing:
+                continue
+            return {"type": op_type, "path": rng.choice(existing)}
+        if op_type == OP_CHMOD:
+            # Skip symlinks: chmod(2) follows symlinks, and our symlink
+            # targets may not exist as real files.
+            candidates = (files_of_type(entries, "file") +
+                          files_of_type(entries, "dir"))
+            if not candidates:
+                continue
+            path = rng.choice(candidates)
+            mode_pool = (MODE_CHOICES
+                         if entries[path]["type"] == "file"
+                         else DIR_MODE_CHOICES)
+            return {"type": op_type, "path": path,
+                    "mode": rng.choice(mode_pool)}
+        if op_type == OP_CHOWN:
+            candidates = list(entries.keys())
+            if not candidates:
+                continue
+            return {"type": op_type, "path": rng.choice(candidates),
+                    "uid": cur_uid, "gid": cur_gid}
+        if op_type == OP_LINK:
+            srcs = files_of_type(entries, "file")
+            free = [p for p in FILE_POOL if p not in entries]
+            if not srcs or not free:
+                continue
+            return {"type": op_type, "src": rng.choice(srcs),
+                    "dst": rng.choice(free)}
+        if op_type == OP_SYMLINK:
+            free = [p for p in FILE_POOL if p not in entries]
+            if not free:
+                continue
+            target = rng.choice(PATH_POOL)
+            return {"type": op_type, "path": rng.choice(free),
+                    "target": target}
     return None
 
 
-def update_state(op, files):
-    """Apply op's effect to the in-driver file size map."""
+def update_state(op, entries):
+    """Apply op's effect to the in-driver entries map.
+    Hard links share their file-state dict, so size updates through one
+    pathname are visible through the other(s)."""
     t = op["type"]
     if t == OP_WRITE_NEW:
-        files[op["path"]] = len(op["data"])
+        entries[op["path"]] = {"type": "file", "size": len(op["data"])}
     elif t == OP_OVERWRITE:
-        # File size unchanged.
-        pass
+        pass  # file size unchanged
     elif t == OP_EXTEND:
-        files[op["path"]] = max(files[op["path"]],
-                                op["offset"] + len(op["data"]))
+        e = entries[op["path"]]
+        e["size"] = max(e["size"], op["offset"] + len(op["data"]))
     elif t == OP_TRUNCATE:
-        files[op["path"]] = op["size"]
+        entries[op["path"]]["size"] = op["size"]
     elif t == OP_UNLINK:
-        del files[op["path"]]
+        del entries[op["path"]]
     elif t == OP_RENAME:
-        files[op["to"]] = files.pop(op["from"])
+        entries[op["to"]] = entries.pop(op["from"])
+    elif t == OP_MKDIR:
+        entries[op["path"]] = {"type": "dir"}
+    elif t == OP_RMDIR:
+        del entries[op["path"]]
+    elif t == OP_CHMOD or t == OP_CHOWN:
+        pass  # tracked metadata not used by op picker
+    elif t == OP_LINK:
+        # Share the same dict object so size updates propagate to both names.
+        entries[op["dst"]] = entries[op["src"]]
+    elif t == OP_SYMLINK:
+        entries[op["path"]] = {"type": "symlink", "target": op["target"]}
 
 
 def op_summary(op):
     """One-line, replay-friendly description of an op (no data bytes)."""
     t = op["type"]
-    if t in (OP_WRITE_NEW,):
+    if t == OP_WRITE_NEW:
         return f"{t} path={op['path']} size={len(op['data'])}"
     if t in (OP_OVERWRITE, OP_EXTEND):
         return (f"{t} path={op['path']} offset={op['offset']} "
                 f"len={len(op['data'])}")
     if t == OP_TRUNCATE:
         return f"{t} path={op['path']} size={op['size']}"
-    if t == OP_UNLINK:
+    if t in (OP_UNLINK, OP_RMDIR):
         return f"{t} path={op['path']}"
     if t == OP_RENAME:
         return f"{t} from={op['from']} to={op['to']}"
+    if t == OP_MKDIR:
+        return f"{t} path={op['path']} mode={oct(op['mode'])}"
+    if t == OP_CHMOD:
+        return f"{t} path={op['path']} mode={oct(op['mode'])}"
+    if t == OP_CHOWN:
+        return f"{t} path={op['path']} uid={op['uid']} gid={op['gid']}"
+    if t == OP_LINK:
+        return f"{t} src={op['src']} dst={op['dst']}"
+    if t == OP_SYMLINK:
+        return f"{t} path={op['path']} target={op['target']}"
     return repr(op)
 
 
 def snapshot_tree(root):
-    """Walk root and return dict: relpath -> (mode, size, sha256_hex).
-    Symlinks are not in MVP scope; if encountered, recorded as link target."""
+    """Walk root and return dict: relpath -> (kind, mode, payload).
+    For files, payload is (size, sha256_hex). For dirs, payload is None.
+    For symlinks, payload is the target string (read via os.readlink).
+    Does not follow symlinks."""
     out = {}
     root_str = str(root)
-    for dirpath, dirnames, filenames in os.walk(root_str):
-        for name in filenames:
-            full = os.path.join(dirpath, name)
-            rel = os.path.relpath(full, root_str)
-            st = os.lstat(full)
-            with open(full, "rb") as f:
-                h = hashlib.sha256(f.read()).hexdigest()
-            out[rel] = (st.st_mode & 0o7777, st.st_size, h)
+
+    def _walk(d):
+        with os.scandir(d) as it:
+            for entry in it:
+                full = entry.path
+                rel = os.path.relpath(full, root_str)
+                st = entry.stat(follow_symlinks=False)
+                mode = st.st_mode & 0o7777
+                if stat.S_ISLNK(st.st_mode):
+                    target = os.readlink(full)
+                    out[rel] = ("symlink", mode, target)
+                elif stat.S_ISDIR(st.st_mode):
+                    out[rel] = ("dir", mode, None)
+                    _walk(full)
+                elif stat.S_ISREG(st.st_mode):
+                    with open(full, "rb") as f:
+                        h = hashlib.sha256(f.read()).hexdigest()
+                    out[rel] = ("file", mode, (st.st_size, h))
+
+    _walk(root_str)
     return out
 
 
@@ -361,11 +475,11 @@ def main():
         proc = start_fuselog()
         atexit.register(stop_fuselog, proc)
 
-        files = {}
+        entries = {}
         op_log = []
         skipped = 0
         for i in range(args.num_ops):
-            op = pick_op(rng, files)
+            op = pick_op(rng, entries)
             if op is None:
                 skipped += 1
                 continue
@@ -378,7 +492,7 @@ def main():
                 dump = dump_failure(seed, op_log, b"", fuselog_log_path)
                 log(f"failure artifacts: {dump}")
                 return 1
-            update_state(op, files)
+            update_state(op, entries)
             op_log.append(op_summary(op))
 
         # Flush kernel page cache for the fuselog mount so all writes have
