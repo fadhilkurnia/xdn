@@ -111,6 +111,7 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
     // ---------------------------------------------------------------------------
     // Consistency model registry
     // ---------------------------------------------------------------------------
+    private ConsistencyModel consistencyModel = ConsistencyModel.EVENTUAL;
     private static final ConcurrentHashMap<String, ConsistencyModel> SERVICE_CONSISTENCY_MODELS =
             new ConcurrentHashMap<>();
 
@@ -129,8 +130,35 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
     }
 
     private ConsistencyModel getConsistencyModel() {
-        return SERVICE_CONSISTENCY_MODELS.getOrDefault(this.name, ConsistencyModel.EVENTUAL);
+        return this.consistencyModel;
     }
+
+    public static void registerConsistencyModel(
+            String serviceName, edu.umass.cs.xdn.service.ConsistencyModel model) {
+        ConsistencyModel consistency = toPlacementConsistencyModel(model);
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 registering {0} with {1}",
+                new Object[]{ serviceName, consistency.name() });
+        SERVICE_CONSISTENCY_MODELS.put(serviceName, toPlacementConsistencyModel(model));
+    }
+
+    private static ConsistencyModel toPlacementConsistencyModel(
+            edu.umass.cs.xdn.service.ConsistencyModel model) {
+        return switch (model) {
+            case LINEARIZABILITY, LINEARIZABLE
+                    -> ConsistencyModel.LINEARIZABLE;
+            case SEQUENTIAL, PRAM, CAUSAL
+                    -> ConsistencyModel.SEQUENTIAL;
+            case MONOTONIC_READS, MONOTONIC_WRITES,
+                 READ_YOUR_WRITES, WRITES_FOLLOW_READS
+                    -> ConsistencyModel.PRIMARY_BACKUP;
+            case EVENTUAL
+                    -> ConsistencyModel.EVENTUAL;
+            default
+                    -> ConsistencyModel.SEQUENTIAL;
+        };
+    }
+
 
     // ---------------------------------------------------------------------------
     // Per-instance demand state
@@ -171,6 +199,10 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
         }
         decodeGrid(stats.optString(KEY_GRID_SPARSE_READS_B64,  null), sparseReadGrid);
         decodeGrid(stats.optString(KEY_GRID_SPARSE_WRITES_B64, null), sparseWriteGrid);
+        if (stats.has("consistency_model")) {
+            this.consistencyModel = ConsistencyModel.valueOf(
+                    stats.getString("consistency_model"));
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -227,6 +259,12 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
             mapLock.unlock();
         }
 
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 [AR] Sending demand report for '{0}': reads={1} cells, writes={2} cells, totalReqs={3}",
+                new Object[]{
+                        this.name, readEntries.size(), writeEntries.size(), numReqs
+                });
+
         // Trim to budget: keep highest-traffic cells (they dominate the centroid / cost).
         if (readEntries.size()  > MAX_GRID_ENTRIES_PER_REPORT)
             readEntries  = readEntries.subList(0, MAX_GRID_ENTRIES_PER_REPORT);
@@ -239,6 +277,10 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
             stats.put(KEY_NUM_REQS,              numReqs);
             stats.put(KEY_GRID_SPARSE_READS_B64,  encodeEntries(readEntries));
             stats.put(KEY_GRID_SPARSE_WRITES_B64, encodeEntries(writeEntries));
+            stats.put("consistency_model",
+                    SERVICE_CONSISTENCY_MODELS
+                            .getOrDefault(this.name, ConsistencyModel.EVENTUAL)
+                            .name());
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
@@ -251,6 +293,10 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
         XdnGeoDemandProfiler2 incoming = (XdnGeoDemandProfiler2) update;
         assert incoming.name.equals(this.name) : "Expecting profiler for the same service";
 
+        if (incoming.consistencyModel != ConsistencyModel.EVENTUAL) {
+            this.consistencyModel = incoming.consistencyModel;
+        }
+
         mapLock.lock();
         try {
             this.totalRequests += incoming.totalRequests;
@@ -259,6 +305,11 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
         } finally {
             mapLock.unlock();
         }
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 [RC] Received demand report for '{0}': +{1} reqs (total now={2})",
+                new Object[]{
+                        this.name, incoming.totalRequests, this.totalRequests
+                });
     }
 
     @Override
@@ -302,7 +353,7 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
             throw new RuntimeException(e);
         }
 
-        LOGGER.log(Level.FINE,
+        LOGGER.log(Level.INFO,
                 "XdnGeoDemandProfiler2 [{0}] algorithm={1} model={2} actives={3} coordinator={4}",
                 new Object[]{
                         this.name, ALGORITHM, model,

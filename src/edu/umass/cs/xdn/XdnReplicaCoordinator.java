@@ -697,6 +697,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // Store the service->service-property mapping
     this.serviceProperties.put(serviceName, serviceProperty);
 
+    // Create instance of the service in XdnGeoDemandProfiler2
+    XdnGeoDemandProfiler2.registerConsistencyModel(
+            serviceName, serviceProperty.getConsistencyModel());
+
     System.out.printf(
         ">> XDNReplicaCoordinator:%s name=%s coordinator=%s\n",
         myNodeID, serviceName, coordinator.getClass().getSimpleName());
