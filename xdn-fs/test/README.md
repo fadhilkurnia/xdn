@@ -46,6 +46,28 @@ Artifacts are dumped to `/tmp/fuselog-fuzz-fail-<seed>/`:
 - `statediff.bin` — raw socket payload
 - `fuselog.log` — captured fuselog stdout/stderr
 
+## Companion tests
+
+- **`fuzz_concurrent.py`** — same harness but with N worker threads, each on
+  a disjoint subtree (`t0/`, `t1/`, ...). Stresses `push_statediff` CAS and
+  `fid_mutex` under contention; final state stays deterministic so
+  `A == B == C` is still a valid assertion.
+- **`fuzz_concurrent_overlap.py`** — N threads on the SAME shared path pool
+  (overlapping ops). Drops the plain-dir oracle and only asserts `A == C`.
+  Tolerates expected race errnos (`ENOENT`, `EEXIST`, ...) at op level.
+  Writes use thread-owned byte offsets so concurrent threads never touch
+  the same bytes (sidesteps the push-after-pwrite ordering race);
+  truncate is excluded for the same reason. The test surfaces races on
+  metadata, rename, link, and unlink, where it is correct.
+
+  Note: this test is **probabilistic**, not deterministic. Even with a
+  fixed RNG seed, OS scheduling determines which thread's `push_statediff`
+  CAS lands first when their FUSE handlers complete in close succession.
+  Hard-link aliasing (one inode under two names with concurrent writes
+  through both) can also produce occasional divergence. Empirical pass
+  rate at 4 threads × 200 ops is ~95% over 20 runs; failures land in
+  `/tmp/fuselog-fuzz-fail-<seed>/` for inspection.
+
 ## Requirements
 
 - Linux (FUSE)

@@ -82,17 +82,31 @@ def log(msg):
 
 
 def ensure_clean_dirs():
-    """Recreate BASE_DIR from scratch."""
+    """Recreate BASE_DIR from scratch. Tolerates a stale fuselog mount
+    from a previous crashed run."""
     if BASE_DIR.exists():
-        # If MOUNT_DIR is currently a fuselog mount, unmount first.
+        # If MOUNT_DIR is still a live fuselog mount, unmount aggressively.
         try:
             subprocess.run(["fusermount3", "-u", "-q", str(MOUNT_DIR)],
+                           check=False)
+            # Lazy unmount in case the above failed because of EBUSY.
+            subprocess.run(["fusermount3", "-u", "-z", "-q", str(MOUNT_DIR)],
                            check=False)
         except FileNotFoundError:
             pass
         shutil.rmtree(BASE_DIR, ignore_errors=True)
+        # If rmtree couldn't fully remove BASE_DIR (e.g. lingering mount),
+        # fall back to clearing its contents one level at a time.
+        if BASE_DIR.exists():
+            for child in BASE_DIR.iterdir():
+                shutil.rmtree(child, ignore_errors=True)
+            try:
+                BASE_DIR.rmdir()
+            except OSError:
+                pass
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
     for d in (MOUNT_DIR, PLAIN_DIR, APPLY_DIR):
-        d.mkdir(parents=True, exist_ok=False)
+        d.mkdir(parents=True, exist_ok=True)
 
 
 def start_fuselog():
@@ -425,29 +439,64 @@ def snapshot_tree(root):
     """Walk root and return dict: relpath -> (kind, mode, payload).
     For files, payload is (size, sha256_hex). For dirs, payload is None.
     For symlinks, payload is the target string (read via os.readlink).
-    Does not follow symlinks."""
+    Does not follow symlinks.
+
+    Tolerates dirs/files that the test workload set to permissions we
+    can't traverse or read: lstat captures the *real* mode first, then
+    we chmod to a walkable mode temporarily so we can recurse / hash
+    contents. The recorded mode is always the original."""
     out = {}
     root_str = str(root)
 
-    def _walk(d):
-        with os.scandir(d) as it:
-            for entry in it:
-                full = entry.path
-                rel = os.path.relpath(full, root_str)
-                st = entry.stat(follow_symlinks=False)
-                mode = st.st_mode & 0o7777
-                if stat.S_ISLNK(st.st_mode):
-                    target = os.readlink(full)
-                    out[rel] = ("symlink", mode, target)
-                elif stat.S_ISDIR(st.st_mode):
-                    out[rel] = ("dir", mode, None)
-                    _walk(full)
-                elif stat.S_ISREG(st.st_mode):
-                    with open(full, "rb") as f:
-                        h = hashlib.sha256(f.read()).hexdigest()
-                    out[rel] = ("file", mode, (st.st_size, h))
+    def _scandir(path):
+        try:
+            return list(os.scandir(path))
+        except PermissionError:
+            os.chmod(path, 0o755)
+            return list(os.scandir(path))
 
-    _walk(root_str)
+    def _hash(path):
+        try:
+            with open(path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except PermissionError:
+            os.chmod(path, 0o644)
+            with open(path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+
+    def _lstat_or_fix(path):
+        try:
+            return os.lstat(path)
+        except PermissionError:
+            # The immediate parent might not have x; chmod-and-retry.
+            try:
+                os.chmod(os.path.dirname(path), 0o755)
+            except OSError:
+                return None
+            try:
+                return os.lstat(path)
+            except OSError:
+                return None
+
+    def _record(path):
+        st = _lstat_or_fix(path)
+        if st is None:
+            rel = os.path.relpath(path, root_str)
+            out[rel] = ("inaccessible", None, None)
+            return
+        rel = os.path.relpath(path, root_str)
+        mode = st.st_mode & 0o7777
+        if stat.S_ISLNK(st.st_mode):
+            out[rel] = ("symlink", mode, os.readlink(path))
+        elif stat.S_ISDIR(st.st_mode):
+            out[rel] = ("dir", mode, None)
+            for entry in _scandir(path):
+                _record(entry.path)
+        elif stat.S_ISREG(st.st_mode):
+            out[rel] = ("file", mode, (st.st_size, _hash(path)))
+
+    for entry in _scandir(root_str):
+        _record(entry.path)
     return out
 
 
@@ -539,10 +588,13 @@ def main():
         # actually been delivered to fuselog_write before we harvest.
         subprocess.run(["sync"], check=True)
 
-        snap_a = snapshot_tree(MOUNT_DIR)
+        # Harvest BEFORE snapshot: snapshot may need to chmod some dirs
+        # to traverse them, and those chmods would otherwise leak into
+        # the captured statediff.
         payload = harvest_statediff()
         with open(STATEDIFF_FILE, "wb") as f:
             f.write(payload)
+        snap_a = snapshot_tree(MOUNT_DIR)
 
         stop_fuselog(proc)
         proc = None

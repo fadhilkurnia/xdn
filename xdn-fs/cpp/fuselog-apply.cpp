@@ -469,7 +469,7 @@ void apply2(char *target_root) {
         logging(LOG_INFO, ">>> rename \n      from: %s\n      to: %s\n",
                from_abs_path, to_abs_path);
         int err = rename(from_abs_path, to_abs_path);
-        if (err == -1) {
+        if (err == -1 && errno != ENOENT) {
           logging(LOG_ERROR, "error: failed to rename file %s -> %s\n",
                   from_filename.c_str(), to_filename.c_str());
           perror("reason");

@@ -35,6 +35,7 @@
 
 #define FUSE_USE_VERSION 31
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fuse.h>
@@ -95,6 +96,18 @@ static bool is_sd_prune    = true;   // set from FUSELOG_PRUNE
 static bool is_sd_compress = false;  // set from FUSELOG_COMPRESSION
 static ZSTD_CCtx* zstd_cctx = nullptr;
 static const int ZSTD_COMPRESS_LEVEL = 1;
+// TODO: allocate fresh fids on recreate.
+// Every handler that observes a new (or reappearing) path looks the path up
+// here and **reuses the existing fid** if one was previously assigned. That
+// conflates multiple incarnations of the same path within a single batch:
+// e.g. a path cycled file → unlink → mkdir → rmdir → file all carries one
+// fid in the captured statediff, and apply cannot tell which actions belong
+// to which incarnation. Under concurrent workloads with path recycling, this
+// produces ~5% A!=C divergence in fuzz_concurrent_overlap.py.
+// Fix: on every CREATE/MKDIR/SYMLINK (and on the to_fid of LINK/RENAME when
+// the destination is fresh), allocate a NEW fid instead of reusing the
+// existing entry. Wire-format-compatible (just larger fid space); the apply
+// side already keys actions by fid alone.
 static unordered_map<string, uint64_t> filename_to_fid;
 struct statediff_action {
   uint8_t               sd_type;
@@ -283,6 +296,29 @@ static char *get_absolute_path(const char *path) {
     real_path[strlen(real_path) - 1] = '\0';
   strcat(real_path, path);
   return real_path;
+}
+
+// Detect FUSE's silly-rename names. When userspace unlinks a file that still
+// has open fds, the kernel renames it to `.fuse_hiddenXXXXXXXXXXXXXXXX` (16
+// hex chars) and later unlinks that silly name once all fds close. We treat
+// silly-renamed paths as non-user-visible so the captured statediff matches
+// the user's intent (which is: unlink the original path).
+static bool is_silly_name(const char *name) {
+  if (name == NULL) return false;
+  const char prefix[] = ".fuse_hidden";
+  const size_t prefix_len = sizeof(prefix) - 1;
+  if (strncmp(name, prefix, prefix_len) != 0) return false;
+  for (size_t i = prefix_len; name[i]; i++) {
+    if (!isxdigit((unsigned char) name[i])) return false;
+  }
+  return name[prefix_len] != '\0';  // require at least one hex char
+}
+
+static bool is_silly_path(const char *path) {
+  if (path == NULL) return false;
+  const char *base = strrchr(path, '/');
+  base = base ? base + 1 : path;
+  return is_silly_name(base);
 }
 
 static char *get_relative_path(const char *path) {
@@ -1114,10 +1150,10 @@ static int fuselog_unlink(const char *orig_path) {
     return -errno;
   } 
   
-  if (is_sd_capture == true) {
+  if (is_sd_capture == true && !is_silly_path(path)) {
     auto start_time = chrono::high_resolution_clock::now();
     if (fuse_get_context()->pid > 0) {
-      
+
       // get the file id (fid)
       uint64_t cur_fid = 0;
       string path_str(path);
@@ -1140,10 +1176,11 @@ static int fuselog_unlink(const char *orig_path) {
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
                         (end_time-start_time);
-    logging(LOG_INFO, ">> unlink %s, sd-cap-time: %ldns\n" , 
+    logging(LOG_INFO, ">> unlink %s, sd-cap-time: %ldns\n" ,
             path, sd_cap_time.count());
   } else {
-    logging(LOG_INFO, ">> unlink %s\n", path);
+    logging(LOG_INFO, ">> unlink %s%s\n", path,
+            is_silly_path(path) ? " (silly-rename cleanup; not captured)" : "");
   }
 
   free(path);
@@ -1198,33 +1235,61 @@ static int fuselog_rename(const char *orig_from, const char *orig_to,
   if (res != -1 && is_sd_capture == true) {
     auto start_time = chrono::high_resolution_clock::now();
     if (fuse_get_context()->pid > 0) {
-      
-      // get the file id (fid)
-      uint64_t from_fid = 0;
-      string   from_path_str(from);
-      uint64_t to_fid = 0;
-      string   to_path_str(to);
-      fid_mutex.lock();
-      if (filename_to_fid.count(from_path_str)) {
-        from_fid = filename_to_fid[from_path_str];
-      } else {
-        from_fid = filename_to_fid.size();
-        filename_to_fid[from_path_str] = from_fid;
-      }
-      if (filename_to_fid.count(to_path_str)) {
-        to_fid = filename_to_fid[to_path_str];
-      } else {
-        to_fid = filename_to_fid.size();
-        filename_to_fid[to_path_str] = to_fid;
-      }
-      fid_mutex.unlock();
 
-      // capture and gather the statediff
-      auto* sd = new statediff_action{};
-      sd->sd_type = SD_TYPE_RENAME;
-      sd->fid     = from_fid;
-      sd->offset  = to_fid;          // TODO: use another field!!!
-      push_statediff(sd);
+      // Silly-rename detection: when the kernel renames X -> .fuse_hiddenZ
+      // because something still has X open, capture the user-visible effect
+      // (UNLINK X) rather than the FUSE-internal rename. The subsequent
+      // ops on the silly name will be skipped by their handlers.
+      bool to_is_silly   = is_silly_path(to);
+      bool from_is_silly = is_silly_path(from);
+
+      if (to_is_silly && !from_is_silly) {
+        // Treat as UNLINK(from).
+        uint64_t from_fid = 0;
+        string   from_path_str(from);
+        fid_mutex.lock();
+        if (filename_to_fid.count(from_path_str)) {
+          from_fid = filename_to_fid[from_path_str];
+        } else {
+          from_fid = filename_to_fid.size();
+          filename_to_fid[from_path_str] = from_fid;
+        }
+        fid_mutex.unlock();
+
+        auto* sd = new statediff_action{};
+        sd->sd_type = SD_TYPE_UNLINK;
+        sd->fid     = from_fid;
+        push_statediff(sd);
+      } else if (from_is_silly) {
+        // Reverse silly-rename (rare). Skip capture entirely; the file
+        // never had user-visible content at the silly name.
+      } else {
+        // Normal user-initiated rename.
+        uint64_t from_fid = 0;
+        string   from_path_str(from);
+        uint64_t to_fid = 0;
+        string   to_path_str(to);
+        fid_mutex.lock();
+        if (filename_to_fid.count(from_path_str)) {
+          from_fid = filename_to_fid[from_path_str];
+        } else {
+          from_fid = filename_to_fid.size();
+          filename_to_fid[from_path_str] = from_fid;
+        }
+        if (filename_to_fid.count(to_path_str)) {
+          to_fid = filename_to_fid[to_path_str];
+        } else {
+          to_fid = filename_to_fid.size();
+          filename_to_fid[to_path_str] = to_fid;
+        }
+        fid_mutex.unlock();
+
+        auto* sd = new statediff_action{};
+        sd->sd_type = SD_TYPE_RENAME;
+        sd->fid     = from_fid;
+        sd->offset  = to_fid;          // TODO: use another field!!!
+        push_statediff(sd);
+      }
     }
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
@@ -1311,7 +1376,7 @@ static int fuselog_chmod(const char *orig_path, mode_t mode,
     return -errno;
   }
 
-  if (is_sd_capture && fuse_get_context()->pid > 0) {
+  if (is_sd_capture && fuse_get_context()->pid > 0 && !is_silly_path(path)) {
     string path_str(path);
     uint64_t cur_fid = 0;
     fid_mutex.lock();
@@ -1348,7 +1413,8 @@ static int fuselog_chown(const char *orig_path, uid_t uid, gid_t gid,
     logging(LOG_INFO, "  + username:%s groupname:%s\n", username, groupname);
   }
 
-  if (res == 0 && is_sd_capture && fuse_get_context()->pid > 0) {
+  if (res == 0 && is_sd_capture && fuse_get_context()->pid > 0 &&
+      !is_silly_path(path)) {
     string path_str(path);
     uint64_t cur_fid = 0;
     fid_mutex.lock();
@@ -1384,7 +1450,8 @@ static int fuselog_truncate(const char *orig_path, off_t size,
   else
     res = truncate(path, size);
 
-  if (res != -1 && is_sd_capture == true && fuse_get_context()->pid > 0) {
+  if (res != -1 && is_sd_capture == true && fuse_get_context()->pid > 0 &&
+      !is_silly_path(path)) {
     auto start_time = chrono::high_resolution_clock::now();
     {
       // get the file id (fid)
@@ -1582,8 +1649,10 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
   if (is_sd_capture) {
     auto start_time = chrono::high_resolution_clock::now();
 
-    /* Ignore statediff from pid == 0*/
-    if (fuse_get_context()->pid > 0) {
+    /* Ignore statediff from pid == 0, and writes that land on a
+       silly-renamed (.fuse_hiddenXXXX) inode — those bytes are about to
+       be discarded when the last fd closes. */
+    if (fuse_get_context()->pid > 0 && !is_silly_path(path)) {
       
       // get the file id (fid)
       uint64_t cur_fid = 0;
