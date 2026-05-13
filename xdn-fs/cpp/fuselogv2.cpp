@@ -107,7 +107,9 @@ struct statediff_action {
   statediff_action*     next = nullptr;  // intrusive linked list pointer
 };
 
-// Lock-free singly-linked list (prepend via CAS). Order is commutative.
+// Lock-free Treiber stack: prepend via CAS. The list ends up in
+// reverse-chronological order (newest first). send_gathered_statediffs
+// reverses it before serializing so apply replays in the original order.
 static atomic<statediff_action*> statediff_head{nullptr};
 // statediff_write_unit and COALESCE_ACTION_OVERHEAD live in fuselog_internal.h
 const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
@@ -123,7 +125,8 @@ const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
 #define SD_TYPE_RMDIR    9
 #define SD_TYPE_SYMLINK  10
 
-// Lock-free prepend. Safe for concurrent callers because write order is commutative.
+// Lock-free prepend. Concurrent callers are serialized by the CAS; the
+// chronological order they observe is reconstructed by the harvest path.
 static void push_statediff(statediff_action* sd) {
   statediff_action* old_head = statediff_head.load(memory_order_relaxed);
   do {
@@ -379,14 +382,31 @@ static int send_gathered_statediffs(int conn_fd) {
 
   statediff_action* serialized = head;
   if (is_sd_prune) {
-    // Pruning: O(n) two-pass scan to remove writes to deleted files.
-    // Pass 1: collect unlinked/rmdir'd fids.
-    unordered_set<uint64_t> removed_fids;
+    // Pruning: O(n) two-pass scan.
+    // Pass 1: classify fids.
+    //   - unlinked_fids: fid is the victim of an UNLINK/RMDIR in this batch
+    //   - renamed_fids:  fid appears as from_fid or to_fid in a RENAME/LINK
+    // A fid in renamed_fids is excluded from pruning entirely: its lifetime
+    // may span multiple incarnations of the same path, and a fid being
+    // unlinked under one incarnation says nothing about whether actions
+    // under a previous/subsequent incarnation (now connected via rename to
+    // another path) should be preserved. A proper analysis would track
+    // per-lifetime spans; this conservative rule avoids that complexity.
+    unordered_set<uint64_t> unlinked_fids;
+    unordered_set<uint64_t> renamed_fids;
     for (statediff_action* p = head; p; p = p->next) {
-      if (p->sd_type == SD_TYPE_UNLINK || p->sd_type == SD_TYPE_RMDIR)
-        removed_fids.insert(p->fid);
+      if (p->sd_type == SD_TYPE_UNLINK || p->sd_type == SD_TYPE_RMDIR) {
+        unlinked_fids.insert(p->fid);
+      } else if (p->sd_type == SD_TYPE_RENAME ||
+                 p->sd_type == SD_TYPE_LINK) {
+        renamed_fids.insert(p->fid);     // from_fid
+        renamed_fids.insert(p->offset);  // to_fid
+      }
     }
-    // Pass 2: filter writes/truncates/metadata for deleted files; rebuild pruned list.
+
+    // Pass 2: drop writes/metadata/creates for fids that are unlinked AND
+    // not involved in any rename/link. Keep the unlink itself so the
+    // backup actually removes the file. Apply tolerates ENOENT on unlink.
     statediff_action* pruned = nullptr;
     for (statediff_action* p = head; p; ) {
       statediff_action* nxt = p->next;
@@ -395,7 +415,9 @@ static int send_gathered_statediffs(int conn_fd) {
                           p->sd_type == SD_TYPE_CHMOD ||
                           p->sd_type == SD_TYPE_CHOWN ||
                           p->sd_type == SD_TYPE_CREATE);
-      bool keep = !(is_prunable && removed_fids.count(p->fid));
+      bool fid_prunable = unlinked_fids.count(p->fid) &&
+                          !renamed_fids.count(p->fid);
+      bool keep = !(is_prunable && fid_prunable);
       if (keep) {
         p->next = pruned;
         pruned = p;
@@ -405,6 +427,19 @@ static int send_gathered_statediffs(int conn_fd) {
       p = nxt;
     }
     serialized = pruned;
+  } else {
+    // No prune: head is in reverse-chronological order from CAS prepends.
+    // The prune branch above happens to reverse-during-rebuild and so
+    // emits chronological order; here we have to do that reversal
+    // explicitly so apply sees actions in the order they happened.
+    statediff_action* reversed = nullptr;
+    for (statediff_action* p = serialized; p; ) {
+      statediff_action* nxt = p->next;
+      p->next = reversed;
+      reversed = p;
+      p = nxt;
+    }
+    serialized = reversed;
   }
 
   for (statediff_action* p = serialized; p; p = p->next) {
