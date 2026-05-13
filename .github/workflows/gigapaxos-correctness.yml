@@ -1,0 +1,64 @@
+name: "GigaPaxos correctness tests"
+
+# Guards GigaPaxos correctness against regressions when new features land.
+# These tests are JDK-only (no Docker/FUSE/rsync), so they complete in well
+# under a minute and run in parallel via a matrix strategy.
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "RequestPacketTest"
+            cmd: "ant runtest -Dtest=RequestPacketTest"
+          - name: "E2ELatencyAwareRedirectorTest"
+            cmd: "ant runtest -Dtest=E2ELatencyAwareRedirectorTest"
+          - name: "TESTReconfigurationClient"
+            # End-to-end reconfiguration: create/delete services, anycast,
+            # batched sequences, add/delete actives, add/delete reconfigurators.
+            cmd: "ant test"
+          - name: "TESTPaxosMain"
+            # Single-JVM multi-node Paxos with assertRSMInvariant enabled on
+            # every request execution. CI-sized config keeps the
+            # testWithRecovery() run inside the 250s JUnit timeout.
+            cmd: "bash test-gigapaxos/testPaxosMain/testPaxosMain.sh gigapaxos.properties test-gigapaxos/testPaxosMain/testing.ci.properties"
+
+    name: "${{ matrix.name }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'oracle'
+
+      - name: Build jar
+        run: ant jar
+
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.cmd }}
+
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "test-output-${{ matrix.name }}"
+          path: |
+            out/**/*.xml
+            out/**/*.txt
+          if-no-files-found: ignore
