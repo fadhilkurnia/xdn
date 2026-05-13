@@ -473,7 +473,16 @@ def _client_label(ar_id):
     return f"{CLIENT_PREFIX}-{ar_id}" if ar_id else CLIENT_PREFIX
 
 
-def resolve_rows(rows, pid_to_ar, nio_port_to_ar, http_port_to_ar):
+def _strip_v4mapped(ip):
+    """Strip the IPv4-in-IPv6 prefix (`::ffff:`) that bpftrace emits for
+    AF_INET6 sockets with v4 addresses."""
+    if ip and ip.startswith("::ffff:"):
+        return ip[len("::ffff:"):]
+    return ip
+
+
+def resolve_rows(rows, pid_to_ar, nio_port_to_ar, http_port_to_ar,
+                  endpoint_to_ar=None):
     """Annotate each event with `local_id` and `peer_id`.
 
     Two flow categories are handled:
@@ -485,24 +494,41 @@ def resolve_rows(rows, pid_to_ar, nio_port_to_ar, http_port_to_ar):
         traffic on its own pair of edges instead of collapsing every external
         client into a single hub vertex.
 
-    Resolution rules per row:
+    `endpoint_to_ar` (optional) maps `(host, port)` → AR id for every
+    replica's NIO and HTTP listener. Keyed jointly so it stays injective in
+    every deployment shape (pure-distributed shared-port, loopback distinct-
+    port, mixed co-located). Resolution prefers this map; the legacy
+    port-only maps remain as a backstop for older callers that don't supply
+    it.
+
+    Resolution rules per row (in order; first match wins):
       local_id =
-        pid_to_ar[pid]                              if pid is a known AR JVM
-        else nio_port_to_ar[local_port]             if local is a NIO listener
-        else http_port_to_ar[local_port]            if local is an HTTP listener
-        else ephemeral_owner[local_port]            if local is an AR ephemeral
-        else "client-<peer_ar>"                     if peer_port is an HTTP listener
+        pid_to_ar[pid]                                if pid is a known AR JVM
+        else nio_port_to_ar[local_port]               if local is a NIO listener
+        else http_port_to_ar[local_port]              if local is an HTTP listener
+        else ephemeral_owner[local_port]              if local is an AR ephemeral
+        else "client-<peer_ar>"                       if peer is an HTTP listener
         else "unknown"
       peer_id =
-        nio_port_to_ar[peer_port]                   if peer is a NIO listener
-        else http_port_to_ar[peer_port]             if peer is an HTTP listener
-        else ephemeral_owner[peer_port]             if peer is an AR ephemeral
-        else "client-<local_ar>"                    if local_port is an HTTP listener
+        endpoint_to_ar[(peer_ip, peer_port)]          if peer is a known listener endpoint
+        else nio_port_to_ar[peer_port]                if peer is a NIO listener
+        else http_port_to_ar[peer_port]               if peer is an HTTP listener
+        else ephemeral_owner[peer_port]               if peer is an AR ephemeral
+        else "client-<local_ar>"                      if local is an HTTP listener
         else "unknown"
     """
+    endpoint_to_ar = endpoint_to_ar or {}
     nio_listener_ports = set(nio_port_to_ar.keys())
     http_listener_ports = set(http_port_to_ar.keys())
     listener_ports = nio_listener_ports | http_listener_ports
+
+    def _ar_at_endpoint(ip, port):
+        """Resolve an (ip, port) listener endpoint to an AR id. Looks up the
+        joint key — returns None for ephemeral peers and for non-cluster IPs
+        (driver / external clients)."""
+        if not endpoint_to_ar:
+            return None
+        return endpoint_to_ar.get((_strip_v4mapped(ip), port))
 
     # Pass 1: ephemeral_port -> ar_id (only when the local pid is known and
     # the local port is *not* a well-known listener port).
@@ -528,14 +554,24 @@ def resolve_rows(rows, pid_to_ar, nio_port_to_ar, http_port_to_ar):
                      or http_port_to_ar.get(lp)
                      or ephemeral_owner.get(lp))
         if not local and pp in http_listener_ports:
-            local = _client_label(http_port_to_ar.get(pp))
+            # Peer is the HTTP server; we are an external client of that AR.
+            # Prefer (peer_ip, peer_port) over port-only to disambiguate when
+            # every AR shares the same HTTP listener port across hosts.
+            peer_ar = (_ar_at_endpoint(r["peer_ip"], pp)
+                       or http_port_to_ar.get(pp))
+            local = _client_label(peer_ar)
         r["local_id"] = local or "unknown"
 
-        peer = (nio_port_to_ar.get(pp)
-                or http_port_to_ar.get(pp)
-                or ephemeral_owner.get(pp))
+        peer = _ar_at_endpoint(r["peer_ip"], pp)
+        if not peer:
+            peer = (nio_port_to_ar.get(pp)
+                    or http_port_to_ar.get(pp)
+                    or ephemeral_owner.get(pp))
         if not peer and lp in http_listener_ports:
-            peer = _client_label(http_port_to_ar.get(lp))
+            # Local is the HTTP server; the peer is an external client of
+            # *this* AR. Use the already-resolved local_id so each AR's
+            # client-side vertex stays distinct.
+            peer = _client_label(local)
         r["peer_id"] = peer or "unknown"
     return rows
 
@@ -675,10 +711,21 @@ def _resolve_rc_endpoint(args):
 
 
 def _build_port_maps(nodes):
-    """Compute the bpftrace port range + listener-port → AR-id maps from a
-    placement node list. Shared by every mode that touches bpftrace output."""
+    """Compute the bpftrace port range + listener-endpoint → AR-id maps from
+    a placement node list. Shared by every mode that touches bpftrace output.
+
+    `endpoint_to_ar` is keyed on `(host, port)` so it remains injective in
+    every deployment shape: pure-distributed (each AR on its own host with a
+    shared port number), loopback (every AR on 127.0.0.1 with distinct
+    ports), and mixed (some hosts run multiple ARs on different ports).
+    Port-only or host-only maps collapse in two of those three cases; the
+    joint key collapses in none."""
     nio_ports = sorted({n["nio_port"] for n in nodes})
     http_ports = sorted({n["http_port"] for n in nodes})
+    endpoint_to_ar = {}
+    for n in nodes:
+        endpoint_to_ar[(n["nio_host"], n["nio_port"])] = n["id"]
+        endpoint_to_ar[(n["http_host"], n["http_port"])] = n["id"]
     return {
         "nio_low": min(nio_ports),
         "nio_high": max(nio_ports),
@@ -686,6 +733,7 @@ def _build_port_maps(nodes):
         "http_high": max(http_ports),
         "nio_port_to_ar": {n["nio_port"]: n["id"] for n in nodes},
         "http_port_to_ar": {n["http_port"]: n["id"] for n in nodes},
+        "endpoint_to_ar": endpoint_to_ar,
     }
 
 
@@ -1052,7 +1100,8 @@ def _run_aggregate(args):
           f"pid_to_ar has {len(pid_to_ar)} entries", file=sys.stderr)
 
     resolve_rows(rows, pid_to_ar, port_maps["nio_port_to_ar"],
-                  port_maps["http_port_to_ar"])
+                  port_maps["http_port_to_ar"],
+                  endpoint_to_ar=port_maps["endpoint_to_ar"])
     unresolved_local = sum(1 for r in rows if r["local_id"] == "unknown")
     unresolved_peer = sum(1 for r in rows if r["peer_id"] == "unknown")
     if unresolved_local or unresolved_peer:
@@ -1124,8 +1173,10 @@ def _run_local(args):
           f"interval={args.interval}s duration={args.duration}s",
           file=sys.stderr)
 
-    nio_port_to_ar = {n["nio_port"]: n["id"] for n in nodes}
-    http_port_to_ar = {n["http_port"]: n["id"] for n in nodes}
+    local_port_maps = _build_port_maps(nodes)
+    nio_port_to_ar = local_port_maps["nio_port_to_ar"]
+    http_port_to_ar = local_port_maps["http_port_to_ar"]
+    endpoint_to_ar = local_port_maps["endpoint_to_ar"]
     pid_to_ar = build_pid_to_ar()
 
     # Pull service-wide metadata (protocol + consistency model) from one
@@ -1299,7 +1350,8 @@ def _run_local(args):
     if reader.error:
         print(f"warning: reader thread error: {reader.error}", file=sys.stderr)
 
-    resolve_rows(rows, pid_to_ar, nio_port_to_ar, http_port_to_ar)
+    resolve_rows(rows, pid_to_ar, nio_port_to_ar, http_port_to_ar,
+                  endpoint_to_ar=endpoint_to_ar)
 
     unresolved_local = sum(1 for r in rows if r["local_id"] == "unknown")
     unresolved_peer = sum(1 for r in rows if r["peer_id"] == "unknown")
