@@ -7,10 +7,18 @@
 // service execution: receiving http request, updating data in database, and
 // sending the http response).
 //
+// Pure compute helpers used by the write path (diff capture and gap merging)
+// live in fuselog_internal.h and are exercised by test_fuselog.cpp.
+//
 // Install dependencies:
 //   apt install pkg-config libfuse3-dev libzstd-dev
+//   apt install libgtest-dev                  (only needed for unit tests)
 //
-// How to compile:
+// How to compile (canonical path uses the build script):
+//   ./bin/build_xdn_fuselog.sh cpp            # build fuselog + fuselog-apply
+//   ./bin/build_xdn_fuselog.sh test           # build and run GoogleTest suite
+//
+// Equivalent raw g++ command (requires fuselog_internal.h in the same dir):
 //   g++ -Wall fuselogv2.cpp -o fuselog -D_FILE_OFFSET_BITS=64
 //   $(pkg-config fuse3 --cflags --libs)
 //   $(pkg-config libzstd --cflags --libs)
@@ -18,11 +26,11 @@
 //
 // How to use:
 //   ./fuselog <mount_point>
-//   example: 
+//   example:
 //      ./fuselog /app/data
 //      ./fuselog -f /app/data                  (running in the foreground)
 //      ./fuselog -o allow_other /app/data      (allowing other users)
-// 
+//
 // Initial developer: Fadhil I. Kurnia (fikurnia@cs.umass.edu)
 
 #define FUSE_USE_VERSION 31
@@ -53,6 +61,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "fuselog_internal.h"
 
 using namespace std;
 
@@ -99,14 +109,7 @@ struct statediff_action {
 
 // Lock-free singly-linked list (prepend via CAS). Order is commutative.
 static atomic<statediff_action*> statediff_head{nullptr};
-struct statediff_write_unit {                // for coalescing
-  uint64_t               offset;
-  vector<unsigned char>  buffer;
-};
-// Per-action serialization overhead: 1 (type) + 8 (fid) + 8 (count) + 8 (offset) = 25 bytes.
-// When merging coalesced chunks, including a gap of identical bytes is cheaper than
-// emitting two separate actions if the gap is smaller than this overhead.
-static const uint32_t COALESCE_ACTION_OVERHEAD = 25;
+// statediff_write_unit and COALESCE_ACTION_OVERHEAD live in fuselog_internal.h
 const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
 #define SD_TYPE_WRITE    0
 #define SD_TYPE_UNLINK   1
@@ -1511,56 +1514,10 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             "from %d\n", 
             fd_ro, rd_size, size, sd_buffer_rd);
 
-    /* compare old bytes (in buf) and new bytes (in sd_buffer_rd) */
-    ssize_t i = 0;
-    while (i < rd_size) {
-      struct statediff_write_unit cur;
-      cur.offset = offset + i;
-
-      /* keep iterating through non-equal contiguous values, if they are
-         equal we dont need to keep the statediff.
-         Coalesce with a minimum length of `min_width_coelasce` */
-      if ((unsigned char) sd_buffer_rd[i] != (unsigned char) buf[i]) {
-        while (((unsigned char) sd_buffer_rd[i] != (unsigned char) buf[i] ||
-                ((unsigned char) sd_buffer_rd[i] == (unsigned char) buf[i] &&
-                cur.buffer.size() < min_width_coelasce)) &&
-              i < rd_size) {
-          cur.buffer.push_back((unsigned char) buf[i]);
-          i++;
-        }
-      }
-
-      /* if buf and sd_buffer_rd are equal, we dont need to gather the 
-         statediff */
-      if (cur.buffer.size() > 0) {
-        coalesced_write.push_back(cur);
-      }
-
-      i++;
-    }
-    // if i == rd_size < size, process the remaining new values
-    if (i < (ssize_t) size) {
-      struct statediff_write_unit cur;
-      cur.offset = offset + i;
-      
-      // handle if the last contiguous diff includes the last byte
-      if (coalesced_write.size() > 0) {
-        struct statediff_write_unit last;
-        last = coalesced_write.back();
-        if ((ssize_t) (last.offset + last.buffer.size()) == rd_size) {
-          coalesced_write.pop_back();
-          cur.offset = last.offset;
-          cur.buffer = last.buffer;
-        }
-      }
-
-      while (i < (ssize_t) size) {
-        cur.buffer.push_back((unsigned char) buf[i]);
-        i++;
-      }
-
-      coalesced_write.push_back(cur);
-    }
+    coalesced_write = compute_diff(
+        (const unsigned char*) sd_buffer_rd,
+        (const unsigned char*) buf,
+        (size_t) rd_size, size, (uint64_t) offset, min_width_coelasce);
 
     /* Calculate the number of different bytes */
     if (coalesced_write.size() > 0) num_diff = 0;
@@ -1602,26 +1559,10 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
 
       if (is_sd_coalesce && coalesced_write.size() > 0) {
         // Phase 1: Merge adjacent chunks whose gap < COALESCE_ACTION_OVERHEAD.
-        // Including a small gap of identical bytes in one chunk is cheaper
-        // than paying 25 bytes of per-action overhead for a separate chunk.
-        vector<statediff_write_unit> merged;
-        merged.push_back(std::move(coalesced_write[0]));
-        for (size_t ci = 1; ci < coalesced_write.size(); ci++) {
-          auto& prev = merged.back();
-          auto& cur  = coalesced_write[ci];
-          uint64_t prev_end = prev.offset + prev.buffer.size();
-          uint64_t gap = (cur.offset > prev_end) ? (cur.offset - prev_end) : 0;
-          if (gap < COALESCE_ACTION_OVERHEAD) {
-            // Merge: fill the gap with original bytes from buf, then append cur
-            for (uint64_t g = 0; g < gap; g++) {
-              uint64_t buf_idx = (prev_end + g) - offset;
-              prev.buffer.push_back((unsigned char) buf[buf_idx]);
-            }
-            prev.buffer.insert(prev.buffer.end(), cur.buffer.begin(), cur.buffer.end());
-          } else {
-            merged.push_back(std::move(cur));
-          }
-        }
+        vector<statediff_write_unit> merged = merge_adjacent_chunks(
+            std::move(coalesced_write),
+            (const unsigned char*) buf, (uint64_t) offset,
+            COALESCE_ACTION_OVERHEAD);
 
         // Phase 2: Compare coalesced cost vs raw cost. Use whichever is smaller.
         // Coalesced cost: N * 25 + D (N actions, D total diff bytes)
