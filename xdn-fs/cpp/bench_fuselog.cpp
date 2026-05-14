@@ -47,36 +47,58 @@ static void bench_one(size_t n, double diff_fraction) {
   std::vector<unsigned char> a, b;
   make_diff_pair(a, b, n, diff_fraction, /*seed=*/123);
 
-  // Warm-up to pull data into cache.
+  // Warm-up.
   auto _ = compute_diff_scalar(a.data(), b.data(), n, n, 0, 0);
   (void)_;
 
-  int iters = std::max(1, (int)(1024 * 1024 * 64 / n));   // ~64 MB total
+  int iters = std::max(1, (int)(1024 * 1024 * 64 / n));
   double scalar_s = time_iters(
       [&]() {
         auto r = compute_diff_scalar(a.data(), b.data(), n, n, 0, 0);
         asm volatile("" :: "g"(&r) : "memory");
       }, iters);
-  double simd_s = time_iters(
+  double avx2_s = time_iters(
       [&]() {
         auto r = compute_diff_simd(a.data(), b.data(), n, n, 0, 0);
         asm volatile("" :: "g"(&r) : "memory");
       }, iters);
+  double avx512_s = fuselog_has_avx512()
+      ? time_iters(
+          [&]() {
+            auto r = compute_diff_avx512(a.data(), b.data(), n, n, 0, 0);
+            asm volatile("" :: "g"(&r) : "memory");
+          }, iters)
+      : 0.0;
 
   double bytes = (double)n * iters;
   double scalar_mbps = bytes / scalar_s / (1024.0 * 1024.0);
-  double simd_mbps   = bytes / simd_s   / (1024.0 * 1024.0);
-  double speedup     = scalar_s / simd_s;
+  double avx2_mbps   = bytes / avx2_s   / (1024.0 * 1024.0);
+  double avx512_mbps = (avx512_s > 0)
+      ? bytes / avx512_s / (1024.0 * 1024.0)
+      : 0.0;
 
-  printf("  n=%8zu  diff=%4.1f%%   scalar=%8.1f MB/s   simd=%9.1f MB/s   speedup=%5.1fx\n",
-         n, diff_fraction * 100.0, scalar_mbps, simd_mbps, speedup);
+  if (avx512_s > 0) {
+    printf("  n=%8zu  diff=%5.2f%%   scalar=%8.0f   avx2=%8.0f (%4.1fx)   "
+           "avx512=%8.0f (%4.1fx vs avx2, %4.1fx vs scalar)  MiB/s\n",
+           n, diff_fraction * 100.0,
+           scalar_mbps,
+           avx2_mbps, scalar_s / avx2_s,
+           avx512_mbps, avx2_s / avx512_s, scalar_s / avx512_s);
+  } else {
+    printf("  n=%8zu  diff=%5.2f%%   scalar=%8.0f   avx2=%8.0f (%4.1fx)   "
+           "avx512=n/a  MiB/s\n",
+           n, diff_fraction * 100.0,
+           scalar_mbps, avx2_mbps, scalar_s / avx2_s);
+  }
 }
 
 int main() {
-  printf("AVX2 supported: %s\n\n", fuselog_has_avx2() ? "yes" : "no");
+  printf("AVX2 supported:   %s\n", fuselog_has_avx2() ? "yes" : "no");
+  printf("AVX-512 supported: %s\n\n",
+         fuselog_has_avx512() ? "yes" : "no");
 
-  printf("compute_diff scalar vs SIMD\n");
-  printf("---------------------------\n");
+  printf("compute_diff scalar vs AVX2 vs AVX-512\n");
+  printf("--------------------------------------\n");
   for (size_t n : {(size_t)4096, (size_t)65536, (size_t)262144,
                     (size_t)1 << 20}) {
     for (double f : {0.001, 0.01, 0.10, 0.50}) {

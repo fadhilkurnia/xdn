@@ -122,6 +122,49 @@ inline size_t find_first_match_avx2(const unsigned char* a,
   }
   return i + find_first_match_scalar(a + i, b + i, n - i);
 }
+
+// AVX-512 variants — 64 bytes per iteration. `_mm512_cmpeq_epi8_mask`
+// returns a 64-bit mask directly (no movemask step needed), so the inner
+// loop is slightly tighter than AVX2 in addition to processing 2× the
+// bytes per iteration. Requires AVX-512F + AVX-512BW.
+__attribute__((target("avx512f,avx512bw")))
+inline size_t find_first_diff_avx512(const unsigned char* a,
+                                      const unsigned char* b, size_t n) {
+  size_t i = 0;
+  for (; i + 64 <= n; i += 64) {
+    __m512i va = _mm512_loadu_si512((const void*)(a + i));
+    __m512i vb = _mm512_loadu_si512((const void*)(b + i));
+    __mmask64 eq = _mm512_cmpeq_epi8_mask(va, vb);
+    if (eq != ~(__mmask64) 0) {
+      return i + __builtin_ctzll(~eq);
+    }
+  }
+  // Tail: fall through to AVX2 if there's enough room, else scalar.
+  if (i + 32 <= n) {
+    size_t off = find_first_diff_avx2(a + i, b + i, n - i);
+    return i + off;
+  }
+  return i + find_first_diff_scalar(a + i, b + i, n - i);
+}
+
+__attribute__((target("avx512f,avx512bw")))
+inline size_t find_first_match_avx512(const unsigned char* a,
+                                       const unsigned char* b, size_t n) {
+  size_t i = 0;
+  for (; i + 64 <= n; i += 64) {
+    __m512i va = _mm512_loadu_si512((const void*)(a + i));
+    __m512i vb = _mm512_loadu_si512((const void*)(b + i));
+    __mmask64 eq = _mm512_cmpeq_epi8_mask(va, vb);
+    if (eq != 0) {
+      return i + __builtin_ctzll(eq);
+    }
+  }
+  if (i + 32 <= n) {
+    size_t off = find_first_match_avx2(a + i, b + i, n - i);
+    return i + off;
+  }
+  return i + find_first_match_scalar(a + i, b + i, n - i);
+}
 #endif  // FUSELOG_HAVE_AVX2
 
 inline bool fuselog_has_avx2() {
@@ -141,9 +184,38 @@ inline bool fuselog_has_avx2() {
 #endif
 }
 
+inline bool fuselog_has_avx512() {
+#ifdef FUSELOG_HAVE_AVX2
+  static const bool support = ([]() -> bool {
+    // FUSELOG_DISABLE_SIMD disables everything; FUSELOG_DISABLE_AVX512
+    // forces the dispatch back to AVX2 (or scalar if also disabled).
+    if (const char* v = std::getenv("FUSELOG_DISABLE_SIMD")) {
+      if (*v != '\0' && *v != '0') return false;
+    }
+    if (const char* v = std::getenv("FUSELOG_DISABLE_AVX512")) {
+      if (*v != '\0' && *v != '0') return false;
+    }
+    return __builtin_cpu_supports("avx512f") &&
+           __builtin_cpu_supports("avx512bw");
+  })();
+  return support;
+#else
+  return false;
+#endif
+}
+
+inline const char* fuselog_simd_name() {
+#ifdef FUSELOG_HAVE_AVX2
+  if (fuselog_has_avx512()) return "avx512";
+  if (fuselog_has_avx2()) return "avx2";
+#endif
+  return "scalar";
+}
+
 inline size_t find_first_diff(const unsigned char* a,
                                const unsigned char* b, size_t n) {
 #ifdef FUSELOG_HAVE_AVX2
+  if (fuselog_has_avx512()) return find_first_diff_avx512(a, b, n);
   if (fuselog_has_avx2()) return find_first_diff_avx2(a, b, n);
 #endif
   return find_first_diff_scalar(a, b, n);
@@ -152,6 +224,7 @@ inline size_t find_first_diff(const unsigned char* a,
 inline size_t find_first_match(const unsigned char* a,
                                 const unsigned char* b, size_t n) {
 #ifdef FUSELOG_HAVE_AVX2
+  if (fuselog_has_avx512()) return find_first_match_avx512(a, b, n);
   if (fuselog_has_avx2()) return find_first_match_avx2(a, b, n);
 #endif
   return find_first_match_scalar(a, b, n);
@@ -320,15 +393,39 @@ inline std::vector<statediff_write_unit> compute_diff_simd(
 #endif
 }
 
+inline std::vector<statediff_write_unit> compute_diff_avx512(
+    const unsigned char* old_buf, const unsigned char* new_buf,
+    size_t rd_size, size_t write_size, uint64_t offset,
+    uint32_t min_width_coalesce) {
+  if (min_width_coalesce != 0) {
+    return compute_diff_pushback(old_buf, new_buf, rd_size, write_size,
+                                  offset, min_width_coalesce);
+  }
+#ifdef FUSELOG_HAVE_AVX2
+  return compute_diff_impl(
+      old_buf, new_buf, rd_size, write_size, offset,
+      find_first_diff_avx512, find_first_match_avx512);
+#else
+  return compute_diff_scalar(old_buf, new_buf, rd_size, write_size,
+                              offset, min_width_coalesce);
+#endif
+}
+
 // Dispatched entry point. Production code calls this; the SIMD path is
 // used when the host CPU supports AVX2.
 inline std::vector<statediff_write_unit> compute_diff(
     const unsigned char* old_buf, const unsigned char* new_buf,
     size_t rd_size, size_t write_size, uint64_t offset,
     uint32_t min_width_coalesce) {
-  if (fuselog_has_avx2() && min_width_coalesce == 0) {
-    return compute_diff_simd(old_buf, new_buf, rd_size, write_size,
-                             offset, min_width_coalesce);
+  if (min_width_coalesce == 0) {
+    if (fuselog_has_avx512()) {
+      return compute_diff_avx512(old_buf, new_buf, rd_size, write_size,
+                                  offset, min_width_coalesce);
+    }
+    if (fuselog_has_avx2()) {
+      return compute_diff_simd(old_buf, new_buf, rd_size, write_size,
+                               offset, min_width_coalesce);
+    }
   }
   return compute_diff_scalar(old_buf, new_buf, rd_size, write_size,
                              offset, min_width_coalesce);

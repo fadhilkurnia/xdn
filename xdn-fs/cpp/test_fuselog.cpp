@@ -417,3 +417,46 @@ TEST(FindFirstMatch, MatchesScalar) {
         << "trial " << trial << " n=" << n;
   }
 }
+
+// -------- AVX-512 equivalence (skipped if host doesn't support it) --------
+
+#ifdef FUSELOG_HAVE_AVX2
+TEST(ComputeDiffAvx512, MatchesScalarOnRandomized) {
+  if (!__builtin_cpu_supports("avx512bw") ||
+      !__builtin_cpu_supports("avx512f")) {
+    GTEST_SKIP() << "host does not support AVX-512BW";
+  }
+  std::srand(42);
+  for (int trial = 0; trial < 300; trial++) {
+    size_t n = (std::rand() % 4096) + 1;
+    std::vector<unsigned char> a(n), b(n);
+    for (size_t i = 0; i < n; i++) {
+      a[i] = (unsigned char)(std::rand() & 0xff);
+      int p = (trial % 10) + 2;
+      b[i] = (std::rand() % p == 0)
+                 ? (unsigned char)(std::rand() & 0xff)
+                 : a[i];
+    }
+    auto s = compute_diff_scalar(a.data(), b.data(), n, n, 0, 0);
+    auto v = compute_diff_avx512(a.data(), b.data(), n, n, 0, 0);
+    ASSERT_TRUE(chunks_equal(s, v))
+        << "mismatch on trial " << trial << " n=" << n;
+  }
+}
+
+TEST(FindFirstAvx512, DiffMatchesScalarAround64ByteBoundary) {
+  if (!__builtin_cpu_supports("avx512bw") ||
+      !__builtin_cpu_supports("avx512f")) {
+    GTEST_SKIP() << "host does not support AVX-512BW";
+  }
+  // AVX-512 lane is 64 B; verify behaviour around its boundary too.
+  std::vector<unsigned char> a(192, 'a');
+  for (size_t pos : {0, 1, 31, 32, 33, 63, 64, 65, 95, 127, 128, 129, 191}) {
+    std::vector<unsigned char> b = a;
+    b[pos] = 'X';
+    EXPECT_EQ(find_first_diff_scalar(a.data(), b.data(), 192),
+              find_first_diff_avx512(a.data(), b.data(), 192))
+        << "diff at pos " << pos;
+  }
+}
+#endif  // FUSELOG_HAVE_AVX2

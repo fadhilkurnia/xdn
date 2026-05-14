@@ -434,7 +434,7 @@ static int send_gathered_statediffs(int conn_fd) {
             (unsigned long) (b >> 20),
             (unsigned long) (n / 1000000),
             mbps, avg_ns,
-            fuselog_has_avx2() ? "on" : "off");
+            fuselog_simd_name());
   }
 
   // Snapshot filename_to_fid under fid_mutex — brief hold.
