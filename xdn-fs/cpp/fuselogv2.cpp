@@ -110,14 +110,28 @@ static const int ZSTD_COMPRESS_LEVEL = 1;
 // side already keys actions by fid alone.
 static unordered_map<string, uint64_t> filename_to_fid;
 struct statediff_action {
-  uint8_t               sd_type;
-  uint64_t              fid;
-  uint64_t              offset;
-  vector<unsigned char> buffer;
-  uint32_t              uid;
-  uint32_t              gid;
-  uint32_t              mode;
-  statediff_action*     next = nullptr;  // intrusive linked list pointer
+  uint8_t                          sd_type;
+  uint64_t                         fid;
+  uint64_t                         offset;
+  std::unique_ptr<unsigned char[]> buffer;
+  size_t                           buffer_size = 0;
+  uint32_t                         uid;
+  uint32_t                         gid;
+  uint32_t                         mode;
+  statediff_action*                next = nullptr;  // intrusive linked list pointer
+
+  // Take ownership of an existing buffer (e.g. from a statediff_write_unit).
+  void take_buffer(std::unique_ptr<unsigned char[]> b, size_t n) {
+    buffer = std::move(b);
+    buffer_size = n;
+  }
+  // Allocate and copy from `src`.
+  void copy_buffer(const unsigned char* src, size_t n) {
+    if (n == 0) { buffer.reset(); buffer_size = 0; return; }
+    buffer.reset(new unsigned char[n]);
+    memcpy(buffer.get(), src, n);
+    buffer_size = n;
+  }
 };
 
 // Lock-free Treiber stack: prepend via CAS. The list ends up in
@@ -128,6 +142,12 @@ static atomic<statediff_action*> statediff_head{nullptr};
 // Cumulative throughput counters for compute_diff. Updated lock-free
 // (atomic fetch_add) on each write; printed on every harvest so the
 // SIMD vs scalar dispatch can be A/B'd against real workloads.
+//
+// All accesses are gated by `if (log_level <= LOG_DEBUG)` so that at
+// log_level=LOG_INFO (the production default) the compiler DCEs both
+// the timing reads and the atomic stores at -O3. The atomics still
+// exist as zero-initialized globals (~24 bytes BSS, ignorable); but
+// the per-write fetch_add cost is gone.
 static atomic<uint64_t> total_cd_bytes{0};   // total bytes scanned
 static atomic<uint64_t> total_cd_ns{0};      // total ns spent in compute_diff
 static atomic<uint64_t> total_cd_calls{0};   // number of compute_diff calls
@@ -400,8 +420,8 @@ static int send_gathered_statediffs(int conn_fd) {
   statediff_action* head = statediff_head.exchange(nullptr, memory_order_acq_rel);
 
   // Print compute_diff throughput so SIMD vs scalar runs can be A/B'd.
-  // This always prints; cheap relative to the harvest itself.
-  {
+  // Gated by log_level so production builds (LOG_INFO) get DCE'd here.
+  if (log_level <= LOG_DEBUG) {
     uint64_t b = total_cd_bytes.load(memory_order_relaxed);
     uint64_t n = total_cd_ns.load(memory_order_relaxed);
     uint64_t c = total_cd_calls.load(memory_order_relaxed);
@@ -530,10 +550,10 @@ static int send_gathered_statediffs(int conn_fd) {
   }
   for (statediff_action* p = serialized; p; p = p->next) {
     if (p->sd_type == SD_TYPE_WRITE) {
-      sum_len_wr_buf += p->buffer.size();
+      sum_len_wr_buf += p->buffer_size;
     }
     if (p->sd_type == SD_TYPE_SYMLINK) {
-      sum_len_symlink_target += p->buffer.size();
+      sum_len_symlink_target += p->buffer_size;
     }
   }
   num_statediffs = num_write + num_unlink + num_rename +
@@ -599,7 +619,7 @@ static int send_gathered_statediffs(int conn_fd) {
 
     case SD_TYPE_WRITE: {
       // [1:type][8:fid][8:count][8:offset][count:buffer]
-      uint64_t count = sd.buffer.size();
+      uint64_t count = sd.buffer_size;
       uint64_t offset = sd.offset;
       if (count == 0) {
         logging(LOG_ERROR, "found write with empty buffer!\n");
@@ -610,7 +630,7 @@ static int send_gathered_statediffs(int conn_fd) {
       memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8, (void*)&count, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8 + 8, (void*)&offset, sizeof(uint64_t));
-      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer.data(), count);
+      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer.get(), count);
       pos += 25 + count;
       write_diff_sz += count;
       break;
@@ -671,11 +691,11 @@ static int send_gathered_statediffs(int conn_fd) {
 
     case SD_TYPE_SYMLINK: {
       // [1:type][8:fid][4:target_len][target_len:target][4:uid][4:gid]
-      uint32_t target_len = sd.buffer.size();
+      uint32_t target_len = (uint32_t) sd.buffer_size;
       memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
       memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8, (void*)&target_len, sizeof(uint32_t));
-      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer.data(), target_len);
+      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer.get(), target_len);
       memcpy(buffer + pos + 1 + 8 + 4 + target_len, (void*)&sd.uid, sizeof(uint32_t));
       memcpy(buffer + pos + 1 + 8 + 4 + target_len + 4, (void*)&sd.gid, sizeof(uint32_t));
       pos += 21 + target_len;
@@ -1156,7 +1176,9 @@ static int fuselog_symlink(const char *from, const char *orig_to) {
     sd->gid     = fuse_get_context()->gid;
     // store symlink target path in buffer
     string from_str(from);
-    sd->buffer.assign(from_str.begin(), from_str.end());
+    sd->copy_buffer(
+        reinterpret_cast<const unsigned char*>(from_str.data()),
+        from_str.size());
     push_statediff(sd);
   }
 
@@ -1661,23 +1683,26 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             "from %d\n", 
             fd_ro, rd_size, size, sd_buffer_rd);
 
-    auto cd_t0 = chrono::steady_clock::now();
+    chrono::steady_clock::time_point cd_t0;
+    if (log_level <= LOG_DEBUG) cd_t0 = chrono::steady_clock::now();
     coalesced_write = compute_diff(
         (const unsigned char*) sd_buffer_rd,
         (const unsigned char*) buf,
         (size_t) rd_size, size, (uint64_t) offset, min_width_coelasce);
-    auto cd_t1 = chrono::steady_clock::now();
-    total_cd_ns.fetch_add(
-        (uint64_t) chrono::duration_cast<chrono::nanoseconds>(
-            cd_t1 - cd_t0).count(),
-        memory_order_relaxed);
-    total_cd_bytes.fetch_add((uint64_t) rd_size, memory_order_relaxed);
-    total_cd_calls.fetch_add(1, memory_order_relaxed);
+    if (log_level <= LOG_DEBUG) {
+      auto cd_t1 = chrono::steady_clock::now();
+      total_cd_ns.fetch_add(
+          (uint64_t) chrono::duration_cast<chrono::nanoseconds>(
+              cd_t1 - cd_t0).count(),
+          memory_order_relaxed);
+      total_cd_bytes.fetch_add((uint64_t) rd_size, memory_order_relaxed);
+      total_cd_calls.fetch_add(1, memory_order_relaxed);
+    }
 
     /* Calculate the number of different bytes */
     if (coalesced_write.size() > 0) num_diff = 0;
-    for (auto cur_diff : coalesced_write) {
-      num_diff += cur_diff.buffer.size();
+    for (const auto& cur_diff : coalesced_write) {
+      num_diff += cur_diff.size;
     }
 
   } // end of coalescing write statediff
@@ -1732,7 +1757,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
         // Coalesced cost: N * 25 + D (N actions, D total diff bytes)
         // Raw cost:       1 * 25 + size (one action, full write buffer)
         uint64_t coalesced_data = 0;
-        for (auto& m : merged) coalesced_data += m.buffer.size();
+        for (auto& m : merged) coalesced_data += m.size;
         uint64_t coalesced_cost = merged.size() * COALESCE_ACTION_OVERHEAD + coalesced_data;
         uint64_t raw_cost       = COALESCE_ACTION_OVERHEAD + size;
 
@@ -1743,7 +1768,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             sd->sd_type = SD_TYPE_WRITE;
             sd->fid     = cur_fid;
             sd->offset  = m.offset;
-            sd->buffer  = std::move(m.buffer);
+            sd->take_buffer(std::move(m.buffer), m.size);
             push_statediff(sd);
           }
         } else {
@@ -1752,9 +1777,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
           sd->sd_type = SD_TYPE_WRITE;
           sd->fid     = cur_fid;
           sd->offset  = offset;
-          for (size_t i = 0; i < size; i++) {
-            sd->buffer.push_back(buf[i]);
-          }
+          sd->copy_buffer(reinterpret_cast<const unsigned char*>(buf), size);
           push_statediff(sd);
         }
       } else if (is_sd_coalesce) {
@@ -1766,9 +1789,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
         sd->sd_type = SD_TYPE_WRITE;
         sd->fid     = cur_fid;
         sd->offset  = offset;
-        for (size_t i = 0; i < size; i++) {
-          sd->buffer.push_back(buf[i]);
-        }
+        sd->copy_buffer(reinterpret_cast<const unsigned char*>(buf), size);
         push_statediff(sd);
       }
     }
@@ -1785,22 +1806,22 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
       logging(LOG_INFO, "   + written %d diff bytes of %ld\n", num_diff, size);
 
       uint64_t print_count = 0;
-      for (auto cur_diff : coalesced_write) {
+      for (const auto& cur_diff : coalesced_write) {
         logging(LOG_DEBUG, "     + %5ld..%5ld: \n",
                 cur_diff.offset,
-                cur_diff.offset + cur_diff.buffer.size() - 1);
+                cur_diff.offset + cur_diff.size - 1);
 
         uint64_t i = 0;
         uint64_t max_print_count = 5;
-        while (i < cur_diff.buffer.size() && i < max_print_count) {
+        while (i < cur_diff.size && i < max_print_count) {
         logging(LOG_DEBUG, "                      %4d(%1c) ==> %4d(%1c) \n",
-                (unsigned char) cur_diff.buffer[i],
-                printChar((char) cur_diff.buffer[i]),
+                (unsigned char) cur_diff.buffer.get()[i],
+                printChar((char) cur_diff.buffer.get()[i]),
                 (unsigned char) buf[i],
                 printChar((char) buf[i]));
 
         i++;
-        if (i == max_print_count && cur_diff.buffer.size() != max_print_count) {
+        if (i == max_print_count && cur_diff.size != max_print_count) {
           logging(LOG_DEBUG, "                      <...>\n");
           break;
         }

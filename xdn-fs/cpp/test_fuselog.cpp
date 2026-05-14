@@ -25,10 +25,10 @@ std::vector<unsigned char> apply_chunks(
   std::vector<unsigned char> out = old_buf;
   for (const auto& c : chunks) {
     uint64_t rel = c.offset - base_offset;
-    if (rel + c.buffer.size() > out.size()) {
-      out.resize(rel + c.buffer.size());
+    if (rel + c.size > out.size()) {
+      out.resize(rel + c.size);
     }
-    for (size_t i = 0; i < c.buffer.size(); i++) out[rel + i] = c.buffer[i];
+    for (size_t i = 0; i < c.size; i++) out[rel + i] = c.buffer[i];
   }
   return out;
 }
@@ -55,7 +55,7 @@ TEST(ComputeDiff, AllDifferentIsOneChunk) {
   auto chunks = compute_diff(a.data(), b.data(), 64, 64, 0, 0);
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 0u);
-  EXPECT_EQ(chunks[0].buffer.size(), 64u);
+  EXPECT_EQ(chunks[0].size, 64u);
 }
 
 TEST(ComputeDiff, SingleByteDiffAtStart) {
@@ -64,7 +64,7 @@ TEST(ComputeDiff, SingleByteDiffAtStart) {
   auto chunks = compute_diff(a.data(), b.data(), 4, 4, 0, 0);
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 0u);
-  ASSERT_EQ(chunks[0].buffer.size(), 1u);
+  ASSERT_EQ(chunks[0].size, 1u);
   EXPECT_EQ(chunks[0].buffer[0], 'X');
 }
 
@@ -74,7 +74,7 @@ TEST(ComputeDiff, SingleByteDiffAtEnd) {
   auto chunks = compute_diff(a.data(), b.data(), 4, 4, 0, 0);
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 3u);
-  ASSERT_EQ(chunks[0].buffer.size(), 1u);
+  ASSERT_EQ(chunks[0].size, 1u);
   EXPECT_EQ(chunks[0].buffer[0], 'X');
 }
 
@@ -84,7 +84,7 @@ TEST(ComputeDiff, SingleByteDiffInMiddle) {
   auto chunks = compute_diff(a.data(), b.data(), 5, 5, 0, 0);
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 2u);
-  ASSERT_EQ(chunks[0].buffer.size(), 1u);
+  ASSERT_EQ(chunks[0].size, 1u);
   EXPECT_EQ(chunks[0].buffer[0], 'X');
 }
 
@@ -94,9 +94,9 @@ TEST(ComputeDiff, TwoSeparateDiffsProduceTwoChunks) {
   auto chunks = compute_diff(a.data(), b.data(), 8, 8, 0, 0);
   ASSERT_EQ(chunks.size(), 2u);
   EXPECT_EQ(chunks[0].offset, 0u);
-  EXPECT_EQ(chunks[0].buffer.size(), 1u);
+  EXPECT_EQ(chunks[0].size, 1u);
   EXPECT_EQ(chunks[1].offset, 7u);
-  EXPECT_EQ(chunks[1].buffer.size(), 1u);
+  EXPECT_EQ(chunks[1].size, 1u);
 }
 
 TEST(ComputeDiff, WriteExtendsBeyondOldFile) {
@@ -105,7 +105,7 @@ TEST(ComputeDiff, WriteExtendsBeyondOldFile) {
   auto chunks = compute_diff(a.data(), b.data(), 3, 6, 0, 0);
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 3u);
-  ASSERT_EQ(chunks[0].buffer.size(), 3u);
+  ASSERT_EQ(chunks[0].size, 3u);
   EXPECT_EQ(chunks[0].buffer[0], 'd');
   EXPECT_EQ(chunks[0].buffer[1], 'e');
   EXPECT_EQ(chunks[0].buffer[2], 'f');
@@ -123,7 +123,7 @@ TEST(ComputeDiff, TailFoldOnlyAtZeroOffset) {
   auto z = compute_diff(a.data(), b.data(), 3, 5, 0, 0);
   ASSERT_EQ(z.size(), 1u);
   EXPECT_EQ(z[0].offset, 1u);
-  ASSERT_EQ(z[0].buffer.size(), 4u);
+  ASSERT_EQ(z[0].size, 4u);
   EXPECT_EQ(z[0].buffer[0], 'X');
   EXPECT_EQ(z[0].buffer[1], 'Y');
   EXPECT_EQ(z[0].buffer[2], 'Z');
@@ -132,9 +132,9 @@ TEST(ComputeDiff, TailFoldOnlyAtZeroOffset) {
   auto nz = compute_diff(a.data(), b.data(), 3, 5, 100, 0);
   ASSERT_EQ(nz.size(), 2u);
   EXPECT_EQ(nz[0].offset, 101u);
-  EXPECT_EQ(nz[0].buffer.size(), 2u);
+  EXPECT_EQ(nz[0].size, 2u);
   EXPECT_EQ(nz[1].offset, 103u);
-  ASSERT_EQ(nz[1].buffer.size(), 2u);
+  ASSERT_EQ(nz[1].size, 2u);
   EXPECT_EQ(nz[1].buffer[0], 'Z');
   EXPECT_EQ(nz[1].buffer[1], 'W');
 }
@@ -164,7 +164,7 @@ TEST(ComputeDiff, DiffAtThirtyTwoByteBoundary) {
   auto chunks = compute_diff(a.data(), b.data(), 64, 64, 0, 0);
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 31u);
-  ASSERT_EQ(chunks[0].buffer.size(), 2u);
+  ASSERT_EQ(chunks[0].size, 2u);
   EXPECT_EQ(chunks[0].buffer[0], 'X');
   EXPECT_EQ(chunks[0].buffer[1], 'Y');
 }
@@ -219,12 +219,12 @@ TEST(MergeChunks, EmptyInputReturnsEmpty) {
 TEST(MergeChunks, GapBelowOverheadMerges) {
   std::vector<unsigned char> buf(50, 'z');
   std::vector<statediff_write_unit> in(2);
-  in[0].offset = 0;  in[0].buffer = {'A','A','A','A','A'};   // [0..5)
-  in[1].offset = 10; in[1].buffer = {'B','B','B','B','B'};   // gap = 5 < 25
+  in[0].offset = 0;  in[0].assign({'A','A','A','A','A'});   // [0..5)
+  in[1].offset = 10; in[1].assign({'B','B','B','B','B'});   // gap = 5 < 25
   auto out = merge_adjacent_chunks(std::move(in), buf.data(), 0, 25);
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(out[0].offset, 0u);
-  ASSERT_EQ(out[0].buffer.size(), 15u);
+  ASSERT_EQ(out[0].size, 15u);
   for (size_t i = 5; i < 10; i++) EXPECT_EQ(out[0].buffer[i], 'z');
   EXPECT_EQ(out[0].buffer[10], 'B');
 }
@@ -232,8 +232,8 @@ TEST(MergeChunks, GapBelowOverheadMerges) {
 TEST(MergeChunks, GapAboveOverheadStaysSeparate) {
   std::vector<unsigned char> buf(200, 'z');
   std::vector<statediff_write_unit> in(2);
-  in[0].offset = 0;   in[0].buffer = {'A','A','A','A','A'};
-  in[1].offset = 100; in[1].buffer = {'B','B'};               // gap = 95
+  in[0].offset = 0;   in[0].assign({'A','A','A','A','A'});
+  in[1].offset = 100; in[1].assign({'B','B'});               // gap = 95
   auto out = merge_adjacent_chunks(std::move(in), buf.data(), 0, 25);
   EXPECT_EQ(out.size(), 2u);
 }
@@ -243,8 +243,8 @@ TEST(MergeChunks, GapExactlyOverheadStaysSeparate) {
   // gap == overhead does not (break-even goes to separate).
   std::vector<unsigned char> buf(100, 'z');
   std::vector<statediff_write_unit> in(2);
-  in[0].offset = 0;  in[0].buffer = {'A'};
-  in[1].offset = 26; in[1].buffer = {'B'};   // gap = 25 == overhead
+  in[0].offset = 0;  in[0].assign({'A'});
+  in[1].offset = 26; in[1].assign({'B'});   // gap = 25 == overhead
   auto out = merge_adjacent_chunks(std::move(in), buf.data(), 0, 25);
   EXPECT_EQ(out.size(), 2u);
 }
@@ -252,23 +252,23 @@ TEST(MergeChunks, GapExactlyOverheadStaysSeparate) {
 TEST(MergeChunks, ChainedSmallGapsAllMerge) {
   std::vector<unsigned char> buf(50, 'z');
   std::vector<statediff_write_unit> in(3);
-  in[0].offset = 0;  in[0].buffer = {'A'};
-  in[1].offset = 5;  in[1].buffer = {'B'};   // gap = 4
-  in[2].offset = 10; in[2].buffer = {'C'};   // gap = 4 from the merged chunk
+  in[0].offset = 0;  in[0].assign({'A'});
+  in[1].offset = 5;  in[1].assign({'B'});   // gap = 4
+  in[2].offset = 10; in[2].assign({'C'});   // gap = 4 from the merged chunk
   auto out = merge_adjacent_chunks(std::move(in), buf.data(), 0, 25);
   ASSERT_EQ(out.size(), 1u);
-  EXPECT_EQ(out[0].buffer.size(), 11u);
+  EXPECT_EQ(out[0].size, 11u);
 }
 
 TEST(MergeChunks, BridgeBytesPulledFromNewBufAtBaseOffset) {
   // base_offset = 1000: new_buf[0] corresponds to file offset 1000.
   std::vector<unsigned char> buf = {'P','Q','R','S','T','U','V','W','X','Y','Z'};
   std::vector<statediff_write_unit> in(2);
-  in[0].offset = 1000; in[0].buffer = {'A'};            // ends at file 1001
-  in[1].offset = 1005; in[1].buffer = {'B'};            // gap [1001..1005) = 4
+  in[0].offset = 1000; in[0].assign({'A'});            // ends at file 1001
+  in[1].offset = 1005; in[1].assign({'B'});            // gap [1001..1005) = 4
   auto out = merge_adjacent_chunks(std::move(in), buf.data(), 1000, 25);
   ASSERT_EQ(out.size(), 1u);
-  ASSERT_EQ(out[0].buffer.size(), 6u);
+  ASSERT_EQ(out[0].size, 6u);
   EXPECT_EQ(out[0].buffer[0], 'A');
   EXPECT_EQ(out[0].buffer[1], 'Q');  // buf[1001-1000]
   EXPECT_EQ(out[0].buffer[2], 'R');
@@ -281,13 +281,13 @@ TEST(MergeChunks, BridgeBytesPulledFromNewBufAtBaseOffset) {
 
 namespace {
 
-// True if two chunks are bytewise identical.
+// True if two chunks are bytewise identical (delegated to the struct's
+// content-based operator==).
 bool chunks_equal(const std::vector<statediff_write_unit>& a,
                   const std::vector<statediff_write_unit>& b) {
   if (a.size() != b.size()) return false;
   for (size_t i = 0; i < a.size(); i++) {
-    if (a[i].offset != b[i].offset) return false;
-    if (a[i].buffer != b[i].buffer) return false;
+    if (a[i] != b[i]) return false;
   }
   return true;
 }
