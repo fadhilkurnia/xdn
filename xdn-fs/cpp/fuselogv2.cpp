@@ -7,10 +7,18 @@
 // service execution: receiving http request, updating data in database, and
 // sending the http response).
 //
+// Pure compute helpers used by the write path (diff capture and gap merging)
+// live in fuselog_internal.h and are exercised by test_fuselog.cpp.
+//
 // Install dependencies:
 //   apt install pkg-config libfuse3-dev libzstd-dev
+//   apt install libgtest-dev                  (only needed for unit tests)
 //
-// How to compile:
+// How to compile (canonical path uses the build script):
+//   ./bin/build_xdn_fuselog.sh cpp            # build fuselog + fuselog-apply
+//   ./bin/build_xdn_fuselog.sh test           # build and run GoogleTest suite
+//
+// Equivalent raw g++ command (requires fuselog_internal.h in the same dir):
 //   g++ -Wall fuselogv2.cpp -o fuselog -D_FILE_OFFSET_BITS=64
 //   $(pkg-config fuse3 --cflags --libs)
 //   $(pkg-config libzstd --cflags --libs)
@@ -18,15 +26,16 @@
 //
 // How to use:
 //   ./fuselog <mount_point>
-//   example: 
+//   example:
 //      ./fuselog /app/data
 //      ./fuselog -f /app/data                  (running in the foreground)
 //      ./fuselog -o allow_other /app/data      (allowing other users)
-// 
+//
 // Initial developer: Fadhil I. Kurnia (fikurnia@cs.umass.edu)
 
 #define FUSE_USE_VERSION 31
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fuse.h>
@@ -53,6 +62,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "fuselog_internal.h"
 
 using namespace std;
 
@@ -85,28 +96,73 @@ static bool is_sd_prune    = true;   // set from FUSELOG_PRUNE
 static bool is_sd_compress = false;  // set from FUSELOG_COMPRESSION
 static ZSTD_CCtx* zstd_cctx = nullptr;
 static const int ZSTD_COMPRESS_LEVEL = 1;
+// TODO: allocate fresh fids on recreate.
+// Every handler that observes a new (or reappearing) path looks the path up
+// here and **reuses the existing fid** if one was previously assigned. That
+// conflates multiple incarnations of the same path within a single batch:
+// e.g. a path cycled file → unlink → mkdir → rmdir → file all carries one
+// fid in the captured statediff, and apply cannot tell which actions belong
+// to which incarnation. Under concurrent workloads with path recycling, this
+// produces ~5% A!=C divergence in fuzz_concurrent_overlap.py.
+// Fix: on every CREATE/MKDIR/SYMLINK (and on the to_fid of LINK/RENAME when
+// the destination is fresh), allocate a NEW fid instead of reusing the
+// existing entry. Wire-format-compatible (just larger fid space); the apply
+// side already keys actions by fid alone.
 static unordered_map<string, uint64_t> filename_to_fid;
 struct statediff_action {
-  uint8_t               sd_type;
-  uint64_t              fid;
-  uint64_t              offset;
-  vector<unsigned char> buffer;
-  uint32_t              uid;
-  uint32_t              gid;
-  uint32_t              mode;
-  statediff_action*     next = nullptr;  // intrusive linked list pointer
+  uint8_t                       sd_type;
+  uint64_t                      fid;
+  uint64_t                      offset;
+  // Buffer is a slice of a shared arena (when the source was compute_diff)
+  // or a private one-slot arena (when the source was a string / raw write
+  // / symlink target). Either way the shared_ptr handles lifetime.
+  std::shared_ptr<chunk_arena>  buffer_arena;
+  size_t                        buffer_offset = 0;
+  size_t                        buffer_size = 0;
+  uint32_t                      uid;
+  uint32_t                      gid;
+  uint32_t                      mode;
+  statediff_action*             next = nullptr;
+
+  const unsigned char* buffer_data() const {
+    return buffer_arena ? buffer_arena->buf.get() + buffer_offset : nullptr;
+  }
+
+  // Move semantics for arena-backed chunks: refcount-free transfer.
+  void take_buffer(std::shared_ptr<chunk_arena> a, size_t off, size_t n) {
+    buffer_arena = std::move(a);
+    buffer_offset = off;
+    buffer_size = n;
+  }
+  // Standalone allocation (raw write buffers, symlink targets).
+  void copy_buffer(const unsigned char* src, size_t n) {
+    if (n == 0) { buffer_arena.reset(); buffer_offset = 0; buffer_size = 0; return; }
+    buffer_arena = std::make_shared<chunk_arena>(n);
+    buffer_arena->pos = n;
+    buffer_offset = 0;
+    memcpy(buffer_arena->buf.get(), src, n);
+    buffer_size = n;
+  }
 };
 
-// Lock-free singly-linked list (prepend via CAS). Order is commutative.
+// Lock-free Treiber stack: prepend via CAS. The list ends up in
+// reverse-chronological order (newest first). send_gathered_statediffs
+// reverses it before serializing so apply replays in the original order.
 static atomic<statediff_action*> statediff_head{nullptr};
-struct statediff_write_unit {                // for coalescing
-  uint64_t               offset;
-  vector<unsigned char>  buffer;
-};
-// Per-action serialization overhead: 1 (type) + 8 (fid) + 8 (count) + 8 (offset) = 25 bytes.
-// When merging coalesced chunks, including a gap of identical bytes is cheaper than
-// emitting two separate actions if the gap is smaller than this overhead.
-static const uint32_t COALESCE_ACTION_OVERHEAD = 25;
+
+// Cumulative throughput counters for compute_diff. Updated lock-free
+// (atomic fetch_add) on each write; printed on every harvest so the
+// SIMD vs scalar dispatch can be A/B'd against real workloads.
+//
+// All accesses are gated by `if (log_level <= LOG_DEBUG)` so that at
+// log_level=LOG_INFO (the production default) the compiler DCEs both
+// the timing reads and the atomic stores at -O3. The atomics still
+// exist as zero-initialized globals (~24 bytes BSS, ignorable); but
+// the per-write fetch_add cost is gone.
+static atomic<uint64_t> total_cd_bytes{0};   // total bytes scanned
+static atomic<uint64_t> total_cd_ns{0};      // total ns spent in compute_diff
+static atomic<uint64_t> total_cd_calls{0};   // number of compute_diff calls
+// statediff_write_unit and COALESCE_ACTION_OVERHEAD live in fuselog_internal.h
 const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
 #define SD_TYPE_WRITE    0
 #define SD_TYPE_UNLINK   1
@@ -120,7 +176,8 @@ const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
 #define SD_TYPE_RMDIR    9
 #define SD_TYPE_SYMLINK  10
 
-// Lock-free prepend. Safe for concurrent callers because write order is commutative.
+// Lock-free prepend. Concurrent callers are serialized by the CAS; the
+// chronological order they observe is reconstructed by the harvest path.
 static void push_statediff(statediff_action* sd) {
   statediff_action* old_head = statediff_head.load(memory_order_relaxed);
   do {
@@ -279,6 +336,29 @@ static char *get_absolute_path(const char *path) {
   return real_path;
 }
 
+// Detect FUSE's silly-rename names. When userspace unlinks a file that still
+// has open fds, the kernel renames it to `.fuse_hiddenXXXXXXXXXXXXXXXX` (16
+// hex chars) and later unlinks that silly name once all fds close. We treat
+// silly-renamed paths as non-user-visible so the captured statediff matches
+// the user's intent (which is: unlink the original path).
+static bool is_silly_name(const char *name) {
+  if (name == NULL) return false;
+  const char prefix[] = ".fuse_hidden";
+  const size_t prefix_len = sizeof(prefix) - 1;
+  if (strncmp(name, prefix, prefix_len) != 0) return false;
+  for (size_t i = prefix_len; name[i]; i++) {
+    if (!isxdigit((unsigned char) name[i])) return false;
+  }
+  return name[prefix_len] != '\0';  // require at least one hex char
+}
+
+static bool is_silly_path(const char *path) {
+  if (path == NULL) return false;
+  const char *base = strrchr(path, '/');
+  base = base ? base + 1 : path;
+  return is_silly_name(base);
+}
+
 static char *get_relative_path(const char *path) {
   if (path[0] == '/') {
     if (strlen(path) == 1) {
@@ -350,6 +430,24 @@ static int send_gathered_statediffs(int conn_fd) {
   // Atomically harvest the entire statediff list — O(1), no mutex.
   statediff_action* head = statediff_head.exchange(nullptr, memory_order_acq_rel);
 
+  // Print compute_diff throughput so SIMD vs scalar runs can be A/B'd.
+  // Gated by log_level so production builds (LOG_INFO) get DCE'd here.
+  if (log_level <= LOG_DEBUG) {
+    uint64_t b = total_cd_bytes.load(memory_order_relaxed);
+    uint64_t n = total_cd_ns.load(memory_order_relaxed);
+    uint64_t c = total_cd_calls.load(memory_order_relaxed);
+    double mbps = (n > 0) ? ((double) b / (double) n * 1e9 / (1024.0 * 1024.0)) : 0.0;
+    double avg_ns = (c > 0) ? ((double) n / (double) c) : 0.0;
+    fprintf(stderr,
+            "[fuselog] compute_diff cumulative: %lu calls, %lu MiB scanned, "
+            "%lu ms total, %.0f MiB/s, %.1f ns/call avg, SIMD=%s\n",
+            (unsigned long) c,
+            (unsigned long) (b >> 20),
+            (unsigned long) (n / 1000000),
+            mbps, avg_ns,
+            fuselog_simd_name());
+  }
+
   // Snapshot filename_to_fid under fid_mutex — brief hold.
   unordered_map<string, uint64_t> local_filename_to_fid;
   {
@@ -376,14 +474,33 @@ static int send_gathered_statediffs(int conn_fd) {
 
   statediff_action* serialized = head;
   if (is_sd_prune) {
-    // Pruning: O(n) two-pass scan to remove writes to deleted files.
-    // Pass 1: collect unlinked/rmdir'd fids.
-    unordered_set<uint64_t> removed_fids;
+    // Pruning: O(n) two-pass scan. A fid's actions are only safe to drop
+    // when its lifecycle in this batch is unambiguous: exactly one
+    // create-equivalent action, an unlink-equivalent action, and no
+    // rename/link references. Multi-lifecycle fids (file deleted then
+    // recreated under the same fid) and rename-touched fids preserve all
+    // their actions, because a proper lifetime/rename-chain analysis is
+    // out of scope here.
+    unordered_set<uint64_t> unlinked_fids;
+    unordered_set<uint64_t> renamed_fids;
+    unordered_map<uint64_t, int> create_count;
     for (statediff_action* p = head; p; p = p->next) {
-      if (p->sd_type == SD_TYPE_UNLINK || p->sd_type == SD_TYPE_RMDIR)
-        removed_fids.insert(p->fid);
+      if (p->sd_type == SD_TYPE_UNLINK || p->sd_type == SD_TYPE_RMDIR) {
+        unlinked_fids.insert(p->fid);
+      } else if (p->sd_type == SD_TYPE_RENAME ||
+                 p->sd_type == SD_TYPE_LINK) {
+        renamed_fids.insert(p->fid);
+        renamed_fids.insert(p->offset);
+      } else if (p->sd_type == SD_TYPE_CREATE ||
+                 p->sd_type == SD_TYPE_MKDIR ||
+                 p->sd_type == SD_TYPE_SYMLINK) {
+        create_count[p->fid]++;
+      }
     }
-    // Pass 2: filter writes/truncates/metadata for deleted files; rebuild pruned list.
+
+    // Pass 2: drop is_prunable actions for fids with a clean single-life
+    // cycle. Keep the UNLINK itself so the backup actually removes the
+    // file. Apply tolerates ENOENT on unlink.
     statediff_action* pruned = nullptr;
     for (statediff_action* p = head; p; ) {
       statediff_action* nxt = p->next;
@@ -392,7 +509,12 @@ static int send_gathered_statediffs(int conn_fd) {
                           p->sd_type == SD_TYPE_CHMOD ||
                           p->sd_type == SD_TYPE_CHOWN ||
                           p->sd_type == SD_TYPE_CREATE);
-      bool keep = !(is_prunable && removed_fids.count(p->fid));
+      auto cc = create_count.find(p->fid);
+      int ccount = (cc == create_count.end()) ? 0 : cc->second;
+      bool fid_prunable = unlinked_fids.count(p->fid) &&
+                          !renamed_fids.count(p->fid) &&
+                          ccount <= 1;
+      bool keep = !(is_prunable && fid_prunable);
       if (keep) {
         p->next = pruned;
         pruned = p;
@@ -402,6 +524,19 @@ static int send_gathered_statediffs(int conn_fd) {
       p = nxt;
     }
     serialized = pruned;
+  } else {
+    // No prune: head is in reverse-chronological order from CAS prepends.
+    // The prune branch above happens to reverse-during-rebuild and so
+    // emits chronological order; here we have to do that reversal
+    // explicitly so apply sees actions in the order they happened.
+    statediff_action* reversed = nullptr;
+    for (statediff_action* p = serialized; p; ) {
+      statediff_action* nxt = p->next;
+      p->next = reversed;
+      reversed = p;
+      p = nxt;
+    }
+    serialized = reversed;
   }
 
   for (statediff_action* p = serialized; p; p = p->next) {
@@ -426,10 +561,10 @@ static int send_gathered_statediffs(int conn_fd) {
   }
   for (statediff_action* p = serialized; p; p = p->next) {
     if (p->sd_type == SD_TYPE_WRITE) {
-      sum_len_wr_buf += p->buffer.size();
+      sum_len_wr_buf += p->buffer_size;
     }
     if (p->sd_type == SD_TYPE_SYMLINK) {
-      sum_len_symlink_target += p->buffer.size();
+      sum_len_symlink_target += p->buffer_size;
     }
   }
   num_statediffs = num_write + num_unlink + num_rename +
@@ -495,7 +630,7 @@ static int send_gathered_statediffs(int conn_fd) {
 
     case SD_TYPE_WRITE: {
       // [1:type][8:fid][8:count][8:offset][count:buffer]
-      uint64_t count = sd.buffer.size();
+      uint64_t count = sd.buffer_size;
       uint64_t offset = sd.offset;
       if (count == 0) {
         logging(LOG_ERROR, "found write with empty buffer!\n");
@@ -506,7 +641,7 @@ static int send_gathered_statediffs(int conn_fd) {
       memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8, (void*)&count, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8 + 8, (void*)&offset, sizeof(uint64_t));
-      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer.data(), count);
+      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer_data(), count);
       pos += 25 + count;
       write_diff_sz += count;
       break;
@@ -567,11 +702,11 @@ static int send_gathered_statediffs(int conn_fd) {
 
     case SD_TYPE_SYMLINK: {
       // [1:type][8:fid][4:target_len][target_len:target][4:uid][4:gid]
-      uint32_t target_len = sd.buffer.size();
+      uint32_t target_len = (uint32_t) sd.buffer_size;
       memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
       memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8, (void*)&target_len, sizeof(uint32_t));
-      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer.data(), target_len);
+      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer_data(), target_len);
       memcpy(buffer + pos + 1 + 8 + 4 + target_len, (void*)&sd.uid, sizeof(uint32_t));
       memcpy(buffer + pos + 1 + 8 + 4 + target_len + 4, (void*)&sd.gid, sizeof(uint32_t));
       pos += 21 + target_len;
@@ -1052,7 +1187,9 @@ static int fuselog_symlink(const char *from, const char *orig_to) {
     sd->gid     = fuse_get_context()->gid;
     // store symlink target path in buffer
     string from_str(from);
-    sd->buffer.assign(from_str.begin(), from_str.end());
+    sd->copy_buffer(
+        reinterpret_cast<const unsigned char*>(from_str.data()),
+        from_str.size());
     push_statediff(sd);
   }
 
@@ -1071,10 +1208,10 @@ static int fuselog_unlink(const char *orig_path) {
     return -errno;
   } 
   
-  if (is_sd_capture == true) {
+  if (is_sd_capture == true && !is_silly_path(path)) {
     auto start_time = chrono::high_resolution_clock::now();
     if (fuse_get_context()->pid > 0) {
-      
+
       // get the file id (fid)
       uint64_t cur_fid = 0;
       string path_str(path);
@@ -1097,10 +1234,11 @@ static int fuselog_unlink(const char *orig_path) {
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
                         (end_time-start_time);
-    logging(LOG_INFO, ">> unlink %s, sd-cap-time: %ldns\n" , 
+    logging(LOG_INFO, ">> unlink %s, sd-cap-time: %ldns\n" ,
             path, sd_cap_time.count());
   } else {
-    logging(LOG_INFO, ">> unlink %s\n", path);
+    logging(LOG_INFO, ">> unlink %s%s\n", path,
+            is_silly_path(path) ? " (silly-rename cleanup; not captured)" : "");
   }
 
   free(path);
@@ -1155,33 +1293,61 @@ static int fuselog_rename(const char *orig_from, const char *orig_to,
   if (res != -1 && is_sd_capture == true) {
     auto start_time = chrono::high_resolution_clock::now();
     if (fuse_get_context()->pid > 0) {
-      
-      // get the file id (fid)
-      uint64_t from_fid = 0;
-      string   from_path_str(from);
-      uint64_t to_fid = 0;
-      string   to_path_str(to);
-      fid_mutex.lock();
-      if (filename_to_fid.count(from_path_str)) {
-        from_fid = filename_to_fid[from_path_str];
-      } else {
-        from_fid = filename_to_fid.size();
-        filename_to_fid[from_path_str] = from_fid;
-      }
-      if (filename_to_fid.count(to_path_str)) {
-        to_fid = filename_to_fid[to_path_str];
-      } else {
-        to_fid = filename_to_fid.size();
-        filename_to_fid[to_path_str] = to_fid;
-      }
-      fid_mutex.unlock();
 
-      // capture and gather the statediff
-      auto* sd = new statediff_action{};
-      sd->sd_type = SD_TYPE_RENAME;
-      sd->fid     = from_fid;
-      sd->offset  = to_fid;          // TODO: use another field!!!
-      push_statediff(sd);
+      // Silly-rename detection: when the kernel renames X -> .fuse_hiddenZ
+      // because something still has X open, capture the user-visible effect
+      // (UNLINK X) rather than the FUSE-internal rename. The subsequent
+      // ops on the silly name will be skipped by their handlers.
+      bool to_is_silly   = is_silly_path(to);
+      bool from_is_silly = is_silly_path(from);
+
+      if (to_is_silly && !from_is_silly) {
+        // Treat as UNLINK(from).
+        uint64_t from_fid = 0;
+        string   from_path_str(from);
+        fid_mutex.lock();
+        if (filename_to_fid.count(from_path_str)) {
+          from_fid = filename_to_fid[from_path_str];
+        } else {
+          from_fid = filename_to_fid.size();
+          filename_to_fid[from_path_str] = from_fid;
+        }
+        fid_mutex.unlock();
+
+        auto* sd = new statediff_action{};
+        sd->sd_type = SD_TYPE_UNLINK;
+        sd->fid     = from_fid;
+        push_statediff(sd);
+      } else if (from_is_silly) {
+        // Reverse silly-rename (rare). Skip capture entirely; the file
+        // never had user-visible content at the silly name.
+      } else {
+        // Normal user-initiated rename.
+        uint64_t from_fid = 0;
+        string   from_path_str(from);
+        uint64_t to_fid = 0;
+        string   to_path_str(to);
+        fid_mutex.lock();
+        if (filename_to_fid.count(from_path_str)) {
+          from_fid = filename_to_fid[from_path_str];
+        } else {
+          from_fid = filename_to_fid.size();
+          filename_to_fid[from_path_str] = from_fid;
+        }
+        if (filename_to_fid.count(to_path_str)) {
+          to_fid = filename_to_fid[to_path_str];
+        } else {
+          to_fid = filename_to_fid.size();
+          filename_to_fid[to_path_str] = to_fid;
+        }
+        fid_mutex.unlock();
+
+        auto* sd = new statediff_action{};
+        sd->sd_type = SD_TYPE_RENAME;
+        sd->fid     = from_fid;
+        sd->offset  = to_fid;          // TODO: use another field!!!
+        push_statediff(sd);
+      }
     }
     auto end_time     = chrono::high_resolution_clock::now();
     auto sd_cap_time  = chrono::duration_cast<chrono::nanoseconds>
@@ -1268,7 +1434,7 @@ static int fuselog_chmod(const char *orig_path, mode_t mode,
     return -errno;
   }
 
-  if (is_sd_capture && fuse_get_context()->pid > 0) {
+  if (is_sd_capture && fuse_get_context()->pid > 0 && !is_silly_path(path)) {
     string path_str(path);
     uint64_t cur_fid = 0;
     fid_mutex.lock();
@@ -1305,7 +1471,8 @@ static int fuselog_chown(const char *orig_path, uid_t uid, gid_t gid,
     logging(LOG_INFO, "  + username:%s groupname:%s\n", username, groupname);
   }
 
-  if (res == 0 && is_sd_capture && fuse_get_context()->pid > 0) {
+  if (res == 0 && is_sd_capture && fuse_get_context()->pid > 0 &&
+      !is_silly_path(path)) {
     string path_str(path);
     uint64_t cur_fid = 0;
     fid_mutex.lock();
@@ -1341,7 +1508,8 @@ static int fuselog_truncate(const char *orig_path, off_t size,
   else
     res = truncate(path, size);
 
-  if (res != -1 && is_sd_capture == true && fuse_get_context()->pid > 0) {
+  if (res != -1 && is_sd_capture == true && fuse_get_context()->pid > 0 &&
+      !is_silly_path(path)) {
     auto start_time = chrono::high_resolution_clock::now();
     {
       // get the file id (fid)
@@ -1393,7 +1561,22 @@ static int fuselog_utimens(const char *orig_path, const struct timespec ts[2],
 
 static int fuselog_open(const char *orig_path, struct fuse_file_info *fi) {
   char *path = get_relative_path(orig_path);
-  int   res  = open(path, fi->flags);
+
+  // Strip O_DIRECT from the flags before opening the underlying file.
+  // O_DIRECT requires the caller's buffer, file offset, and length to all
+  // be aligned to the device block size; the buffer libfuse hands to our
+  // fuselog_write is not 512-byte aligned, so a downstream pwrite would
+  // fail with EINVAL. Since fuselog already sits between the app and the
+  // backing FS, we transparently demote the open to buffered I/O. The
+  // app's durability is unaffected because COMMIT-time fsync still flows
+  // through fuselog_fsync.
+  int open_flags = fi->flags & ~O_DIRECT;
+  int   res  = open(path, open_flags);
+
+  if (fi->flags & O_DIRECT) {
+    logging(LOG_DEBUG, ">> open %s with O_DIRECT requested; stripped\n",
+            orig_path);
+  }
 
   // what type of open ? read, write, or read-write ?
   if (fi->flags & O_RDONLY) {
@@ -1511,82 +1694,56 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             "from %d\n", 
             fd_ro, rd_size, size, sd_buffer_rd);
 
-    /* compare old bytes (in buf) and new bytes (in sd_buffer_rd) */
-    ssize_t i = 0;
-    while (i < rd_size) {
-      struct statediff_write_unit cur;
-      cur.offset = offset + i;
-
-      /* keep iterating through non-equal contiguous values, if they are
-         equal we dont need to keep the statediff.
-         Coalesce with a minimum length of `min_width_coelasce` */
-      if ((unsigned char) sd_buffer_rd[i] != (unsigned char) buf[i]) {
-        while (((unsigned char) sd_buffer_rd[i] != (unsigned char) buf[i] ||
-                ((unsigned char) sd_buffer_rd[i] == (unsigned char) buf[i] &&
-                cur.buffer.size() < min_width_coelasce)) &&
-              i < rd_size) {
-          cur.buffer.push_back((unsigned char) buf[i]);
-          i++;
-        }
-      }
-
-      /* if buf and sd_buffer_rd are equal, we dont need to gather the 
-         statediff */
-      if (cur.buffer.size() > 0) {
-        coalesced_write.push_back(cur);
-      }
-
-      i++;
-    }
-    // if i == rd_size < size, process the remaining new values
-    if (i < (ssize_t) size) {
-      struct statediff_write_unit cur;
-      cur.offset = offset + i;
-      
-      // handle if the last contiguous diff includes the last byte
-      if (coalesced_write.size() > 0) {
-        struct statediff_write_unit last;
-        last = coalesced_write.back();
-        if ((ssize_t) (last.offset + last.buffer.size()) == rd_size) {
-          coalesced_write.pop_back();
-          cur.offset = last.offset;
-          cur.buffer = last.buffer;
-        }
-      }
-
-      while (i < (ssize_t) size) {
-        cur.buffer.push_back((unsigned char) buf[i]);
-        i++;
-      }
-
-      coalesced_write.push_back(cur);
+    chrono::steady_clock::time_point cd_t0;
+    if (log_level <= LOG_DEBUG) cd_t0 = chrono::steady_clock::now();
+    coalesced_write = compute_diff(
+        (const unsigned char*) sd_buffer_rd,
+        (const unsigned char*) buf,
+        (size_t) rd_size, size, (uint64_t) offset, min_width_coelasce);
+    if (log_level <= LOG_DEBUG) {
+      auto cd_t1 = chrono::steady_clock::now();
+      total_cd_ns.fetch_add(
+          (uint64_t) chrono::duration_cast<chrono::nanoseconds>(
+              cd_t1 - cd_t0).count(),
+          memory_order_relaxed);
+      total_cd_bytes.fetch_add((uint64_t) rd_size, memory_order_relaxed);
+      total_cd_calls.fetch_add(1, memory_order_relaxed);
     }
 
     /* Calculate the number of different bytes */
     if (coalesced_write.size() > 0) num_diff = 0;
-    for (auto cur_diff : coalesced_write) {
-      num_diff += cur_diff.buffer.size();
+    for (const auto& cur_diff : coalesced_write) {
+      num_diff += cur_diff.size;
     }
 
   } // end of coalescing write statediff
 
   /* do the actual write */
+  // The underlying fd does not carry O_DIRECT: fuselog_open strips it
+  // before opening so this pwrite is always against a buffered fd, which
+  // has no alignment requirements on `buf`. A future enhancement could
+  // honour O_DIRECT via posix_memalign'd bounce buffers if cache-bypass
+  // semantics matter to some app — for now they don't.
   res = pwrite(fd, buf, size, offset);
   if (res == -1) {
+    int err = errno;
     logging(LOG_ERROR, "   + write %s size: %ld bytes, offset: %ld "
-            "[WRITE-FAIL]\n", path, size, offset);
-    res = -errno;
+            "[WRITE-FAIL] errno=%d (%s)\n",
+            path, size, offset, err, strerror(err));
+    res = -err;
     if (fi == NULL) close(fd);
     free(path);
     return res;
-  } 
+  }
   
   /* Store the statediff into an external file */
   if (is_sd_capture) {
     auto start_time = chrono::high_resolution_clock::now();
 
-    /* Ignore statediff from pid == 0*/
-    if (fuse_get_context()->pid > 0) {
+    /* Ignore statediff from pid == 0, and writes that land on a
+       silly-renamed (.fuse_hiddenXXXX) inode — those bytes are about to
+       be discarded when the last fd closes. */
+    if (fuse_get_context()->pid > 0 && !is_silly_path(path)) {
       
       // get the file id (fid)
       uint64_t cur_fid = 0;
@@ -1602,32 +1759,16 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
 
       if (is_sd_coalesce && coalesced_write.size() > 0) {
         // Phase 1: Merge adjacent chunks whose gap < COALESCE_ACTION_OVERHEAD.
-        // Including a small gap of identical bytes in one chunk is cheaper
-        // than paying 25 bytes of per-action overhead for a separate chunk.
-        vector<statediff_write_unit> merged;
-        merged.push_back(std::move(coalesced_write[0]));
-        for (size_t ci = 1; ci < coalesced_write.size(); ci++) {
-          auto& prev = merged.back();
-          auto& cur  = coalesced_write[ci];
-          uint64_t prev_end = prev.offset + prev.buffer.size();
-          uint64_t gap = (cur.offset > prev_end) ? (cur.offset - prev_end) : 0;
-          if (gap < COALESCE_ACTION_OVERHEAD) {
-            // Merge: fill the gap with original bytes from buf, then append cur
-            for (uint64_t g = 0; g < gap; g++) {
-              uint64_t buf_idx = (prev_end + g) - offset;
-              prev.buffer.push_back((unsigned char) buf[buf_idx]);
-            }
-            prev.buffer.insert(prev.buffer.end(), cur.buffer.begin(), cur.buffer.end());
-          } else {
-            merged.push_back(std::move(cur));
-          }
-        }
+        vector<statediff_write_unit> merged = merge_adjacent_chunks(
+            std::move(coalesced_write),
+            (const unsigned char*) buf, (uint64_t) offset,
+            COALESCE_ACTION_OVERHEAD);
 
         // Phase 2: Compare coalesced cost vs raw cost. Use whichever is smaller.
         // Coalesced cost: N * 25 + D (N actions, D total diff bytes)
         // Raw cost:       1 * 25 + size (one action, full write buffer)
         uint64_t coalesced_data = 0;
-        for (auto& m : merged) coalesced_data += m.buffer.size();
+        for (auto& m : merged) coalesced_data += m.size;
         uint64_t coalesced_cost = merged.size() * COALESCE_ACTION_OVERHEAD + coalesced_data;
         uint64_t raw_cost       = COALESCE_ACTION_OVERHEAD + size;
 
@@ -1638,7 +1779,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             sd->sd_type = SD_TYPE_WRITE;
             sd->fid     = cur_fid;
             sd->offset  = m.offset;
-            sd->buffer  = std::move(m.buffer);
+            sd->take_buffer(std::move(m.arena), m.arena_offset, m.size);
             push_statediff(sd);
           }
         } else {
@@ -1647,9 +1788,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
           sd->sd_type = SD_TYPE_WRITE;
           sd->fid     = cur_fid;
           sd->offset  = offset;
-          for (size_t i = 0; i < size; i++) {
-            sd->buffer.push_back(buf[i]);
-          }
+          sd->copy_buffer(reinterpret_cast<const unsigned char*>(buf), size);
           push_statediff(sd);
         }
       } else if (is_sd_coalesce) {
@@ -1661,9 +1800,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
         sd->sd_type = SD_TYPE_WRITE;
         sd->fid     = cur_fid;
         sd->offset  = offset;
-        for (size_t i = 0; i < size; i++) {
-          sd->buffer.push_back(buf[i]);
-        }
+        sd->copy_buffer(reinterpret_cast<const unsigned char*>(buf), size);
         push_statediff(sd);
       }
     }
@@ -1680,22 +1817,22 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
       logging(LOG_INFO, "   + written %d diff bytes of %ld\n", num_diff, size);
 
       uint64_t print_count = 0;
-      for (auto cur_diff : coalesced_write) {
+      for (const auto& cur_diff : coalesced_write) {
         logging(LOG_DEBUG, "     + %5ld..%5ld: \n",
                 cur_diff.offset,
-                cur_diff.offset + cur_diff.buffer.size() - 1);
+                cur_diff.offset + cur_diff.size - 1);
 
         uint64_t i = 0;
         uint64_t max_print_count = 5;
-        while (i < cur_diff.buffer.size() && i < max_print_count) {
+        while (i < cur_diff.size && i < max_print_count) {
         logging(LOG_DEBUG, "                      %4d(%1c) ==> %4d(%1c) \n",
-                (unsigned char) cur_diff.buffer[i],
-                printChar((char) cur_diff.buffer[i]),
+                (unsigned char) cur_diff.data()[i],
+                printChar((char) cur_diff.data()[i]),
                 (unsigned char) buf[i],
                 printChar((char) buf[i]));
 
         i++;
-        if (i == max_print_count && cur_diff.buffer.size() != max_print_count) {
+        if (i == max_print_count && cur_diff.size != max_print_count) {
           logging(LOG_DEBUG, "                      <...>\n");
           break;
         }

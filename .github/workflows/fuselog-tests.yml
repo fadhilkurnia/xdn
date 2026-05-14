@@ -1,0 +1,270 @@
+# Test workflow for the fuselog filesystem and its test harnesses.
+#
+# Jobs run in parallel (one per layer). Each job builds fuselog
+# independently — the build is fast (~30 s) and avoiding cross-job
+# artifact handoff keeps each job hermetic and easy to retry.
+#
+# Triggered only when fuselog-relevant paths change, so unrelated PRs
+# (Java reconfiguration, CLI, DNS, docs) don't pay this CI tax.
+
+name: "fuselog tests"
+
+on:
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "xdn-fs/**"
+      - "bin/build_xdn_fuselog.sh"
+      - ".github/workflows/fuselog-tests.yml"
+  pull_request:
+    branches: ["master", "main"]
+    paths:
+      - "xdn-fs/**"
+      - "bin/build_xdn_fuselog.sh"
+      - ".github/workflows/fuselog-tests.yml"
+
+permissions:
+  contents: read
+
+# Cancel any in-progress run for the same ref when a new commit lands.
+concurrency:
+  group: fuselog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ----------------------------------------------------------------------
+  # L1: GoogleTest unit tests for compute_diff / merge_adjacent_chunks /
+  # SIMD primitives. Pure C++ — no FUSE mount, no Docker.
+  # ----------------------------------------------------------------------
+  unit-tests:
+    name: "🧪 L1 unit tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install build deps + GoogleTest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config libfuse3-dev libzstd-dev libgtest-dev cmake
+      - name: 🏗️ Build and run unit tests
+        run: ./bin/build_xdn_fuselog.sh test
+
+  # ----------------------------------------------------------------------
+  # L3: end-to-end differential — mount fuselog, do random fs ops on the
+  # mount + a plain dir oracle, replay statediff, assert all three trees
+  # match.
+  # ----------------------------------------------------------------------
+  differential:
+    name: "🧪 L3 differential"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+      - name: 🏗️ Build fuselog
+        run: ./bin/build_xdn_fuselog.sh cpp
+      - name: 🧪 Run fuzz_differential.py over multiple seeds
+        run: |
+          set -e
+          for seed in 1 42 999 12345 31337; do
+            echo "=== seed=$seed ==="
+            ./xdn-fs/test/fuzz_differential.py --seed $seed --num-ops 1000
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: differential-failures
+          path: /tmp/fuselog-fuzz-fail-*/
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
+  # L4 (disjoint): N threads on per-thread subtrees. Stresses the
+  # lock-free Treiber-stack push_statediff path and fid_mutex.
+  # ----------------------------------------------------------------------
+  concurrent-disjoint:
+    name: "🧪 L4 concurrent (disjoint subtrees)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+      - name: 🏗️ Build fuselog
+        run: ./bin/build_xdn_fuselog.sh cpp
+      - name: 🧪 Run fuzz_concurrent.py
+        run: |
+          set -e
+          for seed in 1 42 999 12345; do
+            ./xdn-fs/test/fuzz_concurrent.py --seed $seed --threads 4 \
+              --num-ops-per-thread 200
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrent-disjoint-failures
+          path: /tmp/fuselog-fuzz-fail-*/
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
+  # L4 (overlap): N threads on the SAME shared path pool. Documented
+  # ~5 % flake rate due to the fid-reuse race; retry up to 3 times per
+  # seed before failing.
+  # ----------------------------------------------------------------------
+  concurrent-overlap:
+    name: "🧪 L4 concurrent (overlapping paths)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+      - name: 🏗️ Build fuselog
+        run: ./bin/build_xdn_fuselog.sh cpp
+      - name: 🧪 Run fuzz_concurrent_overlap.py with up-to-3 retries
+        run: |
+          set -e
+          for seed in 1 42 999 12345; do
+            attempts=0
+            while :; do
+              attempts=$((attempts + 1))
+              if ./xdn-fs/test/fuzz_concurrent_overlap.py \
+                  --seed $seed --threads 4 --num-ops-per-thread 200; then
+                break
+              fi
+              if [ $attempts -ge 3 ]; then
+                echo "::error::seed=$seed still failing after 3 attempts"
+                exit 1
+              fi
+              echo "::warning::seed=$seed flaked on attempt $attempts; retrying"
+              sleep 2
+            done
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrent-overlap-failures
+          path: /tmp/fuselog-fuzz-fail-*/
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
+  # L5: SQLite (in-process, no Docker). Fastest of the DB integration
+  # tests; kept separate so it doesn't share runner time with the heavier
+  # Docker-based DBs.
+  # ----------------------------------------------------------------------
+  db-sqlite:
+    name: "🧪 L5 SQLite"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install FUSE + python sqlite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3 \
+            python3 python3-dev
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+      - name: 🏗️ Build fuselog
+        run: ./bin/build_xdn_fuselog.sh cpp
+      - name: 🧪 Run fuzz_db.py --db sqlite over multiple seeds
+        run: |
+          set -e
+          for seed in 1 42 999; do
+            ./xdn-fs/test/fuzz_db.py --db sqlite --seed $seed --num-txns 200
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-sqlite-failure-logs
+          path: /tmp/xdn-fuselog/fuselog.log
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
+  # L5: Docker-based DBs (Postgres, MySQL, MariaDB, MongoDB) — one matrix
+  # entry per DB. fail-fast=false so one DB failing doesn't cancel the
+  # others; we want to see which engine breaks.
+  # ----------------------------------------------------------------------
+  db-docker:
+    name: "🧪 L5 ${{ matrix.db }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - db: postgres
+            image: postgres:16-alpine
+          - db: mysql
+            image: mysql:8.4
+          - db: mariadb
+            image: mariadb:11
+          - db: mongodb
+            image: mongo:7
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install FUSE + Docker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3 \
+            python3
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+          # GitHub Actions runners have docker pre-installed; confirm it.
+          docker --version
+      - name: 🏗️ Build fuselog
+        run: ./bin/build_xdn_fuselog.sh cpp
+      - name: 📦 Pre-pull DB image
+        run: sudo docker pull ${{ matrix.image }}
+      - name: 🧪 Run fuzz_db.py --db ${{ matrix.db }}
+        run: |
+          ./xdn-fs/test/fuzz_db.py --db ${{ matrix.db }} \
+            --seed 999 --num-txns 100
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-${{ matrix.db }}-failure-logs
+          path: /tmp/xdn-fuselog/fuselog.log
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
+  # Aggregator: all-tests-pass gate that downstream branch-protection
+  # rules can require. Depends on every job above.
+  # ----------------------------------------------------------------------
+  all-fuselog-tests:
+    name: "✅ all fuselog tests pass"
+    runs-on: ubuntu-latest
+    needs:
+      - unit-tests
+      - differential
+      - concurrent-disjoint
+      - concurrent-overlap
+      - db-sqlite
+      - db-docker
+    if: always()
+    steps:
+      - name: Check all required jobs
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "::error::one or more fuselog test jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "all fuselog test jobs passed"

@@ -7,6 +7,8 @@
 #   ./bin/build_xdn_fuselog.sh           # Build both C++ and Rust
 #   ./bin/build_xdn_fuselog.sh cpp       # Build C++ only
 #   ./bin/build_xdn_fuselog.sh rust      # Build Rust only
+#   ./bin/build_xdn_fuselog.sh test      # Build and run C++ unit tests (GoogleTest)
+#   ./bin/build_xdn_fuselog.sh bench     # Build and run compute_diff microbenchmark
 #   ./bin/build_xdn_fuselog.sh install   # Build both and install to /usr/local/bin
 
 set -e
@@ -41,6 +43,16 @@ function main() {
     rust)
       build_rust
       ;;
+    test)
+      build_cpp_tests
+      echo "Build complete."
+      exit 0
+      ;;
+    bench)
+      build_cpp_bench
+      echo "Build complete."
+      exit 0
+      ;;
     install)
       build_cpp
       build_rust
@@ -52,7 +64,7 @@ function main() {
       ;;
     *)
       echo "Unknown target: $TARGET"
-      echo "Usage: $0 [cpp|rust|install|all]"
+      echo "Usage: $0 [cpp|rust|test|install|all]"
       exit 1
       ;;
   esac
@@ -90,6 +102,47 @@ function build_cpp() {
 
   echo "  C++ binaries built in $CPP_DIR/"
   ls -lh "$CPP_DIR/fuselog" "$CPP_DIR/fuselog-apply"
+}
+
+function build_cpp_tests() {
+  echo "=== Building and running C++ unit tests ==="
+
+  # GoogleTest sources/libs. Most distros split between -lgtest (compiled
+  # libs from libgtest-dev's prebuilt package) and the source tree in
+  # /usr/src/googletest. Prefer prebuilt libs; if missing, compile from src.
+  local GTEST_CXXFLAGS=""
+  local GTEST_LDFLAGS=""
+  if pkg-config --exists gtest_main 2>/dev/null; then
+    GTEST_CXXFLAGS=$(pkg-config gtest_main --cflags)
+    GTEST_LDFLAGS=$(pkg-config gtest_main --libs)
+  elif [[ -f /usr/lib/x86_64-linux-gnu/libgtest_main.a ]] || \
+       [[ -f /usr/lib/libgtest_main.a ]]; then
+    GTEST_LDFLAGS="-lgtest_main -lgtest -pthread"
+  else
+    echo "Error: GoogleTest not found."
+    echo "Install with: apt install libgtest-dev"
+    echo "(On Debian/Ubuntu you may also need: apt install googletest && "
+    echo " cd /usr/src/googletest && cmake . && make && cp lib/*.a /usr/lib/)"
+    exit 1
+  fi
+
+  echo "  Compiling test_fuselog.cpp -> test_fuselog ..."
+  g++ -Wall -O2 -g -std=c++17 \
+    "$CPP_DIR/test_fuselog.cpp" -o "$CPP_DIR/test_fuselog" \
+    $GTEST_CXXFLAGS $GTEST_LDFLAGS -pthread
+
+  echo "  Running tests ..."
+  "$CPP_DIR/test_fuselog"
+}
+
+function build_cpp_bench() {
+  echo "=== Building and running compute_diff microbenchmark ==="
+  echo "  Compiling bench_fuselog.cpp -> bench_fuselog ..."
+  g++ -Wall -O3 -std=c++17 \
+    "$CPP_DIR/bench_fuselog.cpp" -o "$CPP_DIR/bench_fuselog"
+
+  echo "  Running benchmark ..."
+  "$CPP_DIR/bench_fuselog"
 }
 
 function build_rust() {

@@ -1,3 +1,4 @@
 fuselog
 fuselog-apply
-
+test_fuselog
+bench_fuselog
