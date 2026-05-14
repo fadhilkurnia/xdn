@@ -100,6 +100,8 @@ def main():
     parser.add_argument("--killmid", type=float, default=None,
                         help="seconds after workload start to SIGKILL the "
                              "primary (default: kill only after all txns)")
+    parser.add_argument("--keep-on-pass", action="store_true",
+                        help="Don't clean up dirs on success")
     args = parser.parse_args()
 
     if not FUSELOG_BIN.exists() or not APPLY_BIN.exists():

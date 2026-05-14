@@ -121,6 +121,9 @@ def start_fuselog(allow_other=False):
     env["WRITE_COALESCING"] = "true"
     env["FUSELOG_PRUNE"] = "true"
     env["FUSELOG_COMPRESSION"] = "false"
+    # FUSELOG_DISABLE_SIMD is honoured by compute_diff_dispatch; propagate.
+    if os.environ.get("FUSELOG_DISABLE_SIMD"):
+        env["FUSELOG_DISABLE_SIMD"] = os.environ["FUSELOG_DISABLE_SIMD"]
     fuselog_log = open(BASE_DIR / "fuselog.log", "w")
     cmd = [str(FUSELOG_BIN), "-f"]
     if allow_other:

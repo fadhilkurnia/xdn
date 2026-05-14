@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 
@@ -89,7 +90,15 @@ inline size_t find_first_match_avx2(const unsigned char* a,
 
 inline bool fuselog_has_avx2() {
 #ifdef FUSELOG_HAVE_AVX2
-  static const bool support = __builtin_cpu_supports("avx2");
+  static const bool support = ([]() -> bool {
+    // Env-var override lets us A/B the SIMD path against the scalar
+    // baseline on the same binary; set FUSELOG_DISABLE_SIMD=1 in the
+    // fuselog process's environment to force the scalar path.
+    if (const char* v = std::getenv("FUSELOG_DISABLE_SIMD")) {
+      if (*v != '\0' && *v != '0') return false;
+    }
+    return __builtin_cpu_supports("avx2");
+  })();
   return support;
 #else
   return false;

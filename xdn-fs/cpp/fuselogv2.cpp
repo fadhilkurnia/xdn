@@ -124,6 +124,13 @@ struct statediff_action {
 // reverse-chronological order (newest first). send_gathered_statediffs
 // reverses it before serializing so apply replays in the original order.
 static atomic<statediff_action*> statediff_head{nullptr};
+
+// Cumulative throughput counters for compute_diff. Updated lock-free
+// (atomic fetch_add) on each write; printed on every harvest so the
+// SIMD vs scalar dispatch can be A/B'd against real workloads.
+static atomic<uint64_t> total_cd_bytes{0};   // total bytes scanned
+static atomic<uint64_t> total_cd_ns{0};      // total ns spent in compute_diff
+static atomic<uint64_t> total_cd_calls{0};   // number of compute_diff calls
 // statediff_write_unit and COALESCE_ACTION_OVERHEAD live in fuselog_internal.h
 const uint32_t min_width_coelasce = 0;      // 0, 32, or other size
 #define SD_TYPE_WRITE    0
@@ -391,6 +398,24 @@ static int send_gathered_statediffs(int conn_fd) {
 
   // Atomically harvest the entire statediff list — O(1), no mutex.
   statediff_action* head = statediff_head.exchange(nullptr, memory_order_acq_rel);
+
+  // Print compute_diff throughput so SIMD vs scalar runs can be A/B'd.
+  // This always prints; cheap relative to the harvest itself.
+  {
+    uint64_t b = total_cd_bytes.load(memory_order_relaxed);
+    uint64_t n = total_cd_ns.load(memory_order_relaxed);
+    uint64_t c = total_cd_calls.load(memory_order_relaxed);
+    double mbps = (n > 0) ? ((double) b / (double) n * 1e9 / (1024.0 * 1024.0)) : 0.0;
+    double avg_ns = (c > 0) ? ((double) n / (double) c) : 0.0;
+    fprintf(stderr,
+            "[fuselog] compute_diff cumulative: %lu calls, %lu MiB scanned, "
+            "%lu ms total, %.0f MiB/s, %.1f ns/call avg, SIMD=%s\n",
+            (unsigned long) c,
+            (unsigned long) (b >> 20),
+            (unsigned long) (n / 1000000),
+            mbps, avg_ns,
+            fuselog_has_avx2() ? "on" : "off");
+  }
 
   // Snapshot filename_to_fid under fid_mutex — brief hold.
   unordered_map<string, uint64_t> local_filename_to_fid;
@@ -1636,10 +1661,18 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             "from %d\n", 
             fd_ro, rd_size, size, sd_buffer_rd);
 
+    auto cd_t0 = chrono::steady_clock::now();
     coalesced_write = compute_diff(
         (const unsigned char*) sd_buffer_rd,
         (const unsigned char*) buf,
         (size_t) rd_size, size, (uint64_t) offset, min_width_coelasce);
+    auto cd_t1 = chrono::steady_clock::now();
+    total_cd_ns.fetch_add(
+        (uint64_t) chrono::duration_cast<chrono::nanoseconds>(
+            cd_t1 - cd_t0).count(),
+        memory_order_relaxed);
+    total_cd_bytes.fetch_add((uint64_t) rd_size, memory_order_relaxed);
+    total_cd_calls.fetch_add(1, memory_order_relaxed);
 
     /* Calculate the number of different bytes */
     if (coalesced_write.size() > 0) num_diff = 0;
