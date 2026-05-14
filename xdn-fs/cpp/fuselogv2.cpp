@@ -110,26 +110,37 @@ static const int ZSTD_COMPRESS_LEVEL = 1;
 // side already keys actions by fid alone.
 static unordered_map<string, uint64_t> filename_to_fid;
 struct statediff_action {
-  uint8_t                          sd_type;
-  uint64_t                         fid;
-  uint64_t                         offset;
-  std::unique_ptr<unsigned char[]> buffer;
-  size_t                           buffer_size = 0;
-  uint32_t                         uid;
-  uint32_t                         gid;
-  uint32_t                         mode;
-  statediff_action*                next = nullptr;  // intrusive linked list pointer
+  uint8_t                       sd_type;
+  uint64_t                      fid;
+  uint64_t                      offset;
+  // Buffer is a slice of a shared arena (when the source was compute_diff)
+  // or a private one-slot arena (when the source was a string / raw write
+  // / symlink target). Either way the shared_ptr handles lifetime.
+  std::shared_ptr<chunk_arena>  buffer_arena;
+  size_t                        buffer_offset = 0;
+  size_t                        buffer_size = 0;
+  uint32_t                      uid;
+  uint32_t                      gid;
+  uint32_t                      mode;
+  statediff_action*             next = nullptr;
 
-  // Take ownership of an existing buffer (e.g. from a statediff_write_unit).
-  void take_buffer(std::unique_ptr<unsigned char[]> b, size_t n) {
-    buffer = std::move(b);
+  const unsigned char* buffer_data() const {
+    return buffer_arena ? buffer_arena->buf.get() + buffer_offset : nullptr;
+  }
+
+  // Move semantics for arena-backed chunks: refcount-free transfer.
+  void take_buffer(std::shared_ptr<chunk_arena> a, size_t off, size_t n) {
+    buffer_arena = std::move(a);
+    buffer_offset = off;
     buffer_size = n;
   }
-  // Allocate and copy from `src`.
+  // Standalone allocation (raw write buffers, symlink targets).
   void copy_buffer(const unsigned char* src, size_t n) {
-    if (n == 0) { buffer.reset(); buffer_size = 0; return; }
-    buffer.reset(new unsigned char[n]);
-    memcpy(buffer.get(), src, n);
+    if (n == 0) { buffer_arena.reset(); buffer_offset = 0; buffer_size = 0; return; }
+    buffer_arena = std::make_shared<chunk_arena>(n);
+    buffer_arena->pos = n;
+    buffer_offset = 0;
+    memcpy(buffer_arena->buf.get(), src, n);
     buffer_size = n;
   }
 };
@@ -630,7 +641,7 @@ static int send_gathered_statediffs(int conn_fd) {
       memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8, (void*)&count, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8 + 8, (void*)&offset, sizeof(uint64_t));
-      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer.get(), count);
+      memcpy(buffer + pos + 1 + 8 + 8 + 8, sd.buffer_data(), count);
       pos += 25 + count;
       write_diff_sz += count;
       break;
@@ -695,7 +706,7 @@ static int send_gathered_statediffs(int conn_fd) {
       memcpy(buffer + pos, (void*)&sd_type, sizeof(uint8_t));
       memcpy(buffer + pos + 1, (void*)&fid, sizeof(uint64_t));
       memcpy(buffer + pos + 1 + 8, (void*)&target_len, sizeof(uint32_t));
-      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer.get(), target_len);
+      memcpy(buffer + pos + 1 + 8 + 4, sd.buffer_data(), target_len);
       memcpy(buffer + pos + 1 + 8 + 4 + target_len, (void*)&sd.uid, sizeof(uint32_t));
       memcpy(buffer + pos + 1 + 8 + 4 + target_len + 4, (void*)&sd.gid, sizeof(uint32_t));
       pos += 21 + target_len;
@@ -1768,7 +1779,7 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
             sd->sd_type = SD_TYPE_WRITE;
             sd->fid     = cur_fid;
             sd->offset  = m.offset;
-            sd->take_buffer(std::move(m.buffer), m.size);
+            sd->take_buffer(std::move(m.arena), m.arena_offset, m.size);
             push_statediff(sd);
           }
         } else {
@@ -1815,8 +1826,8 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
         uint64_t max_print_count = 5;
         while (i < cur_diff.size && i < max_print_count) {
         logging(LOG_DEBUG, "                      %4d(%1c) ==> %4d(%1c) \n",
-                (unsigned char) cur_diff.buffer.get()[i],
-                printChar((char) cur_diff.buffer.get()[i]),
+                (unsigned char) cur_diff.data()[i],
+                printChar((char) cur_diff.data()[i]),
                 (unsigned char) buf[i],
                 printChar((char) buf[i]));
 

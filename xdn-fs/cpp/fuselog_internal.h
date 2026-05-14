@@ -24,41 +24,92 @@
 // cheaper than emitting a second action whose header would cost this much.
 static const uint32_t COALESCE_ACTION_OVERHEAD = 25;
 
-// Flat owning buffer: one heap allocation per chunk, no capacity metadata,
-// no per-byte push machinery. The previous design used std::vector which
-// forces push_back-per-byte in the compute_diff inner loops (slow at high
-// diff density) and carries 24 B of bookkeeping per chunk. This shape is
-// 16 B and the inner loops can bulk-memcpy once the diff-run length is
-// known.
+// Bump-allocator arena: one big heap allocation that backs many chunks.
+// Per compute_diff call we allocate one arena (sized at 2 × write_size for
+// safety against the merge expansion); each chunk takes a slice with no
+// further allocations. shared_ptr<chunk_arena> in the chunk and downstream
+// statediff_action keeps the arena alive until the last referencing
+// action is destroyed.
+//
+// Why shared_ptr: ownership is shared across N chunks per call and then
+// across N actions through the harvest pipeline. shared_ptr's move is
+// refcount-free; copy is a single atomic inc — much cheaper than the
+// per-chunk malloc this replaces.
+struct chunk_arena {
+  std::unique_ptr<unsigned char[]> buf;
+  size_t                           cap;
+  size_t                           pos = 0;
+
+  explicit chunk_arena(size_t c) : buf(new unsigned char[c]), cap(c) {}
+
+  // Bump-allocate `n` bytes. Returns nullptr if the arena is full so the
+  // caller can fall back to a per-chunk allocation (rare in practice).
+  unsigned char* alloc(size_t n) {
+    if (pos + n > cap) return nullptr;
+    unsigned char* p = buf.get() + pos;
+    pos += n;
+    return p;
+  }
+};
+
 struct statediff_write_unit {
-  uint64_t                          offset;
-  std::unique_ptr<unsigned char[]>  buffer;
-  size_t                            size = 0;
+  uint64_t                     offset;
+  std::shared_ptr<chunk_arena> arena;          // shared owner; may be null
+  size_t                       arena_offset = 0;
+  size_t                       size = 0;
 
   statediff_write_unit() = default;
-  statediff_write_unit(statediff_write_unit&&) noexcept = default;
-  statediff_write_unit& operator=(statediff_write_unit&&) noexcept = default;
-  // Copy is intentionally disabled — chunks are always moved.
-  statediff_write_unit(const statediff_write_unit&) = delete;
-  statediff_write_unit& operator=(const statediff_write_unit&) = delete;
+  // shared_ptr is movable and copyable; default move/copy are correct here
+  // (move transfers ownership without an atomic op).
 
-  // Allocate `n` bytes and copy from `src`. Replaces any existing buffer.
+  // Pointer to this chunk's bytes inside the arena.
+  unsigned char* data() {
+    return arena ? arena->buf.get() + arena_offset : nullptr;
+  }
+  const unsigned char* data() const {
+    return arena ? arena->buf.get() + arena_offset : nullptr;
+  }
+
+  // operator[] preserves the previous unique_ptr<unsigned char[]> interface
+  // so existing tests keep working unchanged.
+  unsigned char& operator[](size_t i) { return data()[i]; }
+  unsigned char  operator[](size_t i) const { return data()[i]; }
+
+  // Test-mode standalone assign: allocates a fresh, single-slot arena.
+  // For production paths compute_diff calls `place_in_arena` directly.
   void assign(const unsigned char* src, size_t n) {
-    if (n == 0) { buffer.reset(); size = 0; return; }
-    buffer.reset(new unsigned char[n]);
-    std::memcpy(buffer.get(), src, n);
+    if (n == 0) { arena.reset(); arena_offset = 0; size = 0; return; }
+    arena = std::make_shared<chunk_arena>(n);
+    arena_offset = 0;
+    arena->pos = n;
+    std::memcpy(arena->buf.get(), src, n);
     size = n;
   }
-  // Ergonomic overload for tests: `unit.assign({'A','B','C'})`.
   void assign(std::initializer_list<unsigned char> il) {
     assign(il.begin(), il.size());
   }
+
+  // Place `n` bytes from `src` into an existing arena. Falls back to a
+  // private one-slot arena if the arena is full.
+  void place_in_arena(const std::shared_ptr<chunk_arena>& a,
+                       const unsigned char* src, size_t n) {
+    if (n == 0) { arena.reset(); arena_offset = 0; size = 0; return; }
+    unsigned char* slot = a->alloc(n);
+    if (slot != nullptr) {
+      arena = a;
+      arena_offset = static_cast<size_t>(slot - a->buf.get());
+      size = n;
+      std::memcpy(slot, src, n);
+    } else {
+      assign(src, n);  // arena full; standalone
+    }
+  }
+
   bool empty() const { return size == 0; }
 
-  // Equality on content (used by tests).
   bool operator==(const statediff_write_unit& o) const {
     return offset == o.offset && size == o.size &&
-           (size == 0 || std::memcmp(buffer.get(), o.buffer.get(), size) == 0);
+           (size == 0 || std::memcmp(data(), o.data(), size) == 0);
   }
   bool operator!=(const statediff_write_unit& o) const { return !(*this == o); }
 };
@@ -249,6 +300,7 @@ inline size_t find_first_match(const unsigned char* a,
 // terminal diff chunk). Identical between scalar and SIMD.
 inline void compute_diff_tail(
     std::vector<statediff_write_unit>& chunks,
+    const std::shared_ptr<chunk_arena>& arena,
     const unsigned char* new_buf,
     size_t rd_size, size_t write_size, uint64_t offset) {
   if (rd_size >= write_size) return;
@@ -263,21 +315,36 @@ inline void compute_diff_tail(
     statediff_write_unit& last = chunks.back();
     if (last.offset + last.size == rd_size) {
       tail_start = last.offset;
-      // Grow last to absorb the tail in one allocation.
+      // Grow last to absorb the tail. Place merged content in the arena.
       size_t new_size = last.size + (write_size - rd_size);
-      std::unique_ptr<unsigned char[]> nb(new unsigned char[new_size]);
-      std::memcpy(nb.get(), last.buffer.get(), last.size);
-      std::memcpy(nb.get() + last.size, new_buf + rd_size,
-                  write_size - rd_size);
-      last.buffer = std::move(nb);
-      last.size = new_size;
+      statediff_write_unit grown;
+      grown.offset = last.offset;
+      // Allocate the new slot first, then copy from `last` and the tail.
+      unsigned char* slot = arena ? arena->alloc(new_size) : nullptr;
+      if (slot != nullptr) {
+        std::memcpy(slot, last.data(), last.size);
+        std::memcpy(slot + last.size, new_buf + rd_size, write_size - rd_size);
+        grown.arena = arena;
+        grown.arena_offset = static_cast<size_t>(slot - arena->buf.get());
+        grown.size = new_size;
+      } else {
+        // Arena spilled — fall back to standalone allocation.
+        std::unique_ptr<unsigned char[]> nb(new unsigned char[new_size]);
+        std::memcpy(nb.get(), last.data(), last.size);
+        std::memcpy(nb.get() + last.size, new_buf + rd_size,
+                    write_size - rd_size);
+        grown.assign(nb.get(), new_size);
+      }
+      chunks.back() = std::move(grown);
       return;
     }
   }
   // Fresh tail chunk.
   statediff_write_unit cur;
   cur.offset = offset + tail_start;
-  cur.assign(new_buf + tail_start, write_size - tail_start);
+  if (arena) cur.place_in_arena(arena, new_buf + tail_start,
+                                  write_size - tail_start);
+  else       cur.assign(new_buf + tail_start, write_size - tail_start);
   chunks.push_back(std::move(cur));
 }
 
@@ -289,7 +356,16 @@ inline std::vector<statediff_write_unit> compute_diff_impl(
     const unsigned char* old_buf, const unsigned char* new_buf,
     size_t rd_size, size_t write_size, uint64_t offset,
     FindDiff find_diff, FindMatch find_match) {
+  // One arena per compute_diff call backs all chunks + any merge expansion
+  // downstream. Upper bound: ~2x write_size (raw chunks ≤ write_size + tail
+  // extension; merge can add gap bytes ≤ 24 each but is bounded above by
+  // the original total). 0 bytes input → no arena needed.
   std::vector<statediff_write_unit> chunks;
+  size_t arena_cap = (write_size > rd_size ? write_size : rd_size) * 2 + 64;
+  std::shared_ptr<chunk_arena> arena = (arena_cap > 0)
+      ? std::make_shared<chunk_arena>(arena_cap)
+      : nullptr;
+
   size_t i = 0;
   while (i < rd_size) {
     size_t diff_off = find_diff(old_buf + i, new_buf + i, rd_size - i);
@@ -305,25 +381,24 @@ inline std::vector<statediff_write_unit> compute_diff_impl(
 
     statediff_write_unit cur;
     cur.offset = offset + diff_start;
-    cur.assign(new_buf + diff_start, diff_end - diff_start);
+    cur.place_in_arena(arena, new_buf + diff_start, diff_end - diff_start);
     chunks.push_back(std::move(cur));
 
-    i = diff_end;  // next iteration skips the equal byte (or exits)
+    i = diff_end;
   }
-  compute_diff_tail(chunks, new_buf, rd_size, write_size, offset);
+  compute_diff_tail(chunks, arena, new_buf, rd_size, write_size, offset);
   return chunks;
 }
 
 // Push-per-byte legacy scalar (with min_width_coalesce support). Only
 // reachable when min_width_coalesce != 0, which the current production
-// configuration never sets. Kept for completeness and for the min-width
-// path of compute_diff_scalar.
+// configuration never sets. Kept for completeness; not arena-optimized.
 inline std::vector<statediff_write_unit> compute_diff_pushback(
     const unsigned char* old_buf, const unsigned char* new_buf,
     size_t rd_size, size_t write_size, uint64_t offset,
     uint32_t min_width_coalesce) {
   std::vector<statediff_write_unit> chunks;
-  std::vector<unsigned char> tmp;  // growable scratch; converted at flush.
+  std::vector<unsigned char> tmp;
 
   auto flush = [&](uint64_t off) {
     statediff_write_unit cur;
@@ -344,15 +419,13 @@ inline std::vector<statediff_write_unit> compute_diff_pushback(
     }
     flush(cur_off);
   }
-  // Tail extension (mirrors compute_diff_tail logic, but using tmp+vector
-  // because min_width_coalesce paths are rare and not perf-critical).
   if (i < write_size) {
     uint64_t cur_off = offset + i;
     if (!chunks.empty()) {
       statediff_write_unit& last = chunks.back();
       if (last.offset + last.size == rd_size) {
         cur_off = last.offset;
-        tmp.assign(last.buffer.get(), last.buffer.get() + last.size);
+        tmp.assign(last.data(), last.data() + last.size);
         chunks.pop_back();
       }
     }
@@ -433,10 +506,10 @@ inline std::vector<statediff_write_unit> compute_diff(
 
 // merge_adjacent_chunks fuses neighbouring chunks whose gap of unchanged
 // bytes is strictly less than `overhead`. Bridging bytes are pulled from
-// `new_buf` using `base_offset` as the origin (so new_buf[chunk_off -
-// base_offset] is the corresponding relative byte). When a merge fires
-// we allocate the resulting buffer once and memcpy the three regions
-// (prev, gap, cur) into it — no per-byte push_back.
+// `new_buf` using `base_offset` as the origin. The merged buffer is
+// placed in the same arena as the input chunks when possible (one
+// shared_ptr copy, no malloc); falls back to a standalone allocation
+// only if the arena is full.
 inline std::vector<statediff_write_unit> merge_adjacent_chunks(
     std::vector<statediff_write_unit> chunks,
     const unsigned char* new_buf, uint64_t base_offset,
@@ -452,19 +525,42 @@ inline std::vector<statediff_write_unit> merge_adjacent_chunks(
     uint64_t gap = (cur.offset > prev_end) ? (cur.offset - prev_end) : 0;
     if (gap < overhead) {
       size_t new_size = prev.size + gap + cur.size;
-      std::unique_ptr<unsigned char[]> nb(new unsigned char[new_size]);
-      std::memcpy(nb.get(), prev.buffer.get(), prev.size);
-      if (gap > 0) {
-        std::memcpy(nb.get() + prev.size,
-                    new_buf + (prev_end - base_offset),
-                    gap);
+      // Prefer the arena both chunks already share.
+      std::shared_ptr<chunk_arena> a = prev.arena ? prev.arena : cur.arena;
+      unsigned char* slot = a ? a->alloc(new_size) : nullptr;
+      if (slot != nullptr) {
+        std::memcpy(slot, prev.data(), prev.size);
+        if (gap > 0) {
+          std::memcpy(slot + prev.size,
+                      new_buf + (prev_end - base_offset),
+                      gap);
+        }
+        if (cur.size > 0) {
+          std::memcpy(slot + prev.size + gap, cur.data(), cur.size);
+        }
+        prev.arena = a;
+        prev.arena_offset = static_cast<size_t>(slot - a->buf.get());
+        prev.size = new_size;
+      } else {
+        // Arena spilled: standalone allocation for the merged chunk.
+        statediff_write_unit grown;
+        grown.offset = prev.offset;
+        grown.arena = std::make_shared<chunk_arena>(new_size);
+        grown.arena->pos = new_size;
+        grown.arena_offset = 0;
+        grown.size = new_size;
+        unsigned char* dst = grown.arena->buf.get();
+        std::memcpy(dst, prev.data(), prev.size);
+        if (gap > 0) {
+          std::memcpy(dst + prev.size,
+                      new_buf + (prev_end - base_offset),
+                      gap);
+        }
+        if (cur.size > 0) {
+          std::memcpy(dst + prev.size + gap, cur.data(), cur.size);
+        }
+        merged.back() = std::move(grown);
       }
-      if (cur.size > 0) {
-        std::memcpy(nb.get() + prev.size + gap,
-                    cur.buffer.get(), cur.size);
-      }
-      prev.buffer = std::move(nb);
-      prev.size = new_size;
     } else {
       merged.push_back(std::move(cur));
     }

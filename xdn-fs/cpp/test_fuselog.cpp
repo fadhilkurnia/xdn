@@ -28,7 +28,7 @@ std::vector<unsigned char> apply_chunks(
     if (rel + c.size > out.size()) {
       out.resize(rel + c.size);
     }
-    for (size_t i = 0; i < c.size; i++) out[rel + i] = c.buffer[i];
+    for (size_t i = 0; i < c.size; i++) out[rel + i] = c[i];
   }
   return out;
 }
@@ -65,7 +65,7 @@ TEST(ComputeDiff, SingleByteDiffAtStart) {
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 0u);
   ASSERT_EQ(chunks[0].size, 1u);
-  EXPECT_EQ(chunks[0].buffer[0], 'X');
+  EXPECT_EQ(chunks[0][0], 'X');
 }
 
 TEST(ComputeDiff, SingleByteDiffAtEnd) {
@@ -75,7 +75,7 @@ TEST(ComputeDiff, SingleByteDiffAtEnd) {
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 3u);
   ASSERT_EQ(chunks[0].size, 1u);
-  EXPECT_EQ(chunks[0].buffer[0], 'X');
+  EXPECT_EQ(chunks[0][0], 'X');
 }
 
 TEST(ComputeDiff, SingleByteDiffInMiddle) {
@@ -85,7 +85,7 @@ TEST(ComputeDiff, SingleByteDiffInMiddle) {
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 2u);
   ASSERT_EQ(chunks[0].size, 1u);
-  EXPECT_EQ(chunks[0].buffer[0], 'X');
+  EXPECT_EQ(chunks[0][0], 'X');
 }
 
 TEST(ComputeDiff, TwoSeparateDiffsProduceTwoChunks) {
@@ -106,9 +106,9 @@ TEST(ComputeDiff, WriteExtendsBeyondOldFile) {
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 3u);
   ASSERT_EQ(chunks[0].size, 3u);
-  EXPECT_EQ(chunks[0].buffer[0], 'd');
-  EXPECT_EQ(chunks[0].buffer[1], 'e');
-  EXPECT_EQ(chunks[0].buffer[2], 'f');
+  EXPECT_EQ(chunks[0][0], 'd');
+  EXPECT_EQ(chunks[0][1], 'e');
+  EXPECT_EQ(chunks[0][2], 'f');
 }
 
 TEST(ComputeDiff, TailFoldOnlyAtZeroOffset) {
@@ -124,10 +124,10 @@ TEST(ComputeDiff, TailFoldOnlyAtZeroOffset) {
   ASSERT_EQ(z.size(), 1u);
   EXPECT_EQ(z[0].offset, 1u);
   ASSERT_EQ(z[0].size, 4u);
-  EXPECT_EQ(z[0].buffer[0], 'X');
-  EXPECT_EQ(z[0].buffer[1], 'Y');
-  EXPECT_EQ(z[0].buffer[2], 'Z');
-  EXPECT_EQ(z[0].buffer[3], 'W');
+  EXPECT_EQ(z[0][0], 'X');
+  EXPECT_EQ(z[0][1], 'Y');
+  EXPECT_EQ(z[0][2], 'Z');
+  EXPECT_EQ(z[0][3], 'W');
 
   auto nz = compute_diff(a.data(), b.data(), 3, 5, 100, 0);
   ASSERT_EQ(nz.size(), 2u);
@@ -135,8 +135,8 @@ TEST(ComputeDiff, TailFoldOnlyAtZeroOffset) {
   EXPECT_EQ(nz[0].size, 2u);
   EXPECT_EQ(nz[1].offset, 103u);
   ASSERT_EQ(nz[1].size, 2u);
-  EXPECT_EQ(nz[1].buffer[0], 'Z');
-  EXPECT_EQ(nz[1].buffer[1], 'W');
+  EXPECT_EQ(nz[1][0], 'Z');
+  EXPECT_EQ(nz[1][1], 'W');
 }
 
 TEST(ComputeDiff, OffsetAppearsInAbsoluteCoordinates) {
@@ -165,8 +165,8 @@ TEST(ComputeDiff, DiffAtThirtyTwoByteBoundary) {
   ASSERT_EQ(chunks.size(), 1u);
   EXPECT_EQ(chunks[0].offset, 31u);
   ASSERT_EQ(chunks[0].size, 2u);
-  EXPECT_EQ(chunks[0].buffer[0], 'X');
-  EXPECT_EQ(chunks[0].buffer[1], 'Y');
+  EXPECT_EQ(chunks[0][0], 'X');
+  EXPECT_EQ(chunks[0][1], 'Y');
 }
 
 TEST(ComputeDiff, RoundTripRandomized) {
@@ -225,8 +225,8 @@ TEST(MergeChunks, GapBelowOverheadMerges) {
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(out[0].offset, 0u);
   ASSERT_EQ(out[0].size, 15u);
-  for (size_t i = 5; i < 10; i++) EXPECT_EQ(out[0].buffer[i], 'z');
-  EXPECT_EQ(out[0].buffer[10], 'B');
+  for (size_t i = 5; i < 10; i++) EXPECT_EQ(out[0][i], 'z');
+  EXPECT_EQ(out[0][10], 'B');
 }
 
 TEST(MergeChunks, GapAboveOverheadStaysSeparate) {
@@ -269,12 +269,12 @@ TEST(MergeChunks, BridgeBytesPulledFromNewBufAtBaseOffset) {
   auto out = merge_adjacent_chunks(std::move(in), buf.data(), 1000, 25);
   ASSERT_EQ(out.size(), 1u);
   ASSERT_EQ(out[0].size, 6u);
-  EXPECT_EQ(out[0].buffer[0], 'A');
-  EXPECT_EQ(out[0].buffer[1], 'Q');  // buf[1001-1000]
-  EXPECT_EQ(out[0].buffer[2], 'R');
-  EXPECT_EQ(out[0].buffer[3], 'S');
-  EXPECT_EQ(out[0].buffer[4], 'T');
-  EXPECT_EQ(out[0].buffer[5], 'B');
+  EXPECT_EQ(out[0][0], 'A');
+  EXPECT_EQ(out[0][1], 'Q');  // buf[1001-1000]
+  EXPECT_EQ(out[0][2], 'R');
+  EXPECT_EQ(out[0][3], 'S');
+  EXPECT_EQ(out[0][4], 'T');
+  EXPECT_EQ(out[0][5], 'B');
 }
 
 // -------- SIMD equivalence: scalar vs simd produce identical output --------
