@@ -276,3 +276,144 @@ TEST(MergeChunks, BridgeBytesPulledFromNewBufAtBaseOffset) {
   EXPECT_EQ(out[0].buffer[4], 'T');
   EXPECT_EQ(out[0].buffer[5], 'B');
 }
+
+// -------- SIMD equivalence: scalar vs simd produce identical output --------
+
+namespace {
+
+// True if two chunks are bytewise identical.
+bool chunks_equal(const std::vector<statediff_write_unit>& a,
+                  const std::vector<statediff_write_unit>& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); i++) {
+    if (a[i].offset != b[i].offset) return false;
+    if (a[i].buffer != b[i].buffer) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+TEST(ComputeDiffSimd, MatchesScalarOnAllExistingCases) {
+  // Exercise the SIMD path on the same inputs the scalar tests use; the
+  // outputs must be byte-identical.
+  struct Case {
+    std::vector<unsigned char> a, b;
+    size_t rd_size, write_size;
+    uint64_t offset;
+  };
+  std::vector<Case> cases = {
+    {{}, {}, 0, 0, 0},
+    {{'a','b','c','d','e','f','g','h'},
+     {'a','b','c','d','e','f','g','h'}, 8, 8, 0},
+    {std::vector<unsigned char>(64, 'a'),
+     std::vector<unsigned char>(64, 'b'), 64, 64, 0},
+    {{'a','b','c','d'}, {'X','b','c','d'}, 4, 4, 0},
+    {{'a','b','c','d'}, {'a','b','c','X'}, 4, 4, 0},
+    {{'a','b','c','d','e'}, {'a','b','X','d','e'}, 5, 5, 0},
+    {{'a','b','c','d','e','f','g','h'},
+     {'X','b','c','d','e','f','g','Y'}, 8, 8, 0},
+    {{'a','b','c'}, {'a','b','c','d','e','f'}, 3, 6, 0},
+    {{'a','b','c'}, {'X','b','c'}, 3, 3, 1000},
+    {std::vector<unsigned char>(8, 'a'),
+     {'X','a','X','a','X','a','X','a'}, 8, 8, 0},
+  };
+  for (size_t k = 0; k < cases.size(); k++) {
+    auto& c = cases[k];
+    auto s = compute_diff_scalar(c.a.data(), c.b.data(),
+                                  c.rd_size, c.write_size, c.offset, 0);
+    auto v = compute_diff_simd(c.a.data(), c.b.data(),
+                                c.rd_size, c.write_size, c.offset, 0);
+    EXPECT_TRUE(chunks_equal(s, v)) << "mismatch on case " << k;
+  }
+}
+
+TEST(ComputeDiffSimd, MatchesScalarOn32ByteBoundary) {
+  // SIMD lane is 32 bytes; cases straddling that boundary are the most
+  // likely failure mode.
+  std::vector<unsigned char> a(96, 'a');
+  for (size_t pos : {0, 1, 15, 16, 30, 31, 32, 33, 47, 48, 62, 63, 64, 65, 95}) {
+    std::vector<unsigned char> b = a;
+    b[pos] = 'X';
+    auto s = compute_diff_scalar(a.data(), b.data(), 96, 96, 0, 0);
+    auto v = compute_diff_simd(a.data(), b.data(), 96, 96, 0, 0);
+    EXPECT_TRUE(chunks_equal(s, v)) << "mismatch on single-byte diff at " << pos;
+  }
+}
+
+TEST(ComputeDiffSimd, MatchesScalarOnRandomized) {
+  std::srand(42);
+  for (int trial = 0; trial < 300; trial++) {
+    size_t n = (std::rand() % 4096) + 1;
+    std::vector<unsigned char> a(n), b(n);
+    for (size_t i = 0; i < n; i++) {
+      a[i] = (unsigned char)(std::rand() & 0xff);
+      // Vary diff density across trials (1/N chance of differing).
+      int p = (trial % 10) + 2;
+      b[i] = (std::rand() % p == 0)
+                 ? (unsigned char)(std::rand() & 0xff)
+                 : a[i];
+    }
+    auto s = compute_diff_scalar(a.data(), b.data(), n, n, 0, 0);
+    auto v = compute_diff_simd(a.data(), b.data(), n, n, 0, 0);
+    ASSERT_TRUE(chunks_equal(s, v))
+        << "mismatch on trial " << trial << " n=" << n;
+  }
+}
+
+TEST(ComputeDiffSimd, MatchesScalarOnExtendingWrites) {
+  std::srand(7);
+  for (int trial = 0; trial < 100; trial++) {
+    size_t rd = (std::rand() % 1024) + 1;
+    size_t wr = rd + (std::rand() % 2048);
+    std::vector<unsigned char> a(rd), b(wr);
+    for (size_t i = 0; i < rd; i++) {
+      a[i] = (unsigned char)(std::rand() & 0xff);
+      b[i] = (std::rand() & 7) == 0
+                 ? (unsigned char)(std::rand() & 0xff)
+                 : a[i];
+    }
+    for (size_t i = rd; i < wr; i++) {
+      b[i] = (unsigned char)(std::rand() & 0xff);
+    }
+    auto s = compute_diff_scalar(a.data(), b.data(), rd, wr, 0, 0);
+    auto v = compute_diff_simd(a.data(), b.data(), rd, wr, 0, 0);
+    ASSERT_TRUE(chunks_equal(s, v))
+        << "mismatch on trial " << trial << " rd=" << rd << " wr=" << wr;
+  }
+}
+
+TEST(FindFirstDiff, MatchesScalar) {
+  std::srand(1);
+  for (int trial = 0; trial < 200; trial++) {
+    size_t n = (std::rand() % 1024) + 1;
+    std::vector<unsigned char> a(n), b(n);
+    for (size_t i = 0; i < n; i++) {
+      a[i] = (unsigned char)(std::rand() & 0xff);
+      b[i] = (std::rand() & 7) == 0
+                 ? (unsigned char)(std::rand() & 0xff)
+                 : a[i];
+    }
+    EXPECT_EQ(find_first_diff_scalar(a.data(), b.data(), n),
+              find_first_diff(a.data(), b.data(), n))
+        << "trial " << trial << " n=" << n;
+  }
+}
+
+TEST(FindFirstMatch, MatchesScalar) {
+  std::srand(2);
+  for (int trial = 0; trial < 200; trial++) {
+    size_t n = (std::rand() % 1024) + 1;
+    std::vector<unsigned char> a(n), b(n);
+    for (size_t i = 0; i < n; i++) {
+      a[i] = (unsigned char)(std::rand() & 0xff);
+      // Mostly differing, with occasional matches.
+      b[i] = (std::rand() & 15) == 0
+                 ? a[i]
+                 : (unsigned char)((a[i] ^ ((std::rand() & 0xff) | 1)));
+    }
+    EXPECT_EQ(find_first_match_scalar(a.data(), b.data(), n),
+              find_first_match(a.data(), b.data(), n))
+        << "trial " << trial << " n=" << n;
+  }
+}

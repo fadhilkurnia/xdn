@@ -109,8 +109,12 @@ def ensure_clean_dirs():
         d.mkdir(parents=True, exist_ok=True)
 
 
-def start_fuselog():
-    """Launch fuselog -f mounted on MOUNT_DIR, return Popen."""
+def start_fuselog(allow_other=False):
+    """Launch fuselog -f mounted on MOUNT_DIR, return Popen.
+
+    `allow_other=True` adds -o allow_other so other UIDs (e.g. a docker
+    container running as a different user) can access the mount. The
+    host must have `user_allow_other` enabled in /etc/fuse.conf."""
     env = os.environ.copy()
     env["FUSELOG_SOCKET_FILE"] = str(SOCKET_PATH)
     env["FUSELOG_CAPTURE"] = "true"
@@ -118,8 +122,12 @@ def start_fuselog():
     env["FUSELOG_PRUNE"] = "true"
     env["FUSELOG_COMPRESSION"] = "false"
     fuselog_log = open(BASE_DIR / "fuselog.log", "w")
+    cmd = [str(FUSELOG_BIN), "-f"]
+    if allow_other:
+        cmd += ["-o", "allow_other"]
+    cmd.append(str(MOUNT_DIR))
     proc = subprocess.Popen(
-        [str(FUSELOG_BIN), "-f", str(MOUNT_DIR)],
+        cmd,
         env=env,
         stdout=fuselog_log,
         stderr=subprocess.STDOUT,
@@ -154,27 +162,34 @@ def stop_fuselog(proc):
 
 def harvest_statediff():
     """Send 'g' to fuselog's unix socket, return the V2 payload bytes
-    (with the leading 8-byte size header stripped)."""
+    (with the leading 8-byte size header stripped). Uses a bytearray
+    accumulator and recv_into to avoid O(n^2) concat on large payloads
+    (mysql/postgres harvests can be 100+ MB)."""
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(30)
+    s.settimeout(120)
     s.connect(str(SOCKET_PATH))
     s.sendall(b"g")
-    # Read 8-byte little-endian size header.
-    header = b""
-    while len(header) < 8:
-        chunk = s.recv(8 - len(header))
-        if not chunk:
+
+    header = bytearray(8)
+    view = memoryview(header)
+    pos = 0
+    while pos < 8:
+        n = s.recv_into(view[pos:], 8 - pos)
+        if n == 0:
             raise RuntimeError("connection closed while reading size header")
-        header += chunk
+        pos += n
     (size,) = struct.unpack("<Q", header)
-    payload = b""
-    while len(payload) < size:
-        chunk = s.recv(min(65536, size - len(payload)))
-        if not chunk:
+
+    payload = bytearray(size)
+    view = memoryview(payload)
+    pos = 0
+    while pos < size:
+        n = s.recv_into(view[pos:], min(1 << 20, size - pos))
+        if n == 0:
             raise RuntimeError("connection closed while reading payload")
-        payload += chunk
+        pos += n
     s.close()
-    return payload
+    return bytes(payload)
 
 
 def apply_op(op, base_dir):

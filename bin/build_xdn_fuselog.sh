@@ -8,6 +8,7 @@
 #   ./bin/build_xdn_fuselog.sh cpp       # Build C++ only
 #   ./bin/build_xdn_fuselog.sh rust      # Build Rust only
 #   ./bin/build_xdn_fuselog.sh test      # Build and run C++ unit tests (GoogleTest)
+#   ./bin/build_xdn_fuselog.sh bench     # Build and run compute_diff microbenchmark
 #   ./bin/build_xdn_fuselog.sh install   # Build both and install to /usr/local/bin
 
 set -e
@@ -44,6 +45,11 @@ function main() {
       ;;
     test)
       build_cpp_tests
+      echo "Build complete."
+      exit 0
+      ;;
+    bench)
+      build_cpp_bench
       echo "Build complete."
       exit 0
       ;;
@@ -127,6 +133,16 @@ function build_cpp_tests() {
 
   echo "  Running tests ..."
   "$CPP_DIR/test_fuselog"
+}
+
+function build_cpp_bench() {
+  echo "=== Building and running compute_diff microbenchmark ==="
+  echo "  Compiling bench_fuselog.cpp -> bench_fuselog ..."
+  g++ -Wall -O3 -std=c++17 \
+    "$CPP_DIR/bench_fuselog.cpp" -o "$CPP_DIR/bench_fuselog"
+
+  echo "  Running benchmark ..."
+  "$CPP_DIR/bench_fuselog"
 }
 
 function build_rust() {

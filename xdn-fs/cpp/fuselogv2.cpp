@@ -1503,7 +1503,22 @@ static int fuselog_utimens(const char *orig_path, const struct timespec ts[2],
 
 static int fuselog_open(const char *orig_path, struct fuse_file_info *fi) {
   char *path = get_relative_path(orig_path);
-  int   res  = open(path, fi->flags);
+
+  // Strip O_DIRECT from the flags before opening the underlying file.
+  // O_DIRECT requires the caller's buffer, file offset, and length to all
+  // be aligned to the device block size; the buffer libfuse hands to our
+  // fuselog_write is not 512-byte aligned, so a downstream pwrite would
+  // fail with EINVAL. Since fuselog already sits between the app and the
+  // backing FS, we transparently demote the open to buffered I/O. The
+  // app's durability is unaffected because COMMIT-time fsync still flows
+  // through fuselog_fsync.
+  int open_flags = fi->flags & ~O_DIRECT;
+  int   res  = open(path, open_flags);
+
+  if (fi->flags & O_DIRECT) {
+    logging(LOG_DEBUG, ">> open %s with O_DIRECT requested; stripped\n",
+            orig_path);
+  }
 
   // what type of open ? read, write, or read-write ?
   if (fi->flags & O_RDONLY) {
@@ -1635,15 +1650,22 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
   } // end of coalescing write statediff
 
   /* do the actual write */
+  // The underlying fd does not carry O_DIRECT: fuselog_open strips it
+  // before opening so this pwrite is always against a buffered fd, which
+  // has no alignment requirements on `buf`. A future enhancement could
+  // honour O_DIRECT via posix_memalign'd bounce buffers if cache-bypass
+  // semantics matter to some app — for now they don't.
   res = pwrite(fd, buf, size, offset);
   if (res == -1) {
+    int err = errno;
     logging(LOG_ERROR, "   + write %s size: %ld bytes, offset: %ld "
-            "[WRITE-FAIL]\n", path, size, offset);
-    res = -errno;
+            "[WRITE-FAIL] errno=%d (%s)\n",
+            path, size, offset, err, strerror(err));
+    res = -err;
     if (fi == NULL) close(fd);
     free(path);
     return res;
-  } 
+  }
   
   /* Store the statediff into an external file */
   if (is_sd_capture) {
