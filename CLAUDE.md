@@ -51,7 +51,13 @@ ant xdn-regular-unit-tests       # Run all tests EXCEPT Xdn*Test pattern
 ./bin/run_xdn_tests.sh XdnFoo    # Run specific test class (pattern match)
 VERBOSE=true ./bin/run_xdn_tests.sh  # Stream test output to stdout
 ant runtest -Dtest=MyTest        # Run a specific JUnit 4/5 test by class name
-ant test                         # Run legacy JUnit 4 reconfiguration tests
+ant test                         # End-to-end reconfiguration tests (TESTReconfigurationClient)
+
+# Single-JVM multi-node Paxos with RSM-invariant assertion on every request:
+bash test-gigapaxos/testPaxosMain/testPaxosMain.sh gigapaxos.properties \
+    test-gigapaxos/testPaxosMain/testing.ci.properties   # CI-sized config (~30s)
+bash test-gigapaxos/testPaxosMain/testPaxosMain.sh gigapaxos.properties \
+    testing.properties                                   # Full-load config (~20m)
 ```
 
 **Running a single test method from the CLI** (via JUnit ConsoleLauncher; useful when `ant runtest` is too coarse):
@@ -146,6 +152,7 @@ Use the `bin/xdnd` shell script (driver-machine orchestrator) for multi-host dep
 ### Top-level XDN helpers (in `src/edu/umass/cs/xdn/`)
 - `XdnServiceProperties` — service-property helpers and defaults consumed elsewhere
 - `XdnHttpRequestBatcher` — batches HTTP requests at the AR frontend when batching is enabled
+- `XdnHttpForwarderClient` — Netty-based HTTP client that forwards parsed requests to the containerized service (per-origin pool, max 8 connections)
 - `XdnGeoDemandProfiler`, `XdnReplicaPlacementProfile` — geo-demand tracking and replica placement policies
 - `XdnServiceInitialStateValidator`, `XdnServiceNumReplicasExtractor` — launch-time validators/extractors
 - `HttpDebugProxy`, `HttpDebugWaitProxy`, `HttpDebugIndirectProxy` — diagnostic HTTP proxies used in debugging/tests
@@ -210,9 +217,11 @@ URL query parameters prefixed with `_xdn` (e.g. `_xdnsvc`) are consumed at the X
 ### Configuration
 - `gigapaxos.properties` — Main deployment config
 - `conf/gigapaxos.xdn.local.properties` — Local development (1 RC + 3 AR on loopback)
+- `conf/gigapaxos.xdn.local.geodemand.properties` — Local cluster with geo-located ARs; used by the geo-demand smoke CI to exercise demand-driven replica reconfiguration
 - `conf/gigapaxos.cloudlab.properties` — CloudLab cluster deployment
 - `conf/gigapaxos.xdn.cloudlab.local.{10,13}nodes.properties` — Multi-node CloudLab variants
-- `conf/gigapaxos.xdn.3way.properties` — 3-way replication variant
+- `conf/gigapaxos.xdn.3way.properties`, `conf/gigapaxos.xdn.3way.cloudlab.properties` — 3-way replication variants (local + cloudlab)
+- `conf/gigapaxos.xdn.tpcc-java-pb.cloudlab.properties`, `conf/gigapaxos.xdn.wordpress-pb.cloudlab.properties` — App-specific primary-backup eval configs
 - `testing.properties` — Test configuration (nodes, load, batch settings)
 
 Key config properties: `APPLICATION`, `REPLICA_COORDINATOR_CLASS`, `XDN_PB_STATEDIFF_RECORDER_TYPE`, `HTTP_AR_FRONTEND_BATCH_ENABLED`, `NIO_MAX_PAYLOAD_SIZE` (default 128MB).
@@ -221,9 +230,11 @@ Key config properties: `APPLICATION`, `REPLICA_COORDINATOR_CLASS`, `XDN_PB_STATE
 For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifecycle over SSH: `xdnd init-driver` on the driver machine, then `xdnd dist-init -config=... -ssh-key=... -username=...` to initialize remotes, and `xdnd start-all ...` to start xdn instances fleet-wide. `xdnd dist-init-observability` is the optional observability bootstrap.
 
 ## CI Workflows (`.github/workflows/`)
-- **ant-build-test.yml**: Build + run `xdn-full-tests` on push/PR to master/main (JDK 21, Docker, FUSE, rsync)
+- **ant-build-test.yml**: Parallelized XDN test suite on push/PR to master/main. Two job groups: (1) **unit-tests** — JDK-only (no Docker/FUSE/rsync), runs `ant xdn-regular-unit-tests` plus the Xdn*Test classes that don't drive `XdnTestCluster` (`XdnHttpRequestTest`, `XdnHttpRequestBatchTest`, `XdnGeoDemandProfilerTest`). (2) **xdn-integration** — matrix with one entry per `XdnTestCluster`-using class (`XdnEventualConsistencyBatchingTest`, `XdnGetReplicaInfoTest`, `XdnMultiServiceTest`, `XdnPerReplicaRequestTest`, `XdnSetCoordinatorNodeTest`, `XdnTaggedImageLaunchTest`), each on its own runner with full Docker/FUSE/rsync setup. Per-runner isolation is mandatory because `XdnTestCluster.java:44-49` hardcodes loopback ports (RC :3000, AR :2000-2002, proxy :2300-2302) and `/tmp/{gigapaxos,xdn}` — two clusters can't coexist on one host.
+- **gigapaxos-correctness.yml**: Parallel matrix of four GigaPaxos correctness tests — `RequestPacketTest`, `E2ELatencyAwareRedirectorTest`, `ant test` (TESTReconfigurationClient end-to-end), and `TESTPaxosMain` (single-JVM multi-node Paxos with `assertRSMInvariant` enabled on every request). JDK-only, no Docker/FUSE/rsync — each job finishes in under a minute and they run concurrently.
 - **xdn-cli-ci.yml**: gofmt check + CLI binary build on changes to `xdn-cli/`
 - **google-java-format.yml**: Formatting check on XDN Java file changes
+- **geo-demand-smoke.yml**: End-to-end smoke test for demand-driven replica reconfiguration — boots a local cluster from `conf/gigapaxos.xdn.local.geodemand.properties`, drives biased traffic via `eval/geo_demand_smoke.py`, and asserts the active set advances past `epoch=0` and contains the expected us-east-1 nodes (including leader)
 - **test-report.yml**: JUnit test-result reporter (currently disabled — `if: false` — gated on the XDN test workflow)
 
 ## Conventions
@@ -232,6 +243,9 @@ For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifec
 - Test naming: `Xdn*Test.java` for XDN-specific tests, `*Test.java` for general tests
 - Commit messages: short, lowercase, imperative (e.g., `update xdn-cli`, `bugfix formatter`)
 - Example services in `services/` — each is a standalone Docker app (bookcatalog, todo, chessapp, etc.)
+
+## Evaluation Scripts (`eval/`)
+Top-level `eval/` contains Python/Go benchmarking and experiment scripts (distinct from the Java `src/edu/umass/cs/xdn/eval/` subpackage). It covers load-latency sweeps for both active-replication and primary-backup variants across baselines (XDN, OpenEBS, rqlite, DRBD, CRIU, MySQL/Postgres/MongoDB sync), geo-distributed latency experiments, microbenchmarks (coordination granularity, optimization breakdown), failure-injection scenarios, and result aggregation/plotting. See `eval/README.md` for the full script index and typical workflows before running or modifying benchmarks.
 
 ## Further Reading (`docs/`)
 - `docs/developer.md` — formatting, running tests (incl. ConsoleLauncher recipes), logging

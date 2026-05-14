@@ -532,6 +532,11 @@ public class TESTPaxosClient {
 	}
 
 	protected static TESTPaxosClient[] setupClients(NodeConfig<Integer> nc) {
+		// initStaticParams() is normally called from main(), but TESTPaxosMain
+		// drives setupClients()/twoPhaseTest() directly via JUnit, bypassing
+		// main(). Initialize here so static fields like NUM_CLIENTS are populated
+		// before sendTestRequests() reads them.
+		initStaticParams();
 		System.out.println("\n\nInitiating paxos clients setup");
 		TESTPaxosClient[] clients = new TESTPaxosClient[Config
 				.getGlobalInt(TC.NUM_CLIENTS)];

@@ -51,6 +51,11 @@ for CLASS_FILE in $TEST_CLASSES; do
         # rm -rf /tmp/gigapaxos /tmp/xdn 2>/dev/null || true
 
         LOG_FILE="$OUTPUT_DIR/${CLASS_NAME}_${METHOD}.log"
+        # Per-method reports dir so ConsoleLauncher's TEST-junit-jupiter.xml
+        # from each invocation doesn't overwrite the previous one. CI test
+        # reporters (e.g. dorny/test-reporter) glob `out/**/*.xml`.
+        REPORTS_DIR="$OUTPUT_DIR/reports/${CLASS_NAME}_${METHOD}"
+        mkdir -p "$REPORTS_DIR"
 
         set +e
 
@@ -58,12 +63,14 @@ for CLASS_FILE in $TEST_CLASSES; do
             java -cp "$CLASSPATH" \
                 org.junit.platform.console.ConsoleLauncher execute \
                 --select-method "$CLASS_NAME#$METHOD" \
-                --details=verbose 2>&1 | tee "$LOG_FILE"
+                --details=verbose \
+                --reports-dir="$REPORTS_DIR" 2>&1 | tee "$LOG_FILE"
         else
             java -cp "$CLASSPATH" \
                 org.junit.platform.console.ConsoleLauncher execute \
                 --select-method "$CLASS_NAME#$METHOD" \
                 --details=verbose \
+                --reports-dir="$REPORTS_DIR" \
                 > "$LOG_FILE" 2>&1
         fi
 
