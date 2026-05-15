@@ -7,7 +7,7 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.NodeIdsMetadataPair;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.placementalgorithms.Centroid;
-import edu.umass.cs.xdn.placementalgorithms.GreedyHeuristic;
+import edu.umass.cs.xdn.placementalgorithms.Greedy;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import java.net.InetAddress;
@@ -88,18 +88,18 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
     // Algorithm selection
     // Change ALGORITHM and recompile to switch placement strategies.
     // ---------------------------------------------------------------------------
-    public enum PlacementAlgorithmType { CENTROID, GREEDY_KNOWN }
+    public enum PlacementAlgorithmType { CENTROID, GREEDY}
 
-    private static final PlacementAlgorithmType ALGORITHM = PlacementAlgorithmType.GREEDY_KNOWN;
+    private static final PlacementAlgorithmType ALGORITHM = PlacementAlgorithmType.GREEDY;
 
     private static final PlacementAlgorithm CENTROID_ALGO =
             new Centroid(NUM_GRID_ROWS, NUM_GRID_COLUMNS);
 
     private static final PlacementAlgorithm GREEDY_ALGO =
-            new GreedyHeuristic(NUM_GRID_ROWS, NUM_GRID_COLUMNS, MS_PER_UNIT, /*wrapAround=*/ false);
+            new Greedy(NUM_GRID_ROWS, NUM_GRID_COLUMNS, MS_PER_UNIT, /*wrapAround=*/ false);
 
     private static PlacementAlgorithm getAlgorithm() {
-        return ALGORITHM == PlacementAlgorithmType.GREEDY_KNOWN ? GREEDY_ALGO : CENTROID_ALGO;
+        return ALGORITHM == PlacementAlgorithmType.GREEDY ? GREEDY_ALGO : CENTROID_ALGO;
     }
 
     // ---------------------------------------------------------------------------

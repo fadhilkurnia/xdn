@@ -47,7 +47,7 @@ public class PlacementAlgorithmBenchmarkTest {
    */
   private static final List<AlgorithmEntry> ALGORITHMS = Arrays.asList(
       new AlgorithmEntry("greedy_heuristic",
-          (rows, cols) -> new GreedyHeuristic(rows, cols, MS_PER_UNIT, false)),
+          (rows, cols) -> new Greedy(rows, cols, MS_PER_UNIT, false)),
       new AlgorithmEntry("centroid",
           (rows, cols) -> new Centroid(rows, cols))
   );

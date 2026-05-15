@@ -2205,10 +2205,12 @@ public class XdnGigapaxosApp
     // Run with arbitrary user if the container is stateful
     // Only been tested on PostgreSQL, MySQL, MariaDb
     // --cap-add is for MySQL reconfiguration to allow it to handle errors silently
+    /*
     if (uid != 0 && mountDirTarget != null && !mountDirTarget.isEmpty()) {
       userSubCmd =
           String.format("-v /etc/passwd:/etc/passwd:ro --user=%d:%d --cap-add=sys_nice", uid, gid);
     }
+     */
 
     String clearCommand = String.format("docker container rm --force %s", containerName);
     Shell.runCommand(clearCommand, true);

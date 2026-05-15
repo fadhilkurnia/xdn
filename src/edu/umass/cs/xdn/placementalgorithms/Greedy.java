@@ -24,13 +24,13 @@ import java.util.*;
  * <p>Node geolocations are converted to grid (row, col) coordinates before the
  * algorithm runs; distances are in grid-unit multiples of {@code msPerUnit}.
  */
-public class GreedyHeuristic implements PlacementAlgorithm {
+public class Greedy implements PlacementAlgorithm {
     private final int     numGridRows;
     private final int     numGridCols;
     private final double  msPerUnit;
     private final boolean wrapAround;
 
-    public GreedyHeuristic(int numGridRows, int numGridCols, double msPerUnit, boolean wrapAround) {
+    public Greedy(int numGridRows, int numGridCols, double msPerUnit, boolean wrapAround) {
         this.numGridRows = numGridRows;
         this.numGridCols = numGridCols;
         this.msPerUnit   = msPerUnit;

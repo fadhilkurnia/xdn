@@ -14,7 +14,7 @@ public class GreedyHeuristicTest {
   private static final int    COLS        = 1000;
   private static final double MS_PER_UNIT = 0.3;
  
-  private GreedyHeuristic greedy;
+  private Greedy greedy;
  
   // ---- helpers ---------------------------------------------------------------
  
@@ -28,7 +28,7 @@ public class GreedyHeuristicTest {
  
   @BeforeEach
   void setUp() {
-    greedy = new GreedyHeuristic(ROWS, COLS, MS_PER_UNIT, false);
+    greedy = new Greedy(ROWS, COLS, MS_PER_UNIT, false);
   }
  
   // ---- basic placement -------------------------------------------------------
