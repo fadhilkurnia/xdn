@@ -512,8 +512,29 @@ public class ReconfigurationConfig {
          * writePool = max(4, availableProcessors) * this value.
          * 0 means use default (4).
          */
-        HTTP_AR_WRITE_POOL_MULTIPLIER(4)
+        HTTP_AR_WRITE_POOL_MULTIPLIER(4),
 
+        // -----------------------------------------------------------------------
+        // XDN geo demand profiler
+        // -----------------------------------------------------------------------
+
+        /**
+         * Number of latitude rows in the sparse geo-demand grid.
+         * Higher values give finer spatial resolution at the cost of more
+         * memory and a larger serialised demand report.
+         */
+        XDN_GEO_NUM_GRID_ROWS(1000),
+
+        /**
+         * Number of longitude columns in the sparse geo-demand grid.
+         */
+        XDN_GEO_NUM_GRID_COLUMNS(1000),
+
+        /**
+         * Placement algorithm used by XdnGeoDemandProfiler2.
+         * Valid values: CENTROID, GREEDY  (must match PlacementAlgorithmType).
+         */
+        XDN_GEO_PLACEMENT_ALGORITHM("CENTROID")
         ;
 
         final Object defaultValue;

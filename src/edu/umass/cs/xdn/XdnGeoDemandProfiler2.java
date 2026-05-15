@@ -2,9 +2,11 @@ package edu.umass.cs.xdn;
 
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.Geolocation;
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableAppInfo;
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.NodeIdsMetadataPair;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.placementalgorithms.Centroid;
 import edu.umass.cs.xdn.placementalgorithms.Greedy;
@@ -55,8 +57,10 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
     // ---------------------------------------------------------------------------
     // Grid configuration
     // ---------------------------------------------------------------------------
-    private static final int    NUM_GRID_ROWS    = 1000;
-    private static final int    NUM_GRID_COLUMNS = 1000;
+    private static final int NUM_GRID_ROWS =
+            Config.getGlobalInt(ReconfigurationConfig.RC.XDN_GEO_NUM_GRID_ROWS);
+    private static final int NUM_GRID_COLUMNS =
+            Config.getGlobalInt(ReconfigurationConfig.RC.XDN_GEO_NUM_GRID_COLUMNS);
 
     /**
      * Approximate milliseconds per grid-unit of Euclidean distance.
@@ -90,7 +94,9 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
     // ---------------------------------------------------------------------------
     public enum PlacementAlgorithmType { CENTROID, GREEDY}
 
-    private static final PlacementAlgorithmType ALGORITHM = PlacementAlgorithmType.GREEDY;
+    private static final PlacementAlgorithmType ALGORITHM =
+            PlacementAlgorithmType.valueOf(
+                    Config.getGlobalString(ReconfigurationConfig.RC.XDN_GEO_PLACEMENT_ALGORITHM));
 
     private static final PlacementAlgorithm CENTROID_ALGO =
             new Centroid(NUM_GRID_ROWS, NUM_GRID_COLUMNS);
@@ -189,11 +195,18 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
 
     public XdnGeoDemandProfiler2(String name) {
         super(name);
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 initialized: grid={0}x{1} algorithm={2}",
+                new Object[]{ NUM_GRID_ROWS, NUM_GRID_COLUMNS, ALGORITHM });
     }
 
     /** Deserialisation constructor — called by the RC when it receives a demand report. */
     public XdnGeoDemandProfiler2(JSONObject stats) throws JSONException {
         super(stats.getString(KEY_NAME));
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 initialized: grid={0}x{1} algorithm={2}",
+                new Object[]{ NUM_GRID_ROWS, NUM_GRID_COLUMNS, ALGORITHM });
+
         if (stats.has(KEY_NUM_REQS)) {
             this.totalRequests = stats.getLong(KEY_NUM_REQS);
         }
@@ -260,7 +273,7 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
         }
 
         LOGGER.log(Level.INFO,
-                "XdnGeoDemandProfiler2 [AR] Sending demand report for '{0}': reads={1} cells, writes={2} cells, totalReqs={3}",
+                "XdnGeoDemandProfiler2 [AR] Sending demand report for {0}: reads={1} cells, writes={2} cells, totalReqs={3}",
                 new Object[]{
                         this.name, readEntries.size(), writeEntries.size(), numReqs
                 });
