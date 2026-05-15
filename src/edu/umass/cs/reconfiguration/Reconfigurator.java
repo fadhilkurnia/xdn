@@ -31,6 +31,7 @@ import javax.net.ssl.SSLException;
 import edu.umass.cs.reconfiguration.interfaces.*;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import edu.umass.cs.reconfiguration.reconfigurationutils.*;
+import edu.umass.cs.xdn.XdnGeoDemandProfiler2;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -457,23 +458,22 @@ public class Reconfigurator<NodeIDType> implements
         ReconfigurationRecord<NodeIDType> record = this.DB
                 .getReconfigurationRecord(report.getServiceName());
         if (record != null) {
-            NodeIdsMetadataPair<NodeIDType> newActives =
+            NodeIdsMetadataPair<NodeIDType> result =
                     this.shouldReconfigure2(report.getServiceName());
-            String placementMetadata = newActives != null ? newActives.placementMetadata() : null;
-
-            // coordinate and commit reconfiguration intent
-            this.initiateReconfiguration(
-                    /*name=*/report.getServiceName(),
-                    /*reconfigurationRecord=*/record,
-                    /*newActives=*/shouldReconfigure(report.getServiceName()),
-                    /*sender=*/null,
-                    /*receiver=*/null,
-                    /*forwarder*/null,
-                    /*initialState=*/placementMetadata,
-                    /*nameState=*/null,
-                    /*newlyAddedNodes=*/null,
-                    /*policy=*/ReconfigurationConfig.
-                            ReconfigureUponActivesChange.DEFAULT); // coordinated
+            if (result != null) {
+                this.initiateReconfiguration(
+                        /*name=*/           report.getServiceName(),
+                        /*reconfigurationRecord=*/ record,
+                        /*newActives=*/     result.nodeIds(),
+                        /*sender=*/         null,
+                        /*receiver=*/       null,
+                        /*forwarder=*/      null,
+                        /*initialState=*/   result.placementMetadata(),
+                        /*nameState=*/      null,
+                        /*newlyAddedNodes=*/null,
+                        /*policy=*/         ReconfigurationConfig
+                                .ReconfigureUponActivesChange.DEFAULT);
+            }
         }
         trimAggregateDemandProfile();
         return null; // never any messaging or ptasks
@@ -4082,6 +4082,7 @@ public class Reconfigurator<NodeIDType> implements
         if (record == null)
             return ReconfigurationTriggerResult.SERVICE_NOT_FOUND;
 
+        XdnGeoDemandProfiler2.forceReconfigurationOnce(serviceName);
         NodeIdsMetadataPair<NodeIDType> result = this.shouldReconfigure2(serviceName);
         if (result == null) {
             return this.demandProfiler.contains(serviceName)

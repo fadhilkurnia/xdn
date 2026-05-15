@@ -701,6 +701,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     XdnGeoDemandProfiler2.registerConsistencyModel(
             serviceName, serviceProperty.getConsistencyModel());
 
+    XdnGeoDemandProfiler2.registerReconfigurationPolicy(
+            serviceName,
+            serviceProperty.getMinReconfigurationIntervalSec(),
+            serviceProperty.getMinRequestsForReconfiguration());
+
     System.out.printf(
         ">> XDNReplicaCoordinator:%s name=%s coordinator=%s\n",
         myNodeID, serviceName, coordinator.getClass().getSimpleName());

@@ -35,6 +35,10 @@ public class ServiceProperty {
   private final Integer minReplicas;
   private final Integer maxReplicas;
 
+  // Values to determine when to reconfigure
+  private final Long minReconfigurationIntervalSec;
+  private final Long minRequestsForReconfiguration;
+
   private ServiceProperty(
       String serviceName,
       boolean isDeterministic,
@@ -44,7 +48,10 @@ public class ServiceProperty {
       List<RequestMatcher> requestMatchers,
       Integer numReplicas,
       Integer minReplicas,
-      Integer maxReplicas) {
+      Integer maxReplicas,
+      Long minReconfigurationIntervalSec,
+      Long minRequestsForReconfiguration
+      ) {
     this.serviceName = serviceName;
     this.isDeterministic = isDeterministic;
     this.stateDirectory = stateDirectory;
@@ -54,6 +61,8 @@ public class ServiceProperty {
     this.numReplicas = numReplicas;
     this.minReplicas = minReplicas;
     this.maxReplicas = maxReplicas;
+    this.minReconfigurationIntervalSec = minReconfigurationIntervalSec;
+    this.minRequestsForReconfiguration = minRequestsForReconfiguration;
   }
 
   public ServiceComponent getEntryComponent() {
@@ -187,6 +196,10 @@ public class ServiceProperty {
     Integer minReplicas = optionalReplicaField(json, "min_replicas");
     Integer maxReplicas = optionalReplicaField(json, "max_replicas");
     validateReplicaConfig(numReplicas, minReplicas, maxReplicas);
+    Long minReconfigurationIntervalSec = json.has("min_reconfiguration_interval_sec")
+            ? json.getLong("min_reconfiguration_interval_sec") : 0;
+    Long minRequestsForReconfiguration = json.has("min_requests_for_reconfiguration")
+            ? json.getLong("min_requests_for_reconfiguration") : 0;
 
     ServiceProperty prop =
         new ServiceProperty(
@@ -198,7 +211,9 @@ public class ServiceProperty {
             parsedRequestMatchers,
             numReplicas,
             minReplicas,
-            maxReplicas);
+            maxReplicas,
+            minReconfigurationIntervalSec,
+            minRequestsForReconfiguration);
 
     // automatically infer is-stateful of component via the state directory
     if (stateDirectory != null && stateDirectory.split(":").length == 2) {
@@ -579,6 +594,14 @@ public class ServiceProperty {
     return maxReplicas;
   }
 
+  public Long getMinReconfigurationIntervalSec() {
+    return minReconfigurationIntervalSec;
+  }
+
+  public Long getMinRequestsForReconfiguration() {
+    return minRequestsForReconfiguration;
+  }
+
   public String toJsonString() {
     assert !this.components.isEmpty() : "unexpected empty component";
 
@@ -592,6 +615,8 @@ public class ServiceProperty {
         jsonObject.put("state", this.stateDirectory);
         jsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
         jsonObject.put("deterministic", this.isDeterministic);
+        jsonObject.put("min_reconfiguration_interval_sec", this.getMinReconfigurationIntervalSec());
+        jsonObject.put("min_requests_for_reconfiguration", this.getMinRequestsForReconfiguration());
         putReplicaFields(jsonObject);
       } catch (JSONException e) {
         throw new RuntimeException(e);
@@ -606,6 +631,8 @@ public class ServiceProperty {
       servicePropertyJsonObject.put("state", this.stateDirectory);
       servicePropertyJsonObject.put("deterministic", this.isDeterministic);
       servicePropertyJsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
+      servicePropertyJsonObject.put("min_reconfiguration_interval_sec", this.getMinReconfigurationIntervalSec());
+      servicePropertyJsonObject.put("min_requests_for_reconfiguration", this.getMinRequestsForReconfiguration());
       JSONArray componentArray = new JSONArray();
       for (ServiceComponent component : this.components) {
         JSONObject componentJsonObject = component.toJsonObject();

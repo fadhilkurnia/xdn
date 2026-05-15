@@ -28,8 +28,8 @@ function main() {
   local HOST_ARCH
 
   # build the xdn cli for linux/amd64 and darwin/arm64
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${LINUX_AMD64_BIN}" .
-  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o "${DARWIN_ARM64_BIN}" .
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${LINUX_AMD64_BIN}" . || { echo "Build failed"; exit 1; }
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o "${DARWIN_ARM64_BIN}" . || { echo "Build failed"; exit 1; }
 
   HOST_OS="$(uname -s)"
   HOST_ARCH="$(uname -m)"

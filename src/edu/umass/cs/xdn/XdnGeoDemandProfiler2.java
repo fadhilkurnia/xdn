@@ -190,6 +190,45 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
             Logger.getLogger(XdnGeoDemandProfiler2.class.getName());
 
     // ---------------------------------------------------------------------------
+    // Service specifc information on when to reconfigure,
+    // determined by the service owner.
+    // - SERVICE_MIN_RECONFIG_INTERVAL_MS:
+    //      How many ms since last reconfiguration
+    //      before another reconfiguration can be triggered?
+    // - SERVICE_MIN_RECONFIG_REQUESTS:
+    //      How many requests since last reconfiguration
+    //      before another reconfiguration can be triggered?
+    // ---------------------------------------------------------------------------
+    // static registry — populated on the AR JVM
+    private static final ConcurrentHashMap<String, Long> SERVICE_MIN_RECONFIG_INTERVAL_MS =
+            new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Long> SERVICE_MIN_RECONFIG_REQUESTS =
+            new ConcurrentHashMap<>();
+
+    public static void registerReconfigurationPolicy(
+            String serviceName, Long minIntervalSec, Long minRequests) {
+        if (minIntervalSec != null)
+            SERVICE_MIN_RECONFIG_INTERVAL_MS.put(serviceName, minIntervalSec * 1000);
+        if (minRequests != null)
+            SERVICE_MIN_RECONFIG_REQUESTS.put(serviceName, minRequests);
+
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 reconfiguration policy for ''{0}'': " +
+                        "min_interval_sec={1} min_requests={2}",
+                new Object[]{
+                        serviceName,
+                        minIntervalSec != null ? minIntervalSec : 0,
+                        minRequests != null ? minRequests : 0
+                });
+    }
+
+    // instance fields — carried to the RC via serialization
+    private long minReconfigurationIntervalMs = 0;
+    private long minRequestsForReconfiguration = 0;
+    private long lastReconfigurationTimestamp  = 0;
+    private long requestsSinceLastReconfiguration = 0;
+
+    // ---------------------------------------------------------------------------
     // Constructors
     // ---------------------------------------------------------------------------
 
@@ -212,6 +251,9 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
         }
         decodeGrid(stats.optString(KEY_GRID_SPARSE_READS_B64,  null), sparseReadGrid);
         decodeGrid(stats.optString(KEY_GRID_SPARSE_WRITES_B64, null), sparseWriteGrid);
+        this.minReconfigurationIntervalMs = stats.optLong("min_reconfig_interval_ms", 0);
+        this.minRequestsForReconfiguration = stats.optLong("min_reconfig_requests", 0);
+        this.lastReconfigurationTimestamp  = stats.optLong("last_reconfig_ts", 0);
         if (stats.has("consistency_model")) {
             this.consistencyModel = ConsistencyModel.valueOf(
                     stats.getString("consistency_model"));
@@ -294,6 +336,11 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
                     SERVICE_CONSISTENCY_MODELS
                             .getOrDefault(this.name, ConsistencyModel.EVENTUAL)
                             .name());
+            stats.put("min_reconfig_interval_ms",
+                    SERVICE_MIN_RECONFIG_INTERVAL_MS.getOrDefault(this.name, 0L));
+            stats.put("min_reconfig_requests",
+                    SERVICE_MIN_RECONFIG_REQUESTS.getOrDefault(this.name, 0L));
+            stats.put("last_reconfig_ts", this.lastReconfigurationTimestamp);
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
@@ -310,9 +357,20 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
             this.consistencyModel = incoming.consistencyModel;
         }
 
+        if (incoming.minReconfigurationIntervalMs > 0) {
+            this.minReconfigurationIntervalMs = incoming.minReconfigurationIntervalMs;
+        }
+        if (incoming.minRequestsForReconfiguration > 0) {
+            this.minRequestsForReconfiguration = incoming.minRequestsForReconfiguration;
+        }
+        if (incoming.lastReconfigurationTimestamp > this.lastReconfigurationTimestamp) {
+            this.lastReconfigurationTimestamp = incoming.lastReconfigurationTimestamp;
+        }
+
         mapLock.lock();
         try {
             this.totalRequests += incoming.totalRequests;
+	    this.requestsSinceLastReconfiguration += incoming.totalRequests;
             incoming.sparseReadGrid.forEach((k, v)  -> this.sparseReadGrid.merge(k,  v, Integer::sum));
             incoming.sparseWriteGrid.forEach((k, v) -> this.sparseWriteGrid.merge(k, v, Integer::sum));
         } finally {
@@ -337,6 +395,7 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
 
         if (this.totalRequests == 0) return null;
         if (curActives == null || curActives.isEmpty()) return null;
+        if (!shouldTriggerReconfiguration()) return null;
 
         Map<String, Geolocation> nodeGeo = appInfo.getActiveReplicaGeolocations();
         int targetReplicas = Math.min(curActives.size(), nodeGeo.size());
@@ -377,7 +436,11 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
     }
 
     @Override
-    public void justReconfigured() { /* no-op */ }
+    public void justReconfigured() {
+        this.lastReconfigurationTimestamp = System.currentTimeMillis();
+        mapLock.lock();
+        try { requestsSinceLastReconfiguration = 0; } finally { mapLock.unlock(); }
+    }
 
     // ---------------------------------------------------------------------------
     // Hot-path helpers
@@ -426,6 +489,7 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
                     if (event.isWrite()) sparseWriteGrid.merge(idx, 1, Integer::sum);
                     else                  sparseReadGrid.merge(idx,  1, Integer::sum);
                     totalRequests++;
+                    requestsSinceLastReconfiguration++;
                 } finally {
                     mapLock.unlock();
                 }
@@ -461,5 +525,53 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
         ByteBuffer buf = ByteBuffer.wrap(Base64.getDecoder().decode(b64));
         int n = buf.getInt();
         for (int i = 0; i < n; i++) grid.put(buf.getInt(), buf.getInt());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Reconfiguration trigger helpers
+    // ---------------------------------------------------------------------------
+    private static final Set<String> FORCE_RECONFIGURATION_ONCE =
+            ConcurrentHashMap.newKeySet();
+
+    public static void forceReconfigurationOnce(String serviceName) {
+        FORCE_RECONFIGURATION_ONCE.add(serviceName);
+    }
+
+    private boolean shouldTriggerReconfiguration() {
+        // HTTP endpoint override - bypasses thresholds, consumed once
+        if (FORCE_RECONFIGURATION_ONCE.remove(this.name)) return true;
+
+        boolean hasTimeThreshold    = minReconfigurationIntervalMs > 0;
+        boolean hasRequestThreshold = minRequestsForReconfiguration > 0;
+
+        // neither set → always trigger (preserves current behavior)
+        if (!hasTimeThreshold && !hasRequestThreshold) return true;
+
+        // First time we check: start the clock from now, not from Unix epoch
+        if (hasTimeThreshold && lastReconfigurationTimestamp == 0) {
+            lastReconfigurationTimestamp = System.currentTimeMillis();
+        }
+
+        LOGGER.log(Level.INFO,
+                "XdnGeoDemandProfiler2 [{0}] shouldTriggerReconfiguration: " +
+                        "hasTime={1} hasRequests={2} intervalMs={3} sinceLastMs={4} " +
+                        "requestsSinceLast={5} minRequests={6}",
+                new Object[]{
+                        this.name, hasTimeThreshold, hasRequestThreshold,
+                        minReconfigurationIntervalMs,
+                        System.currentTimeMillis() - lastReconfigurationTimestamp,
+                        requestsSinceLastReconfiguration,
+                        minRequestsForReconfiguration
+                });
+
+        if (hasTimeThreshold &&
+                System.currentTimeMillis() - lastReconfigurationTimestamp
+                        >= minReconfigurationIntervalMs)
+            return true;
+
+        if (hasRequestThreshold && totalRequests >= minRequestsForReconfiguration)
+            return true;
+
+        return false;
     }
 }

@@ -571,7 +571,8 @@ public class HttpReconfigurator {
                 return;
             }
 
-            // POST /api/v2/services/{name}/reconfigure
+            // TODO: handle other kind of reconfigurator requests
+            //  POST /api/v2/services/{name}/reconfigure
             Pattern reconfigurePattern =
                     Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/reconfigure$");
             if (httpRequest.method().equals(HttpMethod.POST)
@@ -604,7 +605,6 @@ public class HttpReconfigurator {
             // TODO: Parses and handles DestroyServiceRequest
             //  DELETE /api/v2/services/{serviceName}
 
-            // TODO: handle other kind of reconfigurator requests
 
             // Handles unknown v2 requests with BadRequestResponse (400).
             this.writeBadRequestResponse(ctx, "Unknown reconfiguration request.");

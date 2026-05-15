@@ -35,6 +35,8 @@ type CommonProperties struct {
 	numReplicas       *int
 	minReplicas       *int
 	maxReplicas       *int
+	minReconfigurationIntervalSec *int
+	minRequestsForReconfiguration *int
 }
 
 type EnvPair struct {
@@ -96,6 +98,8 @@ func init() {
 	LaunchCmd.PersistentFlags().IntP("num-replicas", "n", 0, "fixed number of replicas at creation (overrides cluster default)")
 	LaunchCmd.PersistentFlags().Int("min-replicas", 0, "minimum number of replicas (lower bound for reconfiguration)")
 	LaunchCmd.PersistentFlags().Int("max-replicas", 0, "maximum number of replicas (upper bound for reconfiguration)")
+	LaunchCmd.PersistentFlags().Int("min-reconfiguration-interval-sec", 0, "minimum duration since the previous reconfiguration before another one can be triggered")
+	LaunchCmd.PersistentFlags().Int("min-requests-for-reconfiguration", 0, "minimum number of requests since the previous reconfiguration before another one can be triggered")
 
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")
@@ -230,6 +234,13 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 	}
 	if prop.maxReplicas != nil {
 		config["max_replicas"] = *prop.maxReplicas
+	}
+
+	if prop.minReconfigurationIntervalSec != nil {
+		config["min_reconfiguration_interval_sec"] = *prop.minReconfigurationIntervalSec
+	}
+	if prop.minRequestsForReconfiguration != nil {
+		config["min_requests_for_reconfiguration"] = *prop.minRequestsForReconfiguration
 	}
 
 	jsonBody, err := json.Marshal(config)
@@ -373,6 +384,18 @@ func parseReplicaFromFileMap(propMap map[string]interface{}, prop *CommonPropert
 	prop.numReplicas = num
 	prop.minReplicas = min
 	prop.maxReplicas = max
+
+	intervalSec, err := read("min_reconfiguration_interval_sec")
+	if err != nil { 
+		return err 
+	}
+	minRequests, err := read("min_requests_for_reconfiguration")
+	if err != nil { 
+		return err 
+	}
+	prop.minReconfigurationIntervalSec = intervalSec
+	prop.minRequestsForReconfiguration = minRequests
+
 	return nil
 }
 
@@ -408,6 +431,18 @@ func parseReplicaFlags(flags *pflag.FlagSet, prop *CommonProperties) error {
 	prop.numReplicas = num
 	prop.minReplicas = min
 	prop.maxReplicas = max
+
+	intervalSec, err := readIntFlag("min-reconfiguration-interval-sec")
+	if err != nil { 
+		return err 
+	}
+	minRequests, err := readIntFlag("min-requests-for-reconfiguration")
+	if err != nil { 
+		return err 
+	}
+	prop.minReconfigurationIntervalSec = intervalSec
+	prop.minRequestsForReconfiguration = minRequests
+
 	return nil
 }
 
@@ -456,6 +491,13 @@ func runLaunchCommand(prop CommonProperties) error {
 	if prop.maxReplicas != nil {
 		fmt.Printf(" max replicas  : %d\n", *prop.maxReplicas)
 	}
+	if prop.minReconfigurationIntervalSec != nil {
+		fmt.Printf(" min reconfig interval : %ds\n", *prop.minReconfigurationIntervalSec)
+	}
+	if prop.minRequestsForReconfiguration != nil {
+		fmt.Printf(" min reconfig requests : %d\n", *prop.minRequestsForReconfiguration)
+	}
+
 	fmt.Println()
 
 	// checking connection to the control plane
