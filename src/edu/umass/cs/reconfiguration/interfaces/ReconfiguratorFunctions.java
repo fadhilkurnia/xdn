@@ -33,4 +33,5 @@ public interface ReconfiguratorFunctions {
 	 */
 	public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request);
 
+	ReconfigurationTriggerResult triggerDemandBasedReconfiguration(String serviceName);
 }

@@ -2,6 +2,7 @@ package edu.umass.cs.reconfiguration.http;
 
 import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.reconfiguration.interfaces.ReconfigurationTriggerResult;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorFunctions;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
@@ -567,6 +568,30 @@ public class HttpReconfigurator {
             if (httpRequest.method().equals(HttpMethod.PUT) && scnrMatcher.matches()) {
                 parseAndHandleHttpSetCoordinatorNodeRequest(
                         ctx, senderAddress, httpRequest, httpContent);
+                return;
+            }
+
+            // POST /api/v2/services/{name}/reconfigure
+            Pattern reconfigurePattern =
+                    Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/reconfigure$");
+            if (httpRequest.method().equals(HttpMethod.POST)
+                    && reconfigurePattern.matcher(httpRequest.uri()).matches()) {
+                String serviceName = httpRequest.uri().split("/")[4];
+                ReconfigurationTriggerResult result =
+                        this.rcFunctions.triggerDemandBasedReconfiguration(serviceName);
+                HttpResponseStatus status = switch (result) {
+                    case INITIATED, NO_DEMAND_DATA, PLACEMENT_UNCHANGED -> OK;
+                    case ALREADY_RECONFIGURING -> HttpResponseStatus.CONFLICT;
+                    case SERVICE_NOT_FOUND -> HttpResponseStatus.NOT_FOUND;
+                };
+                String body = "{\"result\":\"" + result.name() + "\"}";
+                FullHttpResponse resp = new DefaultFullHttpResponse(
+                        HTTP_1_1, status,
+                        Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
+                resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+                resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
+                ctx.write(resp);
+                ctx.flush();
                 return;
             }
 

@@ -4076,6 +4076,31 @@ public class Reconfigurator<NodeIDType> implements
     }
 
     @Override
+    public ReconfigurationTriggerResult triggerDemandBasedReconfiguration(String serviceName) {
+        ReconfigurationRecord<NodeIDType> record =
+                this.DB.getReconfigurationRecord(serviceName);
+        if (record == null)
+            return ReconfigurationTriggerResult.SERVICE_NOT_FOUND;
+
+        NodeIdsMetadataPair<NodeIDType> result = this.shouldReconfigure2(serviceName);
+        if (result == null) {
+            return this.demandProfiler.contains(serviceName)
+                    ? ReconfigurationTriggerResult.PLACEMENT_UNCHANGED  // had data, same nodes
+                    : ReconfigurationTriggerResult.NO_DEMAND_DATA;      // no reports yet
+        }
+
+        boolean initiated = this.initiateReconfiguration(
+                serviceName, record,
+                result.nodeIds(), null, null, null,
+                result.placementMetadata(), null, null,
+                ReconfigureUponActivesChange.DEFAULT);
+
+        return initiated
+                ? ReconfigurationTriggerResult.INITIATED
+                : ReconfigurationTriggerResult.ALREADY_RECONFIGURING;
+    }
+
+    @Override
     public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request) {
         RequestCallbackFuture<ReconfiguratorRequest> callbackFuture;
         BasicReconfigurationPacket<?> packet = request instanceof ClientReconfigurationPacket ? (ClientReconfigurationPacket) request
