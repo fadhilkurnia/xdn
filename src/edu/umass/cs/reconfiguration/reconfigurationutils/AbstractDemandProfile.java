@@ -115,6 +115,10 @@ public abstract class AbstractDemandProfile {
 	 */
 	public abstract JSONObject getDemandStats();
 
+	public JSONObject getDemandSnapshot() {
+		return null;
+	}
+
 	/**
 	 * Combine the new information in {@code update} into {@code this}. This
 	 * method is used at reconfigurators to combine a newly received demand

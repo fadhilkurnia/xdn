@@ -28,6 +28,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -429,6 +431,18 @@ public class HttpReconfigurator {
         private final StringBuilder buf = new StringBuilder();
         final ReconfiguratorFunctions rcFunctions;
 
+        private static final String DASHBOARD_HTML = loadDashboardHtml();
+
+        private static String loadDashboardHtml() {
+            try (InputStream is = HttpReconfigurator.class
+                    .getResourceAsStream("/dashboard.html")) {
+                if (is == null) return "<h1>dashboard.html not found in classpath</h1>";
+                return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                return "<h1>Failed to load dashboard: " + e.getMessage() + "</h1>";
+            }
+        }
+
         public HttpReconfiguratorHandler(ReconfiguratorFunctions rcFunctions, String rcNodeId) {
             this.rcFunctions = rcFunctions;
             this.rcNodeId = rcNodeId;
@@ -444,6 +458,22 @@ public class HttpReconfigurator {
             if (msg instanceof HttpRequest) {
                 HttpRequest request = this.request = (HttpRequest) msg;
                 buf.setLength(0);
+
+                // Serve the demand visualization dashboard
+                // GET /dashboard  or  GET /dashboard?service=restkv
+                if (msg instanceof HttpRequest httpReq
+                        && (httpReq.uri().equals("/dashboard")
+                        || httpReq.uri().startsWith("/dashboard/"))) {
+                    FullHttpResponse resp = new DefaultFullHttpResponse(
+                            HTTP_1_1, OK,
+                            Unpooled.copiedBuffer(
+                                    DASHBOARD_HTML.getBytes(StandardCharsets.UTF_8)));
+                    resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                    resp.headers().set(HttpHeaderNames.CONTENT_LENGTH,
+                            resp.content().readableBytes());
+                    ctx.writeAndFlush(resp);
+                    return;
+                }
 
                 // All HTTP requests for Reconfiguration with '/api/v2/services' prefix
                 // are being handled separately. We keep other requests (e.g. /?type=CREATE&name=..)
@@ -586,6 +616,32 @@ public class HttpReconfigurator {
                     case SERVICE_NOT_FOUND -> HttpResponseStatus.NOT_FOUND;
                 };
                 String body = "{\"result\":\"" + result.name() + "\"}";
+                FullHttpResponse resp = new DefaultFullHttpResponse(
+                        HTTP_1_1, status,
+                        Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
+                resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+                resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
+                ctx.write(resp);
+                ctx.flush();
+                return;
+            }
+
+            // GET /api/v2/services/{name}/demand
+            Pattern demandPattern =
+                    Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/demand$");
+            if (httpRequest.method().equals(HttpMethod.GET)
+                    && demandPattern.matcher(httpRequest.uri()).matches()) {
+                String serviceName = httpRequest.uri().split("/")[4];
+                JSONObject snapshot = this.rcFunctions.getDemandSnapshot(serviceName);
+                HttpResponseStatus status;
+                String body;
+                if (snapshot == null) {
+                    status = HttpResponseStatus.NOT_FOUND;
+                    body = "{\"error\":\"no demand data for " + serviceName + "\"}";
+                } else {
+                    status = OK;
+                    body = snapshot.toString();
+                }
                 FullHttpResponse resp = new DefaultFullHttpResponse(
                         HTTP_1_1, status,
                         Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));

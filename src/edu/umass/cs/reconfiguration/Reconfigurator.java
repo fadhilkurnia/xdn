@@ -32,6 +32,7 @@ import edu.umass.cs.reconfiguration.interfaces.*;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import edu.umass.cs.reconfiguration.reconfigurationutils.*;
 import edu.umass.cs.xdn.XdnGeoDemandProfiler2;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -4153,6 +4154,48 @@ public class Reconfigurator<NodeIDType> implements
         return callbackFuture;
     }
 
+    @Override
+    public JSONObject getDemandSnapshot(String serviceName) {
+        JSONObject snapshot = this.demandProfiler.getDemandSnapshot(serviceName);
+        if (snapshot == null) {
+            try {
+                snapshot = new JSONObject()
+                        .put("name",          serviceName)
+                        .put("totalRequests", 0)
+                        .put("reads",         new JSONArray())
+                        .put("writes",        new JSONArray());
+            } catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        // Add all node locations and replica location
+        try {
+            Set<NodeIDType> actives = this.DB.getActiveReplicas(serviceName);
+            Set<String> activeIds = new HashSet<>();
+            if (actives != null)
+                actives.forEach(n -> activeIds.add(n.toString()));
+
+            Map<String, Geolocation> allGeo =
+                    this.getReconfigurableAppInfo().getActiveReplicaGeolocations();
+
+            JSONArray nodes = new JSONArray();
+            if (allGeo != null) {
+                for (Map.Entry<String, Geolocation> entry : allGeo.entrySet()) {
+                    nodes.put(new JSONObject()
+                            .put("id",      entry.getKey())
+                            .put("lat",     entry.getValue().latitude())
+                            .put("lng",     entry.getValue().longitude())
+                            .put("replica", activeIds.contains(entry.getKey())));
+                }
+            }
+            snapshot.put("nodes", nodes);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+
+        return snapshot;
+    }
     /**
      * If only a subset of reconfigurators get a node config change intent, they
      * could end up never executing the intent and therefore never doing the

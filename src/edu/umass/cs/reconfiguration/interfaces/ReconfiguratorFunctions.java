@@ -4,6 +4,7 @@ import edu.umass.cs.gigapaxos.async.RequestCallbackFuture;
 import edu.umass.cs.gigapaxos.interfaces.Callback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.Reconfigurator;
+import org.json.JSONObject;
 
 /**
  * @author arun
@@ -34,4 +35,5 @@ public interface ReconfiguratorFunctions {
 	public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request);
 
 	ReconfigurationTriggerResult triggerDemandBasedReconfiguration(String serviceName);
+	JSONObject getDemandSnapshot(String serviceName);
 }

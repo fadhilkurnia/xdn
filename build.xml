@@ -46,6 +46,9 @@
             <compilerarg value="-Xlint:unchecked"/>
             <classpath refid="classpath.base"/>
         </javac>
+	<copy todir="${build.classes.dir}">
+	    <fileset dir="src/main/resources" includes="**/*"/>
+	</copy>
     </target>
 
     <target name="gigapaxos_jarbuild" depends="compile" description="generate jar files for gigpaxos">

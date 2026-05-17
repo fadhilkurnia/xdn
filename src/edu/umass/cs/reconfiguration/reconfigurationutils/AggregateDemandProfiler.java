@@ -26,6 +26,7 @@ import java.util.Set;
 
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableAppInfo;
+import org.json.JSONObject;
 
 /**
  * @author V. Arun
@@ -73,6 +74,12 @@ public class AggregateDemandProfiler {
 	private synchronized AbstractDemandProfile getDemandProfile(String name) {
 		AbstractDemandProfile demand = this.map.get(name);
 		return demand;
+	}
+
+	public synchronized JSONObject getDemandSnapshot(String serviceName) {
+		AbstractDemandProfile demand = this.getDemandProfile(serviceName);
+		if (demand == null) return null;
+		return demand.getDemandSnapshot();
 	}
 
 	/**

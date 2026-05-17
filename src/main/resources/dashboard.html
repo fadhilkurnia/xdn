@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+    <head>
+	<title>XDN Demand Visualizer</title>
+	<style>
+	* { margin: 0; padding: 0; box-sizing: border-box; }
+	body { background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
+	#globe { width: 100vw; height: 100vh; }
+
+	#controls {
+	    position: absolute; top: 16px; left: 16px;
+	    background: rgba(0,0,0,0.6); padding: 12px 16px;
+	    border-radius: 8px; display: flex; flex-direction: column; gap: 8px;
+	    display: flex;
+	    flex-direction: row;
+	    gap: 10px;
+	}
+	#controls label { font-size: 13px; }
+	#controls input {
+	    background: #222; color: #fff; border: 1px solid #444;
+	    padding: 4px 8px; border-radius: 4px; width: 160px;
+	}
+	#controls button {
+	    background: #1a6fb5; color: #fff; border: none;
+	    padding: 5px 10px; border-radius: 4px; cursor: pointer;
+	}
+	.legend { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+	.dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+	#info {
+	    position: absolute; top: 16px; right: 16px;
+	    background: rgba(0,0,0,0.6); padding: 10px 14px;
+	    border-radius: 8px; font-size: 13px;
+	}
+	#status { position: absolute; bottom: 16px; left: 16px; font-size: 11px; opacity: 0.5; }
+	</style>
+    </head>
+    <body>
+	<div id="globe"></div>
+
+	<div id="controls">
+	    <div>
+		<div class="legend">
+		    <div class="dot" style="background:#00aaff"></div> Reads
+		</div>
+		<div class="legend">
+		    <div class="dot" style="background:#ff4400"></div> Writes
+		</div>
+	    </div>
+
+	    <select id="filterSelect" onchange="applyFilter()">
+		<option value="both">Reads + Writes</option>
+		<option value="reads">Reads only</option>
+		<option value="writes">Writes only</option>
+	    </select>
+	</div>
+
+	<div id="info">
+	    <div id="serviceName">-</div>
+	    <div id="totalReqs">Total requests: -</div>
+	    <div id="readCount">Reads: -</div>
+	    <div id="writeCount">Writes: -</div>
+	</div>
+
+	<div id="status">Auto-refreshing every 10s</div>
+
+	<script type="module">
+	import * as THREE from 'https://esm.sh/three';
+	import Globe from 'https://esm.sh/globe.gl';
+
+	// read service from ?service=... query param, fallback to input
+	const pathParts = window.location.pathname.split('/');
+	const initialService = pathParts[2] || '';
+
+	const globe = Globe()
+	    .globeImageUrl('https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-dark.jpg')
+	    .backgroundColor('#0d1f3c')
+	    .showAtmosphere(true)
+	    .atmosphereColor('#1a6fb5')
+	    .atmosphereAltitude(0.15)
+	    .hexBinPointsData([])
+	    .hexBinPointLat('lat')
+	    .hexBinPointLng('lng')
+	    .hexBinPointWeight('count')
+	    .hexBinResolution(4)
+	    .hexMargin(0.2)
+	    .hexAltitude(d => Math.min(d.sumWeight / 1_000_000, 0.5) * 0.4)
+	    .hexTopColor(d => d.points[0]?.type === 'read' ? '#00aaff' : '#ff4400')
+	    .hexSideColor(d => d.points[0]?.type === 'read' ? 'rgba(0,170,255,0.6)' : 'rgba(255,68,0,0.6)')
+	    .hexLabel(d => `${d.sumWeight.toLocaleString()} requests`)
+	    .pointsData([])
+	    .pointLat('lat')
+	    .pointLng('lng')
+	    .pointLabel('id')
+	    .pointColor(d => d.replica ? '#ffffff' : '#888888')
+	    .pointAltitude(0.05)
+	    .pointRadius(0.1)
+	    (document.getElementById('globe'));
+
+	let lastData = null;
+
+	function gridToHexResolution(gridRows) {
+	    const cellKm = (180 / gridRows) * 111;
+	    const resMap = [
+		{ res: 2, km: 450 },
+		{ res: 3, km: 120 },
+		{ res: 4, km: 45 },
+		{ res: 5, km: 17 },
+		{ res: 6, km: 6 },
+	    ];
+	    return resMap.reduce((best, r) =>
+		Math.abs(r.km - cellKm) < Math.abs(best.km - cellKm) ? r : best
+	    ).res;
+	}
+
+	function applyFilter() {
+	    if (!lastData) return;
+	    const filter = document.getElementById('filterSelect').value;
+	    let points = [];
+	    if (filter !== 'writes') points = points.concat(lastData.reads.map(d => ({ ...d, type: 'read' })));
+	    if (filter !== 'reads')  points = points.concat(lastData.writes.map(d => ({ ...d, type: 'write' })));
+	    globe.hexBinPointsData(points);
+	}
+	window.applyFilter = applyFilter;
+
+	function refresh() {
+	    const service = initialService;
+	    if (!service) return;
+
+	    fetch(`/api/v2/services/${service}/demand`)
+		.then(r => {
+		    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+		    return r.json();
+		})
+		.then(data => {
+		    console.log(data);
+		    document.getElementById('serviceName').textContent  = data.name;
+		    document.getElementById('totalReqs').textContent   = `Total requests: ${data.totalRequests}`;
+		    document.getElementById('readCount').textContent   = `Reads:  ${data.reads.length} cells`;
+		    document.getElementById('writeCount').textContent  = `Writes: ${data.writes.length} cells`;
+
+		    if (data.reads.length === 0 && data.writes.length === 0) {
+			globe.pointsData(data.nodes);
+			lastData = data;
+			applyFilter();
+			document.getElementById('status').textContent =
+			    data.totalRequests === 0
+				? `No demand data yet for '${data.name}' - waiting for first report`
+				: `Demand data received but no geo-located requests yet`;
+			return;
+		    }
+
+		    console.log('gridRows:', data.gridRows, '→ resolution:', gridToHexResolution(data.gridRows));
+		    globe.hexBinResolution(gridToHexResolution(data.gridRows));
+		    globe.pointsData(data.nodes);
+		    lastData = data; 
+		    applyFilter();
+		    document.getElementById('status').textContent =
+			`Last updated: ${new Date().toLocaleTimeString()} - auto-refreshing every 10s`;
+		})
+		.catch(err => {
+		    document.getElementById('status').textContent = `Error: ${err.message}`;
+		});
+	}
+
+	if (initialService) refresh();
+	setInterval(refresh, 10000);
+	</script>
+    </body>
+</html>

@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -573,5 +575,48 @@ public class XdnGeoDemandProfiler2 extends AbstractDemandProfile {
             return true;
 
         return false;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helper function to view demand data
+    // ---------------------------------------------------------------------------
+    public JSONObject getDemandSnapshot() {
+        JSONArray reads  = new JSONArray();
+        JSONArray writes = new JSONArray();
+        mapLock.lock();
+        try {
+            for (Map.Entry<Integer, Integer> e : sparseReadGrid.entrySet())
+                reads.put(cellToGeoJson(e.getKey(), e.getValue()));
+            for (Map.Entry<Integer, Integer> e : sparseWriteGrid.entrySet())
+                writes.put(cellToGeoJson(e.getKey(), e.getValue()));
+        } finally {
+            mapLock.unlock();
+        }
+        try {
+            return new JSONObject()
+                    .put("name",          this.name)
+                    .put("totalRequests", this.totalRequests)
+                    .put("reads",         reads)
+                    .put("writes",        writes)
+                    .put("gridCols",      NUM_GRID_COLUMNS)
+                    .put("gridRows",      NUM_GRID_ROWS);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private JSONObject cellToGeoJson(int idx, int count) {
+        int row = idx / NUM_GRID_COLUMNS;
+        int col = idx % NUM_GRID_COLUMNS;
+        double lat = 90.0 - row * 180.0 / NUM_GRID_ROWS - (90.0 / NUM_GRID_ROWS);
+        double lng = col * 360.0 / NUM_GRID_COLUMNS - 180 + (180.0 / NUM_GRID_COLUMNS);
+        try {
+            return new JSONObject()
+                    .put("lat",   lat)
+                    .put("lng",   lng)
+                    .put("count", count);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
