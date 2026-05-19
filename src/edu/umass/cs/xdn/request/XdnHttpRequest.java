@@ -17,6 +17,7 @@ import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.proto.XdnHttpRequestProto;
 import edu.umass.cs.xdn.service.RequestMatcher;
 import edu.umass.cs.xdn.service.ServiceProperty;
+import edu.umass.cs.xdn.utils.GeoIpLookup;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -55,6 +56,8 @@ public class XdnHttpRequest extends XdnRequest
   // also tolerated). Consumed at the XDN layer (parsed into a typed
   // Geolocation and stripped before the request reaches the container).
   public static final String X_CLIENT_LOCATION_HEADER = "X-Client-Location";
+  // IP address as an alternative to lat,lon data
+  public static final String X_CLIENT_IP_HEADER = "X-Client-IP";
 
   public static final List<RequestMatcher> defaultSingletonRequestMatchers =
       ServiceProperty.createDefaultMatchers();
@@ -289,14 +292,23 @@ public class XdnHttpRequest extends XdnRequest
   // separator before delegating to Geolocation.parse (which already handles
   // whitespace, surrounding quotes, range checks, and null-on-error).
   private static Geolocation parseClientGeolocation(HttpRequest httpRequest) {
-    if (httpRequest.headers() == null) {
-      return null;
-    }
+    if (httpRequest.headers() == null) return null;
+
     String raw = httpRequest.headers().get(X_CLIENT_LOCATION_HEADER);
-    if (raw == null || raw.isEmpty()) {
-      return null;
+    if (raw != null && !raw.isEmpty()) {
+      Geolocation geo = Geolocation.parse(raw.replace(';', ','));
+      if (geo != null) return geo;
     }
-    return Geolocation.parse(raw.replace(';', ','));
+
+    String ip = httpRequest.headers().get(X_CLIENT_IP_HEADER);
+    LOG.log(Level.INFO, "X-Client-IP header value: {0}", ip);  // ← add this
+    if (ip != null && !ip.isEmpty()) {
+      Geolocation geo = GeoIpLookup.lookup(ip.trim());
+      LOG.log(Level.INFO, "GeoIpLookup result for {0}: {1}", new Object[]{ ip, geo }); // ← add this
+      return geo;
+    }
+
+    return null;
   }
 
   // Removes any query param whose key starts with XDN_RESERVED_QUERY_PREFIX from

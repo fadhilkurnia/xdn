@@ -315,7 +315,7 @@ SSH_KEY_PATH_ARG=""
 RSYNC_SSH_KEY_PATH_ARG=""
 if [[ ! -z $SSH_KEY_PATH ]]; then
   SSH_KEY_PATH_ARG="-i $SSH_KEY_PATH"
-  RSYNC_SSH_KEY_PATH_ARG="-e 'ssh -x -i $SSH_KEY_PATH -o StrictHostKeyChecking=no'"
+  RSYNC_SSH_KEY_PATH_ARG="-x -i $SSH_KEY_PATH -o StrictHostKeyChecking=no"
 fi
 
 # disabling warnings to prevent manual override; can supply ssh keys
@@ -324,7 +324,7 @@ fi
 SSH="ssh $SSH_KEY_PATH_ARG -x -o StrictHostKeyChecking=no"
 
 RSYNC_PATH="mkdir -p $INSTALL_PATH $INSTALL_PATH/$CONF"
-RSYNC="rsync --force -aL $RSYNC_SSH_KEY_PATH_ARG "
+RSYNC="rsync --force -aL -e $BINDIR/ssh_cloudlab.sh"
 
 # get username from (1) environment variable GP_USERNAME, (2) from
 # gigapaxos properties file, or (3) from whoami
@@ -404,6 +404,7 @@ $LOCAL_SSL_KEYFILES \
 -Djava.util.logging.config.file=$LOG_PROPERTIES \
 -Dlog4j.configuration=$LOG4J_PROPERTIES \
 -DgigapaxosConfig=$GP_PROPERTIES \
+-Dxdn.geoip.mmdb=$HEAD/xdn-dns/geolocation_city_data.mmdb \
 -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host \
 --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
 --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED"
