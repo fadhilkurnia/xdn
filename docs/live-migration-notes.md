@@ -99,3 +99,45 @@ surprise next time someone hits those services.
   reconnect; we measure the "neither host responds" window.
 - **Overlay-IP-on-Swarm question.** Not yet probed; deferred until we need
   TCP preservation.
+
+## Day 2 (2026-05-23) — counter-app baseline
+
+`migration/counter-app/` (HTTP `/inc` + atomic counter, ubuntu:22.04 base,
+~5 MB resident).
+
+Pipeline driven by `migration/xdn-migrate.sh` (single-shot, no pre-copy).
+Probe (`migration/probe.sh`) hammers `/inc` on the source, fails over to the
+destination on first error, logs every request with `epoch.ns` timestamps.
+
+### Result
+
+```
+checkpoint_sec:  0.707
+scp_sec:         0.471
+restore_sec:     0.728
+cleanup_sec:     0.447
+TOTAL:           2.352
+
+client-measured downtime:  1.66 s
+last counter on .2 = 524 ; first counter on .3 = 525   (delta = 1, state preserved)
+failed probes during the window:  207 of 7252
+```
+
+### Three more things that bit me on day 2
+
+1. **CRIU can't dump TCP sockets unless asked**. Without
+   `--tcp-established` the checkpoint fails (silently in our script's first
+   draft) when a client has any open keep-alive or in-flight requests against
+   the container. `podman container checkpoint --tcp-established` fixes it;
+   `restore` needs the matching flag.
+2. **`scp` does not create the destination directory.** Cost me a confusing
+   "No such file or directory" message that points at the wrong file. Now we
+   `mkdir -p` on dst before scp.
+3. **Per-host image builds produce different image IDs.** podman's restore
+   embeds the source image ID in the checkpoint and fails on the destination
+   with `parsing named reference "<64-hex>": invalid repository name`. Fix:
+   one host builds the image, then `podman save | scp | podman load` to the
+   other host so the layer blobs (and therefore IDs) match. For the future
+   `xdn-migrate` tool this implies a one-time image-sync step before the
+   first migration to any new host.
+
