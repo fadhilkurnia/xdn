@@ -756,13 +756,19 @@ public class XdnGigapaxosApp
         throw new RuntimeException(e);
       }
 
-      // Cluster reconfiguration (membership change + adapter join hooks) is Component 6 — not
-      // wired through this path yet. Until it lands, cluster services run with pinned placement.
+      // Cluster reconfiguration: framework is in place (ClusterAdapter, persistent ordinalMap on
+      // ServiceProperty, EtcdClusterAdapter), but the xdn:final: cluster branch — recomputing
+      // ordinals, running the adapter's preJoin/preRemove hooks on the lowest-ordinal survivor,
+      // and starting the new container with XDN_CLUSTER_PHASE=join — is not wired through this
+      // path yet. Until that lands, cluster services launch with pinned placement at epoch 0;
+      // attempting to reconfigure fails fast here instead of silently corrupting cluster state.
+      // See plan Component 6 for the remaining work; the adapter scaffolding under
+      // edu.umass.cs.xdn.cluster is the entry point.
       if (property.isClusterManaged()) {
         throw new UnsupportedOperationException(
             "cluster service reconfiguration is not yet supported for "
                 + serviceName
-                + " — pin placement at launch");
+                + " — pin placement at launch (Component 6 follow-up)");
       }
 
       // prepare statediff directory, if required
