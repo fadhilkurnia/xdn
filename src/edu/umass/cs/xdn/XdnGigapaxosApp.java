@@ -756,14 +756,12 @@ public class XdnGigapaxosApp
         throw new RuntimeException(e);
       }
 
-      // Cluster reconfiguration: framework is in place (ClusterAdapter, persistent ordinalMap on
-      // ServiceProperty, EtcdClusterAdapter), but the xdn:final: cluster branch — recomputing
-      // ordinals, running the adapter's preJoin/preRemove hooks on the lowest-ordinal survivor,
-      // and starting the new container with XDN_CLUSTER_PHASE=join — is not wired through this
-      // path yet. Until that lands, cluster services launch with pinned placement at epoch 0;
-      // attempting to reconfigure fails fast here instead of silently corrupting cluster state.
-      // See plan Component 6 for the remaining work; the adapter scaffolding under
-      // edu.umass.cs.xdn.cluster is the entry point.
+      // Cluster reconfiguration is deferred (Component 6): the xdn:final: branch needs to
+      // recompute the persistent ordinal map, signal XDN_CLUSTER_PHASE=join for fresh
+      // members, and run the per-service add/remove-replica commands declared in the spec
+      // YAML (see project_cluster_reconfig_hooks memory) before starting the new container.
+      // Until that lands, cluster services launch with pinned placement at epoch 0; trying
+      // to reconfigure fails fast here instead of silently corrupting cluster state.
       if (property.isClusterManaged()) {
         throw new UnsupportedOperationException(
             "cluster service reconfiguration is not yet supported for "
@@ -1134,9 +1132,6 @@ public class XdnGigapaxosApp
     }
     env.put(
         "XDN_CLUSTER_PHASE", topology.phase() == ClusterTopology.Phase.JOIN ? "join" : "bootstrap");
-    if (service.property.getClusterAdapter() != null) {
-      env.put("XDN_CLUSTER_ADAPTER", service.property.getClusterAdapter());
-    }
 
     boolean isSuccess =
         startClusterContainer(

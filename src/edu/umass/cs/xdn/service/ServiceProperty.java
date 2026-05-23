@@ -41,9 +41,6 @@ public class ServiceProperty {
   /** The cluster's internal/peer protocol port. Non-null only for cluster services. */
   private final Integer peerPort;
 
-  /** Name of the cluster lifecycle adapter (e.g. "etcd"). Non-null only for cluster services. */
-  private final String clusterAdapter;
-
   /**
    * Persistent nodeId -&gt; ordinal map for a cluster service. Mutable because ordinals must be
    * preserved across reconfiguration epochs (a relocated replica keeps its ordinal).
@@ -62,7 +59,6 @@ public class ServiceProperty {
       Integer maxReplicas,
       DeploymentMode deploymentMode,
       Integer peerPort,
-      String clusterAdapter,
       Map<String, Integer> ordinalMap) {
     this.serviceName = serviceName;
     this.isDeterministic = isDeterministic;
@@ -75,7 +71,6 @@ public class ServiceProperty {
     this.maxReplicas = maxReplicas;
     this.deploymentMode = deploymentMode;
     this.peerPort = peerPort;
-    this.clusterAdapter = clusterAdapter;
     this.ordinalMap = ordinalMap;
   }
 
@@ -129,9 +124,10 @@ public class ServiceProperty {
     }
     boolean isClusterManaged = deploymentMode == DeploymentMode.CLUSTER;
 
-    // parsing cluster-only fields: the internal peer port and the lifecycle adapter
+    // parsing cluster-only fields: the internal peer port. Reconfiguration lifecycle hooks
+    // (add/remove-replica commands) live in the per-service spec when Component 6 lands, not
+    // in Java code — see project_cluster_reconfig_hooks memory.
     Integer peerPort = null;
-    String clusterAdapter = null;
     if (isClusterManaged) {
       if (!json.has("peer_port") || json.isNull("peer_port")) {
         throw new IllegalStateException("peer_port is required for a cluster service");
@@ -140,8 +136,6 @@ public class ServiceProperty {
       if (peerPort < 1 || peerPort > 65535) {
         throw new IllegalStateException("peer_port must be in 1..65535 (got " + peerPort + ")");
       }
-      clusterAdapter =
-          json.has("adapter") && !json.isNull("adapter") ? json.getString("adapter") : null;
     }
 
     // parsing the persistent nodeId -> ordinal map, if carried over from a previous epoch
@@ -281,7 +275,6 @@ public class ServiceProperty {
             maxReplicas,
             deploymentMode,
             peerPort,
-            clusterAdapter,
             ordinalMap);
 
     // automatically infer is-stateful of component via the state directory
@@ -675,10 +668,6 @@ public class ServiceProperty {
     return peerPort;
   }
 
-  public String getClusterAdapter() {
-    return clusterAdapter;
-  }
-
   public Map<String, Integer> getOrdinalMap() {
     return ordinalMap;
   }
@@ -753,9 +742,6 @@ public class ServiceProperty {
     target.put("mode", "cluster");
     if (this.peerPort != null) {
       target.put("peer_port", this.peerPort.intValue());
-    }
-    if (this.clusterAdapter != null) {
-      target.put("adapter", this.clusterAdapter);
     }
     if (this.ordinalMap != null && !this.ordinalMap.isEmpty()) {
       target.put("ordinal_map", new JSONObject(this.ordinalMap));

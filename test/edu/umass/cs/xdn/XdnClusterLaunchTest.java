@@ -52,7 +52,7 @@ public class XdnClusterLaunchTest {
       cluster.start();
 
       cluster.launchClusterService(
-          SERVICE, "xdn-etcd-cluster:test", "/etcd-data/", CLIENT_PORT, PEER_PORT, 3, "etcd");
+          SERVICE, "xdn-etcd-cluster:test", "/etcd-data/", CLIENT_PORT, PEER_PORT, 3);
 
       // Wait for every replica's frontend to forward successfully — that's our proxy for
       // "the cluster has elected a leader and is serving the v3 API."

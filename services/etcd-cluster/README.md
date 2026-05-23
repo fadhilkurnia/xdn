@@ -24,8 +24,7 @@ xdn cluster launch etcd-demo \
     --image xdn-etcd-cluster:test \
     --port 2379 --peer-port 2380 \
     --state /etcd-data/ \
-    --num-replicas 3 \
-    --adapter etcd
+    --num-replicas 3
 
 # Write through replica 0, read back via replica 1
 curl -s http://localhost:2300/v3/kv/put -H 'XDN: etcd-demo' \

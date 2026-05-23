@@ -38,7 +38,6 @@ var ClusterLaunchCmd = &cobra.Command{
 		peerPort, _ := cmd.Flags().GetInt("peer-port")
 		stateDir, _ := cmd.Flags().GetString("state")
 		numReplicas, _ := cmd.Flags().GetInt("num-replicas")
-		adapter, _ := cmd.Flags().GetString("adapter")
 		rawEnv, _ := cmd.Flags().GetStringArray("env")
 
 		if err := validateServiceName(serviceName); err != nil {
@@ -68,9 +67,6 @@ var ClusterLaunchCmd = &cobra.Command{
 			"peer_port":    peerPort,
 			"num_replicas": numReplicas,
 		}
-		if adapter != "" {
-			config["adapter"] = adapter
-		}
 		if envList, err := parseEnvFlags(rawEnv); err != nil {
 			return err
 		} else if len(envList) > 0 {
@@ -81,7 +77,7 @@ var ClusterLaunchCmd = &cobra.Command{
 			return fmt.Errorf("failed to encode cluster spec: %w", err)
 		}
 
-		printClusterLaunchHeader(serviceName, image, httpPort, peerPort, numReplicas, stateDir, adapter)
+		printClusterLaunchHeader(serviceName, image, httpPort, peerPort, numReplicas, stateDir)
 
 		if err := sendCreateRequest(serviceName, string(jsonBody)); err != nil {
 			return err
@@ -102,7 +98,6 @@ func init() {
 	ClusterLaunchCmd.Flags().Int("peer-port", 0, "cluster's internal peer/protocol port (required)")
 	ClusterLaunchCmd.Flags().StringP("state", "s", "", "absolute state directory inside the container, ending with '/' (required)")
 	ClusterLaunchCmd.Flags().IntP("num-replicas", "n", 0, "fixed cluster size — number of replicas (required)")
-	ClusterLaunchCmd.Flags().String("adapter", "", "cluster lifecycle adapter (e.g. \"etcd\") for membership hooks")
 	ClusterLaunchCmd.Flags().StringArrayP("env", "e", []string{}, "environment variables for the cluster image (repeat: --env KEY=VALUE)")
 	_ = ClusterLaunchCmd.MarkFlagRequired("image")
 	_ = ClusterLaunchCmd.MarkFlagRequired("peer-port")
@@ -143,7 +138,7 @@ func parseEnvFlags(raw []string) ([]map[string]string, error) {
 	return out, nil
 }
 
-func printClusterLaunchHeader(name, image string, httpPort, peerPort, n int, stateDir, adapter string) {
+func printClusterLaunchHeader(name, image string, httpPort, peerPort, n int, stateDir string) {
 	colorPrint := color.New(color.FgYellow).Add(color.Bold).Add(color.Underline)
 	fmt.Printf("Launching cluster ")
 	_, _ = colorPrint.Printf("%s", name)
@@ -153,8 +148,5 @@ func printClusterLaunchHeader(name, image string, httpPort, peerPort, n int, sta
 	fmt.Printf(" peer port     : %d  (cluster-internal; on overlay only)\n", peerPort)
 	fmt.Printf(" state dir     : %s\n", stateDir)
 	fmt.Printf(" num replicas  : %d\n", n)
-	if adapter != "" {
-		fmt.Printf(" adapter       : %s\n", adapter)
-	}
 	fmt.Println()
 }

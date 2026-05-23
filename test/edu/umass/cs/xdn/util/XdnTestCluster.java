@@ -157,8 +157,7 @@ public class XdnTestCluster implements AutoCloseable {
       String stateDirectory,
       int httpPort,
       int peerPort,
-      int numReplicas,
-      String adapter)
+      int numReplicas)
       throws IOException, InterruptedException, JSONException {
 
     JSONObject serviceJson = new JSONObject();
@@ -169,9 +168,6 @@ public class XdnTestCluster implements AutoCloseable {
     serviceJson.put("mode", "cluster");
     serviceJson.put("peer_port", peerPort);
     serviceJson.put("num_replicas", numReplicas);
-    if (adapter != null && !adapter.isEmpty()) {
-      serviceJson.put("adapter", adapter);
-    }
 
     String initialState = "xdn:init:" + serviceJson;
     String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
