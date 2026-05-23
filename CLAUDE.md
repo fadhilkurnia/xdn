@@ -34,6 +34,8 @@ ant jar                          # Compile and create JAR files (gigapaxos + nio
 ./bin/build_xdn_fuselog.sh       # Build both C++ (fuselog, fuselog-apply) and Rust (fuserust, fuserust-apply)
 ./bin/build_xdn_fuselog.sh cpp   # C++ only
 ./bin/build_xdn_fuselog.sh rust  # Rust only
+./bin/build_xdn_fuselog.sh test  # Build and run C++ GoogleTest unit tests (needs libgtest-dev)
+./bin/build_xdn_fuselog.sh bench # Build and run the compute_diff microbenchmark
 ```
 
 > **Note**: compiled binaries in `bin/` (`xdn-darwin-arm64`, `xdn-linux-amd64`,
@@ -73,6 +75,23 @@ XDN scripted tests (`run_xdn_tests.sh`) run each test method in a
 **separate JVM** because each test that calls 
 `XdnTestCluster.start()`/`.close()` needs full resource cleanup. 
 Test output goes to `out/junit5-test-output/`.
+
+**fuselog tests (`xdn-fs/test/`, Linux only):** layered correctness harnesses
+for the FUSE state-diff recorder, all driven by Python scripts that build on
+the C++ `fuselog`/`fuselog-apply` binaries:
+- **L1** — C++ GoogleTest unit tests (`build_xdn_fuselog.sh test`); pure C++,
+  no FUSE mount.
+- **L3** — `fuzz_differential.py`: random fs ops on a live mount vs. a plain-dir
+  POSIX oracle, replay the statediff, assert `tree(A) == tree(B) == tree(C)`.
+  Seed is printed at startup; reproduce a failure with `--seed N`.
+- **L4** — `fuzz_concurrent.py` (disjoint subtrees) / `fuzz_concurrent_overlap.py`
+  (shared path pool; ~5% known flake rate from a fid-reuse race).
+- **L5** — `fuzz_db.py --db {sqlite,postgres,mysql,mariadb,mongodb}`: run a real
+  DB on the mount, SIGKILL it, replay onto a fresh dir, assert committed
+  transactions round-trip. Docker-based DBs need `sudo docker` and
+  `user_allow_other` in `/etc/fuse.conf`.
+Failure artifacts land in `/tmp/fuselog-fuzz-fail-<seed>/`. See
+`xdn-fs/test/README.md` for details.
 
 **Test infrastructure:** `XdnTestCluster` provisions a local cluster 
 (1 RC + 3 AR on loopback) for integration tests. 
@@ -232,6 +251,7 @@ For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifec
 ## CI Workflows (`.github/workflows/`)
 - **ant-build-test.yml**: Parallelized XDN test suite on push/PR to master/main. Two job groups: (1) **unit-tests** — JDK-only (no Docker/FUSE/rsync), runs `ant xdn-regular-unit-tests` plus the Xdn*Test classes that don't drive `XdnTestCluster` (`XdnHttpRequestTest`, `XdnHttpRequestBatchTest`, `XdnGeoDemandProfilerTest`). (2) **xdn-integration** — matrix with one entry per `XdnTestCluster`-using class (`XdnEventualConsistencyBatchingTest`, `XdnGetReplicaInfoTest`, `XdnMultiServiceTest`, `XdnPerReplicaRequestTest`, `XdnSetCoordinatorNodeTest`, `XdnTaggedImageLaunchTest`), each on its own runner with full Docker/FUSE/rsync setup. Per-runner isolation is mandatory because `XdnTestCluster.java:44-49` hardcodes loopback ports (RC :3000, AR :2000-2002, proxy :2300-2302) and `/tmp/{gigapaxos,xdn}` — two clusters can't coexist on one host.
 - **gigapaxos-correctness.yml**: Parallel matrix of four GigaPaxos correctness tests — `RequestPacketTest`, `E2ELatencyAwareRedirectorTest`, `ant test` (TESTReconfigurationClient end-to-end), and `TESTPaxosMain` (single-JVM multi-node Paxos with `assertRSMInvariant` enabled on every request). JDK-only, no Docker/FUSE/rsync — each job finishes in under a minute and they run concurrently.
+- **fuselog-tests.yml**: layered fuselog correctness suite (L1 GoogleTest unit, L3 differential, L4 concurrent disjoint/overlap, L5 SQLite + Docker DB matrix). Path-filtered — runs only when `xdn-fs/**`, `bin/build_xdn_fuselog.sh`, or the workflow itself changes. Each job builds fuselog independently; an `all-fuselog-tests` aggregator gates branch protection.
 - **xdn-cli-ci.yml**: gofmt check + CLI binary build on changes to `xdn-cli/`
 - **google-java-format.yml**: Formatting check on XDN Java file changes
 - **geo-demand-smoke.yml**: End-to-end smoke test for demand-driven replica reconfiguration — boots a local cluster from `conf/gigapaxos.xdn.local.geodemand.properties`, drives biased traffic via `eval/geo_demand_smoke.py`, and asserts the active set advances past `epoch=0` and contains the expected us-east-1 nodes (including leader)
