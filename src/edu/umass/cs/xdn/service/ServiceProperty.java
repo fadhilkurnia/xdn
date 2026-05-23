@@ -35,6 +35,21 @@ public class ServiceProperty {
   private final Integer minReplicas;
   private final Integer maxReplicas;
 
+  /** REPLICATED (default) or CLUSTER — see {@link DeploymentMode}. */
+  private final DeploymentMode deploymentMode;
+
+  /** The cluster's internal/peer protocol port. Non-null only for cluster services. */
+  private final Integer peerPort;
+
+  /** Name of the cluster lifecycle adapter (e.g. "etcd"). Non-null only for cluster services. */
+  private final String clusterAdapter;
+
+  /**
+   * Persistent nodeId -&gt; ordinal map for a cluster service. Mutable because ordinals must be
+   * preserved across reconfiguration epochs (a relocated replica keeps its ordinal).
+   */
+  private Map<String, Integer> ordinalMap;
+
   private ServiceProperty(
       String serviceName,
       boolean isDeterministic,
@@ -44,7 +59,11 @@ public class ServiceProperty {
       List<RequestMatcher> requestMatchers,
       Integer numReplicas,
       Integer minReplicas,
-      Integer maxReplicas) {
+      Integer maxReplicas,
+      DeploymentMode deploymentMode,
+      Integer peerPort,
+      String clusterAdapter,
+      Map<String, Integer> ordinalMap) {
     this.serviceName = serviceName;
     this.isDeterministic = isDeterministic;
     this.stateDirectory = stateDirectory;
@@ -54,6 +73,10 @@ public class ServiceProperty {
     this.numReplicas = numReplicas;
     this.minReplicas = minReplicas;
     this.maxReplicas = maxReplicas;
+    this.deploymentMode = deploymentMode;
+    this.peerPort = peerPort;
+    this.clusterAdapter = clusterAdapter;
+    this.ordinalMap = ordinalMap;
   }
 
   public ServiceComponent getEntryComponent() {
@@ -98,6 +121,41 @@ public class ServiceProperty {
       isDeterministic = json.getBoolean("deterministic");
     }
 
+    // parsing deployment mode (default REPLICATED). A cluster service handles its own
+    // coordination, so XDN only places it, gives it a stable identity, and routes to it.
+    DeploymentMode deploymentMode = DeploymentMode.REPLICATED;
+    if (json.has("mode") && !json.isNull("mode")) {
+      deploymentMode = DeploymentMode.fromString(json.getString("mode"));
+    }
+    boolean isClusterManaged = deploymentMode == DeploymentMode.CLUSTER;
+
+    // parsing cluster-only fields: the internal peer port and the lifecycle adapter
+    Integer peerPort = null;
+    String clusterAdapter = null;
+    if (isClusterManaged) {
+      if (!json.has("peer_port") || json.isNull("peer_port")) {
+        throw new IllegalStateException("peer_port is required for a cluster service");
+      }
+      peerPort = json.getInt("peer_port");
+      if (peerPort < 1 || peerPort > 65535) {
+        throw new IllegalStateException("peer_port must be in 1..65535 (got " + peerPort + ")");
+      }
+      clusterAdapter =
+          json.has("adapter") && !json.isNull("adapter") ? json.getString("adapter") : null;
+    }
+
+    // parsing the persistent nodeId -> ordinal map, if carried over from a previous epoch
+    Map<String, Integer> ordinalMap = null;
+    if (json.has("ordinal_map") && !json.isNull("ordinal_map")) {
+      ordinalMap = new HashMap<>();
+      JSONObject ordinalMapJson = json.getJSONObject("ordinal_map");
+      Iterator it = ordinalMapJson.keys();
+      while (it.hasNext()) {
+        String nodeId = it.next().toString();
+        ordinalMap.put(nodeId, ordinalMapJson.getInt(nodeId));
+      }
+    }
+
     // parsing and validating state directory
     String stateDirectory = json.getString("state");
     if (stateDirectory.isEmpty()) {
@@ -108,13 +166,21 @@ public class ServiceProperty {
     }
 
     // parsing and validating consistency model, the default consistency
-    // model is SEQUENTIAL_CONSISTENCY.
+    // model is SEQUENTIAL_CONSISTENCY. A cluster service owns its own consistency, so the
+    // field is optional there and the stored value is only a never-consulted placeholder.
     ConsistencyModel consistencyModel;
-    String consistencyModelString = json.getString("consistency");
-    if (consistencyModelString == null) {
-      consistencyModel = ConsistencyModel.SEQUENTIAL;
+    if (isClusterManaged) {
+      consistencyModel =
+          json.has("consistency") && !json.isNull("consistency")
+              ? parseConsistencyModel(json.getString("consistency"))
+              : ConsistencyModel.SEQUENTIAL;
     } else {
-      consistencyModel = parseConsistencyModel(consistencyModelString);
+      String consistencyModelString = json.getString("consistency");
+      if (consistencyModelString == null) {
+        consistencyModel = ConsistencyModel.SEQUENTIAL;
+      } else {
+        consistencyModel = parseConsistencyModel(consistencyModelString);
+      }
     }
 
     // parsing and validating service component(s)
@@ -188,6 +254,20 @@ public class ServiceProperty {
     Integer maxReplicas = optionalReplicaField(json, "max_replicas");
     validateReplicaConfig(numReplicas, minReplicas, maxReplicas);
 
+    // cluster services are single-image and must declare a fixed replica count
+    if (isClusterManaged) {
+      if (json.has("components")) {
+        throw new IllegalStateException(
+            "a cluster service must be declared with a single 'image', not 'components'");
+      }
+      if (!json.has("image")) {
+        throw new IllegalStateException("a cluster service requires an 'image'");
+      }
+      if (numReplicas == null) {
+        throw new IllegalStateException("num_replicas is required for a cluster service");
+      }
+    }
+
     ServiceProperty prop =
         new ServiceProperty(
             serviceName,
@@ -198,7 +278,11 @@ public class ServiceProperty {
             parsedRequestMatchers,
             numReplicas,
             minReplicas,
-            maxReplicas);
+            maxReplicas,
+            deploymentMode,
+            peerPort,
+            clusterAdapter,
+            ordinalMap);
 
     // automatically infer is-stateful of component via the state directory
     if (stateDirectory != null && stateDirectory.split(":").length == 2) {
@@ -579,6 +663,31 @@ public class ServiceProperty {
     return maxReplicas;
   }
 
+  public DeploymentMode getDeploymentMode() {
+    return deploymentMode;
+  }
+
+  public boolean isClusterManaged() {
+    return deploymentMode == DeploymentMode.CLUSTER;
+  }
+
+  public Integer getPeerPort() {
+    return peerPort;
+  }
+
+  public String getClusterAdapter() {
+    return clusterAdapter;
+  }
+
+  public Map<String, Integer> getOrdinalMap() {
+    return ordinalMap;
+  }
+
+  /** Persists the nodeId -&gt; ordinal map so identities survive a reconfiguration epoch. */
+  public void setOrdinalMap(Map<String, Integer> ordinalMap) {
+    this.ordinalMap = ordinalMap;
+  }
+
   public String toJsonString() {
     assert !this.components.isEmpty() : "unexpected empty component";
 
@@ -593,6 +702,7 @@ public class ServiceProperty {
         jsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
         jsonObject.put("deterministic", this.isDeterministic);
         putReplicaFields(jsonObject);
+        putClusterFields(jsonObject);
       } catch (JSONException e) {
         throw new RuntimeException(e);
       }
@@ -613,6 +723,7 @@ public class ServiceProperty {
       }
       servicePropertyJsonObject.put("components", componentArray);
       putReplicaFields(servicePropertyJsonObject);
+      putClusterFields(servicePropertyJsonObject);
     } catch (JSONException e) {
       throw new RuntimeException(e);
     }
@@ -629,6 +740,25 @@ public class ServiceProperty {
     }
     if (this.maxReplicas != null) {
       target.put("max_replicas", this.maxReplicas.intValue());
+    }
+  }
+
+  /**
+   * Serializes cluster-only fields so a cluster service survives the reconfiguration round-trip.
+   */
+  private void putClusterFields(JSONObject target) throws JSONException {
+    if (this.deploymentMode != DeploymentMode.CLUSTER) {
+      return;
+    }
+    target.put("mode", "cluster");
+    if (this.peerPort != null) {
+      target.put("peer_port", this.peerPort.intValue());
+    }
+    if (this.clusterAdapter != null) {
+      target.put("adapter", this.clusterAdapter);
+    }
+    if (this.ordinalMap != null && !this.ordinalMap.isEmpty()) {
+      target.put("ordinal_map", new JSONObject(this.ordinalMap));
     }
   }
 }
