@@ -34,14 +34,18 @@ public final class SwarmOverlayManager {
    */
   public static boolean ensureOverlay(String networkName) {
     // already exists?
-    int inspect = Shell.runCommand("docker network inspect " + networkName, true);
-    if (inspect == 0) {
+    if (Shell.runCommand("docker network inspect " + networkName, true) == 0) {
       return true;
     }
     // create. We don't pass --subnet/--ip-range; Docker picks a non-conflicting one.
-    int create =
-        Shell.runCommand("docker network create -d overlay --attachable " + networkName, true);
-    return create == 0;
+    if (Shell.runCommand("docker network create -d overlay --attachable " + networkName, true)
+        == 0) {
+      return true;
+    }
+    // When multiple ARs race to create the same overlay on the same swarm, all but one of
+    // their `create` calls fail. Re-inspect: if a peer won the race, the network now exists
+    // and we're done.
+    return Shell.runCommand("docker network inspect " + networkName, true) == 0;
   }
 
   /** Removes the overlay network. Treats "already gone" as success. */
