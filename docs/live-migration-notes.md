@@ -187,3 +187,51 @@ pre-copy on Ubuntu 22.04 we'd need either to upgrade podman from kubic OBS
 (`devel:kubic:libcontainers:stable`) or bypass podman and call CRIU's
 `pre-dump` directly with parent-image-dir chaining. Deferring to v2.
 
+## Day 4 (2026-05-23) — Redis with 104 MB seeded
+
+`docker.io/library/redis:7` (Debian-based, glibc), `redis-server --save ""
+--appendonly no` so all state is in memory. Seeded 100 000 keys × 1 KB hex
+padding = ~104 MB `used_memory` / 110 MB RSS.
+
+### Results
+
+| metric | baseline | with pre-copy |
+|---|---|---|
+| pre-dump (background, NOT downtime) | — | 1.78 MB compressed / 1.02 s |
+| final dump (downtime) | 1.78 MB compressed / 1.20 s | **54 KB / 0.79 s** ← 33× smaller in critical path |
+| scp (downtime) | 0.50 s | 0.30 s |
+| restore (downtime) | 1.03 s | 0.92 s |
+| **client-measured downtime** | **2.59 s** | **1.92 s** (−26%) |
+| DBSIZE post-migration | 100 000 ✓ | 100 000 ✓ |
+
+### What pre-copy bought us and what it didn't
+
+- **Saved 0.67 s of downtime** by collapsing the final-dump and scp legs (the
+  things actually shipped during the pause). The delta tar is ~33× smaller
+  because no writes hit redis between pre-dump and final dump.
+- **Did not reduce restore time.** Podman 3.4.4 doesn't warm-restore the
+  pre-dump image on the destination while the source is still running, so
+  the full 110 MB of CRIU memory pages still gets reassembled during the
+  downtime window. Restore time is ~0.92 s either way.
+- **Disk note:** the on-the-wire archive is tiny (zstd does ~107× on
+  hex-padded keys), but the decompressed CRIU image is the full 115 MB. So
+  pre-copy as podman implements it is a CPU-and-disk optimization, not a
+  network one — most of the time is spent un-zstd-ing and writing pages,
+  not transferring bytes.
+
+The optimization that *would* shrink restore is lazy-paging — restore the
+process minus its anonymous memory, fault pages from a still-running source
+on demand. CRIU supports this (`--lazy-pages`) but podman doesn't expose it.
+Deferred to v2.
+
+### What this implies for XDN
+
+For a v1 XDN integration the question is whether ~2 s of downtime per
+reconfiguration is acceptable for the target workloads. For most stateful
+services (Postgres replicas, Mongo secondaries) ~2 s is *already* a huge
+improvement over the current tar-then-restart path (minutes). For the cluster
+mode we just built (etcd, rqlite), live migration of a member would preserve
+its identity and avoid the `etcdctl member add` dance — but it's *also* fine
+to leave that path on the existing reconfigure-with-rejoin model for now,
+since clusters are membership-aware by design.
+
