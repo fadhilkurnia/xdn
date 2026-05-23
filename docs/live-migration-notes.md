@@ -141,3 +141,49 @@ failed probes during the window:  207 of 7252
    `xdn-migrate` tool this implies a one-time image-sync step before the
    first migration to any new host.
 
+## Day 3 (2026-05-23) — pre-copy on counter-app
+
+`migration/xdn-migrate-precopy.sh` adds one `podman container checkpoint -P`
+round before the final checkpoint. Pre-dumps run while the container is still
+serving requests, so they're outside the downtime window; only the final
+delta ships during the pause.
+
+### Result
+
+| | bytes | wall sec |
+|---|---|---|
+| pre-dump 1 (background, NOT downtime) | 179 KB | 0.60 |
+| final dump (downtime) | 83 KB ← half the 180 KB single-shot final | 0.79 |
+| final scp (downtime) | 83 KB | 0.31 |
+| restore (downtime) | — | 0.72 |
+| **client-measured downtime** | | **1.61 s** |
+
+For comparison, day-2 baseline (no pre-copy): **1.66 s** downtime.
+
+### Honest finding: pre-copy bought us ~50 ms on counter-app.
+
+The fixed `criu dump → criu restore` cost on these hosts is ≈ 1.5 s, dominated
+by process-freeze + namespace dance + TCP-state restoration with
+`--tcp-established`. Counter-app's actual state is a single `atomic.Int64`
+plus the Go runtime working set — almost nothing to ship — so collapsing the
+state transfer phase only saves on the order of disk I/O for 100 KB.
+
+The interesting test for pre-copy is a workload whose memory IS the cost:
+Redis with seeded keys (Day 4) or Postgres with a real working set (Day 5).
+Expecting the gap to widen there.
+
+### Roadblock to call out: podman 3.4.4 doesn't support chained pre-dumps.
+
+The plan's "iterative pre-copy with N rounds until dirty-page rate plateaus"
+collapses to a SINGLE pre-dump because podman 3.4.4 rejects
+`--with-previous` together with `--pre-checkpoint`:
+
+```
+Error: --with-previous can not be used with --pre-checkpoint
+```
+
+This works in podman ≥ 4.0 (I checked the upstream changelog). For multi-round
+pre-copy on Ubuntu 22.04 we'd need either to upgrade podman from kubic OBS
+(`devel:kubic:libcontainers:stable`) or bypass podman and call CRIU's
+`pre-dump` directly with parent-image-dir chaining. Deferring to v2.
+
