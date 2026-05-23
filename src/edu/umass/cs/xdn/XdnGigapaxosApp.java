@@ -1112,10 +1112,23 @@ public class XdnGigapaxosApp
               + " — coordinator must call setClusterTopology() before restore()");
     }
 
-    ServiceComponent c = service.property.getEntryComponent();
-    Map<String, String> env = new LinkedHashMap<>();
-    if (c.getEnvironmentVariables() != null) {
-      env.putAll(c.getEnvironmentVariables());
+    // Identify the cluster member (the stateful component — the one whose Raft joins peers
+    // across the overlay) and the entry component (whose port gets published to the host so
+    // XDN's HTTP frontend can reach it). In a single-image cluster both are the same
+    // component; in a multi-component cluster (e.g. bookcatalog + local rqlite) they are
+    // different and the sidecars share the cluster member's network namespace.
+    ServiceComponent clusterMember = service.property.getStatefulComponent();
+    ServiceComponent entry = service.property.getEntryComponent();
+    if (clusterMember == null) {
+      clusterMember = entry;
+    }
+    int clusterIdx = service.property.getComponents().indexOf(clusterMember);
+    String clusterContainerName = service.containerNames.get(clusterIdx);
+
+    // Build XDN_CLUSTER_* env for the cluster member.
+    Map<String, String> clusterEnv = new LinkedHashMap<>();
+    if (clusterMember.getEnvironmentVariables() != null) {
+      clusterEnv.putAll(clusterMember.getEnvironmentVariables());
     }
     String stableName = "replica-" + topology.myOrdinal();
     StringBuilder peers = new StringBuilder();
@@ -1123,35 +1136,124 @@ public class XdnGigapaxosApp
       if (i > 0) peers.append(',');
       peers.append("replica-").append(i);
     }
-    env.put("XDN_CLUSTER_ORDINAL", String.valueOf(topology.myOrdinal()));
-    env.put("XDN_CLUSTER_SIZE", String.valueOf(topology.clusterSize()));
-    env.put("XDN_CLUSTER_SELF", stableName);
-    env.put("XDN_CLUSTER_PEERS", peers.toString());
+    clusterEnv.put("XDN_CLUSTER_ORDINAL", String.valueOf(topology.myOrdinal()));
+    clusterEnv.put("XDN_CLUSTER_SIZE", String.valueOf(topology.clusterSize()));
+    clusterEnv.put("XDN_CLUSTER_SELF", stableName);
+    clusterEnv.put("XDN_CLUSTER_PEERS", peers.toString());
     if (service.property.getPeerPort() != null) {
-      env.put("XDN_CLUSTER_PEER_PORT", String.valueOf(service.property.getPeerPort()));
+      clusterEnv.put("XDN_CLUSTER_PEER_PORT", String.valueOf(service.property.getPeerPort()));
     }
-    env.put(
+    clusterEnv.put(
         "XDN_CLUSTER_PHASE", topology.phase() == ClusterTopology.Phase.JOIN ? "join" : "bootstrap");
+
+    // The published host port maps to whichever component is the entry. In a multi-component
+    // cluster the entry sidecar shares the cluster member's network namespace, so binding
+    // alloc:<entry-port> on the cluster member's docker run routes external traffic into the
+    // sidecar listening on that port inside the namespace.
+    Integer publishedContainerPort = entry != null ? entry.getEntryPort() : null;
 
     boolean isSuccess =
         startClusterContainer(
-            c.getImageName(),
-            service.containerNames.get(0),
+            clusterMember.getImageName(),
+            clusterContainerName,
             overlay,
             stableName,
-            c.getEntryPort(),
+            publishedContainerPort,
             allocatedPort,
-            c.isStateful() ? stateDirMountSource : null,
-            c.isStateful() ? stateDirMountTarget : null,
-            env);
+            clusterMember.isStateful() ? stateDirMountSource : null,
+            clusterMember.isStateful() ? stateDirMountTarget : null,
+            clusterEnv);
     if (!isSuccess) {
-      throw new RuntimeException("failed to start cluster container for " + serviceName);
+      throw new RuntimeException("failed to start cluster member for " + serviceName);
+    }
+
+    // Start any sidecar components sharing the cluster member's network namespace, in their
+    // declared order. Each sidecar inherits the cluster member's hostname, network aliases,
+    // and published ports — so a sidecar listening on the entry port becomes externally
+    // reachable, and a sidecar that connects to 127.0.0.1:<cluster-member-port> talks to the
+    // local cluster member with zero hops.
+    for (int i = 0; i < service.property.getComponents().size(); i++) {
+      if (i == clusterIdx) {
+        continue;
+      }
+      ServiceComponent sidecar = service.property.getComponents().get(i);
+      Map<String, String> sidecarEnv =
+          sidecar.getEnvironmentVariables() != null
+              ? new LinkedHashMap<>(sidecar.getEnvironmentVariables())
+              : new LinkedHashMap<>();
+      boolean ok =
+          startClusterSidecar(
+              sidecar.getImageName(),
+              service.containerNames.get(i),
+              clusterContainerName,
+              sidecarEnv);
+      if (!ok) {
+        throw new RuntimeException("failed to start cluster sidecar " + sidecar.getComponentName());
+      }
     }
 
     service.composeFilePath = null;
     service.composeProjectName = null;
     service.initializationSucceed = true;
     this.activeServicePorts.put(serviceName, allocatedPort);
+    return true;
+  }
+
+  /**
+   * Starts a sidecar container that shares the cluster member's network namespace.
+   *
+   * <p>The sidecar gets no {@code --network-alias}, {@code --hostname}, or {@code --publish} flags
+   * — those are inherited from the cluster member that owns the namespace. The sidecar just runs
+   * its image with its own env; from inside, it sees the cluster member as {@code 127.0.0.1} (and
+   * conversely, a port the sidecar binds inside the namespace becomes reachable on the host through
+   * whatever {@code --publish} the cluster member set).
+   */
+  private boolean startClusterSidecar(
+      String imageName,
+      String containerName,
+      String namespaceOwnerContainerName,
+      Map<String, String> env) {
+
+    Shell.runCommand("docker container rm --force " + containerName, true);
+
+    List<String> cmd = new ArrayList<>();
+    cmd.add("docker");
+    cmd.add("run");
+    cmd.add("-d");
+    cmd.add("--restart");
+    cmd.add("unless-stopped");
+    cmd.add("--name=" + containerName);
+    cmd.add("--network=container:" + namespaceOwnerContainerName);
+    if (env != null) {
+      for (Map.Entry<String, String> e : env.entrySet()) {
+        cmd.add("--env");
+        cmd.add(e.getKey() + "=" + e.getValue());
+      }
+    }
+    cmd.add(imageName);
+
+    int exitCode = Shell.runCommand(cmd, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:{1} failed to start cluster sidecar {2} sharing namespace of {3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            containerName,
+            namespaceOwnerContainerName
+          });
+      return false;
+    }
+    logger.log(
+        Level.INFO,
+        "{0}:{1} - {2} sidecar started (sharing namespace of {3})",
+        new Object[] {
+          this.myNodeId.toUpperCase(),
+          this.getClass().getSimpleName(),
+          containerName,
+          namespaceOwnerContainerName
+        });
     return true;
   }
 

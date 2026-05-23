@@ -12,11 +12,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 )
 
 // ClusterRootCmd is the parent of all `xdn cluster *` subcommands.
@@ -32,6 +34,12 @@ var ClusterLaunchCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		serviceName := args[0]
+
+		// File-based path: needed for multi-component clusters (e.g. bookcatalog + local
+		// rqlite sidecar) since flags can only express a single image.
+		if fileName, _ := cmd.Flags().GetString("file"); fileName != "" {
+			return runClusterLaunchFromFile(serviceName, fileName)
+		}
 
 		image, _ := cmd.Flags().GetString("image")
 		httpPort, _ := cmd.Flags().GetInt("port")
@@ -99,12 +107,110 @@ func init() {
 	ClusterLaunchCmd.Flags().StringP("state", "s", "", "absolute state directory inside the container, ending with '/' (required)")
 	ClusterLaunchCmd.Flags().IntP("num-replicas", "n", 0, "fixed cluster size — number of replicas (required)")
 	ClusterLaunchCmd.Flags().StringArrayP("env", "e", []string{}, "environment variables for the cluster image (repeat: --env KEY=VALUE)")
-	_ = ClusterLaunchCmd.MarkFlagRequired("image")
-	_ = ClusterLaunchCmd.MarkFlagRequired("peer-port")
-	_ = ClusterLaunchCmd.MarkFlagRequired("state")
-	_ = ClusterLaunchCmd.MarkFlagRequired("num-replicas")
+	ClusterLaunchCmd.Flags().StringP("file", "f", "", "YAML/JSON file with the cluster spec (required for multi-component clusters)")
+	// Flag-based path requires these; file-based path validates them inside the YAML instead.
+	// Bypass the cobra requireds when -f is used by un-marking after the fact in PreRunE.
+	ClusterLaunchCmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if fileName, _ := cmd.Flags().GetString("file"); fileName != "" {
+			return nil
+		}
+		for _, f := range []string{"image", "peer-port", "state", "num-replicas"} {
+			if !cmd.Flags().Changed(f) {
+				return fmt.Errorf("--%s is required (or pass --file <spec.yaml>)", f)
+			}
+		}
+		return nil
+	}
 
 	ClusterRootCmd.AddCommand(ClusterLaunchCmd)
+}
+
+// runClusterLaunchFromFile reads a YAML/JSON cluster spec from disk and hands it to the
+// control plane. The file is the only way to declare a multi-component cluster (one stateful
+// member + one or more sidecars sharing its network namespace).
+func runClusterLaunchFromFile(serviceName, fileName string) error {
+	body, err := os.ReadFile(fileName)
+	if err != nil {
+		return fmt.Errorf("unable to read spec file %s: %w", fileName, err)
+	}
+	jsonBody, err := yaml.YAMLToJSON(body)
+	if err != nil {
+		return fmt.Errorf("unable to parse spec file %s: %w", fileName, err)
+	}
+	var spec map[string]interface{}
+	if err := json.Unmarshal(jsonBody, &spec); err != nil {
+		return fmt.Errorf("spec file is not valid JSON/YAML: %w", err)
+	}
+	specName, _ := spec["name"].(string)
+	if specName != "" && specName != serviceName {
+		return fmt.Errorf(
+			"service name on command line (%q) doesn't match spec file 'name' (%q)",
+			serviceName, specName)
+	}
+	if specName == "" {
+		// Default the name from the command line if the YAML omits it, so the user can reuse
+		// the same spec under different names.
+		spec["name"] = serviceName
+		jsonBody, _ = json.Marshal(spec)
+	}
+	// Sanity-check mode: we won't refuse a non-cluster spec here (the validator will), but a
+	// warning helps catch accidentally passing a regular-launch YAML to `xdn cluster launch`.
+	if m, _ := spec["mode"].(string); m != "cluster" && m != "clustered" {
+		colorPrint := color.New(color.FgYellow)
+		_, _ = colorPrint.Fprintf(os.Stderr,
+			"warning: spec file does not set mode: cluster; the control plane will reject it\n")
+	}
+
+	printClusterLaunchFileHeader(serviceName, fileName, spec)
+
+	if err := sendCreateRequest(serviceName, string(jsonBody)); err != nil {
+		return err
+	}
+	colorPrint := color.New(color.FgGreen).Add(color.Bold)
+	_, _ = colorPrint.Printf("Cluster service launched 🎉\n")
+	fmt.Printf("Inspect placement:   xdn service info %s\n", serviceName)
+	fmt.Printf("Tear down:           xdn service destroy %s\n", serviceName)
+	fmt.Println()
+	return nil
+}
+
+func printClusterLaunchFileHeader(name, fileName string, spec map[string]interface{}) {
+	colorPrint := color.New(color.FgYellow).Add(color.Bold).Add(color.Underline)
+	fmt.Printf("Launching cluster ")
+	_, _ = colorPrint.Printf("%s", name)
+	fmt.Printf(" from spec %s with the following configuration:\n", fileName)
+	if v, ok := spec["peer_port"]; ok {
+		fmt.Printf(" peer port     : %v\n", v)
+	}
+	if v, ok := spec["num_replicas"]; ok {
+		fmt.Printf(" num replicas  : %v\n", v)
+	}
+	if v, ok := spec["state"]; ok {
+		fmt.Printf(" state dir     : %v\n", v)
+	}
+	if comps, ok := spec["components"].([]interface{}); ok {
+		fmt.Printf(" components    :\n")
+		for _, c := range comps {
+			if m, ok := c.(map[string]interface{}); ok {
+				for cname, body := range m {
+					if bm, ok := body.(map[string]interface{}); ok {
+						img, _ := bm["image"].(string)
+						role := ""
+						if v, _ := bm["stateful"].(bool); v {
+							role += " stateful"
+						}
+						if v, _ := bm["entry"].(bool); v {
+							role += " entry"
+						}
+						fmt.Printf("   - %-12s %s%s\n", cname+":", img, role)
+					}
+				}
+			}
+		}
+	} else if v, ok := spec["image"]; ok {
+		fmt.Printf(" docker image  : %v\n", v)
+	}
+	fmt.Println()
 }
 
 func validateServiceName(name string) error {

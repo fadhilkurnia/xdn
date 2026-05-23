@@ -248,14 +248,14 @@ public class ServiceProperty {
     Integer maxReplicas = optionalReplicaField(json, "max_replicas");
     validateReplicaConfig(numReplicas, minReplicas, maxReplicas);
 
-    // cluster services are single-image and must declare a fixed replica count
+    // Cluster services can be either single-image (image alone) or multi-component (one
+    // stateful component is the cluster member on the overlay; the others are sidecars
+    // sharing its network namespace). The generic validation below already enforces exactly
+    // one stateful + one entry component, which is exactly what cluster mode wants.
     if (isClusterManaged) {
-      if (json.has("components")) {
+      if (!json.has("image") && !json.has("components")) {
         throw new IllegalStateException(
-            "a cluster service must be declared with a single 'image', not 'components'");
-      }
-      if (!json.has("image")) {
-        throw new IllegalStateException("a cluster service requires an 'image'");
+            "a cluster service requires either 'image' or 'components'");
       }
       if (numReplicas == null) {
         throw new IllegalStateException("num_replicas is required for a cluster service");
