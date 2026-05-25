@@ -23,8 +23,8 @@ REMOTE=/users/fadhil/xdn-cl
 CFG=conf/gigapaxos.xdn.cluster-launch.cloudlab.properties
 JF='-ea -Djavax.net.ssl.keyStorePassword=qwerty -Djavax.net.ssl.trustStorePassword=qwerty -Djavax.net.ssl.keyStore=conf/keyStore.jks -Djavax.net.ssl.trustStore=conf/trustStore.jks -Djava.util.logging.config.file=conf/logging.properties -Dlog4j.configuration=conf/log4j.properties -DgigapaxosConfig='"$CFG"' -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED'
 
-echo "[1/3] starting RC (node 0) on 10.10.1.1 and ARs (nodes 1,2,3) on .2/.3/.4 ..."
-for pair in "10.10.1.1 0" "10.10.1.2 1" "10.10.1.3 2" "10.10.1.4 3"; do
+echo "[1/3] starting RC (node 0) on 10.10.1.4 and ARs (nodes 1,2,3) on .1/.2/.3 ..."
+for pair in "10.10.1.4 0" "10.10.1.1 1" "10.10.1.2 2" "10.10.1.3 3"; do
   read ip nid <<<"$pair"
   ssh -fn -o BatchMode=yes "$ip" "
     cd $REMOTE && mkdir -p logs
@@ -35,19 +35,19 @@ for pair in "10.10.1.1 0" "10.10.1.2 1" "10.10.1.3 2" "10.10.1.4 3"; do
 done
 
 echo "[2/3] waiting for HTTP frontends ..."
-for pair in "10.10.1.1 3300" "10.10.1.2 2300" "10.10.1.3 2300" "10.10.1.4 2300"; do
+for pair in "10.10.1.4 3300" "10.10.1.1 2300" "10.10.1.2 2300" "10.10.1.3 2300"; do
   read ip port <<<"$pair"
   until timeout 1 bash -c "</dev/tcp/$ip/$port" 2>/dev/null; do sleep 2; done
   echo "  $ip:$port up"
 done
 
-echo "[3/3] XDN cluster ready. Set XDN_CONTROL_PLANE=10.10.1.1 to talk to it."
+echo "[3/3] XDN cluster ready. Set XDN_CONTROL_PLANE=10.10.1.4 to talk to it."
 
 case "${1:-}" in
   --launch-etcd)
     echo
     echo "→ launching etcd-demo (3 replicas)"
-    XDN_CONTROL_PLANE=10.10.1.1 ./bin/xdn cluster launch etcd-demo \
+    XDN_CONTROL_PLANE=10.10.1.4 ./bin/xdn cluster launch etcd-demo \
         --image xdn-etcd-cluster:test \
         --port 2379 --peer-port 2380 \
         --state /etcd-data/ --num-replicas 3
@@ -55,14 +55,12 @@ case "${1:-}" in
   --launch-bookcat)
     echo
     echo "→ launching bookcat (rqlite cluster member + bookcatalog sidecar)"
-    XDN_CONTROL_PLANE=10.10.1.1 ./bin/xdn cluster launch bookcat \
+    XDN_CONTROL_PLANE=10.10.1.4 ./bin/xdn cluster launch bookcat \
         -f services/bookcatalog-rqlite-cluster.yaml
     echo
     echo "Note: bookcatalog can race rqlite startup. If 'curl … /api/books' returns"
-    echo "'don't have any cluster info', restart the sidecars once rqlite is healthy:"
-    echo "  for ip in 10.10.1.2 10.10.1.3 10.10.1.4; do"
-    echo "    nid=\$((\${ip##*.} - 1))"
-    echo "    ssh \$ip \"sudo docker restart c1.e0.bookcat.\$nid.xdn.io\""
-    echo "  done"
+    echo "'don't have any cluster info', restart the sidecars once rqlite is healthy."
+    echo "Container names follow the node id from the spec: c1.e0.bookcat.<nid>.xdn.io"
+    echo "where nid is 1,2,3 on hosts 10.10.1.1, 10.10.1.2, 10.10.1.3 respectively."
     ;;
 esac
