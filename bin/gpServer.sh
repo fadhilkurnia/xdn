@@ -291,7 +291,8 @@ function get_file_list {
   LOG4J_PROPERTIES=$value
 
   conf_transferrables="$GP_PROPERTIES $KEYSTORE $TRUSTSTORE $LOG_PROPERTIES\
-     $LOG4J_PROPERTIES $APP_RESOURCES"
+      $LOG4J_PROPERTIES $APP_RESOURCES"
+
   print 3 "transferrables="$jar_files $conf_transferrables
 }
 
@@ -416,6 +417,7 @@ $REMOTE_SSL_KEYFILES \
 -Djava.util.logging.config.file=$(get_simple_name $LOG_PROPERTIES) \
 -Dlog4j.configuration=$(get_simple_name $LOG4J_PROPERTIES) \
 -DgigapaxosConfig=$(get_simple_name $DEFAULT_GP_PROPERTIES) \
+-Dxdn.geoip.mmdb=$HOME/$INSTALL_PATH/xdn-dns/geolocation_city_data.mmdb \
 -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host \
 --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
 --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED"
@@ -476,6 +478,9 @@ function start_server {
       $jar_files $username@$address:$INSTALL_PATH/jars/ "
     $RSYNC --rsync-path="$RSYNC_PATH && rsync" \
       $jar_files $username@$address:$INSTALL_PATH/jars/ 
+    $RSYNC --rsync-path="mkdir -p $INSTALL_PATH/xdn-dns && rsync" \
+      $HEAD/xdn-dns/geolocation_city_data.mmdb \
+      $username@$address:$INSTALL_PATH/xdn-dns/
     rsync_symlink $address
 
     # then start remote server
