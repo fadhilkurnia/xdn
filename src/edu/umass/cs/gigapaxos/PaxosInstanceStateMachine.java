@@ -1788,7 +1788,15 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 							"PISM.execute total={0}ms deser={1}ms exec={2}ms cb={3}ms entry={4} req={5}",
 							new Object[]{totalMs, deserMs, execMs, cbMs,
 									isEntryReplica, request != null ? request.getClass().getSimpleName() : "null"});
-					assert (requestPacket.getEntryReplica() > 0) : requestPacket;
+					// Note: upstream assertion was `> 0` from the days of string node IDs
+					// (AR0/AR1/…) where the integerized form was always ≥ 1 and 0 meant
+					// "unset". With XDN's numeric node IDs starting at 0 (see the
+					// memory note on GigaPaxos numeric node IDs), node 0 is a valid
+					// entry replica, AND reconfigurator-internal packets like
+					// RECONFIGURATION_COMPLETE legitimately have no entry replica set.
+					// Relaxed to `>= 0` so this assertion stops misfiring on every
+					// reconfiguration commit.
+					assert (requestPacket.getEntryReplica() >= 0) : requestPacket;
 
 					// don't try any more if stopped
 					if (pism != null && pism.isStopped())
