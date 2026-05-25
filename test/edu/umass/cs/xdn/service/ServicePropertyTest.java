@@ -2,6 +2,7 @@ package edu.umass.cs.xdn.service;
 
 import java.util.Objects;
 import org.json.JSONException;
+import org.json.JSONObject;
 import org.junit.Assert;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -95,23 +96,31 @@ public class ServicePropertyTest {
   @Test
   public void ServicePropertyTest_ToJsonStringSingleComponent() {
     String serviceName = "alice-book-catalog";
-    String prop =
-        String.format(
-            """
-                {
-                  "image": "bookcatalog",
-                  "port": 8000,
-                  "name": "%s",
-                  "deterministic": true,
-                  "state": "/data/",
-                  "consistency": "linearizability"
-                }
-                """,
-            serviceName);
-    String compactedProp = prop.replaceAll("\\s+", "");
+    String prop = String.format("""
+      {
+        "image": "bookcatalog",
+        "port": 8000,
+        "name": "%s",
+        "deterministic": true,
+        "state": "/data/",
+        "consistency": "linearizability",
+        "min_reconfiguration_interval_sec": 120,
+        "min_requests_for_reconfiguration": 1000
+      }
+      """, serviceName);
+
     try {
-      ServiceProperty sp = ServiceProperty.createFromJsonString(compactedProp);
-      Assert.assertEquals(sp.toJsonString(), compactedProp);
+      JSONObject expected = new JSONObject(prop);
+      ServiceProperty sp = ServiceProperty.createFromJsonString(prop);
+      JSONObject actual = new JSONObject(sp.toJsonString());
+
+      Assert.assertEquals(expected.length(), actual.length());
+      for (String key : JSONObject.getNames(expected)) {
+        Assert.assertEquals(
+                "Mismatch for key: " + key,
+                expected.get(key),
+                actual.get(key));
+      }
     } catch (JSONException e) {
       throw new RuntimeException(e);
     }

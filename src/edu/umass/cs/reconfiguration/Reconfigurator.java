@@ -31,7 +31,7 @@ import javax.net.ssl.SSLException;
 import edu.umass.cs.reconfiguration.interfaces.*;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import edu.umass.cs.reconfiguration.reconfigurationutils.*;
-import edu.umass.cs.xdn.XdnGeoDemandProfiler2;
+import edu.umass.cs.xdn.XdnGeoDemandProfiler;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -4083,7 +4083,7 @@ public class Reconfigurator<NodeIDType> implements
         if (record == null)
             return ReconfigurationTriggerResult.SERVICE_NOT_FOUND;
 
-        XdnGeoDemandProfiler2.forceReconfigurationOnce(serviceName);
+        XdnGeoDemandProfiler.forceReconfigurationOnce(serviceName);
         NodeIdsMetadataPair<NodeIDType> result = this.shouldReconfigure2(serviceName);
         if (result == null) {
             return this.demandProfiler.contains(serviceName)

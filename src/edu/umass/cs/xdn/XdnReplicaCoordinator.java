@@ -697,11 +697,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // Store the service->service-property mapping
     this.serviceProperties.put(serviceName, serviceProperty);
 
-    // Create instance of the service in XdnGeoDemandProfiler2
-    XdnGeoDemandProfiler2.registerConsistencyModel(
+    // Create instance of the service in XdnGeoDemandProfiler
+    XdnGeoDemandProfiler.registerConsistencyModel(
             serviceName, serviceProperty.getConsistencyModel());
 
-    XdnGeoDemandProfiler2.registerReconfigurationPolicy(
+    XdnGeoDemandProfiler.registerReconfigurationPolicy(
             serviceName,
             serviceProperty.getMinReconfigurationIntervalSec(),
             serviceProperty.getMinRequestsForReconfiguration());

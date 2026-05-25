@@ -531,7 +531,7 @@ public class ReconfigurationConfig {
         XDN_GEO_NUM_GRID_COLUMNS(1000),
 
         /**
-         * Placement algorithm used by XdnGeoDemandProfiler2.
+         * Placement algorithm used by XdnGeoDemandProfiler.
          * Valid values: CENTROID, GREEDY  (must match PlacementAlgorithmType).
          */
         XDN_GEO_PLACEMENT_ALGORITHM("CENTROID")
