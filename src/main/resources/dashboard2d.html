@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+    <head>
+	<title>XDN Demand 2D Visualizer</title>
+	<style>
+	* { margin: 0; padding: 0; box-sizing: border-box; }
+
+	body {
+	    background: #f0f2f5;
+	    color: #1a1a2e;
+	    font-family: 'Courier New', monospace;
+	    padding: 16px 24px;
+	    height: 100vh;
+	    display: flex;
+	    flex-direction: column;
+	    gap: 12px;
+	}
+
+	header {
+	    display: flex;
+	    justify-content: space-between;
+	    align-items: center;
+	    border-bottom: 1px solid #d0d4dc;
+	    padding-bottom: 10px;
+	    flex-shrink: 0;
+	}
+
+	header h1 {
+	    font-size: 12px;
+	    letter-spacing: 0.15em;
+	    text-transform: uppercase;
+	    color: #0066cc;
+	}
+
+	.header-right {
+	    display: flex;
+	    align-items: center;
+	    gap: 20px;
+	    font-size: 11px;
+	}
+
+	#meta { color: #888; display: flex; gap: 16px; }
+	#meta span { color: #333; font-weight: bold; }
+
+	.toggle-label {
+	    display: flex;
+	    align-items: center;
+	    gap: 6px;
+	    font-size: 10px;
+	    letter-spacing: 0.1em;
+	    text-transform: uppercase;
+	    color: #555;
+	    cursor: pointer;
+	    user-select: none;
+	}
+
+	.toggle-label input { cursor: pointer; }
+
+	.grids {
+	    flex: 1;
+	    min-height: 0;
+	    display: flex;
+	    flex-direction: column;
+	    gap: 12px;
+	}
+
+	.grid-block {
+	    display: flex;
+	    flex-direction: column;
+	    gap: 6px;
+	    background: #fff;
+	    border: 1px solid #d0d4dc;
+	    border-radius: 6px;
+	    padding: 10px 12px;
+	}
+
+	.grid-label {
+	    display: flex;
+	    justify-content: space-between;
+	    align-items: center;
+	    font-size: 10px;
+	    letter-spacing: 0.1em;
+	    text-transform: uppercase;
+	    flex-shrink: 0;
+	}
+
+	.grid-label .title { color: #555; }
+	.grid-label .mode  { color: #aaa; font-size: 9px; }
+
+	#status {
+	    font-size: 10px;
+	    color: #999;
+	    letter-spacing: 0.06em;
+	    flex-shrink: 0;
+	}
+
+	#tooltip {
+	    position: fixed;
+	    display: none;
+	    background: rgba(20,20,30,0.85);
+	    color: #fff;
+	    font-family: 'Courier New', monospace;
+	    font-size: 11px;
+	    padding: 5px 9px;
+	    border-radius: 4px;
+	    pointer-events: none;
+	    white-space: nowrap;
+	    z-index: 999;
+	}
+	</style>
+
+	<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    </head>
+    <body>
+	<header>
+	    <h1>XDN / Demand Heatmap / <span id="serviceName">—</span></h1>
+	    <div class="header-right">
+		<div id="meta">
+		    <div>TOTAL <span id="totalReqs">—</span></div>
+		    <div>READS <span id="readCount">—</span></div>
+		    <div>WRITES <span id="writeCount">—</span></div>
+		</div>
+		<label class="toggle-label">
+		    <input type="checkbox" id="showNodes" onchange="onToggleNodes()"> Show Nodes
+		</label>
+	    </div>
+	</header>
+
+	<div class="grids">
+	    <div class="grid-block">
+		<div class="grid-label">
+		    <span class="title">Read Distribution</span>
+		</div>
+		<div id="readPlot"></div>
+	    </div>
+
+	    <div class="grid-block">
+		<div class="grid-label">
+		    <span class="title">Write Distribution</span>
+		</div>
+		<div id="writePlot"></div>
+	    </div>
+
+	    <div class="grid-block">
+		<div class="grid-label">
+		    <span class="title">Overall Distribution</span>
+		</div>
+		<div id="overallPlot"></div>
+	    </div>
+	</div>
+
+	<div id="status">Initializing...</div>
+	<div id="tooltip"></div>
+
+	<script>
+	const pathParts = window.location.pathname.split('/');
+	const service   = pathParts[2] || '';
+	const tooltip   = document.getElementById('tooltip');
+
+	let lastData  = null;
+	let showNodes = false;
+
+	window.onToggleNodes = function() {
+	    showNodes = document.getElementById('showNodes').checked;
+	    if (lastData) renderAll(lastData);
+	};
+
+	function buildZArray(cells, gridRows, gridCols) {
+	    const z = Array.from({ length: gridRows }, () => new Array(gridCols).fill(0));
+	    const latStep = 180 / gridRows;
+	    const lngStep = 360 / gridCols;
+	    cells.forEach(c => {
+		const col = Math.min(gridCols - 1, Math.floor((c.lng + 180) / lngStep));
+		const row = Math.min(gridRows - 1, Math.floor((c.lat +  90) / latStep));
+		z[row][col] += c.count;
+	    });
+	    return z;
+	}
+
+	function renderPlot(divId, cells, gridRows, gridCols, colorEnd, nodes) {
+	    const margins = { l: 50, r: 80, t: 8, b: 40 };
+	    const maxW    = 600;
+	    const plotW   = Math.min(document.getElementById(divId).parentElement.offsetWidth - 26, maxW);
+	    const innerW  = plotW - margins.l - margins.r;
+	    const innerH  = innerW * gridRows / gridCols;
+	    const plotH   = innerH + margins.t + margins.b;
+	    const cellPx  = innerW / gridCols;
+	    const useBorders = cellPx >= 3;
+
+	    const z = buildZArray(cells, gridRows, gridCols);
+	    const traces = [{
+		xgap: useBorders ? 1 : 0,
+		ygap: useBorders ? 1 : 0,
+		type: 'heatmap',
+		z,
+		colorscale: [['0', '#eeeeee'], ['1', colorEnd]],
+		hovertemplate: '%{z} requests<extra></extra>',
+		showscale: true,
+	    }];
+
+	    if (showNodes && nodes?.length) {
+		traces.push({
+		    type: 'scatter',
+		    x: nodes.map(n => Math.floor((n.lng + 180) / (360 / gridCols))),
+		    y: nodes.map(n => Math.floor((n.lat +  90) / (180 / gridRows))),
+		    mode: 'markers',
+		    marker: {
+			color: nodes.map(n => n.replica ? '#ffffff' : '#888888'),
+			size: 8,
+			line: { color: '#333', width: 1 },
+		    },
+		    hovertemplate: '%{text}<extra></extra>',
+		    text: nodes.map(n => n.id),
+		    showlegend: false,
+		});
+	    }
+
+	    Plotly.react(divId, traces, {
+		width: plotW,
+		height: plotH,
+		margin: { l: 50, r: 80, t: 8, b: 40 },
+		xaxis: { ticks: '', showticklabels: true },
+		yaxis: { ticks: '', showticklabels: true },
+		paper_bgcolor: '#ffffff',
+		plot_bgcolor: '#eeeeee',
+	    }, { responsive: false });
+	}
+
+	function renderAll(data) {
+	    const { reads, writes, gridRows, gridCols, nodes } = data;
+	    const overall = Object.values(
+		[...reads, ...writes].reduce((acc, c) => {
+		    const key = `${c.lat},${c.lng}`;
+		    if (!acc[key]) acc[key] = { ...c, count: 0 };
+		    acc[key].count += c.count;
+		    return acc;
+		}, {})
+	    );
+	    renderPlot('readPlot',    reads,   gridRows, gridCols, '#00aaff', nodes);
+	    renderPlot('writePlot',   writes,  gridRows, gridCols, '#ff4400', nodes);
+	    renderPlot('overallPlot', overall, gridRows, gridCols, '#aa66ff', nodes);
+	}
+
+	function refresh() {
+	    if (!service) { document.getElementById('status').textContent = 'No service in URL.'; return; }
+
+	    fetch(`/api/v2/services/${service}/demand`)
+		.then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+		.then(data => {
+		    lastData = data;
+		    document.getElementById('serviceName').textContent = data.name;
+		    document.getElementById('totalReqs').textContent   = data.totalRequests.toLocaleString();
+		    document.getElementById('readCount').textContent   = data.reads.length;
+		    document.getElementById('writeCount').textContent  = data.writes.length;
+		    renderAll(data);
+		    document.getElementById('status').textContent =
+			`Last updated: ${new Date().toLocaleTimeString()} — auto-refreshing every 10s`;
+		})
+		.catch(err => { document.getElementById('status').textContent = `Error: ${err.message}`; });
+	}
+
+	refresh();
+	setInterval(refresh, 10000);
+	</script>
+    </body>
+</html>

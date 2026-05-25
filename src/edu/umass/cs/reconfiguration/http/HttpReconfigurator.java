@@ -431,12 +431,14 @@ public class HttpReconfigurator {
         private final StringBuilder buf = new StringBuilder();
         final ReconfiguratorFunctions rcFunctions;
 
-        private static final String DASHBOARD_HTML = loadDashboardHtml();
+        private static final String DASHBOARD_3D_HTML = loadDashboardHtml("dashboard3d.html");
+        private static final String DASHBOARD_2D_HTML = loadDashboardHtml("dashboard2d.html");
 
-        private static String loadDashboardHtml() {
+        private static String loadDashboardHtml(String filename) {
             try (InputStream is = HttpReconfigurator.class
-                    .getResourceAsStream("/dashboard.html")) {
-                if (is == null) return "<h1>dashboard.html not found in classpath</h1>";
+                    .getResourceAsStream(String.format("/%s", filename))) {
+                if (is == null)
+                    return String.format("<h1>%s not found in classpath</h1>", filename);
                 return new String(is.readAllBytes(), StandardCharsets.UTF_8);
             } catch (IOException e) {
                 return "<h1>Failed to load dashboard: " + e.getMessage() + "</h1>";
@@ -460,14 +462,28 @@ public class HttpReconfigurator {
                 buf.setLength(0);
 
                 // Serve the demand visualization dashboard
-                // GET /dashboard  or  GET /dashboard?service=restkv
-                if (msg instanceof HttpRequest httpReq
-                        && (httpReq.uri().equals("/dashboard")
-                        || httpReq.uri().startsWith("/dashboard/"))) {
+                // GET /dashboard3d/{service}
+                if ((request.uri().equals("/dashboard3d/")
+                        || request.uri().startsWith("/dashboard3d/"))) {
                     FullHttpResponse resp = new DefaultFullHttpResponse(
                             HTTP_1_1, OK,
                             Unpooled.copiedBuffer(
-                                    DASHBOARD_HTML.getBytes(StandardCharsets.UTF_8)));
+                                    DASHBOARD_3D_HTML.getBytes(StandardCharsets.UTF_8)));
+                    resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+                    resp.headers().set(HttpHeaderNames.CONTENT_LENGTH,
+                            resp.content().readableBytes());
+                    ctx.writeAndFlush(resp);
+                    return;
+                }
+
+                // 2D Grid visualization dashboard
+                // GET /dashboard/{service}
+                if ((request.uri().equals("/dashboard/")
+                        || request.uri().startsWith("/dashboard/"))) {
+                    FullHttpResponse resp = new DefaultFullHttpResponse(
+                            HTTP_1_1, OK,
+                            Unpooled.copiedBuffer(
+                                    DASHBOARD_2D_HTML.getBytes(StandardCharsets.UTF_8)));
                     resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
                     resp.headers().set(HttpHeaderNames.CONTENT_LENGTH,
                             resp.content().readableBytes());
