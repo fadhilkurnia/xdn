@@ -1,32 +1,19 @@
 /* Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- * 
+ *
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration;
-
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
 import edu.umass.cs.gigapaxos.interfaces.AppRequestParserBytes;
@@ -51,537 +38,518 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.reconfiguration.reconfigurationutils.TrivialRepliconfigurable;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * @author V. Arun
  * @param <NodeIDType>
- *            <p>
- *            This abstract class should be inherited by replica coordination
- *            protocols. The only abstract method the inheritor needs to
- *            implement is coordinateRequest(.). For example, this method could
- *            lazily propagate the request to all replicas; or it could ensure
- *            reliable receipt from a threshold number of replicas for
- *            durability, and so on.
- * 
- *            Notes:
- * 
- *            In general, coordinateRequest(.) is app-specific logic. But most
- *            common cases, e.g., linearizability, sequential, causal, eventual,
- *            etc. can be implemented agnostic to app-specific details with
- *            supporting libraries that we can provide.
- * 
- *            A request is not an entity that definitively does or does not need
- *            coordination. A request, e.g., a read request, may or may not need
- *            coordination depending on the replica coordination protocol, which
- *            is why it is here.
- * 
+ *     <p>This abstract class should be inherited by replica coordination protocols. The only
+ *     abstract method the inheritor needs to implement is coordinateRequest(.). For example, this
+ *     method could lazily propagate the request to all replicas; or it could ensure reliable
+ *     receipt from a threshold number of replicas for durability, and so on.
+ *     <p>Notes:
+ *     <p>In general, coordinateRequest(.) is app-specific logic. But most common cases, e.g.,
+ *     linearizability, sequential, causal, eventual, etc. can be implemented agnostic to
+ *     app-specific details with supporting libraries that we can provide.
+ *     <p>A request is not an entity that definitively does or does not need coordination. A
+ *     request, e.g., a read request, may or may not need coordination depending on the replica
+ *     coordination protocol, which is why it is here.
  */
-public abstract class AbstractReplicaCoordinator<NodeIDType> implements
-		Repliconfigurable, ReplicaCoordinator<NodeIDType>,
-		AppRequestParserBytes {
-	protected final Repliconfigurable app;
-	private final ConcurrentHashMap<IntegerPacketType, Boolean> coordinationTypes = new ConcurrentHashMap<IntegerPacketType, Boolean>();
+public abstract class AbstractReplicaCoordinator<NodeIDType>
+    implements Repliconfigurable, ReplicaCoordinator<NodeIDType>, AppRequestParserBytes {
+  protected final Repliconfigurable app;
+  private final ConcurrentHashMap<IntegerPacketType, Boolean> coordinationTypes =
+      new ConcurrentHashMap<IntegerPacketType, Boolean>();
 
-	private ReconfiguratorCallback callback = null;
-	private ReconfiguratorCallback stopCallback = null; // for stops
-	private boolean largeCheckpoints = false;
-	protected Messenger<NodeIDType, ?> messenger;
+  private ReconfiguratorCallback callback = null;
+  private ReconfiguratorCallback stopCallback = null; // for stops
+  private boolean largeCheckpoints = false;
+  protected Messenger<NodeIDType, ?> messenger;
 
-	/*********************
-	 * Start of abstract methods
-	 * 
-	 * @param request
-	 * @param callback
-	 * @return Success of coordination.
-	 * @throws IOException
-	 * @throws RequestParseException
-	 **********************************************/
-	/* This method performs whatever replica coordination action is necessary to
-	 * handle the request. */
-	public abstract boolean coordinateRequest(Request request,
-			ExecutedCallback callback) throws IOException,
-			RequestParseException;
+  /*********************
+   * Start of abstract methods
+   *
+   * @param request
+   * @param callback
+   * @return Success of coordination.
+   * @throws IOException
+   * @throws RequestParseException
+   **********************************************/
+  /* This method performs whatever replica coordination action is necessary to
+   * handle the request. */
+  public abstract boolean coordinateRequest(Request request, ExecutedCallback callback)
+      throws IOException, RequestParseException;
 
-	/* This method should return true if the replica group is successfully
-	 * created or one already exists with the same set of nodes. It should
-	 * return false otherwise. */
-	public abstract boolean createReplicaGroup(String serviceName, int epoch,
-			String state, Set<NodeIDType> nodes, String placementMetadata);
+  /* This method should return true if the replica group is successfully
+   * created or one already exists with the same set of nodes. It should
+   * return false otherwise. */
+  public abstract boolean createReplicaGroup(
+      String serviceName, int epoch, String state, Set<NodeIDType> nodes, String placementMetadata);
 
-	/* This method should result in all state corresponding to serviceName being
-	 * deleted. It is meant to be called only after a replica group has been
-	 * stopped by committing a stop request in a coordinated manner. */
-	public abstract boolean deleteReplicaGroup(String serviceName, int epoch);
+  /* This method should result in all state corresponding to serviceName being
+   * deleted. It is meant to be called only after a replica group has been
+   * stopped by committing a stop request in a coordinated manner. */
+  public abstract boolean deleteReplicaGroup(String serviceName, int epoch);
 
-	/* This method must return the replica group that was most recently
-	 * successfully created for the serviceName using createReplicaGroup. */
-	public abstract Set<NodeIDType> getReplicaGroup(String serviceName);
+  /* This method must return the replica group that was most recently
+   * successfully created for the serviceName using createReplicaGroup. */
+  public abstract Set<NodeIDType> getReplicaGroup(String serviceName);
 
-	/********************* End of abstract methods ***********************************************/
+  /********************* End of abstract methods ***********************************************/
 
-	private static ConcurrentMap<Replicable, AbstractReplicaCoordinator<?>> appCoordMap =
-			new ConcurrentHashMap<Replicable, AbstractReplicaCoordinator<?>>();
+  private static ConcurrentMap<Replicable, AbstractReplicaCoordinator<?>> appCoordMap =
+      new ConcurrentHashMap<Replicable, AbstractReplicaCoordinator<?>>();
 
-	// A replica coordinator is meaningless without an underlying app
-	protected AbstractReplicaCoordinator(Replicable app) {
-		appCoordMap.putIfAbsent(app, this);
-		this.app = (app instanceof AbstractReplicaCoordinator)
-				? ((AbstractReplicaCoordinator<?>) app).app
-				: new TrivialRepliconfigurable(app);
+  // A replica coordinator is meaningless without an underlying app
+  protected AbstractReplicaCoordinator(Replicable app) {
+    appCoordMap.putIfAbsent(app, this);
+    this.app =
+        (app instanceof AbstractReplicaCoordinator)
+            ? ((AbstractReplicaCoordinator<?>) app).app
+            : new TrivialRepliconfigurable(app);
 
-		this.messenger = null;
-	}
+    this.messenger = null;
+  }
 
-	
-	/**
-	 * @param app
-	 * @param messenger
-	 */
-	public AbstractReplicaCoordinator(Replicable app,
-			Messenger<NodeIDType, ?> messenger) {
-		this(app);
-		this.messenger = messenger;
-	}
-	
-	private Set<IntegerPacketType> cachedAppCoordTypes = null;
-	
-	// temporary state holders during recovery
-	private String arar;
-	private String arrc;
-	/**
-	 * @return Request types for coordination requests. By default, it is 
-	 * the {@link #getRequestTypes()} - {@link #getAppRequestTypes()}. This
-	 * method must be overridden for non-default behavior.
-	 */
-	public Set<IntegerPacketType> getCoordinatorRequestTypes() {
-		if(cachedAppCoordTypes!=null) return cachedAppCoordTypes;
-		Set<IntegerPacketType> types = this.getRequestTypes();
-		if(types==null) types = new HashSet<IntegerPacketType>();
-		types.removeAll(this.getAppRequestTypes());
-		return cachedAppCoordTypes=types;
-	}
+  /**
+   * @param app
+   * @param messenger
+   */
+  public AbstractReplicaCoordinator(Replicable app, Messenger<NodeIDType, ?> messenger) {
+    this(app);
+    this.messenger = messenger;
+  }
 
-	protected void setMessenger(Messenger<NodeIDType, ?> messenger) {
-		this.messenger = messenger;
-	}
+  private Set<IntegerPacketType> cachedAppCoordTypes = null;
 
-	protected Messenger<NodeIDType, ?> getMessenger() {
-		return this.messenger;
-	}
+  // temporary state holders during recovery
+  private String arar;
+  private String arrc;
 
-	protected void registerCoordination(IntegerPacketType... types) {
-		for (IntegerPacketType type : types)
-			this.coordinationTypes.put(type, true);
-	}
+  /**
+   * @return Request types for coordination requests. By default, it is the {@link
+   *     #getRequestTypes()} - {@link #getAppRequestTypes()}. This method must be overridden for
+   *     non-default behavior.
+   */
+  public Set<IntegerPacketType> getCoordinatorRequestTypes() {
+    if (cachedAppCoordTypes != null) return cachedAppCoordTypes;
+    Set<IntegerPacketType> types = this.getRequestTypes();
+    if (types == null) types = new HashSet<IntegerPacketType>();
+    types.removeAll(this.getAppRequestTypes());
+    return cachedAppCoordTypes = types;
+  }
 
-	/**
-	 * This "default" callback will be called after every request execution. If
-	 * there is a request-specific callback also specified, this callback will
-	 * be called before the request-specific callback.
-	 * 
-	 * @param callback
-	 * @return {@code this}
-	 */
-	protected final AbstractReplicaCoordinator<NodeIDType> setCallback(
-			ReconfiguratorCallback callback) {
-		/**
-		 * The correctness of Reconfigurator relies on the following as
-		 * Reconfigurator sets the callback before its
-		 * getReconfigurableReconfiguratorAsActiveReplica.
-		 */
-		if (this.callback == null)
-			this.callback = callback;
-		return this;
-	}
+  protected void setMessenger(Messenger<NodeIDType, ?> messenger) {
+    this.messenger = messenger;
+  }
 
-	protected final ReconfiguratorCallback getCallback() {
-		return this.callback;
-	}
+  protected Messenger<NodeIDType, ?> getMessenger() {
+    return this.messenger;
+  }
 
-	/**
-	 * Used only at active replicas.
-	 * 
-	 * @param callback
-	 * @return {@code this}
-	 */
-	protected final AbstractReplicaCoordinator<NodeIDType> setStopCallback(
-			ReconfiguratorCallback callback) {
-		this.stopCallback = callback;
-		return this;
-	}
+  protected void registerCoordination(IntegerPacketType... types) {
+    for (IntegerPacketType type : types) this.coordinationTypes.put(type, true);
+  }
 
-	private Request unwrapIfNeeded(Request request) {
-		return request instanceof ReplicableClientRequest
-				&& !
-				// cache-optimized request types
-				(myRequestTypes != null ? myRequestTypes
-						: (myRequestTypes = this.getRequestTypes()))
-						.contains(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST) ? ((ReplicableClientRequest) request)
-				.getRequest() : request;
+  /**
+   * This "default" callback will be called after every request execution. If there is a
+   * request-specific callback also specified, this callback will be called before the
+   * request-specific callback.
+   *
+   * @param callback
+   * @return {@code this}
+   */
+  protected final AbstractReplicaCoordinator<NodeIDType> setCallback(
+      ReconfiguratorCallback callback) {
+    /**
+     * The correctness of Reconfigurator relies on the following as Reconfigurator sets the callback
+     * before its getReconfigurableReconfiguratorAsActiveReplica.
+     */
+    if (this.callback == null) this.callback = callback;
+    return this;
+  }
 
-	}
+  protected final ReconfiguratorCallback getCallback() {
+    return this.callback;
+  }
 
-	private static Set<IntegerPacketType> myRequestTypes = null;
+  /**
+   * Used only at active replicas.
+   *
+   * @param callback
+   * @return {@code this}
+   */
+  protected final AbstractReplicaCoordinator<NodeIDType> setStopCallback(
+      ReconfiguratorCallback callback) {
+    this.stopCallback = callback;
+    return this;
+  }
 
-	/**
-	 * Coordinate if needed, else hand over to app.
-	 * 
-	 * @param request
-	 * @return True if coordinated successfully or handled successfully
-	 *         (locally), false otherwise.
-	 */
-	@SuppressWarnings("deprecation")
-	// only for backwards compatibility
-	protected boolean handleIncoming(Request request, ExecutedCallback callback) {
-		boolean handled = false;
-		// check if coordination on request before unwrapping
+  private Request unwrapIfNeeded(Request request) {
+    return request instanceof ReplicableClientRequest
+            && !
+            // cache-optimized request types
+            (myRequestTypes != null ? myRequestTypes : (myRequestTypes = this.getRequestTypes()))
+                .contains(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST)
+        ? ((ReplicableClientRequest) request).getRequest()
+        : request;
+  }
 
-		if (needsCoordination(request)) {
-			try {
-				if (request instanceof ReplicableRequest) {
-					((ReplicableRequest) request).setNeedsCoordination(false);
-				}
-				handled = coordinateRequest(unwrapIfNeeded(request), callback);
-			} catch (IOException ioe) {
-				ioe.printStackTrace();
-			} catch (RequestParseException rpe) {
-				rpe.printStackTrace();
-			}
-		} else {
-			handled = this.execute(unwrapIfNeeded(request), callback);
-		}
-		return handled;
-	}
+  private static Set<IntegerPacketType> myRequestTypes = null;
 
-	@Override
-	public boolean execute(Request request) {
-		return this.execute(request, null);
-	}
+  /**
+   * Coordinate if needed, else hand over to app.
+   *
+   * @param request
+   * @return True if coordinated successfully or handled successfully (locally), false otherwise.
+   */
+  @SuppressWarnings("deprecation")
+  // only for backwards compatibility
+  protected boolean handleIncoming(Request request, ExecutedCallback callback) {
+    boolean handled = false;
+    // check if coordination on request before unwrapping
 
-	@Override
-	public boolean execute(Request request, boolean noReplyToClient) {
-		return this.execute(request, noReplyToClient, null);
-	}
+    if (needsCoordination(request)) {
+      try {
+        if (request instanceof ReplicableRequest) {
+          ((ReplicableRequest) request).setNeedsCoordination(false);
+        }
+        handled = coordinateRequest(unwrapIfNeeded(request), callback);
+      } catch (IOException ioe) {
+        ioe.printStackTrace();
+      } catch (RequestParseException rpe) {
+        rpe.printStackTrace();
+      }
+    } else {
+      handled = this.execute(unwrapIfNeeded(request), callback);
+    }
+    return handled;
+  }
 
-	private boolean execute(Request request, ExecutedCallback callback) {
-		return this.execute(request, false, callback);
-	}
+  @Override
+  public boolean execute(Request request) {
+    return this.execute(request, null);
+  }
 
-	/** This method is a wrapper for Application.handleRequest and meant to be
-	 * invoked by the class that implements this AbstractReplicaCoordinator or
-	 * its helper classes.
-	 * 
-	 * We need control over this method in order to call the callback after the
-	 * app's handleRequest method has been executed. An alternative would have
-	 * been to enforce the callback as part of the Reconfigurable interface.
-	 * However, this is a less preferred design because it depends more on the
-	 * app's support for stop requests even though a stop request is really
-	 * meaningless to an app.
-	 * 
-	 * Should we add support for response messaging here using the
-	 * ClientMessgenser and ClientRequest interfaces similar to that in
-	 * gigapaxos? No, because response messaging details are specific to the
-	 * coordination protocol. 
-	 * @param request 
-	 * @param noReplyToClient 
-	 * @param requestCallback 
-	 * @return True 
-	 * 
-	 */
-	public boolean execute(Request request, boolean noReplyToClient,
-			ExecutedCallback requestCallback) {
-		if (this.callback != null && this.callback.preExecuted(request)) {
-			// no further execution
-			return true;
-		}
-		
-		boolean handled = request.getRequestType()==ReconfigurationPacket.PacketType.NO_TYPE ||
-				(((this.app instanceof Replicable) ? ((Replicable) (this.app))
-				.execute(request, noReplyToClient) : this.app.execute(request)));
-		callCallback(request, handled, requestCallback);
-		/* We always return true because the return value here is a no-op. It
-		 * might as well be void. Returning anything but true will ensure that a
-		 * paxos coordinator will get stuck on this request forever. The app can
-		 * still convey false if needed to the caller via the callback. */
-		return true;
-	}
+  @Override
+  public boolean execute(Request request, boolean noReplyToClient) {
+    return this.execute(request, noReplyToClient, null);
+  }
 
-	public final Request getRequest(String stringified)
-			throws RequestParseException {
-		if (JSONPacket.couldBeJSON(stringified)) {
-			boolean internal = false;
-			try {
-				JSONObject json = new JSONObject(stringified);
-				Integer type =  JSONPacket.getPacketType(json);
-				if((type == null ||  type == ReconfigurationPacket.PacketType.NO_TYPE
-						.getInt()) && (internal=true)) 
-					// used by default stop
-					return new DefaultAppRequest(json); 
-				else if ((type == ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST
-						.getInt()) && (internal=true))
-					return new ReplicableClientRequest(json, null);
-			} catch (JSONException | UnsupportedEncodingException e) {
-				if(internal) throw new RequestParseException(e);
-				// else ignore and treat as app request
-			}
-		}
-		Request request = null;
-		if(this.parser != null && (request = this.parser.getRequest(stringified)) != null)
-			return request;
-		// else
-		return this.app.getRequest(stringified);
-	}
+  private boolean execute(Request request, ExecutedCallback callback) {
+    return this.execute(request, false, callback);
+  }
 
-	private AppRequestParser parser=null;
-	private AppRequestParserBytes parserBytes=null;
+  /**
+   * This method is a wrapper for Application.handleRequest and meant to be invoked by the class
+   * that implements this AbstractReplicaCoordinator or its helper classes.
+   *
+   * <p>We need control over this method in order to call the callback after the app's handleRequest
+   * method has been executed. An alternative would have been to enforce the callback as part of the
+   * Reconfigurable interface. However, this is a less preferred design because it depends more on
+   * the app's support for stop requests even though a stop request is really meaningless to an app.
+   *
+   * <p>Should we add support for response messaging here using the ClientMessgenser and
+   * ClientRequest interfaces similar to that in gigapaxos? No, because response messaging details
+   * are specific to the coordination protocol.
+   *
+   * @param request
+   * @param noReplyToClient
+   * @param requestCallback
+   * @return True
+   */
+  public boolean execute(
+      Request request, boolean noReplyToClient, ExecutedCallback requestCallback) {
+    if (this.callback != null && this.callback.preExecuted(request)) {
+      // no further execution
+      return true;
+    }
 
-	public void setGetRequestImpl(AppRequestParser parser) {
-		this.parser = parser;
-	}
-	public void setGetRequestImpl(AppRequestParserBytes parserBytes) {
-		this.parserBytes = parserBytes;
-	}
+    boolean handled =
+        request.getRequestType() == ReconfigurationPacket.PacketType.NO_TYPE
+            || (((this.app instanceof Replicable)
+                ? ((Replicable) (this.app)).execute(request, noReplyToClient)
+                : this.app.execute(request)));
+    callCallback(request, handled, requestCallback);
+    /* We always return true because the return value here is a no-op. It
+     * might as well be void. Returning anything but true will ensure that a
+     * paxos coordinator will get stuck on this request forever. The app can
+     * still convey false if needed to the caller via the callback. */
+    return true;
+  }
 
-	public final Request getRequest(byte[] bytes, NIOHeader header)
-			throws RequestParseException {
-		try {
+  public final Request getRequest(String stringified) throws RequestParseException {
+    if (JSONPacket.couldBeJSON(stringified)) {
+      boolean internal = false;
+      try {
+        JSONObject json = new JSONObject(stringified);
+        Integer type = JSONPacket.getPacketType(json);
+        if ((type == null || type == ReconfigurationPacket.PacketType.NO_TYPE.getInt())
+            && (internal = true))
+          // used by default stop
+          return new DefaultAppRequest(json);
+        else if ((type == ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST.getInt())
+            && (internal = true)) return new ReplicableClientRequest(json, null);
+      } catch (JSONException | UnsupportedEncodingException e) {
+        if (internal) throw new RequestParseException(e);
+        // else ignore and treat as app request
+      }
+    }
+    Request request = null;
+    if (this.parser != null && (request = this.parser.getRequest(stringified)) != null)
+      return request;
+    // else
+    return this.app.getRequest(stringified);
+  }
 
-			// FIXME: Remove the wrapping of request with ReplicableClientRequest.
-			//  The current implementation of ActiveReplica does not seem to differentiate
-			//  CoordinatorPacket and AppRequest. Currently, ActiveReplica only knows
-			//  ReconfigurationPacket and AppRequest. ActiveReplica also specifically passes
-			//  ReplicableClientRequest, this is why we wrap all of the parsed request with
-			//  ReplicableClientRequest.
-			//  .
-			//  ActiveReplica does assertion in ActiveReplica.assertAppRequest(Request). without
-			//  wrapping all request with ReplicableClientRequest, the assertion will fail, throwing
-			//  runtime exception.
-			//  .
-			//  Wrapping all requests into ReplicableClientRequest, even for CoordinatorPacket,
-			//  is a potential confusion because CoordinatorPacket comes from fellow ActiveReplica,
-			//  and not from the end user.
-			if (this.parserBytes != null) {
-				return ReplicableClientRequest.wrap(parserBytes.getRequest(bytes, header));
-			}
-			if (this.parser != null) {
-				return ReplicableClientRequest.wrap(
-						parser.getRequest(new String(bytes, StandardCharsets.ISO_8859_1)));
-			}
+  private AppRequestParser parser = null;
+  private AppRequestParserBytes parserBytes = null;
 
-			int inferredRequestType = ByteBuffer.wrap(bytes).getInt();
-			int replicableClientRequestType = ReconfigurationPacket.PacketType.
-					REPLICABLE_CLIENT_REQUEST.getInt();
-			return (inferredRequestType == replicableClientRequestType)
-					? (this.app instanceof AppRequestParserBytes
-						? new ReplicableClientRequest(bytes, header, this.app)
-						: new ReplicableClientRequest(bytes, this.app))
-					: this.app instanceof AppRequestParserBytes
-						? ((AppRequestParserBytes) this.app).getRequest(bytes, header)
-						: this.app.getRequest(new String(bytes, NIOHeader.CHARSET));
-		} catch (UnsupportedEncodingException e) {
-			throw new RequestParseException(e);
-		}
-	}
+  public void setGetRequestImpl(AppRequestParser parser) {
+    this.parser = parser;
+  }
 
-	protected final Request getRequest(ReplicableClientRequest rcr,
-			NIOHeader header) throws RequestParseException {
-		try {
-			return this.app instanceof AppRequestParserBytes ? rcr.getRequest(
-					(AppRequestParserBytes) this.app, header) : rcr
-					.getRequest(this.app);
-		} catch (UnsupportedEncodingException e) {
-			throw new RequestParseException(e);
-		}
-	}
+  public void setGetRequestImpl(AppRequestParserBytes parserBytes) {
+    this.parserBytes = parserBytes;
+  }
 
-	/**
-	 * Need to return just app's request types. Coordination packets can go
-	 * directly to the coordination module and don't have to be known to
-	 * ActiveReplica.
-	 * 
-	 * @return Set of request types that the app is designed to handle.
-	 */
-	public Set<IntegerPacketType> getAppRequestTypes() {
-		return this.app.getRequestTypes();
-	}
+  public final Request getRequest(byte[] bytes, NIOHeader header) throws RequestParseException {
+    try {
 
-	@Override
-	public ReconfigurableRequest getStopRequest(String name, int epoch) {
-		return this.app.getStopRequest(name, epoch);
-	}
+      // FIXME: Remove the wrapping of request with ReplicableClientRequest.
+      //  The current implementation of ActiveReplica does not seem to differentiate
+      //  CoordinatorPacket and AppRequest. Currently, ActiveReplica only knows
+      //  ReconfigurationPacket and AppRequest. ActiveReplica also specifically passes
+      //  ReplicableClientRequest, this is why we wrap all of the parsed request with
+      //  ReplicableClientRequest.
+      //  .
+      //  ActiveReplica does assertion in ActiveReplica.assertAppRequest(Request). without
+      //  wrapping all request with ReplicableClientRequest, the assertion will fail, throwing
+      //  runtime exception.
+      //  .
+      //  Wrapping all requests into ReplicableClientRequest, even for CoordinatorPacket,
+      //  is a potential confusion because CoordinatorPacket comes from fellow ActiveReplica,
+      //  and not from the end user.
+      if (this.parserBytes != null) {
+        return ReplicableClientRequest.wrap(parserBytes.getRequest(bytes, header));
+      }
+      if (this.parser != null) {
+        return ReplicableClientRequest.wrap(
+            parser.getRequest(new String(bytes, StandardCharsets.ISO_8859_1)));
+      }
 
-	@Override
-	public String getFinalState(String name, int epoch) {
-		return this.app.getFinalState(name, epoch);
-	}
+      int inferredRequestType = ByteBuffer.wrap(bytes).getInt();
+      int replicableClientRequestType =
+          ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST.getInt();
+      return (inferredRequestType == replicableClientRequestType)
+          ? (this.app instanceof AppRequestParserBytes
+              ? new ReplicableClientRequest(bytes, header, this.app)
+              : new ReplicableClientRequest(bytes, this.app))
+          : this.app instanceof AppRequestParserBytes
+              ? ((AppRequestParserBytes) this.app).getRequest(bytes, header)
+              : this.app.getRequest(new String(bytes, NIOHeader.CHARSET));
+    } catch (UnsupportedEncodingException e) {
+      throw new RequestParseException(e);
+    }
+  }
 
-	@Override
-	public void putInitialState(String name, int epoch, String state) {
-		this.app.putInitialState(name, epoch, state);
-	}
+  protected final Request getRequest(ReplicableClientRequest rcr, NIOHeader header)
+      throws RequestParseException {
+    try {
+      return this.app instanceof AppRequestParserBytes
+          ? rcr.getRequest((AppRequestParserBytes) this.app, header)
+          : rcr.getRequest(this.app);
+    } catch (UnsupportedEncodingException e) {
+      throw new RequestParseException(e);
+    }
+  }
 
-	@Override
-	public boolean deleteFinalState(String name, int epoch) {
-		return this.app.deleteFinalState(name, epoch);
-	}
+  /**
+   * Need to return just app's request types. Coordination packets can go directly to the
+   * coordination module and don't have to be known to ActiveReplica.
+   *
+   * @return Set of request types that the app is designed to handle.
+   */
+  public Set<IntegerPacketType> getAppRequestTypes() {
+    return this.app.getRequestTypes();
+  }
 
-	@Override
-	public Integer getEpoch(String name) {
-		return this.app.getEpoch(name);
-	}
+  @Override
+  public ReconfigurableRequest getStopRequest(String name, int epoch) {
+    return this.app.getStopRequest(name, epoch);
+  }
 
-	@Override
-	public String checkpoint(String name) {
-		String state = null;
-		return this.stopCallback != null
-				&& (state = this.stopCallback.preCheckpoint(name)) != null ? state
-				: app.checkpoint(name);
-	}
+  @Override
+  public String getFinalState(String name, int epoch) {
+    return this.app.getFinalState(name, epoch);
+  }
 
-	@Override
-	public boolean restore(String name, String state) {
-		return this.stopCallback != null
-				&& this.stopCallback.preRestore(name, state) ? true
+  @Override
+  public void putInitialState(String name, int epoch, String state) {
+    this.app.putInitialState(name, epoch, state);
+  }
 
-		/* Will be a no-op except during recovery when stopCallback will be null
-		 * as it wouldn't yet have been set. */
-		: this.preRestore(name, state) ? true
+  @Override
+  public boolean deleteFinalState(String name, int epoch) {
+    return this.app.deleteFinalState(name, epoch);
+  }
 
-		: app.restore(name, state);
-	}
+  @Override
+  public Integer getEpoch(String name) {
+    return this.app.getEpoch(name);
+  }
 
-	/* Call back active replica for stop requests, else call default callback.
-	 * Should really be private, but sometimes we may need to trigger a callback
-	 * for an older request. */
-	protected final void callCallback(Request request, boolean handled,
-			ExecutedCallback requestCallback) {
-		if (this.stopCallback != null
-				&& request instanceof ReconfigurableRequest
-				&& ((ReconfigurableRequest) request).isStop()) {
-			// no longer used (by ActiveReplica)
-			this.stopCallback.executed(request, handled);
-		} else if (requestCallback != null) {
-			// request-specific callback
-			requestCallback.executed(request, handled);
-		} else if (this.callback != null) {
-			// used by reconfigurator
-			this.callback.executed(request, handled);
-		}
-	}
+  @Override
+  public String checkpoint(String name) {
+    String state = null;
+    return this.stopCallback != null && (state = this.stopCallback.preCheckpoint(name)) != null
+        ? state
+        : app.checkpoint(name);
+  }
 
-	/*********************** Start of private helper methods **********************/
+  @Override
+  public boolean restore(String name, String state) {
+    return this.stopCallback != null && this.stopCallback.preRestore(name, state)
+        ? true
 
-	private boolean needsCoordination(Request request) {
-		if (request instanceof ReplicableRequest
-				&& ((ReplicableRequest) request).needsCoordination()) {
-			return true;
-		}
-		/* No need for setNeedsCoordination as a request will necessarily get
-		 * converted to a proposal or accept when coordinated, so there is no
-		 * need to worry about inifinite looping. */
-		else if (request instanceof RequestPacket && request.getRequestType()==PaxosPacket.PaxosPacketType.REQUEST)
-			return true;
-		return false;
-	}
+        /* Will be a no-op except during recovery when stopCallback will be null
+         * as it wouldn't yet have been set. */
+        : this.preRestore(name, state) ? true : app.restore(name, state);
+  }
 
-	/**
-	 * @return My node ID.
-	 */
-	public NodeIDType getMyID() {
-		assert (this.messenger != null);
-		return this.messenger.getMyID();
-	}
+  /* Call back active replica for stop requests, else call default callback.
+   * Should really be private, but sometimes we may need to trigger a callback
+   * for an older request. */
+  protected final void callCallback(
+      Request request, boolean handled, ExecutedCallback requestCallback) {
+    if (this.stopCallback != null
+        && request instanceof ReconfigurableRequest
+        && ((ReconfigurableRequest) request).isStop()) {
+      // no longer used (by ActiveReplica)
+      this.stopCallback.executed(request, handled);
+    } else if (requestCallback != null) {
+      // request-specific callback
+      requestCallback.executed(request, handled);
+    } else if (this.callback != null) {
+      // used by reconfigurator
+      this.callback.executed(request, handled);
+    }
+  }
 
-	/**
-	 * @return True if large checkpoints are enabled.
-	 */
-	public boolean hasLargeCheckpoints() {
-		return this.largeCheckpoints;
-	}
+  /*********************** Start of private helper methods **********************/
 
-	/**
-	 * Enables large checkpoints. Large checkpoints means that the file system
-	 * will be used to store or retrieve remote checkpoints. This is the only
-	 * way to do checkpointing if the checkpoint state size exceeds the amount
-	 * of available memory.
-	 */
-	public void setLargeCheckpoints() {
-		this.largeCheckpoints = true;
-	}
+  private boolean needsCoordination(Request request) {
+    if (request instanceof ReplicableRequest && ((ReplicableRequest) request).needsCoordination()) {
+      return true;
+    }
+    /* No need for setNeedsCoordination as a request will necessarily get
+     * converted to a proposal or accept when coordinated, so there is no
+     * need to worry about inifinite looping. */
+    else if (request instanceof RequestPacket
+        && request.getRequestType() == PaxosPacket.PaxosPacketType.REQUEST) return true;
+    return false;
+  }
 
-	/**
-	 * Default implementation that can be overridden for more batching
-	 * optimization.
-	 * 
-	 * @param nameStates
-	 * @param nodes
-	 * @return True if all groups successfully created.
-	 */
-	public boolean createReplicaGroup(Map<String, String> nameStates,
-			Set<NodeIDType> nodes) {
-		boolean created = true;
-		for (String name : nameStates.keySet()) {
-			created = created
-					&& this.createReplicaGroup(name, 0, nameStates.get(name),
-							nodes);
-		}
-		return created;
-	}
+  /**
+   * @return My node ID.
+   */
+  public NodeIDType getMyID() {
+    assert (this.messenger != null);
+    return this.messenger.getMyID();
+  }
 
-	public boolean createReplicaGroup(String serviceName, int epoch, String state,
-									  Set<NodeIDType> nodes) {
-		return this.createReplicaGroup(serviceName, epoch, state, nodes, null);
-	}
+  /**
+   * @return True if large checkpoints are enabled.
+   */
+  public boolean hasLargeCheckpoints() {
+    return this.largeCheckpoints;
+  }
 
-	/*********************** End of private helper methods ************************/
+  /**
+   * Enables large checkpoints. Large checkpoints means that the file system will be used to store
+   * or retrieve remote checkpoints. This is the only way to do checkpointing if the checkpoint
+   * state size exceeds the amount of available memory.
+   */
+  public void setLargeCheckpoints() {
+    this.largeCheckpoints = true;
+  }
 
-	public void stop() {
-		this.messenger.stop();
-		if(this.app instanceof GigapaxosShutdownable)
-			((GigapaxosShutdownable)this.app).shutdown();
-	}
+  /**
+   * Default implementation that can be overridden for more batching optimization.
+   *
+   * @param nameStates
+   * @param nodes
+   * @return True if all groups successfully created.
+   */
+  public boolean createReplicaGroup(Map<String, String> nameStates, Set<NodeIDType> nodes) {
+    boolean created = true;
+    for (String name : nameStates.keySet()) {
+      created = created && this.createReplicaGroup(name, 0, nameStates.get(name), nodes);
+    }
+    return created;
+  }
 
-	/********************** Request propagation helper methods ******************/
-	/* A simple utility method for lazy propagation, a simplistic coordination
-	 * protocol. This is the only place where this class uses Messenger. */
-	protected void sendAllLazy(Request request) throws IOException,
-			RequestParseException, JSONException {
-		assert (request.getServiceName() != null);
-		assert (this.getReplicaGroup(request.getServiceName()) != null) : "ARC"
-				+ getMyID() + " has no group for " + request.getServiceName();
-		GenericMessagingTask<NodeIDType, Object> mtask = new GenericMessagingTask<NodeIDType, Object>(
-				this.getReplicaGroup(request.getServiceName()).toArray(),
-				(request.toString()));
-		if (this.messenger == null)
-			return;
-		this.messenger.send(mtask);
-	}
+  public boolean createReplicaGroup(
+      String serviceName, int epoch, String state, Set<NodeIDType> nodes) {
+    return this.createReplicaGroup(serviceName, epoch, state, nodes, null);
+  }
 
-	/**
-	 * @return Refer {@link AppRequestParser#getMutualAuthRequestTypes()}
-	 */
-	protected Set<IntegerPacketType> getMutualAuthAppRequestTypes() {
-		Set<IntegerPacketType> types = this.app.getMutualAuthRequestTypes();
-		return types != null ? types : new HashSet<IntegerPacketType>();
-	}
-	
-	protected String getARARNodesAsString() {
-		return this.arar;
-	}
+  /*********************** End of private helper methods ************************/
 
-	protected String getARRCNodesAsString() {
-		return this.arrc;
-	}
+  public void stop() {
+    this.messenger.stop();
+    if (this.app instanceof GigapaxosShutdownable) ((GigapaxosShutdownable) this.app).shutdown();
+  }
 
-	private boolean preRestore(String name, String state) {
-		if(name.equals(AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString())) {
-			this.arar = state;
-			return true;
-		}
-		else if(name.equals(AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString())) {
-			this.arrc = state;
-			return true;
-		}
-		return false;
-	}
+  /********************** Request propagation helper methods ******************/
+  /* A simple utility method for lazy propagation, a simplistic coordination
+   * protocol. This is the only place where this class uses Messenger. */
+  protected void sendAllLazy(Request request)
+      throws IOException, RequestParseException, JSONException {
+    assert (request.getServiceName() != null);
+    assert (this.getReplicaGroup(request.getServiceName()) != null)
+        : "ARC" + getMyID() + " has no group for " + request.getServiceName();
+    GenericMessagingTask<NodeIDType, Object> mtask =
+        new GenericMessagingTask<NodeIDType, Object>(
+            this.getReplicaGroup(request.getServiceName()).toArray(), (request.toString()));
+    if (this.messenger == null) return;
+    this.messenger.send(mtask);
+  }
+
+  /**
+   * @return Refer {@link AppRequestParser#getMutualAuthRequestTypes()}
+   */
+  protected Set<IntegerPacketType> getMutualAuthAppRequestTypes() {
+    Set<IntegerPacketType> types = this.app.getMutualAuthRequestTypes();
+    return types != null ? types : new HashSet<IntegerPacketType>();
+  }
+
+  protected String getARARNodesAsString() {
+    return this.arar;
+  }
+
+  protected String getARRCNodesAsString() {
+    return this.arrc;
+  }
+
+  private boolean preRestore(String name, String state) {
+    if (name.equals(AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString())) {
+      this.arar = state;
+      return true;
+    } else if (name.equals(AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString())) {
+      this.arrc = state;
+      return true;
+    }
+    return false;
+  }
 }

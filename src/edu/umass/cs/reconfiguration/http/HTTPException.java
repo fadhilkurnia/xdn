@@ -4,23 +4,21 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfiguration
 
 /**
  * @author arun
- *
  */
 public class HTTPException extends Exception {
 
-	/**
-	 * 
-	 */
-	private static final long serialVersionUID = -8942725299426579324L;
-	final ClientReconfigurationPacket.ResponseCodes code;
+  /** */
+  private static final long serialVersionUID = -8942725299426579324L;
 
-	HTTPException(ClientReconfigurationPacket.ResponseCodes code, String message) {
-		super(message);
-		this.code = code;
-	}
+  final ClientReconfigurationPacket.ResponseCodes code;
 
-	HTTPException(String message) {
-		super(message);
-		this.code = null;
-	}
+  HTTPException(ClientReconfigurationPacket.ResponseCodes code, String message) {
+    super(message);
+    this.code = code;
+  }
+
+  HTTPException(String message) {
+    super(message);
+    this.code = null;
+  }
 }

@@ -5,91 +5,109 @@ package edu.umass.cs.primarybackup.proto;
 
 public final class PrimaryBackupPacketProto {
   private PrimaryBackupPacketProto() {}
-  public static void registerAllExtensions(
-      com.google.protobuf.ExtensionRegistryLite registry) {
+
+  public static void registerAllExtensions(com.google.protobuf.ExtensionRegistryLite registry) {}
+
+  public static void registerAllExtensions(com.google.protobuf.ExtensionRegistry registry) {
+    registerAllExtensions((com.google.protobuf.ExtensionRegistryLite) registry);
   }
 
-  public static void registerAllExtensions(
-      com.google.protobuf.ExtensionRegistry registry) {
-    registerAllExtensions(
-        (com.google.protobuf.ExtensionRegistryLite) registry);
-  }
-  public interface ForwardedRequestPacketOrBuilder extends
+  public interface ForwardedRequestPacketOrBuilder
+      extends
       // @@protoc_insertion_point(interface_extends:primary_backup.ForwardedRequestPacket)
       com.google.protobuf.MessageOrBuilder {
 
     /**
+     *
+     *
      * <pre>
      * unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     long getPacketId();
 
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     java.lang.String getServiceName();
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
-    com.google.protobuf.ByteString
-        getServiceNameBytes();
+    com.google.protobuf.ByteString getServiceNameBytes();
 
     /**
+     *
+     *
      * <pre>
      * ID of the entry node that first receive the request.
      * </pre>
      *
      * <code>string sender_node_id = 3;</code>
+     *
      * @return The senderNodeId.
      */
     java.lang.String getSenderNodeId();
+
     /**
+     *
+     *
      * <pre>
      * ID of the entry node that first receive the request.
      * </pre>
      *
      * <code>string sender_node_id = 3;</code>
+     *
      * @return The bytes for senderNodeId.
      */
-    com.google.protobuf.ByteString
-        getSenderNodeIdBytes();
+    com.google.protobuf.ByteString getSenderNodeIdBytes();
 
     /**
+     *
+     *
      * <pre>
      * The encoded request from the entry node.
      * </pre>
      *
      * <code>bytes encoded_request = 4;</code>
+     *
      * @return The encodedRequest.
      */
     com.google.protobuf.ByteString getEncodedRequest();
   }
-  /**
-   * Protobuf type {@code primary_backup.ForwardedRequestPacket}
-   */
-  public static final class ForwardedRequestPacket extends
-      com.google.protobuf.GeneratedMessageV3 implements
+
+  /** Protobuf type {@code primary_backup.ForwardedRequestPacket} */
+  public static final class ForwardedRequestPacket extends com.google.protobuf.GeneratedMessageV3
+      implements
       // @@protoc_insertion_point(message_implements:primary_backup.ForwardedRequestPacket)
       ForwardedRequestPacketOrBuilder {
-  private static final long serialVersionUID = 0L;
+    private static final long serialVersionUID = 0L;
+
     // Use ForwardedRequestPacket.newBuilder() to construct.
     private ForwardedRequestPacket(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
       super(builder);
     }
+
     private ForwardedRequestPacket() {
       serviceName_ = "";
       senderNodeId_ = "";
@@ -98,37 +116,44 @@ public final class PrimaryBackupPacketProto {
 
     @java.lang.Override
     @SuppressWarnings({"unused"})
-    protected java.lang.Object newInstance(
-        UnusedPrivateParameter unused) {
+    protected java.lang.Object newInstance(UnusedPrivateParameter unused) {
       return new ForwardedRequestPacket();
     }
 
     @java.lang.Override
-    public final com.google.protobuf.UnknownFieldSet
-    getUnknownFields() {
+    public final com.google.protobuf.UnknownFieldSet getUnknownFields() {
       return this.unknownFields;
     }
-    public static final com.google.protobuf.Descriptors.Descriptor
-        getDescriptor() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ForwardedRequestPacket_descriptor;
+
+    public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_ForwardedRequestPacket_descriptor;
     }
 
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable
           .ensureFieldAccessorsInitialized(
-              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.Builder.class);
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+                  .class,
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+                  .Builder.class);
     }
 
     public static final int PACKET_ID_FIELD_NUMBER = 1;
     private long packetId_ = 0L;
+
     /**
+     *
+     *
      * <pre>
      * unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     @java.lang.Override
@@ -137,14 +162,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object serviceName_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     @java.lang.Override
@@ -153,29 +183,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         serviceName_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getServiceNameBytes() {
+    public com.google.protobuf.ByteString getServiceNameBytes() {
       java.lang.Object ref = serviceName_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         serviceName_ = b;
         return b;
       } else {
@@ -184,14 +215,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int SENDER_NODE_ID_FIELD_NUMBER = 3;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object senderNodeId_ = "";
+
     /**
+     *
+     *
      * <pre>
      * ID of the entry node that first receive the request.
      * </pre>
      *
      * <code>string sender_node_id = 3;</code>
+     *
      * @return The senderNodeId.
      */
     @java.lang.Override
@@ -200,29 +236,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         senderNodeId_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * ID of the entry node that first receive the request.
      * </pre>
      *
      * <code>string sender_node_id = 3;</code>
+     *
      * @return The bytes for senderNodeId.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getSenderNodeIdBytes() {
+    public com.google.protobuf.ByteString getSenderNodeIdBytes() {
       java.lang.Object ref = senderNodeId_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         senderNodeId_ = b;
         return b;
       } else {
@@ -232,12 +269,16 @@ public final class PrimaryBackupPacketProto {
 
     public static final int ENCODED_REQUEST_FIELD_NUMBER = 4;
     private com.google.protobuf.ByteString encodedRequest_ = com.google.protobuf.ByteString.EMPTY;
+
     /**
+     *
+     *
      * <pre>
      * The encoded request from the entry node.
      * </pre>
      *
      * <code>bytes encoded_request = 4;</code>
+     *
      * @return The encodedRequest.
      */
     @java.lang.Override
@@ -246,6 +287,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     private byte memoizedIsInitialized = -1;
+
     @java.lang.Override
     public final boolean isInitialized() {
       byte isInitialized = memoizedIsInitialized;
@@ -257,8 +299,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public void writeTo(com.google.protobuf.CodedOutputStream output)
-                        throws java.io.IOException {
+    public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
       if (packetId_ != 0L) {
         output.writeInt64(1, packetId_);
       }
@@ -281,8 +322,7 @@ public final class PrimaryBackupPacketProto {
 
       size = 0;
       if (packetId_ != 0L) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt64Size(1, packetId_);
+        size += com.google.protobuf.CodedOutputStream.computeInt64Size(1, packetId_);
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(serviceName_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, serviceName_);
@@ -291,8 +331,7 @@ public final class PrimaryBackupPacketProto {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(3, senderNodeId_);
       }
       if (!encodedRequest_.isEmpty()) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeBytesSize(4, encodedRequest_);
+        size += com.google.protobuf.CodedOutputStream.computeBytesSize(4, encodedRequest_);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -302,21 +341,20 @@ public final class PrimaryBackupPacketProto {
     @java.lang.Override
     public boolean equals(final java.lang.Object obj) {
       if (obj == this) {
-       return true;
+        return true;
       }
-      if (!(obj instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket)) {
+      if (!(obj
+          instanceof
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket)) {
         return super.equals(obj);
       }
-      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket other = (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket) obj;
+      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket other =
+          (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket) obj;
 
-      if (getPacketId()
-          != other.getPacketId()) return false;
-      if (!getServiceName()
-          .equals(other.getServiceName())) return false;
-      if (!getSenderNodeId()
-          .equals(other.getSenderNodeId())) return false;
-      if (!getEncodedRequest()
-          .equals(other.getEncodedRequest())) return false;
+      if (getPacketId() != other.getPacketId()) return false;
+      if (!getServiceName().equals(other.getServiceName())) return false;
+      if (!getSenderNodeId().equals(other.getSenderNodeId())) return false;
+      if (!getEncodedRequest().equals(other.getEncodedRequest())) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -329,8 +367,7 @@ public final class PrimaryBackupPacketProto {
       int hash = 41;
       hash = (19 * hash) + getDescriptor().hashCode();
       hash = (37 * hash) + PACKET_ID_FIELD_NUMBER;
-      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-          getPacketId());
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(getPacketId());
       hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
       hash = (53 * hash) + getServiceName().hashCode();
       hash = (37 * hash) + SENDER_NODE_ID_FIELD_NUMBER;
@@ -342,88 +379,102 @@ public final class PrimaryBackupPacketProto {
       return hash;
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        java.nio.ByteBuffer data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(java.nio.ByteBuffer data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        java.nio.ByteBuffer data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(
+            java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        com.google.protobuf.ByteString data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(com.google.protobuf.ByteString data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        com.google.protobuf.ByteString data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(
+            com.google.protobuf.ByteString data,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(byte[] data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(byte[] data) throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        byte[] data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseDelimitedFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseDelimitedFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseDelimitedFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseDelimitedFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        com.google.protobuf.CodedInputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket parseFrom(
-        com.google.protobuf.CodedInputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        parseFrom(
+            com.google.protobuf.CodedInputStream input,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     @java.lang.Override
-    public Builder newBuilderForType() { return newBuilder(); }
+    public Builder newBuilderForType() {
+      return newBuilder();
+    }
+
     public static Builder newBuilder() {
       return DEFAULT_INSTANCE.toBuilder();
     }
-    public static Builder newBuilder(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket prototype) {
+
+    public static Builder newBuilder(
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+            prototype) {
       return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
     }
+
     @java.lang.Override
     public Builder toBuilder() {
-      return this == DEFAULT_INSTANCE
-          ? new Builder() : new Builder().mergeFrom(this);
+      return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
     }
 
     @java.lang.Override
@@ -432,36 +483,38 @@ public final class PrimaryBackupPacketProto {
       Builder builder = new Builder(parent);
       return builder;
     }
-    /**
-     * Protobuf type {@code primary_backup.ForwardedRequestPacket}
-     */
-    public static final class Builder extends
-        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+
+    /** Protobuf type {@code primary_backup.ForwardedRequestPacket} */
+    public static final class Builder
+        extends com.google.protobuf.GeneratedMessageV3.Builder<Builder>
+        implements
         // @@protoc_insertion_point(builder_implements:primary_backup.ForwardedRequestPacket)
         edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacketOrBuilder {
-      public static final com.google.protobuf.Descriptors.Descriptor
-          getDescriptor() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ForwardedRequestPacket_descriptor;
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ForwardedRequestPacket_descriptor;
       }
 
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable
             .ensureFieldAccessorsInitialized(
-                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.Builder.class);
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+                    .class,
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+                    .Builder.class);
       }
 
-      // Construct using edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.newBuilder()
-      private Builder() {
+      // Construct using
+      // edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.newBuilder()
+      private Builder() {}
 
-      }
-
-      private Builder(
-          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      private Builder(com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
         super(parent);
-
       }
+
       @java.lang.Override
       public Builder clear() {
         super.clear();
@@ -474,19 +527,23 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public com.google.protobuf.Descriptors.Descriptor
-          getDescriptorForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ForwardedRequestPacket_descriptor;
+      public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ForwardedRequestPacket_descriptor;
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket getDefaultInstanceForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.getDefaultInstance();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+          getDefaultInstanceForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+            .getDefaultInstance();
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket build() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket result = buildPartial();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+          build() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket result =
+            buildPartial();
         if (!result.isInitialized()) {
           throw newUninitializedMessageException(result);
         }
@@ -494,14 +551,20 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket buildPartial() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket result = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket(this);
-        if (bitField0_ != 0) { buildPartial0(result); }
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+          buildPartial() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket result =
+            new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket(
+                this);
+        if (bitField0_ != 0) {
+          buildPartial0(result);
+        }
         onBuilt();
         return result;
       }
 
-      private void buildPartial0(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket result) {
+      private void buildPartial0(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket result) {
         int from_bitField0_ = bitField0_;
         if (((from_bitField0_ & 0x00000001) != 0)) {
           result.packetId_ = packetId_;
@@ -521,46 +584,56 @@ public final class PrimaryBackupPacketProto {
       public Builder clone() {
         return super.clone();
       }
+
       @java.lang.Override
       public Builder setField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.setField(field, value);
       }
+
       @java.lang.Override
-      public Builder clearField(
-          com.google.protobuf.Descriptors.FieldDescriptor field) {
+      public Builder clearField(com.google.protobuf.Descriptors.FieldDescriptor field) {
         return super.clearField(field);
       }
+
       @java.lang.Override
-      public Builder clearOneof(
-          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+      public Builder clearOneof(com.google.protobuf.Descriptors.OneofDescriptor oneof) {
         return super.clearOneof(oneof);
       }
+
       @java.lang.Override
       public Builder setRepeatedField(
           com.google.protobuf.Descriptors.FieldDescriptor field,
-          int index, java.lang.Object value) {
+          int index,
+          java.lang.Object value) {
         return super.setRepeatedField(field, index, value);
       }
+
       @java.lang.Override
       public Builder addRepeatedField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.addRepeatedField(field, value);
       }
+
       @java.lang.Override
       public Builder mergeFrom(com.google.protobuf.Message other) {
-        if (other instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket) {
-          return mergeFrom((edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket)other);
+        if (other
+            instanceof
+            edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket) {
+          return mergeFrom(
+              (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket)
+                  other);
         } else {
           super.mergeFrom(other);
           return this;
         }
       }
 
-      public Builder mergeFrom(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket other) {
-        if (other == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket.getDefaultInstance()) return this;
+      public Builder mergeFrom(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket other) {
+        if (other
+            == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+                .getDefaultInstance()) return this;
         if (other.getPacketId() != 0L) {
           setPacketId(other.getPacketId());
         }
@@ -603,32 +676,37 @@ public final class PrimaryBackupPacketProto {
               case 0:
                 done = true;
                 break;
-              case 8: {
-                packetId_ = input.readInt64();
-                bitField0_ |= 0x00000001;
-                break;
-              } // case 8
-              case 18: {
-                serviceName_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000002;
-                break;
-              } // case 18
-              case 26: {
-                senderNodeId_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000004;
-                break;
-              } // case 26
-              case 34: {
-                encodedRequest_ = input.readBytes();
-                bitField0_ |= 0x00000008;
-                break;
-              } // case 34
-              default: {
-                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
-                  done = true; // was an endgroup tag
-                }
-                break;
-              } // default:
+              case 8:
+                {
+                  packetId_ = input.readInt64();
+                  bitField0_ |= 0x00000001;
+                  break;
+                } // case 8
+              case 18:
+                {
+                  serviceName_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000002;
+                  break;
+                } // case 18
+              case 26:
+                {
+                  senderNodeId_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000004;
+                  break;
+                } // case 26
+              case 34:
+                {
+                  encodedRequest_ = input.readBytes();
+                  bitField0_ |= 0x00000008;
+                  break;
+                } // case 34
+              default:
+                {
+                  if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                    done = true; // was an endgroup tag
+                  }
+                  break;
+                } // default:
             } // switch (tag)
           } // while (!done)
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
@@ -638,43 +716,56 @@ public final class PrimaryBackupPacketProto {
         } // finally
         return this;
       }
+
       private int bitField0_;
 
-      private long packetId_ ;
+      private long packetId_;
+
       /**
+       *
+       *
        * <pre>
        * unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return The packetId.
        */
       @java.lang.Override
       public long getPacketId() {
         return packetId_;
       }
+
       /**
+       *
+       *
        * <pre>
        * unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @param value The packetId to set.
        * @return This builder for chaining.
        */
       public Builder setPacketId(long value) {
-        
+
         packetId_ = value;
         bitField0_ |= 0x00000001;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPacketId() {
@@ -685,19 +776,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object serviceName_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The serviceName.
        */
       public java.lang.String getServiceName() {
         java.lang.Object ref = serviceName_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           serviceName_ = s;
           return s;
@@ -705,50 +799,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The bytes for serviceName.
        */
-      public com.google.protobuf.ByteString
-          getServiceNameBytes() {
+      public com.google.protobuf.ByteString getServiceNameBytes() {
         java.lang.Object ref = serviceName_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           serviceName_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceName(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceName(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearServiceName() {
@@ -757,18 +862,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The bytes for serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceNameBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceNameBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         serviceName_ = value;
         bitField0_ |= 0x00000002;
@@ -777,19 +887,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object senderNodeId_ = "";
+
       /**
+       *
+       *
        * <pre>
        * ID of the entry node that first receive the request.
        * </pre>
        *
        * <code>string sender_node_id = 3;</code>
+       *
        * @return The senderNodeId.
        */
       public java.lang.String getSenderNodeId() {
         java.lang.Object ref = senderNodeId_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           senderNodeId_ = s;
           return s;
@@ -797,50 +910,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * ID of the entry node that first receive the request.
        * </pre>
        *
        * <code>string sender_node_id = 3;</code>
+       *
        * @return The bytes for senderNodeId.
        */
-      public com.google.protobuf.ByteString
-          getSenderNodeIdBytes() {
+      public com.google.protobuf.ByteString getSenderNodeIdBytes() {
         java.lang.Object ref = senderNodeId_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           senderNodeId_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * ID of the entry node that first receive the request.
        * </pre>
        *
        * <code>string sender_node_id = 3;</code>
+       *
        * @param value The senderNodeId to set.
        * @return This builder for chaining.
        */
-      public Builder setSenderNodeId(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setSenderNodeId(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         senderNodeId_ = value;
         bitField0_ |= 0x00000004;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * ID of the entry node that first receive the request.
        * </pre>
        *
        * <code>string sender_node_id = 3;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearSenderNodeId() {
@@ -849,18 +973,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * ID of the entry node that first receive the request.
        * </pre>
        *
        * <code>string sender_node_id = 3;</code>
+       *
        * @param value The bytes for senderNodeId to set.
        * @return This builder for chaining.
        */
-      public Builder setSenderNodeIdBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setSenderNodeIdBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         senderNodeId_ = value;
         bitField0_ |= 0x00000004;
@@ -869,40 +998,54 @@ public final class PrimaryBackupPacketProto {
       }
 
       private com.google.protobuf.ByteString encodedRequest_ = com.google.protobuf.ByteString.EMPTY;
+
       /**
+       *
+       *
        * <pre>
        * The encoded request from the entry node.
        * </pre>
        *
        * <code>bytes encoded_request = 4;</code>
+       *
        * @return The encodedRequest.
        */
       @java.lang.Override
       public com.google.protobuf.ByteString getEncodedRequest() {
         return encodedRequest_;
       }
+
       /**
+       *
+       *
        * <pre>
        * The encoded request from the entry node.
        * </pre>
        *
        * <code>bytes encoded_request = 4;</code>
+       *
        * @param value The encodedRequest to set.
        * @return This builder for chaining.
        */
       public Builder setEncodedRequest(com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+        if (value == null) {
+          throw new NullPointerException();
+        }
         encodedRequest_ = value;
         bitField0_ |= 0x00000008;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The encoded request from the entry node.
        * </pre>
        *
        * <code>bytes encoded_request = 4;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearEncodedRequest() {
@@ -911,6 +1054,7 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       @java.lang.Override
       public final Builder setUnknownFields(
           final com.google.protobuf.UnknownFieldSet unknownFields) {
@@ -923,41 +1067,46 @@ public final class PrimaryBackupPacketProto {
         return super.mergeUnknownFields(unknownFields);
       }
 
-
       // @@protoc_insertion_point(builder_scope:primary_backup.ForwardedRequestPacket)
     }
 
     // @@protoc_insertion_point(class_scope:primary_backup.ForwardedRequestPacket)
-    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket DEFAULT_INSTANCE;
+    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .ForwardedRequestPacket
+        DEFAULT_INSTANCE;
+
     static {
-      DEFAULT_INSTANCE = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket();
+      DEFAULT_INSTANCE =
+          new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket();
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket getDefaultInstance() {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        getDefaultInstance() {
       return DEFAULT_INSTANCE;
     }
 
-    private static final com.google.protobuf.Parser<ForwardedRequestPacket>
-        PARSER = new com.google.protobuf.AbstractParser<ForwardedRequestPacket>() {
-      @java.lang.Override
-      public ForwardedRequestPacket parsePartialFrom(
-          com.google.protobuf.CodedInputStream input,
-          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-          throws com.google.protobuf.InvalidProtocolBufferException {
-        Builder builder = newBuilder();
-        try {
-          builder.mergeFrom(input, extensionRegistry);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-          throw e.setUnfinishedMessage(builder.buildPartial());
-        } catch (com.google.protobuf.UninitializedMessageException e) {
-          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
-        } catch (java.io.IOException e) {
-          throw new com.google.protobuf.InvalidProtocolBufferException(e)
-              .setUnfinishedMessage(builder.buildPartial());
-        }
-        return builder.buildPartial();
-      }
-    };
+    private static final com.google.protobuf.Parser<ForwardedRequestPacket> PARSER =
+        new com.google.protobuf.AbstractParser<ForwardedRequestPacket>() {
+          @java.lang.Override
+          public ForwardedRequestPacket parsePartialFrom(
+              com.google.protobuf.CodedInputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws com.google.protobuf.InvalidProtocolBufferException {
+            Builder builder = newBuilder();
+            try {
+              builder.mergeFrom(input, extensionRegistry);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+              throw e.setUnfinishedMessage(builder.buildPartial());
+            } catch (com.google.protobuf.UninitializedMessageException e) {
+              throw e.asInvalidProtocolBufferException()
+                  .setUnfinishedMessage(builder.buildPartial());
+            } catch (java.io.IOException e) {
+              throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                  .setUnfinishedMessage(builder.buildPartial());
+            }
+            return builder.buildPartial();
+          }
+        };
 
     public static com.google.protobuf.Parser<ForwardedRequestPacket> parser() {
       return PARSER;
@@ -969,94 +1118,115 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket getDefaultInstanceForType() {
+    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ForwardedRequestPacket
+        getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
-
   }
 
-  public interface ApplyStateDiffPacketOrBuilder extends
+  public interface ApplyStateDiffPacketOrBuilder
+      extends
       // @@protoc_insertion_point(interface_extends:primary_backup.ApplyStateDiffPacket)
       com.google.protobuf.MessageOrBuilder {
 
     /**
+     *
+     *
      * <pre>
      * Unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     long getPacketId();
 
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     java.lang.String getServiceName();
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
-    com.google.protobuf.ByteString
-        getServiceNameBytes();
+    com.google.protobuf.ByteString getServiceNameBytes();
 
     /**
+     *
+     *
      * <pre>
      * The primary epoch, consisting the primary node ID and its counter epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The primaryNodeId.
      */
     java.lang.String getPrimaryNodeId();
+
     /**
+     *
+     *
      * <pre>
      * The primary epoch, consisting the primary node ID and its counter epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The bytes for primaryNodeId.
      */
-    com.google.protobuf.ByteString
-        getPrimaryNodeIdBytes();
+    com.google.protobuf.ByteString getPrimaryNodeIdBytes();
 
     /**
      * <code>uint32 primary_epoch = 4;</code>
+     *
      * @return The primaryEpoch.
      */
     int getPrimaryEpoch();
 
     /**
+     *
+     *
      * <pre>
      * State diff obtained by the Primary.
      * </pre>
      *
      * <code>bytes encoded_state_diff = 5;</code>
+     *
      * @return The encodedStateDiff.
      */
     com.google.protobuf.ByteString getEncodedStateDiff();
   }
-  /**
-   * Protobuf type {@code primary_backup.ApplyStateDiffPacket}
-   */
-  public static final class ApplyStateDiffPacket extends
-      com.google.protobuf.GeneratedMessageV3 implements
+
+  /** Protobuf type {@code primary_backup.ApplyStateDiffPacket} */
+  public static final class ApplyStateDiffPacket extends com.google.protobuf.GeneratedMessageV3
+      implements
       // @@protoc_insertion_point(message_implements:primary_backup.ApplyStateDiffPacket)
       ApplyStateDiffPacketOrBuilder {
-  private static final long serialVersionUID = 0L;
+    private static final long serialVersionUID = 0L;
+
     // Use ApplyStateDiffPacket.newBuilder() to construct.
     private ApplyStateDiffPacket(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
       super(builder);
     }
+
     private ApplyStateDiffPacket() {
       serviceName_ = "";
       primaryNodeId_ = "";
@@ -1065,37 +1235,43 @@ public final class PrimaryBackupPacketProto {
 
     @java.lang.Override
     @SuppressWarnings({"unused"})
-    protected java.lang.Object newInstance(
-        UnusedPrivateParameter unused) {
+    protected java.lang.Object newInstance(UnusedPrivateParameter unused) {
       return new ApplyStateDiffPacket();
     }
 
     @java.lang.Override
-    public final com.google.protobuf.UnknownFieldSet
-    getUnknownFields() {
+    public final com.google.protobuf.UnknownFieldSet getUnknownFields() {
       return this.unknownFields;
     }
-    public static final com.google.protobuf.Descriptors.Descriptor
-        getDescriptor() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
+
+    public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
     }
 
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable
           .ensureFieldAccessorsInitialized(
-              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.Builder.class);
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.class,
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.Builder
+                  .class);
     }
 
     public static final int PACKET_ID_FIELD_NUMBER = 1;
     private long packetId_ = 0L;
+
     /**
+     *
+     *
      * <pre>
      * Unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     @java.lang.Override
@@ -1104,14 +1280,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object serviceName_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     @java.lang.Override
@@ -1120,29 +1301,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         serviceName_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getServiceNameBytes() {
+    public com.google.protobuf.ByteString getServiceNameBytes() {
       java.lang.Object ref = serviceName_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         serviceName_ = b;
         return b;
       } else {
@@ -1151,14 +1333,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int PRIMARY_NODE_ID_FIELD_NUMBER = 3;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object primaryNodeId_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The primary epoch, consisting the primary node ID and its counter epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The primaryNodeId.
      */
     @java.lang.Override
@@ -1167,29 +1354,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         primaryNodeId_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The primary epoch, consisting the primary node ID and its counter epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The bytes for primaryNodeId.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getPrimaryNodeIdBytes() {
+    public com.google.protobuf.ByteString getPrimaryNodeIdBytes() {
       java.lang.Object ref = primaryNodeId_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         primaryNodeId_ = b;
         return b;
       } else {
@@ -1199,8 +1387,10 @@ public final class PrimaryBackupPacketProto {
 
     public static final int PRIMARY_EPOCH_FIELD_NUMBER = 4;
     private int primaryEpoch_ = 0;
+
     /**
      * <code>uint32 primary_epoch = 4;</code>
+     *
      * @return The primaryEpoch.
      */
     @java.lang.Override
@@ -1210,12 +1400,16 @@ public final class PrimaryBackupPacketProto {
 
     public static final int ENCODED_STATE_DIFF_FIELD_NUMBER = 5;
     private com.google.protobuf.ByteString encodedStateDiff_ = com.google.protobuf.ByteString.EMPTY;
+
     /**
+     *
+     *
      * <pre>
      * State diff obtained by the Primary.
      * </pre>
      *
      * <code>bytes encoded_state_diff = 5;</code>
+     *
      * @return The encodedStateDiff.
      */
     @java.lang.Override
@@ -1224,6 +1418,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     private byte memoizedIsInitialized = -1;
+
     @java.lang.Override
     public final boolean isInitialized() {
       byte isInitialized = memoizedIsInitialized;
@@ -1235,8 +1430,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public void writeTo(com.google.protobuf.CodedOutputStream output)
-                        throws java.io.IOException {
+    public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
       if (packetId_ != 0L) {
         output.writeInt64(1, packetId_);
       }
@@ -1262,8 +1456,7 @@ public final class PrimaryBackupPacketProto {
 
       size = 0;
       if (packetId_ != 0L) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt64Size(1, packetId_);
+        size += com.google.protobuf.CodedOutputStream.computeInt64Size(1, packetId_);
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(serviceName_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, serviceName_);
@@ -1272,12 +1465,10 @@ public final class PrimaryBackupPacketProto {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(3, primaryNodeId_);
       }
       if (primaryEpoch_ != 0) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeUInt32Size(4, primaryEpoch_);
+        size += com.google.protobuf.CodedOutputStream.computeUInt32Size(4, primaryEpoch_);
       }
       if (!encodedStateDiff_.isEmpty()) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeBytesSize(5, encodedStateDiff_);
+        size += com.google.protobuf.CodedOutputStream.computeBytesSize(5, encodedStateDiff_);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -1287,23 +1478,21 @@ public final class PrimaryBackupPacketProto {
     @java.lang.Override
     public boolean equals(final java.lang.Object obj) {
       if (obj == this) {
-       return true;
+        return true;
       }
-      if (!(obj instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket)) {
+      if (!(obj
+          instanceof
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket)) {
         return super.equals(obj);
       }
-      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket other = (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket) obj;
+      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket other =
+          (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket) obj;
 
-      if (getPacketId()
-          != other.getPacketId()) return false;
-      if (!getServiceName()
-          .equals(other.getServiceName())) return false;
-      if (!getPrimaryNodeId()
-          .equals(other.getPrimaryNodeId())) return false;
-      if (getPrimaryEpoch()
-          != other.getPrimaryEpoch()) return false;
-      if (!getEncodedStateDiff()
-          .equals(other.getEncodedStateDiff())) return false;
+      if (getPacketId() != other.getPacketId()) return false;
+      if (!getServiceName().equals(other.getServiceName())) return false;
+      if (!getPrimaryNodeId().equals(other.getPrimaryNodeId())) return false;
+      if (getPrimaryEpoch() != other.getPrimaryEpoch()) return false;
+      if (!getEncodedStateDiff().equals(other.getEncodedStateDiff())) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -1316,8 +1505,7 @@ public final class PrimaryBackupPacketProto {
       int hash = 41;
       hash = (19 * hash) + getDescriptor().hashCode();
       hash = (37 * hash) + PACKET_ID_FIELD_NUMBER;
-      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-          getPacketId());
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(getPacketId());
       hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
       hash = (53 * hash) + getServiceName().hashCode();
       hash = (37 * hash) + PRIMARY_NODE_ID_FIELD_NUMBER;
@@ -1331,88 +1519,101 @@ public final class PrimaryBackupPacketProto {
       return hash;
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        java.nio.ByteBuffer data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(java.nio.ByteBuffer data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        java.nio.ByteBuffer data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(
+            java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        com.google.protobuf.ByteString data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(com.google.protobuf.ByteString data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        com.google.protobuf.ByteString data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(
+            com.google.protobuf.ByteString data,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(byte[] data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(byte[] data) throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        byte[] data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseDelimitedFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseDelimitedFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseDelimitedFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseDelimitedFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        com.google.protobuf.CodedInputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket parseFrom(
-        com.google.protobuf.CodedInputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        parseFrom(
+            com.google.protobuf.CodedInputStream input,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     @java.lang.Override
-    public Builder newBuilderForType() { return newBuilder(); }
+    public Builder newBuilderForType() {
+      return newBuilder();
+    }
+
     public static Builder newBuilder() {
       return DEFAULT_INSTANCE.toBuilder();
     }
-    public static Builder newBuilder(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket prototype) {
+
+    public static Builder newBuilder(
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket prototype) {
       return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
     }
+
     @java.lang.Override
     public Builder toBuilder() {
-      return this == DEFAULT_INSTANCE
-          ? new Builder() : new Builder().mergeFrom(this);
+      return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
     }
 
     @java.lang.Override
@@ -1421,36 +1622,38 @@ public final class PrimaryBackupPacketProto {
       Builder builder = new Builder(parent);
       return builder;
     }
-    /**
-     * Protobuf type {@code primary_backup.ApplyStateDiffPacket}
-     */
-    public static final class Builder extends
-        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+
+    /** Protobuf type {@code primary_backup.ApplyStateDiffPacket} */
+    public static final class Builder
+        extends com.google.protobuf.GeneratedMessageV3.Builder<Builder>
+        implements
         // @@protoc_insertion_point(builder_implements:primary_backup.ApplyStateDiffPacket)
         edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacketOrBuilder {
-      public static final com.google.protobuf.Descriptors.Descriptor
-          getDescriptor() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
       }
 
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable
             .ensureFieldAccessorsInitialized(
-                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.Builder.class);
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+                    .class,
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+                    .Builder.class);
       }
 
-      // Construct using edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.newBuilder()
-      private Builder() {
+      // Construct using
+      // edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.newBuilder()
+      private Builder() {}
 
-      }
-
-      private Builder(
-          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      private Builder(com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
         super(parent);
-
       }
+
       @java.lang.Override
       public Builder clear() {
         super.clear();
@@ -1464,19 +1667,23 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public com.google.protobuf.Descriptors.Descriptor
-          getDescriptorForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
+      public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket getDefaultInstanceForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.getDefaultInstance();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+          getDefaultInstanceForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+            .getDefaultInstance();
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket build() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket result = buildPartial();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+          build() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket result =
+            buildPartial();
         if (!result.isInitialized()) {
           throw newUninitializedMessageException(result);
         }
@@ -1484,14 +1691,20 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket buildPartial() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket result = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket(this);
-        if (bitField0_ != 0) { buildPartial0(result); }
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+          buildPartial() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket result =
+            new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket(
+                this);
+        if (bitField0_ != 0) {
+          buildPartial0(result);
+        }
         onBuilt();
         return result;
       }
 
-      private void buildPartial0(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket result) {
+      private void buildPartial0(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket result) {
         int from_bitField0_ = bitField0_;
         if (((from_bitField0_ & 0x00000001) != 0)) {
           result.packetId_ = packetId_;
@@ -1514,46 +1727,56 @@ public final class PrimaryBackupPacketProto {
       public Builder clone() {
         return super.clone();
       }
+
       @java.lang.Override
       public Builder setField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.setField(field, value);
       }
+
       @java.lang.Override
-      public Builder clearField(
-          com.google.protobuf.Descriptors.FieldDescriptor field) {
+      public Builder clearField(com.google.protobuf.Descriptors.FieldDescriptor field) {
         return super.clearField(field);
       }
+
       @java.lang.Override
-      public Builder clearOneof(
-          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+      public Builder clearOneof(com.google.protobuf.Descriptors.OneofDescriptor oneof) {
         return super.clearOneof(oneof);
       }
+
       @java.lang.Override
       public Builder setRepeatedField(
           com.google.protobuf.Descriptors.FieldDescriptor field,
-          int index, java.lang.Object value) {
+          int index,
+          java.lang.Object value) {
         return super.setRepeatedField(field, index, value);
       }
+
       @java.lang.Override
       public Builder addRepeatedField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.addRepeatedField(field, value);
       }
+
       @java.lang.Override
       public Builder mergeFrom(com.google.protobuf.Message other) {
-        if (other instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket) {
-          return mergeFrom((edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket)other);
+        if (other
+            instanceof
+            edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket) {
+          return mergeFrom(
+              (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket)
+                  other);
         } else {
           super.mergeFrom(other);
           return this;
         }
       }
 
-      public Builder mergeFrom(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket other) {
-        if (other == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket.getDefaultInstance()) return this;
+      public Builder mergeFrom(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket other) {
+        if (other
+            == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+                .getDefaultInstance()) return this;
         if (other.getPacketId() != 0L) {
           setPacketId(other.getPacketId());
         }
@@ -1599,37 +1822,43 @@ public final class PrimaryBackupPacketProto {
               case 0:
                 done = true;
                 break;
-              case 8: {
-                packetId_ = input.readInt64();
-                bitField0_ |= 0x00000001;
-                break;
-              } // case 8
-              case 18: {
-                serviceName_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000002;
-                break;
-              } // case 18
-              case 26: {
-                primaryNodeId_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000004;
-                break;
-              } // case 26
-              case 32: {
-                primaryEpoch_ = input.readUInt32();
-                bitField0_ |= 0x00000008;
-                break;
-              } // case 32
-              case 42: {
-                encodedStateDiff_ = input.readBytes();
-                bitField0_ |= 0x00000010;
-                break;
-              } // case 42
-              default: {
-                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
-                  done = true; // was an endgroup tag
-                }
-                break;
-              } // default:
+              case 8:
+                {
+                  packetId_ = input.readInt64();
+                  bitField0_ |= 0x00000001;
+                  break;
+                } // case 8
+              case 18:
+                {
+                  serviceName_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000002;
+                  break;
+                } // case 18
+              case 26:
+                {
+                  primaryNodeId_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000004;
+                  break;
+                } // case 26
+              case 32:
+                {
+                  primaryEpoch_ = input.readUInt32();
+                  bitField0_ |= 0x00000008;
+                  break;
+                } // case 32
+              case 42:
+                {
+                  encodedStateDiff_ = input.readBytes();
+                  bitField0_ |= 0x00000010;
+                  break;
+                } // case 42
+              default:
+                {
+                  if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                    done = true; // was an endgroup tag
+                  }
+                  break;
+                } // default:
             } // switch (tag)
           } // while (!done)
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
@@ -1639,43 +1868,56 @@ public final class PrimaryBackupPacketProto {
         } // finally
         return this;
       }
+
       private int bitField0_;
 
-      private long packetId_ ;
+      private long packetId_;
+
       /**
+       *
+       *
        * <pre>
        * Unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return The packetId.
        */
       @java.lang.Override
       public long getPacketId() {
         return packetId_;
       }
+
       /**
+       *
+       *
        * <pre>
        * Unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @param value The packetId to set.
        * @return This builder for chaining.
        */
       public Builder setPacketId(long value) {
-        
+
         packetId_ = value;
         bitField0_ |= 0x00000001;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * Unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPacketId() {
@@ -1686,19 +1928,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object serviceName_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The serviceName.
        */
       public java.lang.String getServiceName() {
         java.lang.Object ref = serviceName_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           serviceName_ = s;
           return s;
@@ -1706,50 +1951,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The bytes for serviceName.
        */
-      public com.google.protobuf.ByteString
-          getServiceNameBytes() {
+      public com.google.protobuf.ByteString getServiceNameBytes() {
         java.lang.Object ref = serviceName_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           serviceName_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceName(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceName(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearServiceName() {
@@ -1758,18 +2014,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The bytes for serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceNameBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceNameBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         serviceName_ = value;
         bitField0_ |= 0x00000002;
@@ -1778,19 +2039,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object primaryNodeId_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The primary epoch, consisting the primary node ID and its counter epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @return The primaryNodeId.
        */
       public java.lang.String getPrimaryNodeId() {
         java.lang.Object ref = primaryNodeId_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           primaryNodeId_ = s;
           return s;
@@ -1798,50 +2062,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The primary epoch, consisting the primary node ID and its counter epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @return The bytes for primaryNodeId.
        */
-      public com.google.protobuf.ByteString
-          getPrimaryNodeIdBytes() {
+      public com.google.protobuf.ByteString getPrimaryNodeIdBytes() {
         java.lang.Object ref = primaryNodeId_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           primaryNodeId_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The primary epoch, consisting the primary node ID and its counter epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @param value The primaryNodeId to set.
        * @return This builder for chaining.
        */
-      public Builder setPrimaryNodeId(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setPrimaryNodeId(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         primaryNodeId_ = value;
         bitField0_ |= 0x00000004;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The primary epoch, consisting the primary node ID and its counter epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPrimaryNodeId() {
@@ -1850,18 +2125,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The primary epoch, consisting the primary node ID and its counter epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @param value The bytes for primaryNodeId to set.
        * @return This builder for chaining.
        */
-      public Builder setPrimaryNodeIdBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setPrimaryNodeIdBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         primaryNodeId_ = value;
         bitField0_ |= 0x00000004;
@@ -1869,29 +2149,35 @@ public final class PrimaryBackupPacketProto {
         return this;
       }
 
-      private int primaryEpoch_ ;
+      private int primaryEpoch_;
+
       /**
        * <code>uint32 primary_epoch = 4;</code>
+       *
        * @return The primaryEpoch.
        */
       @java.lang.Override
       public int getPrimaryEpoch() {
         return primaryEpoch_;
       }
+
       /**
        * <code>uint32 primary_epoch = 4;</code>
+       *
        * @param value The primaryEpoch to set.
        * @return This builder for chaining.
        */
       public Builder setPrimaryEpoch(int value) {
-        
+
         primaryEpoch_ = value;
         bitField0_ |= 0x00000008;
         onChanged();
         return this;
       }
+
       /**
        * <code>uint32 primary_epoch = 4;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPrimaryEpoch() {
@@ -1901,41 +2187,56 @@ public final class PrimaryBackupPacketProto {
         return this;
       }
 
-      private com.google.protobuf.ByteString encodedStateDiff_ = com.google.protobuf.ByteString.EMPTY;
+      private com.google.protobuf.ByteString encodedStateDiff_ =
+          com.google.protobuf.ByteString.EMPTY;
+
       /**
+       *
+       *
        * <pre>
        * State diff obtained by the Primary.
        * </pre>
        *
        * <code>bytes encoded_state_diff = 5;</code>
+       *
        * @return The encodedStateDiff.
        */
       @java.lang.Override
       public com.google.protobuf.ByteString getEncodedStateDiff() {
         return encodedStateDiff_;
       }
+
       /**
+       *
+       *
        * <pre>
        * State diff obtained by the Primary.
        * </pre>
        *
        * <code>bytes encoded_state_diff = 5;</code>
+       *
        * @param value The encodedStateDiff to set.
        * @return This builder for chaining.
        */
       public Builder setEncodedStateDiff(com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+        if (value == null) {
+          throw new NullPointerException();
+        }
         encodedStateDiff_ = value;
         bitField0_ |= 0x00000010;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * State diff obtained by the Primary.
        * </pre>
        *
        * <code>bytes encoded_state_diff = 5;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearEncodedStateDiff() {
@@ -1944,6 +2245,7 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       @java.lang.Override
       public final Builder setUnknownFields(
           final com.google.protobuf.UnknownFieldSet unknownFields) {
@@ -1956,41 +2258,46 @@ public final class PrimaryBackupPacketProto {
         return super.mergeUnknownFields(unknownFields);
       }
 
-
       // @@protoc_insertion_point(builder_scope:primary_backup.ApplyStateDiffPacket)
     }
 
     // @@protoc_insertion_point(class_scope:primary_backup.ApplyStateDiffPacket)
-    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket DEFAULT_INSTANCE;
+    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .ApplyStateDiffPacket
+        DEFAULT_INSTANCE;
+
     static {
-      DEFAULT_INSTANCE = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket();
+      DEFAULT_INSTANCE =
+          new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket();
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket getDefaultInstance() {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        getDefaultInstance() {
       return DEFAULT_INSTANCE;
     }
 
-    private static final com.google.protobuf.Parser<ApplyStateDiffPacket>
-        PARSER = new com.google.protobuf.AbstractParser<ApplyStateDiffPacket>() {
-      @java.lang.Override
-      public ApplyStateDiffPacket parsePartialFrom(
-          com.google.protobuf.CodedInputStream input,
-          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-          throws com.google.protobuf.InvalidProtocolBufferException {
-        Builder builder = newBuilder();
-        try {
-          builder.mergeFrom(input, extensionRegistry);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-          throw e.setUnfinishedMessage(builder.buildPartial());
-        } catch (com.google.protobuf.UninitializedMessageException e) {
-          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
-        } catch (java.io.IOException e) {
-          throw new com.google.protobuf.InvalidProtocolBufferException(e)
-              .setUnfinishedMessage(builder.buildPartial());
-        }
-        return builder.buildPartial();
-      }
-    };
+    private static final com.google.protobuf.Parser<ApplyStateDiffPacket> PARSER =
+        new com.google.protobuf.AbstractParser<ApplyStateDiffPacket>() {
+          @java.lang.Override
+          public ApplyStateDiffPacket parsePartialFrom(
+              com.google.protobuf.CodedInputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws com.google.protobuf.InvalidProtocolBufferException {
+            Builder builder = newBuilder();
+            try {
+              builder.mergeFrom(input, extensionRegistry);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+              throw e.setUnfinishedMessage(builder.buildPartial());
+            } catch (com.google.protobuf.UninitializedMessageException e) {
+              throw e.asInvalidProtocolBufferException()
+                  .setUnfinishedMessage(builder.buildPartial());
+            } catch (java.io.IOException e) {
+              throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                  .setUnfinishedMessage(builder.buildPartial());
+            }
+            return builder.buildPartial();
+          }
+        };
 
     public static com.google.protobuf.Parser<ApplyStateDiffPacket> parser() {
       return PARSER;
@@ -2002,68 +2309,82 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket getDefaultInstanceForType() {
+    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ApplyStateDiffPacket
+        getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
-
   }
 
-  public interface ResponsePacketOrBuilder extends
+  public interface ResponsePacketOrBuilder
+      extends
       // @@protoc_insertion_point(interface_extends:primary_backup.ResponsePacket)
       com.google.protobuf.MessageOrBuilder {
 
     /**
+     *
+     *
      * <pre>
      * ID of request whose response contained in this project.
      * </pre>
      *
      * <code>int64 request_id = 1;</code>
+     *
      * @return The requestId.
      */
     long getRequestId();
 
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     java.lang.String getServiceName();
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
-    com.google.protobuf.ByteString
-        getServiceNameBytes();
+    com.google.protobuf.ByteString getServiceNameBytes();
 
     /**
+     *
+     *
      * <pre>
      * The encoded response from the Primary.
      * </pre>
      *
      * <code>bytes encoded_response = 3;</code>
+     *
      * @return The encodedResponse.
      */
     com.google.protobuf.ByteString getEncodedResponse();
   }
-  /**
-   * Protobuf type {@code primary_backup.ResponsePacket}
-   */
-  public static final class ResponsePacket extends
-      com.google.protobuf.GeneratedMessageV3 implements
+
+  /** Protobuf type {@code primary_backup.ResponsePacket} */
+  public static final class ResponsePacket extends com.google.protobuf.GeneratedMessageV3
+      implements
       // @@protoc_insertion_point(message_implements:primary_backup.ResponsePacket)
       ResponsePacketOrBuilder {
-  private static final long serialVersionUID = 0L;
+    private static final long serialVersionUID = 0L;
+
     // Use ResponsePacket.newBuilder() to construct.
     private ResponsePacket(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
       super(builder);
     }
+
     private ResponsePacket() {
       serviceName_ = "";
       encodedResponse_ = com.google.protobuf.ByteString.EMPTY;
@@ -2071,37 +2392,43 @@ public final class PrimaryBackupPacketProto {
 
     @java.lang.Override
     @SuppressWarnings({"unused"})
-    protected java.lang.Object newInstance(
-        UnusedPrivateParameter unused) {
+    protected java.lang.Object newInstance(UnusedPrivateParameter unused) {
       return new ResponsePacket();
     }
 
     @java.lang.Override
-    public final com.google.protobuf.UnknownFieldSet
-    getUnknownFields() {
+    public final com.google.protobuf.UnknownFieldSet getUnknownFields() {
       return this.unknownFields;
     }
-    public static final com.google.protobuf.Descriptors.Descriptor
-        getDescriptor() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ResponsePacket_descriptor;
+
+    public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_ResponsePacket_descriptor;
     }
 
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ResponsePacket_fieldAccessorTable
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_ResponsePacket_fieldAccessorTable
           .ensureFieldAccessorsInitialized(
-              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.Builder.class);
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.class,
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.Builder
+                  .class);
     }
 
     public static final int REQUEST_ID_FIELD_NUMBER = 1;
     private long requestId_ = 0L;
+
     /**
+     *
+     *
      * <pre>
      * ID of request whose response contained in this project.
      * </pre>
      *
      * <code>int64 request_id = 1;</code>
+     *
      * @return The requestId.
      */
     @java.lang.Override
@@ -2110,14 +2437,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object serviceName_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     @java.lang.Override
@@ -2126,29 +2458,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         serviceName_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getServiceNameBytes() {
+    public com.google.protobuf.ByteString getServiceNameBytes() {
       java.lang.Object ref = serviceName_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         serviceName_ = b;
         return b;
       } else {
@@ -2158,12 +2491,16 @@ public final class PrimaryBackupPacketProto {
 
     public static final int ENCODED_RESPONSE_FIELD_NUMBER = 3;
     private com.google.protobuf.ByteString encodedResponse_ = com.google.protobuf.ByteString.EMPTY;
+
     /**
+     *
+     *
      * <pre>
      * The encoded response from the Primary.
      * </pre>
      *
      * <code>bytes encoded_response = 3;</code>
+     *
      * @return The encodedResponse.
      */
     @java.lang.Override
@@ -2172,6 +2509,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     private byte memoizedIsInitialized = -1;
+
     @java.lang.Override
     public final boolean isInitialized() {
       byte isInitialized = memoizedIsInitialized;
@@ -2183,8 +2521,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public void writeTo(com.google.protobuf.CodedOutputStream output)
-                        throws java.io.IOException {
+    public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
       if (requestId_ != 0L) {
         output.writeInt64(1, requestId_);
       }
@@ -2204,15 +2541,13 @@ public final class PrimaryBackupPacketProto {
 
       size = 0;
       if (requestId_ != 0L) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt64Size(1, requestId_);
+        size += com.google.protobuf.CodedOutputStream.computeInt64Size(1, requestId_);
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(serviceName_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, serviceName_);
       }
       if (!encodedResponse_.isEmpty()) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeBytesSize(3, encodedResponse_);
+        size += com.google.protobuf.CodedOutputStream.computeBytesSize(3, encodedResponse_);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -2222,19 +2557,18 @@ public final class PrimaryBackupPacketProto {
     @java.lang.Override
     public boolean equals(final java.lang.Object obj) {
       if (obj == this) {
-       return true;
+        return true;
       }
-      if (!(obj instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket)) {
+      if (!(obj
+          instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket)) {
         return super.equals(obj);
       }
-      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket other = (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket) obj;
+      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket other =
+          (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket) obj;
 
-      if (getRequestId()
-          != other.getRequestId()) return false;
-      if (!getServiceName()
-          .equals(other.getServiceName())) return false;
-      if (!getEncodedResponse()
-          .equals(other.getEncodedResponse())) return false;
+      if (getRequestId() != other.getRequestId()) return false;
+      if (!getServiceName().equals(other.getServiceName())) return false;
+      if (!getEncodedResponse().equals(other.getEncodedResponse())) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -2247,8 +2581,7 @@ public final class PrimaryBackupPacketProto {
       int hash = 41;
       hash = (19 * hash) + getDescriptor().hashCode();
       hash = (37 * hash) + REQUEST_ID_FIELD_NUMBER;
-      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-          getRequestId());
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(getRequestId());
       hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
       hash = (53 * hash) + getServiceName().hashCode();
       hash = (37 * hash) + ENCODED_RESPONSE_FIELD_NUMBER;
@@ -2258,88 +2591,101 @@ public final class PrimaryBackupPacketProto {
       return hash;
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        java.nio.ByteBuffer data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(java.nio.ByteBuffer data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        java.nio.ByteBuffer data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(
+            java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        com.google.protobuf.ByteString data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(com.google.protobuf.ByteString data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        com.google.protobuf.ByteString data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(
+            com.google.protobuf.ByteString data,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(byte[] data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(byte[] data) throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        byte[] data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseDelimitedFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseDelimitedFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseDelimitedFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseDelimitedFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        com.google.protobuf.CodedInputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket parseFrom(
-        com.google.protobuf.CodedInputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        parseFrom(
+            com.google.protobuf.CodedInputStream input,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     @java.lang.Override
-    public Builder newBuilderForType() { return newBuilder(); }
+    public Builder newBuilderForType() {
+      return newBuilder();
+    }
+
     public static Builder newBuilder() {
       return DEFAULT_INSTANCE.toBuilder();
     }
-    public static Builder newBuilder(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket prototype) {
+
+    public static Builder newBuilder(
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket prototype) {
       return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
     }
+
     @java.lang.Override
     public Builder toBuilder() {
-      return this == DEFAULT_INSTANCE
-          ? new Builder() : new Builder().mergeFrom(this);
+      return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
     }
 
     @java.lang.Override
@@ -2348,36 +2694,37 @@ public final class PrimaryBackupPacketProto {
       Builder builder = new Builder(parent);
       return builder;
     }
-    /**
-     * Protobuf type {@code primary_backup.ResponsePacket}
-     */
-    public static final class Builder extends
-        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+
+    /** Protobuf type {@code primary_backup.ResponsePacket} */
+    public static final class Builder
+        extends com.google.protobuf.GeneratedMessageV3.Builder<Builder>
+        implements
         // @@protoc_insertion_point(builder_implements:primary_backup.ResponsePacket)
         edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacketOrBuilder {
-      public static final com.google.protobuf.Descriptors.Descriptor
-          getDescriptor() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ResponsePacket_descriptor;
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ResponsePacket_descriptor;
       }
 
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ResponsePacket_fieldAccessorTable
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ResponsePacket_fieldAccessorTable
             .ensureFieldAccessorsInitialized(
-                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.Builder.class);
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.class,
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.Builder
+                    .class);
       }
 
-      // Construct using edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.newBuilder()
-      private Builder() {
+      // Construct using
+      // edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.newBuilder()
+      private Builder() {}
 
-      }
-
-      private Builder(
-          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      private Builder(com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
         super(parent);
-
       }
+
       @java.lang.Override
       public Builder clear() {
         super.clear();
@@ -2389,19 +2736,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public com.google.protobuf.Descriptors.Descriptor
-          getDescriptorForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_ResponsePacket_descriptor;
+      public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_ResponsePacket_descriptor;
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket getDefaultInstanceForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.getDefaultInstance();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+          getDefaultInstanceForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+            .getDefaultInstance();
       }
 
       @java.lang.Override
       public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket build() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket result = buildPartial();
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket result =
+            buildPartial();
         if (!result.isInitialized()) {
           throw newUninitializedMessageException(result);
         }
@@ -2409,14 +2759,19 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket buildPartial() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket result = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket(this);
-        if (bitField0_ != 0) { buildPartial0(result); }
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+          buildPartial() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket result =
+            new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket(this);
+        if (bitField0_ != 0) {
+          buildPartial0(result);
+        }
         onBuilt();
         return result;
       }
 
-      private void buildPartial0(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket result) {
+      private void buildPartial0(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket result) {
         int from_bitField0_ = bitField0_;
         if (((from_bitField0_ & 0x00000001) != 0)) {
           result.requestId_ = requestId_;
@@ -2433,46 +2788,54 @@ public final class PrimaryBackupPacketProto {
       public Builder clone() {
         return super.clone();
       }
+
       @java.lang.Override
       public Builder setField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.setField(field, value);
       }
+
       @java.lang.Override
-      public Builder clearField(
-          com.google.protobuf.Descriptors.FieldDescriptor field) {
+      public Builder clearField(com.google.protobuf.Descriptors.FieldDescriptor field) {
         return super.clearField(field);
       }
+
       @java.lang.Override
-      public Builder clearOneof(
-          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+      public Builder clearOneof(com.google.protobuf.Descriptors.OneofDescriptor oneof) {
         return super.clearOneof(oneof);
       }
+
       @java.lang.Override
       public Builder setRepeatedField(
           com.google.protobuf.Descriptors.FieldDescriptor field,
-          int index, java.lang.Object value) {
+          int index,
+          java.lang.Object value) {
         return super.setRepeatedField(field, index, value);
       }
+
       @java.lang.Override
       public Builder addRepeatedField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.addRepeatedField(field, value);
       }
+
       @java.lang.Override
       public Builder mergeFrom(com.google.protobuf.Message other) {
-        if (other instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket) {
-          return mergeFrom((edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket)other);
+        if (other
+            instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket) {
+          return mergeFrom(
+              (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket) other);
         } else {
           super.mergeFrom(other);
           return this;
         }
       }
 
-      public Builder mergeFrom(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket other) {
-        if (other == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket.getDefaultInstance()) return this;
+      public Builder mergeFrom(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket other) {
+        if (other
+            == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+                .getDefaultInstance()) return this;
         if (other.getRequestId() != 0L) {
           setRequestId(other.getRequestId());
         }
@@ -2510,27 +2873,31 @@ public final class PrimaryBackupPacketProto {
               case 0:
                 done = true;
                 break;
-              case 8: {
-                requestId_ = input.readInt64();
-                bitField0_ |= 0x00000001;
-                break;
-              } // case 8
-              case 18: {
-                serviceName_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000002;
-                break;
-              } // case 18
-              case 26: {
-                encodedResponse_ = input.readBytes();
-                bitField0_ |= 0x00000004;
-                break;
-              } // case 26
-              default: {
-                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
-                  done = true; // was an endgroup tag
-                }
-                break;
-              } // default:
+              case 8:
+                {
+                  requestId_ = input.readInt64();
+                  bitField0_ |= 0x00000001;
+                  break;
+                } // case 8
+              case 18:
+                {
+                  serviceName_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000002;
+                  break;
+                } // case 18
+              case 26:
+                {
+                  encodedResponse_ = input.readBytes();
+                  bitField0_ |= 0x00000004;
+                  break;
+                } // case 26
+              default:
+                {
+                  if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                    done = true; // was an endgroup tag
+                  }
+                  break;
+                } // default:
             } // switch (tag)
           } // while (!done)
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
@@ -2540,43 +2907,56 @@ public final class PrimaryBackupPacketProto {
         } // finally
         return this;
       }
+
       private int bitField0_;
 
-      private long requestId_ ;
+      private long requestId_;
+
       /**
+       *
+       *
        * <pre>
        * ID of request whose response contained in this project.
        * </pre>
        *
        * <code>int64 request_id = 1;</code>
+       *
        * @return The requestId.
        */
       @java.lang.Override
       public long getRequestId() {
         return requestId_;
       }
+
       /**
+       *
+       *
        * <pre>
        * ID of request whose response contained in this project.
        * </pre>
        *
        * <code>int64 request_id = 1;</code>
+       *
        * @param value The requestId to set.
        * @return This builder for chaining.
        */
       public Builder setRequestId(long value) {
-        
+
         requestId_ = value;
         bitField0_ |= 0x00000001;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * ID of request whose response contained in this project.
        * </pre>
        *
        * <code>int64 request_id = 1;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearRequestId() {
@@ -2587,19 +2967,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object serviceName_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The serviceName.
        */
       public java.lang.String getServiceName() {
         java.lang.Object ref = serviceName_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           serviceName_ = s;
           return s;
@@ -2607,50 +2990,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The bytes for serviceName.
        */
-      public com.google.protobuf.ByteString
-          getServiceNameBytes() {
+      public com.google.protobuf.ByteString getServiceNameBytes() {
         java.lang.Object ref = serviceName_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           serviceName_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceName(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceName(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearServiceName() {
@@ -2659,18 +3053,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The bytes for serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceNameBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceNameBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         serviceName_ = value;
         bitField0_ |= 0x00000002;
@@ -2678,41 +3077,56 @@ public final class PrimaryBackupPacketProto {
         return this;
       }
 
-      private com.google.protobuf.ByteString encodedResponse_ = com.google.protobuf.ByteString.EMPTY;
+      private com.google.protobuf.ByteString encodedResponse_ =
+          com.google.protobuf.ByteString.EMPTY;
+
       /**
+       *
+       *
        * <pre>
        * The encoded response from the Primary.
        * </pre>
        *
        * <code>bytes encoded_response = 3;</code>
+       *
        * @return The encodedResponse.
        */
       @java.lang.Override
       public com.google.protobuf.ByteString getEncodedResponse() {
         return encodedResponse_;
       }
+
       /**
+       *
+       *
        * <pre>
        * The encoded response from the Primary.
        * </pre>
        *
        * <code>bytes encoded_response = 3;</code>
+       *
        * @param value The encodedResponse to set.
        * @return This builder for chaining.
        */
       public Builder setEncodedResponse(com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+        if (value == null) {
+          throw new NullPointerException();
+        }
         encodedResponse_ = value;
         bitField0_ |= 0x00000004;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The encoded response from the Primary.
        * </pre>
        *
        * <code>bytes encoded_response = 3;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearEncodedResponse() {
@@ -2721,6 +3135,7 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       @java.lang.Override
       public final Builder setUnknownFields(
           final com.google.protobuf.UnknownFieldSet unknownFields) {
@@ -2733,41 +3148,45 @@ public final class PrimaryBackupPacketProto {
         return super.mergeUnknownFields(unknownFields);
       }
 
-
       // @@protoc_insertion_point(builder_scope:primary_backup.ResponsePacket)
     }
 
     // @@protoc_insertion_point(class_scope:primary_backup.ResponsePacket)
-    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket DEFAULT_INSTANCE;
+    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        DEFAULT_INSTANCE;
+
     static {
-      DEFAULT_INSTANCE = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket();
+      DEFAULT_INSTANCE =
+          new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket();
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket getDefaultInstance() {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        getDefaultInstance() {
       return DEFAULT_INSTANCE;
     }
 
-    private static final com.google.protobuf.Parser<ResponsePacket>
-        PARSER = new com.google.protobuf.AbstractParser<ResponsePacket>() {
-      @java.lang.Override
-      public ResponsePacket parsePartialFrom(
-          com.google.protobuf.CodedInputStream input,
-          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-          throws com.google.protobuf.InvalidProtocolBufferException {
-        Builder builder = newBuilder();
-        try {
-          builder.mergeFrom(input, extensionRegistry);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-          throw e.setUnfinishedMessage(builder.buildPartial());
-        } catch (com.google.protobuf.UninitializedMessageException e) {
-          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
-        } catch (java.io.IOException e) {
-          throw new com.google.protobuf.InvalidProtocolBufferException(e)
-              .setUnfinishedMessage(builder.buildPartial());
-        }
-        return builder.buildPartial();
-      }
-    };
+    private static final com.google.protobuf.Parser<ResponsePacket> PARSER =
+        new com.google.protobuf.AbstractParser<ResponsePacket>() {
+          @java.lang.Override
+          public ResponsePacket parsePartialFrom(
+              com.google.protobuf.CodedInputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws com.google.protobuf.InvalidProtocolBufferException {
+            Builder builder = newBuilder();
+            try {
+              builder.mergeFrom(input, extensionRegistry);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+              throw e.setUnfinishedMessage(builder.buildPartial());
+            } catch (com.google.protobuf.UninitializedMessageException e) {
+              throw e.asInvalidProtocolBufferException()
+                  .setUnfinishedMessage(builder.buildPartial());
+            } catch (java.io.IOException e) {
+              throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                  .setUnfinishedMessage(builder.buildPartial());
+            }
+            return builder.buildPartial();
+          }
+        };
 
     public static com.google.protobuf.Parser<ResponsePacket> parser() {
       return PARSER;
@@ -2779,92 +3198,116 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket getDefaultInstanceForType() {
+    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.ResponsePacket
+        getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
-
   }
 
-  public interface StartEpochPacketOrBuilder extends
+  public interface StartEpochPacketOrBuilder
+      extends
       // @@protoc_insertion_point(interface_extends:primary_backup.StartEpochPacket)
       com.google.protobuf.MessageOrBuilder {
 
     /**
+     *
+     *
      * <pre>
      * Unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     long getPacketId();
 
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     java.lang.String getServiceName();
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
-    com.google.protobuf.ByteString
-        getServiceNameBytes();
+    com.google.protobuf.ByteString getServiceNameBytes();
 
     /**
+     *
+     *
      * <pre>
      * The node ID of Primary that starts the epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The primaryNodeId.
      */
     java.lang.String getPrimaryNodeId();
+
     /**
+     *
+     *
      * <pre>
      * The node ID of Primary that starts the epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The bytes for primaryNodeId.
      */
-    com.google.protobuf.ByteString
-        getPrimaryNodeIdBytes();
+    com.google.protobuf.ByteString getPrimaryNodeIdBytes();
 
     /**
+     *
+     *
      * <pre>
      * The encoded response from the Primary.
      * </pre>
      *
      * <code>uint32 primary_epoch = 4;</code>
+     *
      * @return The primaryEpoch.
      */
     int getPrimaryEpoch();
   }
+
   /**
+   *
+   *
    * <pre>
    * StartEpochPacket: Elected Primary =&gt; All Nodes.
    * </pre>
    *
    * Protobuf type {@code primary_backup.StartEpochPacket}
    */
-  public static final class StartEpochPacket extends
-      com.google.protobuf.GeneratedMessageV3 implements
+  public static final class StartEpochPacket extends com.google.protobuf.GeneratedMessageV3
+      implements
       // @@protoc_insertion_point(message_implements:primary_backup.StartEpochPacket)
       StartEpochPacketOrBuilder {
-  private static final long serialVersionUID = 0L;
+    private static final long serialVersionUID = 0L;
+
     // Use StartEpochPacket.newBuilder() to construct.
     private StartEpochPacket(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
       super(builder);
     }
+
     private StartEpochPacket() {
       serviceName_ = "";
       primaryNodeId_ = "";
@@ -2872,37 +3315,43 @@ public final class PrimaryBackupPacketProto {
 
     @java.lang.Override
     @SuppressWarnings({"unused"})
-    protected java.lang.Object newInstance(
-        UnusedPrivateParameter unused) {
+    protected java.lang.Object newInstance(UnusedPrivateParameter unused) {
       return new StartEpochPacket();
     }
 
     @java.lang.Override
-    public final com.google.protobuf.UnknownFieldSet
-    getUnknownFields() {
+    public final com.google.protobuf.UnknownFieldSet getUnknownFields() {
       return this.unknownFields;
     }
-    public static final com.google.protobuf.Descriptors.Descriptor
-        getDescriptor() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_StartEpochPacket_descriptor;
+
+    public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_StartEpochPacket_descriptor;
     }
 
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_StartEpochPacket_fieldAccessorTable
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_StartEpochPacket_fieldAccessorTable
           .ensureFieldAccessorsInitialized(
-              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.Builder.class);
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.class,
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.Builder
+                  .class);
     }
 
     public static final int PACKET_ID_FIELD_NUMBER = 1;
     private long packetId_ = 0L;
+
     /**
+     *
+     *
      * <pre>
      * Unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     @java.lang.Override
@@ -2911,14 +3360,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object serviceName_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     @java.lang.Override
@@ -2927,29 +3381,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         serviceName_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getServiceNameBytes() {
+    public com.google.protobuf.ByteString getServiceNameBytes() {
       java.lang.Object ref = serviceName_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         serviceName_ = b;
         return b;
       } else {
@@ -2958,14 +3413,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int PRIMARY_NODE_ID_FIELD_NUMBER = 3;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object primaryNodeId_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The node ID of Primary that starts the epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The primaryNodeId.
      */
     @java.lang.Override
@@ -2974,29 +3434,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         primaryNodeId_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The node ID of Primary that starts the epoch.
      * </pre>
      *
      * <code>string primary_node_id = 3;</code>
+     *
      * @return The bytes for primaryNodeId.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getPrimaryNodeIdBytes() {
+    public com.google.protobuf.ByteString getPrimaryNodeIdBytes() {
       java.lang.Object ref = primaryNodeId_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         primaryNodeId_ = b;
         return b;
       } else {
@@ -3006,12 +3467,16 @@ public final class PrimaryBackupPacketProto {
 
     public static final int PRIMARY_EPOCH_FIELD_NUMBER = 4;
     private int primaryEpoch_ = 0;
+
     /**
+     *
+     *
      * <pre>
      * The encoded response from the Primary.
      * </pre>
      *
      * <code>uint32 primary_epoch = 4;</code>
+     *
      * @return The primaryEpoch.
      */
     @java.lang.Override
@@ -3020,6 +3485,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     private byte memoizedIsInitialized = -1;
+
     @java.lang.Override
     public final boolean isInitialized() {
       byte isInitialized = memoizedIsInitialized;
@@ -3031,8 +3497,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public void writeTo(com.google.protobuf.CodedOutputStream output)
-                        throws java.io.IOException {
+    public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
       if (packetId_ != 0L) {
         output.writeInt64(1, packetId_);
       }
@@ -3055,8 +3520,7 @@ public final class PrimaryBackupPacketProto {
 
       size = 0;
       if (packetId_ != 0L) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt64Size(1, packetId_);
+        size += com.google.protobuf.CodedOutputStream.computeInt64Size(1, packetId_);
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(serviceName_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, serviceName_);
@@ -3065,8 +3529,7 @@ public final class PrimaryBackupPacketProto {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(3, primaryNodeId_);
       }
       if (primaryEpoch_ != 0) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeUInt32Size(4, primaryEpoch_);
+        size += com.google.protobuf.CodedOutputStream.computeUInt32Size(4, primaryEpoch_);
       }
       size += getUnknownFields().getSerializedSize();
       memoizedSize = size;
@@ -3076,21 +3539,19 @@ public final class PrimaryBackupPacketProto {
     @java.lang.Override
     public boolean equals(final java.lang.Object obj) {
       if (obj == this) {
-       return true;
+        return true;
       }
-      if (!(obj instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket)) {
+      if (!(obj
+          instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket)) {
         return super.equals(obj);
       }
-      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket other = (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket) obj;
+      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket other =
+          (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket) obj;
 
-      if (getPacketId()
-          != other.getPacketId()) return false;
-      if (!getServiceName()
-          .equals(other.getServiceName())) return false;
-      if (!getPrimaryNodeId()
-          .equals(other.getPrimaryNodeId())) return false;
-      if (getPrimaryEpoch()
-          != other.getPrimaryEpoch()) return false;
+      if (getPacketId() != other.getPacketId()) return false;
+      if (!getServiceName().equals(other.getServiceName())) return false;
+      if (!getPrimaryNodeId().equals(other.getPrimaryNodeId())) return false;
+      if (getPrimaryEpoch() != other.getPrimaryEpoch()) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -3103,8 +3564,7 @@ public final class PrimaryBackupPacketProto {
       int hash = 41;
       hash = (19 * hash) + getDescriptor().hashCode();
       hash = (37 * hash) + PACKET_ID_FIELD_NUMBER;
-      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-          getPacketId());
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(getPacketId());
       hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
       hash = (53 * hash) + getServiceName().hashCode();
       hash = (37 * hash) + PRIMARY_NODE_ID_FIELD_NUMBER;
@@ -3116,88 +3576,101 @@ public final class PrimaryBackupPacketProto {
       return hash;
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        java.nio.ByteBuffer data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(java.nio.ByteBuffer data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        java.nio.ByteBuffer data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(
+            java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        com.google.protobuf.ByteString data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(com.google.protobuf.ByteString data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        com.google.protobuf.ByteString data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(
+            com.google.protobuf.ByteString data,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(byte[] data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(byte[] data) throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        byte[] data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseDelimitedFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseDelimitedFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseDelimitedFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseDelimitedFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        com.google.protobuf.CodedInputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket parseFrom(
-        com.google.protobuf.CodedInputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        parseFrom(
+            com.google.protobuf.CodedInputStream input,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     @java.lang.Override
-    public Builder newBuilderForType() { return newBuilder(); }
+    public Builder newBuilderForType() {
+      return newBuilder();
+    }
+
     public static Builder newBuilder() {
       return DEFAULT_INSTANCE.toBuilder();
     }
-    public static Builder newBuilder(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket prototype) {
+
+    public static Builder newBuilder(
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket prototype) {
       return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
     }
+
     @java.lang.Override
     public Builder toBuilder() {
-      return this == DEFAULT_INSTANCE
-          ? new Builder() : new Builder().mergeFrom(this);
+      return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
     }
 
     @java.lang.Override
@@ -3206,40 +3679,45 @@ public final class PrimaryBackupPacketProto {
       Builder builder = new Builder(parent);
       return builder;
     }
+
     /**
+     *
+     *
      * <pre>
      * StartEpochPacket: Elected Primary =&gt; All Nodes.
      * </pre>
      *
      * Protobuf type {@code primary_backup.StartEpochPacket}
      */
-    public static final class Builder extends
-        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+    public static final class Builder
+        extends com.google.protobuf.GeneratedMessageV3.Builder<Builder>
+        implements
         // @@protoc_insertion_point(builder_implements:primary_backup.StartEpochPacket)
         edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacketOrBuilder {
-      public static final com.google.protobuf.Descriptors.Descriptor
-          getDescriptor() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_StartEpochPacket_descriptor;
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_StartEpochPacket_descriptor;
       }
 
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_StartEpochPacket_fieldAccessorTable
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_StartEpochPacket_fieldAccessorTable
             .ensureFieldAccessorsInitialized(
-                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.Builder.class);
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.class,
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.Builder
+                    .class);
       }
 
-      // Construct using edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.newBuilder()
-      private Builder() {
+      // Construct using
+      // edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.newBuilder()
+      private Builder() {}
 
-      }
-
-      private Builder(
-          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      private Builder(com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
         super(parent);
-
       }
+
       @java.lang.Override
       public Builder clear() {
         super.clear();
@@ -3252,19 +3730,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public com.google.protobuf.Descriptors.Descriptor
-          getDescriptorForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_StartEpochPacket_descriptor;
+      public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_StartEpochPacket_descriptor;
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket getDefaultInstanceForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.getDefaultInstance();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+          getDefaultInstanceForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+            .getDefaultInstance();
       }
 
       @java.lang.Override
       public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket build() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket result = buildPartial();
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket result =
+            buildPartial();
         if (!result.isInitialized()) {
           throw newUninitializedMessageException(result);
         }
@@ -3272,14 +3753,19 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket buildPartial() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket result = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket(this);
-        if (bitField0_ != 0) { buildPartial0(result); }
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+          buildPartial() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket result =
+            new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket(this);
+        if (bitField0_ != 0) {
+          buildPartial0(result);
+        }
         onBuilt();
         return result;
       }
 
-      private void buildPartial0(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket result) {
+      private void buildPartial0(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket result) {
         int from_bitField0_ = bitField0_;
         if (((from_bitField0_ & 0x00000001) != 0)) {
           result.packetId_ = packetId_;
@@ -3299,46 +3785,54 @@ public final class PrimaryBackupPacketProto {
       public Builder clone() {
         return super.clone();
       }
+
       @java.lang.Override
       public Builder setField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.setField(field, value);
       }
+
       @java.lang.Override
-      public Builder clearField(
-          com.google.protobuf.Descriptors.FieldDescriptor field) {
+      public Builder clearField(com.google.protobuf.Descriptors.FieldDescriptor field) {
         return super.clearField(field);
       }
+
       @java.lang.Override
-      public Builder clearOneof(
-          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+      public Builder clearOneof(com.google.protobuf.Descriptors.OneofDescriptor oneof) {
         return super.clearOneof(oneof);
       }
+
       @java.lang.Override
       public Builder setRepeatedField(
           com.google.protobuf.Descriptors.FieldDescriptor field,
-          int index, java.lang.Object value) {
+          int index,
+          java.lang.Object value) {
         return super.setRepeatedField(field, index, value);
       }
+
       @java.lang.Override
       public Builder addRepeatedField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.addRepeatedField(field, value);
       }
+
       @java.lang.Override
       public Builder mergeFrom(com.google.protobuf.Message other) {
-        if (other instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket) {
-          return mergeFrom((edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket)other);
+        if (other
+            instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket) {
+          return mergeFrom(
+              (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket) other);
         } else {
           super.mergeFrom(other);
           return this;
         }
       }
 
-      public Builder mergeFrom(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket other) {
-        if (other == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket.getDefaultInstance()) return this;
+      public Builder mergeFrom(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket other) {
+        if (other
+            == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+                .getDefaultInstance()) return this;
         if (other.getPacketId() != 0L) {
           setPacketId(other.getPacketId());
         }
@@ -3381,32 +3875,37 @@ public final class PrimaryBackupPacketProto {
               case 0:
                 done = true;
                 break;
-              case 8: {
-                packetId_ = input.readInt64();
-                bitField0_ |= 0x00000001;
-                break;
-              } // case 8
-              case 18: {
-                serviceName_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000002;
-                break;
-              } // case 18
-              case 26: {
-                primaryNodeId_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000004;
-                break;
-              } // case 26
-              case 32: {
-                primaryEpoch_ = input.readUInt32();
-                bitField0_ |= 0x00000008;
-                break;
-              } // case 32
-              default: {
-                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
-                  done = true; // was an endgroup tag
-                }
-                break;
-              } // default:
+              case 8:
+                {
+                  packetId_ = input.readInt64();
+                  bitField0_ |= 0x00000001;
+                  break;
+                } // case 8
+              case 18:
+                {
+                  serviceName_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000002;
+                  break;
+                } // case 18
+              case 26:
+                {
+                  primaryNodeId_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000004;
+                  break;
+                } // case 26
+              case 32:
+                {
+                  primaryEpoch_ = input.readUInt32();
+                  bitField0_ |= 0x00000008;
+                  break;
+                } // case 32
+              default:
+                {
+                  if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                    done = true; // was an endgroup tag
+                  }
+                  break;
+                } // default:
             } // switch (tag)
           } // while (!done)
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
@@ -3416,43 +3915,56 @@ public final class PrimaryBackupPacketProto {
         } // finally
         return this;
       }
+
       private int bitField0_;
 
-      private long packetId_ ;
+      private long packetId_;
+
       /**
+       *
+       *
        * <pre>
        * Unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return The packetId.
        */
       @java.lang.Override
       public long getPacketId() {
         return packetId_;
       }
+
       /**
+       *
+       *
        * <pre>
        * Unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @param value The packetId to set.
        * @return This builder for chaining.
        */
       public Builder setPacketId(long value) {
-        
+
         packetId_ = value;
         bitField0_ |= 0x00000001;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * Unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPacketId() {
@@ -3463,19 +3975,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object serviceName_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The serviceName.
        */
       public java.lang.String getServiceName() {
         java.lang.Object ref = serviceName_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           serviceName_ = s;
           return s;
@@ -3483,50 +3998,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The bytes for serviceName.
        */
-      public com.google.protobuf.ByteString
-          getServiceNameBytes() {
+      public com.google.protobuf.ByteString getServiceNameBytes() {
         java.lang.Object ref = serviceName_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           serviceName_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceName(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceName(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearServiceName() {
@@ -3535,18 +4061,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The bytes for serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceNameBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceNameBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         serviceName_ = value;
         bitField0_ |= 0x00000002;
@@ -3555,19 +4086,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object primaryNodeId_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The node ID of Primary that starts the epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @return The primaryNodeId.
        */
       public java.lang.String getPrimaryNodeId() {
         java.lang.Object ref = primaryNodeId_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           primaryNodeId_ = s;
           return s;
@@ -3575,50 +4109,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The node ID of Primary that starts the epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @return The bytes for primaryNodeId.
        */
-      public com.google.protobuf.ByteString
-          getPrimaryNodeIdBytes() {
+      public com.google.protobuf.ByteString getPrimaryNodeIdBytes() {
         java.lang.Object ref = primaryNodeId_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           primaryNodeId_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The node ID of Primary that starts the epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @param value The primaryNodeId to set.
        * @return This builder for chaining.
        */
-      public Builder setPrimaryNodeId(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setPrimaryNodeId(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         primaryNodeId_ = value;
         bitField0_ |= 0x00000004;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The node ID of Primary that starts the epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPrimaryNodeId() {
@@ -3627,18 +4172,23 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The node ID of Primary that starts the epoch.
        * </pre>
        *
        * <code>string primary_node_id = 3;</code>
+       *
        * @param value The bytes for primaryNodeId to set.
        * @return This builder for chaining.
        */
-      public Builder setPrimaryNodeIdBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setPrimaryNodeIdBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         primaryNodeId_ = value;
         bitField0_ |= 0x00000004;
@@ -3646,41 +4196,53 @@ public final class PrimaryBackupPacketProto {
         return this;
       }
 
-      private int primaryEpoch_ ;
+      private int primaryEpoch_;
+
       /**
+       *
+       *
        * <pre>
        * The encoded response from the Primary.
        * </pre>
        *
        * <code>uint32 primary_epoch = 4;</code>
+       *
        * @return The primaryEpoch.
        */
       @java.lang.Override
       public int getPrimaryEpoch() {
         return primaryEpoch_;
       }
+
       /**
+       *
+       *
        * <pre>
        * The encoded response from the Primary.
        * </pre>
        *
        * <code>uint32 primary_epoch = 4;</code>
+       *
        * @param value The primaryEpoch to set.
        * @return This builder for chaining.
        */
       public Builder setPrimaryEpoch(int value) {
-        
+
         primaryEpoch_ = value;
         bitField0_ |= 0x00000008;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The encoded response from the Primary.
        * </pre>
        *
        * <code>uint32 primary_epoch = 4;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPrimaryEpoch() {
@@ -3689,6 +4251,7 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       @java.lang.Override
       public final Builder setUnknownFields(
           final com.google.protobuf.UnknownFieldSet unknownFields) {
@@ -3701,41 +4264,45 @@ public final class PrimaryBackupPacketProto {
         return super.mergeUnknownFields(unknownFields);
       }
 
-
       // @@protoc_insertion_point(builder_scope:primary_backup.StartEpochPacket)
     }
 
     // @@protoc_insertion_point(class_scope:primary_backup.StartEpochPacket)
-    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket DEFAULT_INSTANCE;
+    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        DEFAULT_INSTANCE;
+
     static {
-      DEFAULT_INSTANCE = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket();
+      DEFAULT_INSTANCE =
+          new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket();
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket getDefaultInstance() {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        getDefaultInstance() {
       return DEFAULT_INSTANCE;
     }
 
-    private static final com.google.protobuf.Parser<StartEpochPacket>
-        PARSER = new com.google.protobuf.AbstractParser<StartEpochPacket>() {
-      @java.lang.Override
-      public StartEpochPacket parsePartialFrom(
-          com.google.protobuf.CodedInputStream input,
-          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-          throws com.google.protobuf.InvalidProtocolBufferException {
-        Builder builder = newBuilder();
-        try {
-          builder.mergeFrom(input, extensionRegistry);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-          throw e.setUnfinishedMessage(builder.buildPartial());
-        } catch (com.google.protobuf.UninitializedMessageException e) {
-          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
-        } catch (java.io.IOException e) {
-          throw new com.google.protobuf.InvalidProtocolBufferException(e)
-              .setUnfinishedMessage(builder.buildPartial());
-        }
-        return builder.buildPartial();
-      }
-    };
+    private static final com.google.protobuf.Parser<StartEpochPacket> PARSER =
+        new com.google.protobuf.AbstractParser<StartEpochPacket>() {
+          @java.lang.Override
+          public StartEpochPacket parsePartialFrom(
+              com.google.protobuf.CodedInputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws com.google.protobuf.InvalidProtocolBufferException {
+            Builder builder = newBuilder();
+            try {
+              builder.mergeFrom(input, extensionRegistry);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+              throw e.setUnfinishedMessage(builder.buildPartial());
+            } catch (com.google.protobuf.UninitializedMessageException e) {
+              throw e.asInvalidProtocolBufferException()
+                  .setUnfinishedMessage(builder.buildPartial());
+            } catch (java.io.IOException e) {
+              throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                  .setUnfinishedMessage(builder.buildPartial());
+            }
+            return builder.buildPartial();
+          }
+        };
 
     public static com.google.protobuf.Parser<StartEpochPacket> parser() {
       return PARSER;
@@ -3747,99 +4314,120 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket getDefaultInstanceForType() {
+    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.StartEpochPacket
+        getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
-
   }
 
-  public interface InitBackupPacketOrBuilder extends
+  public interface InitBackupPacketOrBuilder
+      extends
       // @@protoc_insertion_point(interface_extends:primary_backup.InitBackupPacket)
       com.google.protobuf.MessageOrBuilder {
 
     /**
+     *
+     *
      * <pre>
      * unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     long getPacketId();
 
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     java.lang.String getServiceName();
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
-    com.google.protobuf.ByteString
-        getServiceNameBytes();
+    com.google.protobuf.ByteString getServiceNameBytes();
   }
+
   /**
+   *
+   *
    * <pre>
    * InitBackupPacket: Elected Primary =&gt; All Nodes.
    * </pre>
    *
    * Protobuf type {@code primary_backup.InitBackupPacket}
    */
-  public static final class InitBackupPacket extends
-      com.google.protobuf.GeneratedMessageV3 implements
+  public static final class InitBackupPacket extends com.google.protobuf.GeneratedMessageV3
+      implements
       // @@protoc_insertion_point(message_implements:primary_backup.InitBackupPacket)
       InitBackupPacketOrBuilder {
-  private static final long serialVersionUID = 0L;
+    private static final long serialVersionUID = 0L;
+
     // Use InitBackupPacket.newBuilder() to construct.
     private InitBackupPacket(com.google.protobuf.GeneratedMessageV3.Builder<?> builder) {
       super(builder);
     }
+
     private InitBackupPacket() {
       serviceName_ = "";
     }
 
     @java.lang.Override
     @SuppressWarnings({"unused"})
-    protected java.lang.Object newInstance(
-        UnusedPrivateParameter unused) {
+    protected java.lang.Object newInstance(UnusedPrivateParameter unused) {
       return new InitBackupPacket();
     }
 
     @java.lang.Override
-    public final com.google.protobuf.UnknownFieldSet
-    getUnknownFields() {
+    public final com.google.protobuf.UnknownFieldSet getUnknownFields() {
       return this.unknownFields;
     }
-    public static final com.google.protobuf.Descriptors.Descriptor
-        getDescriptor() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_InitBackupPacket_descriptor;
+
+    public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_InitBackupPacket_descriptor;
     }
 
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
         internalGetFieldAccessorTable() {
-      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_InitBackupPacket_fieldAccessorTable
+      return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+          .internal_static_primary_backup_InitBackupPacket_fieldAccessorTable
           .ensureFieldAccessorsInitialized(
-              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.Builder.class);
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.class,
+              edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.Builder
+                  .class);
     }
 
     public static final int PACKET_ID_FIELD_NUMBER = 1;
     private long packetId_ = 0L;
+
     /**
+     *
+     *
      * <pre>
      * unique ID of this packet.
      * </pre>
      *
      * <code>int64 packet_id = 1;</code>
+     *
      * @return The packetId.
      */
     @java.lang.Override
@@ -3848,14 +4436,19 @@ public final class PrimaryBackupPacketProto {
     }
 
     public static final int SERVICE_NAME_FIELD_NUMBER = 2;
+
     @SuppressWarnings("serial")
     private volatile java.lang.Object serviceName_ = "";
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The serviceName.
      */
     @java.lang.Override
@@ -3864,29 +4457,30 @@ public final class PrimaryBackupPacketProto {
       if (ref instanceof java.lang.String) {
         return (java.lang.String) ref;
       } else {
-        com.google.protobuf.ByteString bs = 
-            (com.google.protobuf.ByteString) ref;
+        com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
         serviceName_ = s;
         return s;
       }
     }
+
     /**
+     *
+     *
      * <pre>
      * The service name.
      * </pre>
      *
      * <code>string service_name = 2;</code>
+     *
      * @return The bytes for serviceName.
      */
     @java.lang.Override
-    public com.google.protobuf.ByteString
-        getServiceNameBytes() {
+    public com.google.protobuf.ByteString getServiceNameBytes() {
       java.lang.Object ref = serviceName_;
       if (ref instanceof java.lang.String) {
-        com.google.protobuf.ByteString b = 
-            com.google.protobuf.ByteString.copyFromUtf8(
-                (java.lang.String) ref);
+        com.google.protobuf.ByteString b =
+            com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
         serviceName_ = b;
         return b;
       } else {
@@ -3895,6 +4489,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     private byte memoizedIsInitialized = -1;
+
     @java.lang.Override
     public final boolean isInitialized() {
       byte isInitialized = memoizedIsInitialized;
@@ -3906,8 +4501,7 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public void writeTo(com.google.protobuf.CodedOutputStream output)
-                        throws java.io.IOException {
+    public void writeTo(com.google.protobuf.CodedOutputStream output) throws java.io.IOException {
       if (packetId_ != 0L) {
         output.writeInt64(1, packetId_);
       }
@@ -3924,8 +4518,7 @@ public final class PrimaryBackupPacketProto {
 
       size = 0;
       if (packetId_ != 0L) {
-        size += com.google.protobuf.CodedOutputStream
-          .computeInt64Size(1, packetId_);
+        size += com.google.protobuf.CodedOutputStream.computeInt64Size(1, packetId_);
       }
       if (!com.google.protobuf.GeneratedMessageV3.isStringEmpty(serviceName_)) {
         size += com.google.protobuf.GeneratedMessageV3.computeStringSize(2, serviceName_);
@@ -3938,17 +4531,17 @@ public final class PrimaryBackupPacketProto {
     @java.lang.Override
     public boolean equals(final java.lang.Object obj) {
       if (obj == this) {
-       return true;
+        return true;
       }
-      if (!(obj instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket)) {
+      if (!(obj
+          instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket)) {
         return super.equals(obj);
       }
-      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket other = (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket) obj;
+      edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket other =
+          (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket) obj;
 
-      if (getPacketId()
-          != other.getPacketId()) return false;
-      if (!getServiceName()
-          .equals(other.getServiceName())) return false;
+      if (getPacketId() != other.getPacketId()) return false;
+      if (!getServiceName().equals(other.getServiceName())) return false;
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -3961,8 +4554,7 @@ public final class PrimaryBackupPacketProto {
       int hash = 41;
       hash = (19 * hash) + getDescriptor().hashCode();
       hash = (37 * hash) + PACKET_ID_FIELD_NUMBER;
-      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
-          getPacketId());
+      hash = (53 * hash) + com.google.protobuf.Internal.hashLong(getPacketId());
       hash = (37 * hash) + SERVICE_NAME_FIELD_NUMBER;
       hash = (53 * hash) + getServiceName().hashCode();
       hash = (29 * hash) + getUnknownFields().hashCode();
@@ -3970,88 +4562,101 @@ public final class PrimaryBackupPacketProto {
       return hash;
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        java.nio.ByteBuffer data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(java.nio.ByteBuffer data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        java.nio.ByteBuffer data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(
+            java.nio.ByteBuffer data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        com.google.protobuf.ByteString data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(com.google.protobuf.ByteString data)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        com.google.protobuf.ByteString data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(
+            com.google.protobuf.ByteString data,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(byte[] data)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(byte[] data) throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        byte[] data,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws com.google.protobuf.InvalidProtocolBufferException {
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(byte[] data, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws com.google.protobuf.InvalidProtocolBufferException {
       return PARSER.parseFrom(data, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseDelimitedFrom(java.io.InputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseDelimitedFrom(java.io.InputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseDelimitedFrom(
-        java.io.InputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseDelimitedWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseDelimitedFrom(
+            java.io.InputStream input, com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseDelimitedWithIOException(
+          PARSER, input, extensionRegistry);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        com.google.protobuf.CodedInputStream input)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(com.google.protobuf.CodedInputStream input) throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(PARSER, input);
     }
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket parseFrom(
-        com.google.protobuf.CodedInputStream input,
-        com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-        throws java.io.IOException {
-      return com.google.protobuf.GeneratedMessageV3
-          .parseWithIOException(PARSER, input, extensionRegistry);
+
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        parseFrom(
+            com.google.protobuf.CodedInputStream input,
+            com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+            throws java.io.IOException {
+      return com.google.protobuf.GeneratedMessageV3.parseWithIOException(
+          PARSER, input, extensionRegistry);
     }
 
     @java.lang.Override
-    public Builder newBuilderForType() { return newBuilder(); }
+    public Builder newBuilderForType() {
+      return newBuilder();
+    }
+
     public static Builder newBuilder() {
       return DEFAULT_INSTANCE.toBuilder();
     }
-    public static Builder newBuilder(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket prototype) {
+
+    public static Builder newBuilder(
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket prototype) {
       return DEFAULT_INSTANCE.toBuilder().mergeFrom(prototype);
     }
+
     @java.lang.Override
     public Builder toBuilder() {
-      return this == DEFAULT_INSTANCE
-          ? new Builder() : new Builder().mergeFrom(this);
+      return this == DEFAULT_INSTANCE ? new Builder() : new Builder().mergeFrom(this);
     }
 
     @java.lang.Override
@@ -4060,40 +4665,45 @@ public final class PrimaryBackupPacketProto {
       Builder builder = new Builder(parent);
       return builder;
     }
+
     /**
+     *
+     *
      * <pre>
      * InitBackupPacket: Elected Primary =&gt; All Nodes.
      * </pre>
      *
      * Protobuf type {@code primary_backup.InitBackupPacket}
      */
-    public static final class Builder extends
-        com.google.protobuf.GeneratedMessageV3.Builder<Builder> implements
+    public static final class Builder
+        extends com.google.protobuf.GeneratedMessageV3.Builder<Builder>
+        implements
         // @@protoc_insertion_point(builder_implements:primary_backup.InitBackupPacket)
         edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacketOrBuilder {
-      public static final com.google.protobuf.Descriptors.Descriptor
-          getDescriptor() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_InitBackupPacket_descriptor;
+      public static final com.google.protobuf.Descriptors.Descriptor getDescriptor() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_InitBackupPacket_descriptor;
       }
 
       @java.lang.Override
       protected com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
           internalGetFieldAccessorTable() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_InitBackupPacket_fieldAccessorTable
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_InitBackupPacket_fieldAccessorTable
             .ensureFieldAccessorsInitialized(
-                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.class, edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.Builder.class);
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.class,
+                edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.Builder
+                    .class);
       }
 
-      // Construct using edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.newBuilder()
-      private Builder() {
+      // Construct using
+      // edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.newBuilder()
+      private Builder() {}
 
-      }
-
-      private Builder(
-          com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
+      private Builder(com.google.protobuf.GeneratedMessageV3.BuilderParent parent) {
         super(parent);
-
       }
+
       @java.lang.Override
       public Builder clear() {
         super.clear();
@@ -4104,19 +4714,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public com.google.protobuf.Descriptors.Descriptor
-          getDescriptorForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.internal_static_primary_backup_InitBackupPacket_descriptor;
+      public com.google.protobuf.Descriptors.Descriptor getDescriptorForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto
+            .internal_static_primary_backup_InitBackupPacket_descriptor;
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket getDefaultInstanceForType() {
-        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.getDefaultInstance();
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+          getDefaultInstanceForType() {
+        return edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+            .getDefaultInstance();
       }
 
       @java.lang.Override
       public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket build() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket result = buildPartial();
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket result =
+            buildPartial();
         if (!result.isInitialized()) {
           throw newUninitializedMessageException(result);
         }
@@ -4124,14 +4737,19 @@ public final class PrimaryBackupPacketProto {
       }
 
       @java.lang.Override
-      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket buildPartial() {
-        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket result = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket(this);
-        if (bitField0_ != 0) { buildPartial0(result); }
+      public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+          buildPartial() {
+        edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket result =
+            new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket(this);
+        if (bitField0_ != 0) {
+          buildPartial0(result);
+        }
         onBuilt();
         return result;
       }
 
-      private void buildPartial0(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket result) {
+      private void buildPartial0(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket result) {
         int from_bitField0_ = bitField0_;
         if (((from_bitField0_ & 0x00000001) != 0)) {
           result.packetId_ = packetId_;
@@ -4145,46 +4763,54 @@ public final class PrimaryBackupPacketProto {
       public Builder clone() {
         return super.clone();
       }
+
       @java.lang.Override
       public Builder setField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.setField(field, value);
       }
+
       @java.lang.Override
-      public Builder clearField(
-          com.google.protobuf.Descriptors.FieldDescriptor field) {
+      public Builder clearField(com.google.protobuf.Descriptors.FieldDescriptor field) {
         return super.clearField(field);
       }
+
       @java.lang.Override
-      public Builder clearOneof(
-          com.google.protobuf.Descriptors.OneofDescriptor oneof) {
+      public Builder clearOneof(com.google.protobuf.Descriptors.OneofDescriptor oneof) {
         return super.clearOneof(oneof);
       }
+
       @java.lang.Override
       public Builder setRepeatedField(
           com.google.protobuf.Descriptors.FieldDescriptor field,
-          int index, java.lang.Object value) {
+          int index,
+          java.lang.Object value) {
         return super.setRepeatedField(field, index, value);
       }
+
       @java.lang.Override
       public Builder addRepeatedField(
-          com.google.protobuf.Descriptors.FieldDescriptor field,
-          java.lang.Object value) {
+          com.google.protobuf.Descriptors.FieldDescriptor field, java.lang.Object value) {
         return super.addRepeatedField(field, value);
       }
+
       @java.lang.Override
       public Builder mergeFrom(com.google.protobuf.Message other) {
-        if (other instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket) {
-          return mergeFrom((edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket)other);
+        if (other
+            instanceof edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket) {
+          return mergeFrom(
+              (edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket) other);
         } else {
           super.mergeFrom(other);
           return this;
         }
       }
 
-      public Builder mergeFrom(edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket other) {
-        if (other == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket.getDefaultInstance()) return this;
+      public Builder mergeFrom(
+          edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket other) {
+        if (other
+            == edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+                .getDefaultInstance()) return this;
         if (other.getPacketId() != 0L) {
           setPacketId(other.getPacketId());
         }
@@ -4219,22 +4845,25 @@ public final class PrimaryBackupPacketProto {
               case 0:
                 done = true;
                 break;
-              case 8: {
-                packetId_ = input.readInt64();
-                bitField0_ |= 0x00000001;
-                break;
-              } // case 8
-              case 18: {
-                serviceName_ = input.readStringRequireUtf8();
-                bitField0_ |= 0x00000002;
-                break;
-              } // case 18
-              default: {
-                if (!super.parseUnknownField(input, extensionRegistry, tag)) {
-                  done = true; // was an endgroup tag
-                }
-                break;
-              } // default:
+              case 8:
+                {
+                  packetId_ = input.readInt64();
+                  bitField0_ |= 0x00000001;
+                  break;
+                } // case 8
+              case 18:
+                {
+                  serviceName_ = input.readStringRequireUtf8();
+                  bitField0_ |= 0x00000002;
+                  break;
+                } // case 18
+              default:
+                {
+                  if (!super.parseUnknownField(input, extensionRegistry, tag)) {
+                    done = true; // was an endgroup tag
+                  }
+                  break;
+                } // default:
             } // switch (tag)
           } // while (!done)
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
@@ -4244,43 +4873,56 @@ public final class PrimaryBackupPacketProto {
         } // finally
         return this;
       }
+
       private int bitField0_;
 
-      private long packetId_ ;
+      private long packetId_;
+
       /**
+       *
+       *
        * <pre>
        * unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return The packetId.
        */
       @java.lang.Override
       public long getPacketId() {
         return packetId_;
       }
+
       /**
+       *
+       *
        * <pre>
        * unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @param value The packetId to set.
        * @return This builder for chaining.
        */
       public Builder setPacketId(long value) {
-        
+
         packetId_ = value;
         bitField0_ |= 0x00000001;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * unique ID of this packet.
        * </pre>
        *
        * <code>int64 packet_id = 1;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearPacketId() {
@@ -4291,19 +4933,22 @@ public final class PrimaryBackupPacketProto {
       }
 
       private java.lang.Object serviceName_ = "";
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The serviceName.
        */
       public java.lang.String getServiceName() {
         java.lang.Object ref = serviceName_;
         if (!(ref instanceof java.lang.String)) {
-          com.google.protobuf.ByteString bs =
-              (com.google.protobuf.ByteString) ref;
+          com.google.protobuf.ByteString bs = (com.google.protobuf.ByteString) ref;
           java.lang.String s = bs.toStringUtf8();
           serviceName_ = s;
           return s;
@@ -4311,50 +4956,61 @@ public final class PrimaryBackupPacketProto {
           return (java.lang.String) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return The bytes for serviceName.
        */
-      public com.google.protobuf.ByteString
-          getServiceNameBytes() {
+      public com.google.protobuf.ByteString getServiceNameBytes() {
         java.lang.Object ref = serviceName_;
         if (ref instanceof String) {
-          com.google.protobuf.ByteString b = 
-              com.google.protobuf.ByteString.copyFromUtf8(
-                  (java.lang.String) ref);
+          com.google.protobuf.ByteString b =
+              com.google.protobuf.ByteString.copyFromUtf8((java.lang.String) ref);
           serviceName_ = b;
           return b;
         } else {
           return (com.google.protobuf.ByteString) ref;
         }
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceName(
-          java.lang.String value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceName(java.lang.String value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @return This builder for chaining.
        */
       public Builder clearServiceName() {
@@ -4363,24 +5019,30 @@ public final class PrimaryBackupPacketProto {
         onChanged();
         return this;
       }
+
       /**
+       *
+       *
        * <pre>
        * The service name.
        * </pre>
        *
        * <code>string service_name = 2;</code>
+       *
        * @param value The bytes for serviceName to set.
        * @return This builder for chaining.
        */
-      public Builder setServiceNameBytes(
-          com.google.protobuf.ByteString value) {
-        if (value == null) { throw new NullPointerException(); }
+      public Builder setServiceNameBytes(com.google.protobuf.ByteString value) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
         checkByteStringIsUtf8(value);
         serviceName_ = value;
         bitField0_ |= 0x00000002;
         onChanged();
         return this;
       }
+
       @java.lang.Override
       public final Builder setUnknownFields(
           final com.google.protobuf.UnknownFieldSet unknownFields) {
@@ -4393,41 +5055,45 @@ public final class PrimaryBackupPacketProto {
         return super.mergeUnknownFields(unknownFields);
       }
 
-
       // @@protoc_insertion_point(builder_scope:primary_backup.InitBackupPacket)
     }
 
     // @@protoc_insertion_point(class_scope:primary_backup.InitBackupPacket)
-    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket DEFAULT_INSTANCE;
+    private static final edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        DEFAULT_INSTANCE;
+
     static {
-      DEFAULT_INSTANCE = new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket();
+      DEFAULT_INSTANCE =
+          new edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket();
     }
 
-    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket getDefaultInstance() {
+    public static edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        getDefaultInstance() {
       return DEFAULT_INSTANCE;
     }
 
-    private static final com.google.protobuf.Parser<InitBackupPacket>
-        PARSER = new com.google.protobuf.AbstractParser<InitBackupPacket>() {
-      @java.lang.Override
-      public InitBackupPacket parsePartialFrom(
-          com.google.protobuf.CodedInputStream input,
-          com.google.protobuf.ExtensionRegistryLite extensionRegistry)
-          throws com.google.protobuf.InvalidProtocolBufferException {
-        Builder builder = newBuilder();
-        try {
-          builder.mergeFrom(input, extensionRegistry);
-        } catch (com.google.protobuf.InvalidProtocolBufferException e) {
-          throw e.setUnfinishedMessage(builder.buildPartial());
-        } catch (com.google.protobuf.UninitializedMessageException e) {
-          throw e.asInvalidProtocolBufferException().setUnfinishedMessage(builder.buildPartial());
-        } catch (java.io.IOException e) {
-          throw new com.google.protobuf.InvalidProtocolBufferException(e)
-              .setUnfinishedMessage(builder.buildPartial());
-        }
-        return builder.buildPartial();
-      }
-    };
+    private static final com.google.protobuf.Parser<InitBackupPacket> PARSER =
+        new com.google.protobuf.AbstractParser<InitBackupPacket>() {
+          @java.lang.Override
+          public InitBackupPacket parsePartialFrom(
+              com.google.protobuf.CodedInputStream input,
+              com.google.protobuf.ExtensionRegistryLite extensionRegistry)
+              throws com.google.protobuf.InvalidProtocolBufferException {
+            Builder builder = newBuilder();
+            try {
+              builder.mergeFrom(input, extensionRegistry);
+            } catch (com.google.protobuf.InvalidProtocolBufferException e) {
+              throw e.setUnfinishedMessage(builder.buildPartial());
+            } catch (com.google.protobuf.UninitializedMessageException e) {
+              throw e.asInvalidProtocolBufferException()
+                  .setUnfinishedMessage(builder.buildPartial());
+            } catch (java.io.IOException e) {
+              throw new com.google.protobuf.InvalidProtocolBufferException(e)
+                  .setUnfinishedMessage(builder.buildPartial());
+            }
+            return builder.buildPartial();
+          }
+        };
 
     public static com.google.protobuf.Parser<InitBackupPacket> parser() {
       return PARSER;
@@ -4439,98 +5105,102 @@ public final class PrimaryBackupPacketProto {
     }
 
     @java.lang.Override
-    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket getDefaultInstanceForType() {
+    public edu.umass.cs.primarybackup.proto.PrimaryBackupPacketProto.InitBackupPacket
+        getDefaultInstanceForType() {
       return DEFAULT_INSTANCE;
     }
-
   }
 
   private static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_primary_backup_ForwardedRequestPacket_descriptor;
-  private static final 
-    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_primary_backup_ForwardedRequestPacket_descriptor;
+  private static final com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
-  private static final 
-    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_primary_backup_ApplyStateDiffPacket_descriptor;
+  private static final com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_primary_backup_ResponsePacket_descriptor;
-  private static final 
-    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_primary_backup_ResponsePacket_descriptor;
+  private static final com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_primary_backup_ResponsePacket_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_primary_backup_StartEpochPacket_descriptor;
-  private static final 
-    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_primary_backup_StartEpochPacket_descriptor;
+  private static final com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_primary_backup_StartEpochPacket_fieldAccessorTable;
   private static final com.google.protobuf.Descriptors.Descriptor
-    internal_static_primary_backup_InitBackupPacket_descriptor;
-  private static final 
-    com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
+      internal_static_primary_backup_InitBackupPacket_descriptor;
+  private static final com.google.protobuf.GeneratedMessageV3.FieldAccessorTable
       internal_static_primary_backup_InitBackupPacket_fieldAccessorTable;
 
-  public static com.google.protobuf.Descriptors.FileDescriptor
-      getDescriptor() {
+  public static com.google.protobuf.Descriptors.FileDescriptor getDescriptor() {
     return descriptor;
   }
-  private static  com.google.protobuf.Descriptors.FileDescriptor
-      descriptor;
+
+  private static com.google.protobuf.Descriptors.FileDescriptor descriptor;
+
   static {
     java.lang.String[] descriptorData = {
-      "\n@src/edu/umass/cs/primarybackup/proto/p" +
-      "rimary_backup_packet.proto\022\016primary_back" +
-      "up\"r\n\026ForwardedRequestPacket\022\021\n\tpacket_i" +
-      "d\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\t\022\026\n\016sender_" +
-      "node_id\030\003 \001(\t\022\027\n\017encoded_request\030\004 \001(\014\"\213" +
-      "\001\n\024ApplyStateDiffPacket\022\021\n\tpacket_id\030\001 \001" +
-      "(\003\022\024\n\014service_name\030\002 \001(\t\022\027\n\017primary_node" +
-      "_id\030\003 \001(\t\022\025\n\rprimary_epoch\030\004 \001(\r\022\032\n\022enco" +
-      "ded_state_diff\030\005 \001(\014\"T\n\016ResponsePacket\022\022" +
-      "\n\nrequest_id\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\t" +
-      "\022\030\n\020encoded_response\030\003 \001(\014\"k\n\020StartEpoch" +
-      "Packet\022\021\n\tpacket_id\030\001 \001(\003\022\024\n\014service_nam" +
-      "e\030\002 \001(\t\022\027\n\017primary_node_id\030\003 \001(\t\022\025\n\rprim" +
-      "ary_epoch\030\004 \001(\r\";\n\020InitBackupPacket\022\021\n\tp" +
-      "acket_id\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\tB<\n " +
-      "edu.umass.cs.primarybackup.protoB\030Primar" +
-      "yBackupPacketProtob\006proto3"
+      "\n@src/edu/umass/cs/primarybackup/proto/p"
+          + "rimary_backup_packet.proto\022\016primary_back"
+          + "up\"r\n\026ForwardedRequestPacket\022\021\n\tpacket_i"
+          + "d\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\t\022\026\n\016sender_"
+          + "node_id\030\003 \001(\t\022\027\n\017encoded_request\030\004 \001(\014\"\213"
+          + "\001\n\024ApplyStateDiffPacket\022\021\n\tpacket_id\030\001 \001"
+          + "(\003\022\024\n\014service_name\030\002 \001(\t\022\027\n\017primary_node"
+          + "_id\030\003 \001(\t\022\025\n\rprimary_epoch\030\004 \001(\r\022\032\n\022enco"
+          + "ded_state_diff\030\005 \001(\014\"T\n\016ResponsePacket\022\022"
+          + "\n\nrequest_id\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\t"
+          + "\022\030\n\020encoded_response\030\003 \001(\014\"k\n\020StartEpoch"
+          + "Packet\022\021\n\tpacket_id\030\001 \001(\003\022\024\n\014service_nam"
+          + "e\030\002 \001(\t\022\027\n\017primary_node_id\030\003 \001(\t\022\025\n\rprim"
+          + "ary_epoch\030\004 \001(\r\";\n\020InitBackupPacket\022\021\n\tp"
+          + "acket_id\030\001 \001(\003\022\024\n\014service_name\030\002 \001(\tB<\n "
+          + "edu.umass.cs.primarybackup.protoB\030Primar"
+          + "yBackupPacketProtob\006proto3"
     };
-    descriptor = com.google.protobuf.Descriptors.FileDescriptor
-      .internalBuildGeneratedFileFrom(descriptorData,
-        new com.google.protobuf.Descriptors.FileDescriptor[] {
-        });
+    descriptor =
+        com.google.protobuf.Descriptors.FileDescriptor.internalBuildGeneratedFileFrom(
+            descriptorData, new com.google.protobuf.Descriptors.FileDescriptor[] {});
     internal_static_primary_backup_ForwardedRequestPacket_descriptor =
-      getDescriptor().getMessageTypes().get(0);
-    internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
-        internal_static_primary_backup_ForwardedRequestPacket_descriptor,
-        new java.lang.String[] { "PacketId", "ServiceName", "SenderNodeId", "EncodedRequest", });
+        getDescriptor().getMessageTypes().get(0);
+    internal_static_primary_backup_ForwardedRequestPacket_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+            internal_static_primary_backup_ForwardedRequestPacket_descriptor,
+            new java.lang.String[] {
+              "PacketId", "ServiceName", "SenderNodeId", "EncodedRequest",
+            });
     internal_static_primary_backup_ApplyStateDiffPacket_descriptor =
-      getDescriptor().getMessageTypes().get(1);
-    internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
-        internal_static_primary_backup_ApplyStateDiffPacket_descriptor,
-        new java.lang.String[] { "PacketId", "ServiceName", "PrimaryNodeId", "PrimaryEpoch", "EncodedStateDiff", });
+        getDescriptor().getMessageTypes().get(1);
+    internal_static_primary_backup_ApplyStateDiffPacket_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+            internal_static_primary_backup_ApplyStateDiffPacket_descriptor,
+            new java.lang.String[] {
+              "PacketId", "ServiceName", "PrimaryNodeId", "PrimaryEpoch", "EncodedStateDiff",
+            });
     internal_static_primary_backup_ResponsePacket_descriptor =
-      getDescriptor().getMessageTypes().get(2);
-    internal_static_primary_backup_ResponsePacket_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
-        internal_static_primary_backup_ResponsePacket_descriptor,
-        new java.lang.String[] { "RequestId", "ServiceName", "EncodedResponse", });
+        getDescriptor().getMessageTypes().get(2);
+    internal_static_primary_backup_ResponsePacket_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+            internal_static_primary_backup_ResponsePacket_descriptor,
+            new java.lang.String[] {
+              "RequestId", "ServiceName", "EncodedResponse",
+            });
     internal_static_primary_backup_StartEpochPacket_descriptor =
-      getDescriptor().getMessageTypes().get(3);
-    internal_static_primary_backup_StartEpochPacket_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
-        internal_static_primary_backup_StartEpochPacket_descriptor,
-        new java.lang.String[] { "PacketId", "ServiceName", "PrimaryNodeId", "PrimaryEpoch", });
+        getDescriptor().getMessageTypes().get(3);
+    internal_static_primary_backup_StartEpochPacket_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+            internal_static_primary_backup_StartEpochPacket_descriptor,
+            new java.lang.String[] {
+              "PacketId", "ServiceName", "PrimaryNodeId", "PrimaryEpoch",
+            });
     internal_static_primary_backup_InitBackupPacket_descriptor =
-      getDescriptor().getMessageTypes().get(4);
-    internal_static_primary_backup_InitBackupPacket_fieldAccessorTable = new
-      com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
-        internal_static_primary_backup_InitBackupPacket_descriptor,
-        new java.lang.String[] { "PacketId", "ServiceName", });
+        getDescriptor().getMessageTypes().get(4);
+    internal_static_primary_backup_InitBackupPacket_fieldAccessorTable =
+        new com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
+            internal_static_primary_backup_InitBackupPacket_descriptor,
+            new java.lang.String[] {
+              "PacketId", "ServiceName",
+            });
   }
 
   // @@protoc_insertion_point(outer_class_scope)

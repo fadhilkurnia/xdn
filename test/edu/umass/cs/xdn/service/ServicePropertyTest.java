@@ -96,7 +96,9 @@ public class ServicePropertyTest {
   @Test
   public void ServicePropertyTest_ToJsonStringSingleComponent() {
     String serviceName = "alice-book-catalog";
-    String prop = String.format("""
+    String prop =
+        String.format(
+            """
       {
         "image": "bookcatalog",
         "port": 8000,
@@ -107,7 +109,8 @@ public class ServicePropertyTest {
         "min_reconfiguration_interval_sec": 120,
         "min_requests_for_reconfiguration": 1000
       }
-      """, serviceName);
+      """,
+            serviceName);
 
     try {
       JSONObject expected = new JSONObject(prop);
@@ -116,10 +119,7 @@ public class ServicePropertyTest {
 
       Assert.assertEquals(expected.length(), actual.length());
       for (String key : JSONObject.getNames(expected)) {
-        Assert.assertEquals(
-                "Mismatch for key: " + key,
-                expected.get(key),
-                actual.get(key));
+        Assert.assertEquals("Mismatch for key: " + key, expected.get(key), actual.get(key));
       }
     } catch (JSONException e) {
       throw new RuntimeException(e);

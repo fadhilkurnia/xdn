@@ -20,7 +20,6 @@ import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCountUtil;
-
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
@@ -31,254 +30,266 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import org.json.JSONException;
 import org.json.JSONObject;
 
 public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
-    private final NodeIDType myNodeId;
-    private final Replicable app;
-    private final Set<IntegerPacketType> packetTypes;
-    private final Messenger<NodeIDType, JSONObject> messenger;
+  private final NodeIDType myNodeId;
+  private final Replicable app;
+  private final Set<IntegerPacketType> packetTypes;
+  private final Messenger<NodeIDType, JSONObject> messenger;
 
-    private record LazyReplicaInstance<NodeIDType>(String serviceName,
-                                                   int currEpoch,
-                                                   String initStateSnapshot,
-                                                   Set<NodeIDType> nodes) {
-    }
+  private record LazyReplicaInstance<NodeIDType>(
+      String serviceName, int currEpoch, String initStateSnapshot, Set<NodeIDType> nodes) {}
 
-    private final ConcurrentMap<String, LazyReplicaInstance<NodeIDType>> currentInstances;
-    private final ExecutorService executePool;
+  private final ConcurrentMap<String, LazyReplicaInstance<NodeIDType>> currentInstances;
+  private final ExecutorService executePool;
 
-    private final Logger logger = Logger.getLogger(LazyReplicaCoordinator.class.getSimpleName());
+  private final Logger logger = Logger.getLogger(LazyReplicaCoordinator.class.getSimpleName());
 
-    public LazyReplicaCoordinator(Replicable app,
-                                  NodeIDType myId,
-                                  Stringifiable<NodeIDType> nodeIdDeserializer,
-                                  Messenger<NodeIDType, JSONObject> messenger) {
-        super(app, messenger);
-        this.myNodeId = myId;
-        this.messenger = messenger;
-        this.app = app;
+  public LazyReplicaCoordinator(
+      Replicable app,
+      NodeIDType myId,
+      Stringifiable<NodeIDType> nodeIdDeserializer,
+      Messenger<NodeIDType, JSONObject> messenger) {
+    super(app, messenger);
+    this.myNodeId = myId;
+    this.messenger = messenger;
+    this.app = app;
 
-        // validate the nodeIdDeserializer
-        assert messenger.getMyID().equals(myId) : "Invalid node ID given in the messenger";
-        assert nodeIdDeserializer.valueOf(this.myNodeId.toString()).equals(this.myNodeId)
-                : "Invalid node ID deserializer given";
+    // validate the nodeIdDeserializer
+    assert messenger.getMyID().equals(myId) : "Invalid node ID given in the messenger";
+    assert nodeIdDeserializer.valueOf(this.myNodeId.toString()).equals(this.myNodeId)
+        : "Invalid node ID deserializer given";
 
-        // initialize all the supported packet types
-        this.packetTypes = new HashSet<>();
-        this.packetTypes.addAll(List.of(LazyPacketType.values()));
+    // initialize all the supported packet types
+    this.packetTypes = new HashSet<>();
+    this.packetTypes.addAll(List.of(LazyPacketType.values()));
 
-        this.currentInstances = new ConcurrentHashMap<>();
+    this.currentInstances = new ConcurrentHashMap<>();
 
-        int nWorkers = Integer.getInteger("LAZY_N_EXECUTE_WORKERS",
-                Math.max(32, Runtime.getRuntime().availableProcessors() * 4));
-        this.executePool = Executors.newFixedThreadPool(nWorkers, r -> {
-            Thread t = new Thread(r, "lazy-exec-" + myNodeId);
-            t.setDaemon(true);
-            return t;
-        });
-
-        // add packet demultiplexer for LaztPacket that will invoke
-        // the coordinateRequest() method.
-        LazyPacketDemultiplexer packetDemultiplexer =
-                new LazyPacketDemultiplexer(this, app);
-        this.messenger.precedePacketDemultiplexer(packetDemultiplexer);
-    }
-
-    @Override
-    public Set<IntegerPacketType> getRequestTypes() {
-        return this.packetTypes;
-    }
-
-    @Override
-    public boolean coordinateRequest(Request request, ExecutedCallback callback)
-            throws IOException, RequestParseException {
-        if (logger.isLoggable(Level.FINE)) {
-            logger.log(Level.FINE, ">> " + myNodeId + " LazyReplicaCoordinator -- receiving request " +
-                    request.getClass().getSimpleName());
-        }
-        if (!(request instanceof ReplicableClientRequest) && !(request instanceof LazyPacket)) {
-            throw new RuntimeException("Unknown request/packet handled by LazyReplicaCoordinator");
-        }
-
-        // validate that service exists
-        String serviceName = request.getServiceName();
-        if (!this.currentInstances.containsKey(serviceName)) {
-            logger.log(Level.WARNING, "Ignoring request for unknown service=" + serviceName);
-            return true;
-        }
-        LazyReplicaInstance<NodeIDType> currInstance = this.currentInstances.get(serviceName);
-
-        // unwrap the request if needed
-        Request currRequestOrPacket = request;
-        if (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
-            currRequestOrPacket = rcr.getRequest();
-        }
-
-        // handle StopEpoch packet
-        if (currRequestOrPacket instanceof ReconfigurableRequest rcRequest &&
-                rcRequest.isStop()) {
-            boolean isSuccess = this.app.restore(serviceName, null);
-            callback.executed(rcRequest, isSuccess);
-            return true;
-        }
-
-        // handle client-initiated request
-        if (currRequestOrPacket instanceof ClientRequest clientRequest) {
-            // validates that request is either ReadOnly or (WriteOnly and Monotonic).
-            if (!(clientRequest instanceof BehavioralRequest br)) {
-                throw new RuntimeException("Expecting BehavioralRequest for LazyReplicaCoordinator");
-            }
-            boolean isReadOnly = br.isReadOnlyRequest();
-            boolean isMonotonic = br.isMonotonicRequest();
-            boolean isWriteOnly = br.isWriteOnlyRequest();
-            if (!(isReadOnly || (isMonotonic && isWriteOnly))) {
-                throw new RuntimeException(
-                        "Expecting ReadOnly request or (Monotonic and WriteOnly) request " +
-                                "for LazyReplicaCoordinator");
-            }
-
-            // Read-only requests need no coordination — execute inline on the
-            // caller thread to avoid thread-pool dispatch overhead.
-            if (isReadOnly) {
-                boolean isExecSuccess = this.app.execute(clientRequest);
-                callback.executed(clientRequest, isExecSuccess);
-                return true;
-            }
-
-            // Write requests are fire-and-forget — execute inline, respond,
-            // then asynchronously broadcast WRITE_AFTER on a virtual thread.
-            boolean isExecSuccess = this.app.execute(clientRequest);
-            if (!isExecSuccess) {
-                if (logger.isLoggable(Level.WARNING)) {
-                    logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
-                }
-                callback.executed(clientRequest, false);
-                return true;
-            }
-            callback.executed(clientRequest, true);
-
-            retainRequestContent(clientRequest);
-            Thread.ofVirtual().start(() -> {
-                try {
-                    LazyPacket writeAfterPacket = new LazyWriteAfterPacket(
-                            myNodeId.toString(), clientRequest);
-                    Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
-                    myPeers.remove(myNodeId);
-                    GenericMessagingTask<NodeIDType, LazyPacket> m =
-                            new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
-                    if (logger.isLoggable(Level.FINE)) {
-                        logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
-                    }
-                    messenger.send(m);
-                } catch (Exception e) {
-                    logger.log(Level.WARNING, "Failed to send WRITE_AFTER", e);
-                } finally {
-                    releaseRequestContent(clientRequest);
-                }
+    int nWorkers =
+        Integer.getInteger(
+            "LAZY_N_EXECUTE_WORKERS", Math.max(32, Runtime.getRuntime().availableProcessors() * 4));
+    this.executePool =
+        Executors.newFixedThreadPool(
+            nWorkers,
+            r -> {
+              Thread t = new Thread(r, "lazy-exec-" + myNodeId);
+              t.setDaemon(true);
+              return t;
             });
-            return true;
+
+    // add packet demultiplexer for LaztPacket that will invoke
+    // the coordinateRequest() method.
+    LazyPacketDemultiplexer packetDemultiplexer = new LazyPacketDemultiplexer(this, app);
+    this.messenger.precedePacketDemultiplexer(packetDemultiplexer);
+  }
+
+  @Override
+  public Set<IntegerPacketType> getRequestTypes() {
+    return this.packetTypes;
+  }
+
+  @Override
+  public boolean coordinateRequest(Request request, ExecutedCallback callback)
+      throws IOException, RequestParseException {
+    if (logger.isLoggable(Level.FINE)) {
+      logger.log(
+          Level.FINE,
+          ">> "
+              + myNodeId
+              + " LazyReplicaCoordinator -- receiving request "
+              + request.getClass().getSimpleName());
+    }
+    if (!(request instanceof ReplicableClientRequest) && !(request instanceof LazyPacket)) {
+      throw new RuntimeException("Unknown request/packet handled by LazyReplicaCoordinator");
+    }
+
+    // validate that service exists
+    String serviceName = request.getServiceName();
+    if (!this.currentInstances.containsKey(serviceName)) {
+      logger.log(Level.WARNING, "Ignoring request for unknown service=" + serviceName);
+      return true;
+    }
+    LazyReplicaInstance<NodeIDType> currInstance = this.currentInstances.get(serviceName);
+
+    // unwrap the request if needed
+    Request currRequestOrPacket = request;
+    if (currRequestOrPacket instanceof ReplicableClientRequest rcr) {
+      currRequestOrPacket = rcr.getRequest();
+    }
+
+    // handle StopEpoch packet
+    if (currRequestOrPacket instanceof ReconfigurableRequest rcRequest && rcRequest.isStop()) {
+      boolean isSuccess = this.app.restore(serviceName, null);
+      callback.executed(rcRequest, isSuccess);
+      return true;
+    }
+
+    // handle client-initiated request
+    if (currRequestOrPacket instanceof ClientRequest clientRequest) {
+      // validates that request is either ReadOnly or (WriteOnly and Monotonic).
+      if (!(clientRequest instanceof BehavioralRequest br)) {
+        throw new RuntimeException("Expecting BehavioralRequest for LazyReplicaCoordinator");
+      }
+      boolean isReadOnly = br.isReadOnlyRequest();
+      boolean isMonotonic = br.isMonotonicRequest();
+      boolean isWriteOnly = br.isWriteOnlyRequest();
+      if (!(isReadOnly || (isMonotonic && isWriteOnly))) {
+        throw new RuntimeException(
+            "Expecting ReadOnly request or (Monotonic and WriteOnly) request "
+                + "for LazyReplicaCoordinator");
+      }
+
+      // Read-only requests need no coordination — execute inline on the
+      // caller thread to avoid thread-pool dispatch overhead.
+      if (isReadOnly) {
+        boolean isExecSuccess = this.app.execute(clientRequest);
+        callback.executed(clientRequest, isExecSuccess);
+        return true;
+      }
+
+      // Write requests are fire-and-forget — execute inline, respond,
+      // then asynchronously broadcast WRITE_AFTER on a virtual thread.
+      boolean isExecSuccess = this.app.execute(clientRequest);
+      if (!isExecSuccess) {
+        if (logger.isLoggable(Level.WARNING)) {
+          logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
         }
+        callback.executed(clientRequest, false);
+        return true;
+      }
+      callback.executed(clientRequest, true);
 
-        // handle peer-initiated packet (i.e., write-after)
-        if (currRequestOrPacket instanceof LazyPacket lp &&
-                lp instanceof LazyWriteAfterPacket writeAfterPacket) {
-            Request clientRequest = writeAfterPacket.getClientWriteOnlyRequest();
-            boolean isWriteOnly = (clientRequest instanceof BehavioralRequest br) &&
-                    br.isWriteOnlyRequest();
-            boolean isMonotonic = (clientRequest instanceof BehavioralRequest br) &&
-                    br.isMonotonicRequest();
-            if (!isWriteOnly || !isMonotonic) {
-                throw new RuntimeException(
-                        "Expecting (Monotonic and WriteOnly) request for LazyReplicaCoordinator");
-            }
-
-            if (clientRequest instanceof XdnHttpRequest xhr) {
-                xhr.clearHttpResponse();
-            } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
-                for (XdnHttpRequest xhr: batch.getRequestList()) {
-                    xhr.clearHttpResponse();
+      retainRequestContent(clientRequest);
+      Thread.ofVirtual()
+          .start(
+              () -> {
+                try {
+                  LazyPacket writeAfterPacket =
+                      new LazyWriteAfterPacket(myNodeId.toString(), clientRequest);
+                  Set<NodeIDType> myPeers = new HashSet<>(currInstance.nodes());
+                  myPeers.remove(myNodeId);
+                  GenericMessagingTask<NodeIDType, LazyPacket> m =
+                      new GenericMessagingTask<>(myPeers.toArray(), writeAfterPacket);
+                  if (logger.isLoggable(Level.FINE)) {
+                    logger.log(Level.FINE, "Sending WRITE_AFTER packet ...");
+                  }
+                  messenger.send(m);
+                } catch (Exception e) {
+                  logger.log(Level.WARNING, "Failed to send WRITE_AFTER", e);
+                } finally {
+                  releaseRequestContent(clientRequest);
                 }
-            }
+              });
+      return true;
+    }
 
-            return this.app.execute(clientRequest, true);
+    // handle peer-initiated packet (i.e., write-after)
+    if (currRequestOrPacket instanceof LazyPacket lp
+        && lp instanceof LazyWriteAfterPacket writeAfterPacket) {
+      Request clientRequest = writeAfterPacket.getClientWriteOnlyRequest();
+      boolean isWriteOnly =
+          (clientRequest instanceof BehavioralRequest br) && br.isWriteOnlyRequest();
+      boolean isMonotonic =
+          (clientRequest instanceof BehavioralRequest br) && br.isMonotonicRequest();
+      if (!isWriteOnly || !isMonotonic) {
+        throw new RuntimeException(
+            "Expecting (Monotonic and WriteOnly) request for LazyReplicaCoordinator");
+      }
+
+      if (clientRequest instanceof XdnHttpRequest xhr) {
+        xhr.clearHttpResponse();
+      } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
+        for (XdnHttpRequest xhr : batch.getRequestList()) {
+          xhr.clearHttpResponse();
         }
+      }
 
-        throw new IllegalStateException("Unexpected LazyPacket/Request: " + request.getRequestType());
+      return this.app.execute(clientRequest, true);
     }
 
-    @Override
-    public boolean createReplicaGroup(String serviceName, int epoch, String state, Set<NodeIDType> nodes, String placementMetadata) {
-        if (logger.isLoggable(Level.INFO)) {
-            logger.log(Level.INFO, String.format(">> %s:LazyReplicaCoordinator -- " +
-                            "createReplicaGroup name=%s nodes=%s epoch=%d state=%s",
-                    myNodeId, serviceName, nodes, epoch, state));
-        }
-        LazyReplicaInstance<NodeIDType> replicaInstance =
-                new LazyReplicaInstance<>(serviceName, epoch, state, nodes);
-        this.currentInstances.put(serviceName, replicaInstance);
+    throw new IllegalStateException("Unexpected LazyPacket/Request: " + request.getRequestType());
+  }
 
-        // Creating a replica group is a special case for reconfiguration where we reconfigure
-        // from nothing to something. In that case, we call app.restore(.) with initialState.
-        return this.app.restore(serviceName, state);
+  @Override
+  public boolean createReplicaGroup(
+      String serviceName,
+      int epoch,
+      String state,
+      Set<NodeIDType> nodes,
+      String placementMetadata) {
+    if (logger.isLoggable(Level.INFO)) {
+      logger.log(
+          Level.INFO,
+          String.format(
+              ">> %s:LazyReplicaCoordinator -- "
+                  + "createReplicaGroup name=%s nodes=%s epoch=%d state=%s",
+              myNodeId, serviceName, nodes, epoch, state));
     }
+    LazyReplicaInstance<NodeIDType> replicaInstance =
+        new LazyReplicaInstance<>(serviceName, epoch, state, nodes);
+    this.currentInstances.put(serviceName, replicaInstance);
 
-    @Override
-    public boolean deleteReplicaGroup(String serviceName, int epoch) {
-        if (!this.currentInstances.containsKey(serviceName)) return true;
-        LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
-        if (replicaInstance.currEpoch != epoch) return true;
-        this.currentInstances.remove(serviceName);
+    // Creating a replica group is a special case for reconfiguration where we reconfigure
+    // from nothing to something. In that case, we call app.restore(.) with initialState.
+    return this.app.restore(serviceName, state);
+  }
 
-        // Deleting a replica group is a special case for reconfiguration where we reconfigure
-        // from something into nothing. In that case, we call app.restore(.) with null state.
-        return this.app.restore(serviceName, null);
+  @Override
+  public boolean deleteReplicaGroup(String serviceName, int epoch) {
+    if (!this.currentInstances.containsKey(serviceName)) return true;
+    LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
+    if (replicaInstance.currEpoch != epoch) return true;
+    this.currentInstances.remove(serviceName);
+
+    // Deleting a replica group is a special case for reconfiguration where we reconfigure
+    // from something into nothing. In that case, we call app.restore(.) with null state.
+    return this.app.restore(serviceName, null);
+  }
+
+  @Override
+  public Set<NodeIDType> getReplicaGroup(String serviceName) {
+    LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
+    return replicaInstance != null ? replicaInstance.nodes() : null;
+  }
+
+  private void retainRequestContent(ClientRequest request) {
+    if (request instanceof XdnHttpRequestBatch batch) {
+      for (XdnHttpRequest xhr : batch.getRequestList()) {
+        retainSingleRequestContent(xhr);
+      }
+    } else if (request instanceof XdnHttpRequest xhr) {
+      retainSingleRequestContent(xhr);
     }
+  }
 
-    @Override
-    public Set<NodeIDType> getReplicaGroup(String serviceName) {
-        LazyReplicaInstance<NodeIDType> replicaInstance = this.currentInstances.get(serviceName);
-        return replicaInstance != null ? replicaInstance.nodes() : null;
+  private void retainSingleRequestContent(XdnHttpRequest xhr) {
+    if (xhr.getHttpRequestContent() != null) {
+      ByteBuf content = xhr.getHttpRequestContent().content();
+      if (content != null && content.refCnt() > 0) {
+        ReferenceCountUtil.retain(content);
+      }
     }
+  }
 
-    private void retainRequestContent(ClientRequest request) {
-        if (request instanceof XdnHttpRequestBatch batch) {
-            for (XdnHttpRequest xhr : batch.getRequestList()) {
-                retainSingleRequestContent(xhr);
-            }
-        } else if (request instanceof XdnHttpRequest xhr) {
-            retainSingleRequestContent(xhr);
-        }
+  private void releaseRequestContent(ClientRequest request) {
+    if (request instanceof XdnHttpRequestBatch batch) {
+      for (XdnHttpRequest xhr : batch.getRequestList()) {
+        releaseSingleRequestContent(xhr);
+      }
+    } else if (request instanceof XdnHttpRequest xhr) {
+      releaseSingleRequestContent(xhr);
     }
+  }
 
-    private void retainSingleRequestContent(XdnHttpRequest xhr) {
-        if (xhr.getHttpRequestContent() != null) {
-            ByteBuf content = xhr.getHttpRequestContent().content();
-            if (content != null && content.refCnt() > 0) {
-                ReferenceCountUtil.retain(content);
-            }
-        }
+  private void releaseSingleRequestContent(XdnHttpRequest xhr) {
+    if (xhr.getHttpRequestContent() != null) {
+      ByteBuf content = xhr.getHttpRequestContent().content();
+      if (content != null && content.refCnt() > 0) {
+        ReferenceCountUtil.release(content);
+      }
     }
-
-    private void releaseRequestContent(ClientRequest request) {
-        if (request instanceof XdnHttpRequestBatch batch) {
-            for (XdnHttpRequest xhr : batch.getRequestList()) {
-                releaseSingleRequestContent(xhr);
-            }
-        } else if (request instanceof XdnHttpRequest xhr) {
-            releaseSingleRequestContent(xhr);
-        }
-    }
-
-    private void releaseSingleRequestContent(XdnHttpRequest xhr) {
-        if (xhr.getHttpRequestContent() != null) {
-            ByteBuf content = xhr.getHttpRequestContent().content();
-            if (content != null && content.refCnt() > 0) {
-                ReferenceCountUtil.release(content);
-            }
-        }
-    }
+  }
 }

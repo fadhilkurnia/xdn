@@ -1,5 +1,9 @@
 package edu.umass.cs.reconfiguration.http;
 
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
+
 import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurationTriggerResult;
@@ -23,11 +27,6 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.CharsetUtil;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import javax.net.ssl.SSLException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -39,873 +38,817 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
-import static io.netty.handler.codec.http.HttpResponseStatus.OK;
-import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
+import javax.net.ssl.SSLException;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * @author arun
- * <p>
- * An HTTP front-end for a reconfigurator that supports the create,
- * delete, and request active replicas operations.
- * <p>
- * Requests are encoded in URIs using
- * <p>
- * Loosely based on the HTTP Snoop server example from netty
- * documentation pages.
- * <p>
- *         TODO: implement better API with prefix of /api/services
- *          - GET 		/api/v2/services                        [Unimplemented] list all services.
- *          - POST 		/api/v2/services/{name}                 [Unimplemented] Create a new launched service
- *          - GET 		/api/v2/services/{name}                 [Unimplemented] Get a launched service
- *          - DELETE 	/api/v2/services/{name}                 [Unimplemented] Destroy a new launched service
- *          - GET 		/api/v2/services/{name}/placement       Get the current placement
- *          - PUT 	    /api/v2/services/{name}/placement       Update the replica placement, including coordinator
- *          - GET 		/api/v2/services/{name}/coordinator     [Unimplemented] Get the current coordinator
- *          - PUT 		/api/v2/services/{name}/coordinator     [Unimplemented] Change the coordinator
- *          because currently everything is handled with GET request :(
+ *     <p>An HTTP front-end for a reconfigurator that supports the create, delete, and request
+ *     active replicas operations.
+ *     <p>Requests are encoded in URIs using
+ *     <p>Loosely based on the HTTP Snoop server example from netty documentation pages.
+ *     <p>TODO: implement better API with prefix of /api/services - GET /api/v2/services
+ *     [Unimplemented] list all services. - POST /api/v2/services/{name} [Unimplemented] Create a
+ *     new launched service - GET /api/v2/services/{name} [Unimplemented] Get a launched service -
+ *     DELETE /api/v2/services/{name} [Unimplemented] Destroy a new launched service - GET
+ *     /api/v2/services/{name}/placement Get the current placement - PUT
+ *     /api/v2/services/{name}/placement Update the replica placement, including coordinator - GET
+ *     /api/v2/services/{name}/coordinator [Unimplemented] Get the current coordinator - PUT
+ *     /api/v2/services/{name}/coordinator [Unimplemented] Change the coordinator because currently
+ *     everything is handled with GET request :(
  */
 public class HttpReconfigurator {
 
-    /**
-     * String keys for URI keys.
-     */
-    public static enum HTTPKeys {
-
-        /**
-         * The request type that must be present in every request and must be
-         * one of the ones specified in {@link HTTPRequestTypes}.
-         */
-        TYPE(JSONPacket.PACKET_TYPE),
-
-        /**
-         * The service name that must be present in every request.
-         */
-        NAME(BasicReconfigurationPacket.Keys.NAME.toString()),
-
-        /**
-         * The initial state used in name creation requests.
-         */
-        INITIAL_STATE(ClientReconfigurationPacket.Keys.INITIAL_STATE.toString()),
-
-        /**
-         * Request ID.
-         */
-        QID(RequestActiveReplicas.Keys.QID.toString()),
-
-        ;
-        /**
-         *
-         */
-        public final String label;
-
-        HTTPKeys(String label) {
-            this.label = label;
-        }
-    }
+  /** String keys for URI keys. */
+  public static enum HTTPKeys {
 
     /**
-     *
+     * The request type that must be present in every request and must be one of the ones specified
+     * in {@link HTTPRequestTypes}.
      */
-    public static enum HTTPRequestTypes {
+    TYPE(JSONPacket.PACKET_TYPE),
 
-        /**
-         *
-         */
-        CREATE(ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME),
+    /** The service name that must be present in every request. */
+    NAME(BasicReconfigurationPacket.Keys.NAME.toString()),
 
-        /**
-         *
-         */
-        DELETE(ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME),
+    /** The initial state used in name creation requests. */
+    INITIAL_STATE(ClientReconfigurationPacket.Keys.INITIAL_STATE.toString()),
 
-        /**
-         *
-         */
-        REQ_ACTIVES(ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS),
+    /** Request ID. */
+    QID(RequestActiveReplicas.Keys.QID.toString()),
+    ;
 
-        /**
-         *
-         */
-        CHANGE_ACTIVES(
-                ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG),
+    /** */
+    public final String label;
 
-        /**
-         *
-         */
-        CHANGE_RECONFIGURATORS(
-                ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG),
+    HTTPKeys(String label) {
+      this.label = label;
+    }
+  }
 
-        ;
+  /** */
+  public static enum HTTPRequestTypes {
 
-        final ReconfigurationPacket.PacketType type;
+    /** */
+    CREATE(ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME),
 
-        HTTPRequestTypes(ReconfigurationPacket.PacketType type) {
-            this.type = type;
-        }
+    /** */
+    DELETE(ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME),
 
-        HTTPRequestTypes() {
-            this(null);
-        }
+    /** */
+    REQ_ACTIVES(ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS),
+
+    /** */
+    CHANGE_ACTIVES(ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG),
+
+    /** */
+    CHANGE_RECONFIGURATORS(ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG),
+    ;
+
+    final ReconfigurationPacket.PacketType type;
+
+    HTTPRequestTypes(ReconfigurationPacket.PacketType type) {
+      this.type = type;
     }
 
-    private static final Set<HttpReconfigurator> instances = new HashSet<HttpReconfigurator>();
+    HTTPRequestTypes() {
+      this(null);
+    }
+  }
 
-    private static final Logger log = ReconfigurationConfig.getLogger();
+  private static final Set<HttpReconfigurator> instances = new HashSet<HttpReconfigurator>();
 
-    private final EventLoopGroup bossGroup;
-    private final EventLoopGroup workerGroup;
+  private static final Logger log = ReconfigurationConfig.getLogger();
 
-    private final Channel channel;
+  private final EventLoopGroup bossGroup;
+  private final EventLoopGroup workerGroup;
 
-    private final String rcf;
+  private final Channel channel;
+
+  private final String rcf;
+  private final String rcNodeId;
+
+  /**
+   * @param rcf
+   * @param sockAddr
+   * @param ssl
+   * @throws CertificateException
+   * @throws SSLException
+   * @throws InterruptedException
+   */
+  public HttpReconfigurator(ReconfiguratorFunctions rcf, InetSocketAddress sockAddr, boolean ssl)
+      throws CertificateException, SSLException, InterruptedException {
+
+    this.rcf = rcf == null ? "" : rcf.toString();
+    this.rcNodeId = this.rcf.substring(3);
+
+    // Configure SSL.
+    final SslContext sslCtx;
+    if (ssl) {
+      SelfSignedCertificate ssc = new SelfSignedCertificate();
+      sslCtx = SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey()).build();
+    } else {
+      sslCtx = null;
+    }
+
+    // Configure the server.
+    bossGroup = new NioEventLoopGroup(1);
+    workerGroup = new NioEventLoopGroup();
+    try {
+      ServerBootstrap b = new ServerBootstrap();
+      b.group(bossGroup, workerGroup)
+          .channel(NioServerSocketChannel.class)
+          .childHandler(new HttpReconfiguratorInitializer(sslCtx, rcf, rcNodeId));
+
+      // Note that we always use the DEFAULT_HTTP_ADDR (0.0.0.0) if the loop-back address
+      // (e.g., 127.0.0.1 or localhost) is used so that we can listen incoming Http requests
+      // from all interfaces, including non-localhost ones.
+      if (sockAddr.getAddress().isLoopbackAddress()) {
+        sockAddr = new InetSocketAddress("0.0.0.0", sockAddr.getPort());
+      }
+
+      // FIXME: a quick hack to make RC listens to all interface, enabling a nameserver
+      //  to contact with the RC using localhost or 127.0.0.1.
+      sockAddr = new InetSocketAddress("0.0.0.0", sockAddr.getPort());
+
+      channel = b.bind(sockAddr).sync().channel();
+      instances.add(this);
+      log.log(Level.INFO, "{0} ready", new Object[] {this});
+      System.out.println("HttpReconfigurator ready on " + sockAddr);
+
+      channel.closeFuture().sync();
+    } finally {
+      bossGroup.shutdownGracefully();
+      workerGroup.shutdownGracefully();
+    }
+  }
+
+  public String toString() {
+    return this.rcf + ":HTTP:" + this.channel.localAddress().toString();
+  }
+
+  /**
+   * @return Local socket address.
+   */
+  public SocketAddress getListeningAddress() {
+    return this.channel.localAddress();
+  }
+
+  private boolean closed = false;
+
+  /** Close server and workers gracefully. */
+  public void close() {
+    this.bossGroup.shutdownGracefully();
+    this.workerGroup.shutdownGracefully();
+    closed = true;
+  }
+
+  /**
+   * @return True if this server was closed gracefully using {@link #close()}.
+   */
+  public boolean isClosed() {
+    return this.closed;
+  }
+
+  /** To close all instances. */
+  public static void closeAll() {
+    for (HttpReconfigurator instance :
+        // convert to array to allow removal while iterating
+        instances.toArray(new HttpReconfigurator[0]))
+      try {
+        instance.close();
+        instances.remove(instance);
+      } catch (Exception | Error e) {
+        // ignore and try to close rest
+      }
+  }
+
+  static class HttpReconfiguratorInitializer extends ChannelInitializer<SocketChannel> {
+
+    private final SslContext sslCtx;
+    private final ReconfiguratorFunctions rcFunctions;
     private final String rcNodeId;
 
-    /**
-     * @param rcf
-     * @param sockAddr
-     * @param ssl
-     * @throws CertificateException
-     * @throws SSLException
-     * @throws InterruptedException
-     */
-    public HttpReconfigurator(ReconfiguratorFunctions rcf,
-                              InetSocketAddress sockAddr, boolean ssl)
-            throws CertificateException, SSLException, InterruptedException {
-
-        this.rcf = rcf == null ? "" : rcf.toString();
-        this.rcNodeId = this.rcf.substring(3);
-
-        // Configure SSL.
-        final SslContext sslCtx;
-        if (ssl) {
-            SelfSignedCertificate ssc = new SelfSignedCertificate();
-            sslCtx = SslContextBuilder.forServer(ssc.certificate(),
-                    ssc.privateKey()).build();
-        } else {
-            sslCtx = null;
-        }
-
-        // Configure the server.
-        bossGroup = new NioEventLoopGroup(1);
-        workerGroup = new NioEventLoopGroup();
-        try {
-            ServerBootstrap b = new ServerBootstrap();
-            b.group(bossGroup, workerGroup)
-                    .channel(NioServerSocketChannel.class)
-                    .childHandler(
-                            new HttpReconfiguratorInitializer(sslCtx, rcf, rcNodeId));
-
-            // Note that we always use the DEFAULT_HTTP_ADDR (0.0.0.0) if the loop-back address
-            // (e.g., 127.0.0.1 or localhost) is used so that we can listen incoming Http requests
-            // from all interfaces, including non-localhost ones.
-            if (sockAddr.getAddress().isLoopbackAddress()) {
-                sockAddr = new InetSocketAddress("0.0.0.0", sockAddr.getPort());
-            }
-
-            // FIXME: a quick hack to make RC listens to all interface, enabling a nameserver
-            //  to contact with the RC using localhost or 127.0.0.1.
-            sockAddr = new InetSocketAddress("0.0.0.0", sockAddr.getPort());
-
-            channel = b.bind(sockAddr).sync().channel();
-            instances.add(this);
-            log.log(Level.INFO, "{0} ready", new Object[]{this});
-            System.out.println("HttpReconfigurator ready on " + sockAddr);
-
-            channel.closeFuture().sync();
-        } finally {
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
-        }
+    HttpReconfiguratorInitializer(
+        SslContext sslCtx, final ReconfiguratorFunctions rcFunctions, String rcNodeId) {
+      this.sslCtx = sslCtx;
+      this.rcFunctions = rcFunctions;
+      this.rcNodeId = rcNodeId;
     }
 
-    public String toString() {
-        return this.rcf + ":HTTP:" + this.channel.localAddress().toString();
+    @Override
+    protected void initChannel(SocketChannel ch) throws Exception {
+      ChannelPipeline p = ch.pipeline();
+      if (sslCtx != null) p.addLast(sslCtx.newHandler(ch.alloc()));
 
+      p.addLast(new HttpRequestDecoder());
+
+      // Uncomment if you don't want to handle HttpChunks.
+      p.addLast(new HttpObjectAggregator(1048576));
+
+      p.addLast(new HttpResponseEncoder());
+
+      p.addLast(new HttpReconfiguratorHandler(rcFunctions, rcNodeId));
     }
+  }
 
-    /**
-     * @return Local socket address.
-     */
-    public SocketAddress getListeningAddress() {
-        return this.channel.localAddress();
-    }
+  private static final JSONObject toJSONObject(Map<String, List<String>> keyValues)
+      throws JSONException {
+    JSONObject json = new JSONObject();
+    for (String key : keyValues.keySet())
+      // replace with last in case key repeats
+      json.put(getHTTPKey(key), JSONObject.stringToValue(keyValues.get(key).get(0)));
+    return json;
+  }
 
-    private boolean closed = false;
+  private static final String missingKeyMessage(String key) {
+    return "Malformed request missing key " + key;
+  }
 
-    /**
-     * Close server and workers gracefully.
-     */
-    public void close() {
-        this.bossGroup.shutdownGracefully();
-        this.workerGroup.shutdownGracefully();
-        closed = true;
-    }
+  /** {@link ClientReconfigurationPacket} types handled. */
+  public static final ReconfigurationPacket.PacketType[] types = {
+    ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME,
+    ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME,
+    ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS,
+    ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG,
+    ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,
+  };
 
-    /**
-     * @return True if this server was closed gracefully using {@link #close()}.
-     */
-    public boolean isClosed() {
-        return this.closed;
-    }
+  private static ReconfigurationPacket.PacketType getRequestType(Object val) {
+    for (ReconfigurationPacket.PacketType type : types)
+      if (val instanceof String
+          && (
+          // string match
+          type.toString().toLowerCase().equals(val.toString().toLowerCase())
+              ||
+              // alias match
+              type.equals(HTTPRequestTypes.valueOf(val.toString().toUpperCase()).type)))
+        return type;
+      else if (val instanceof Integer && type.getInt() == (Integer) val) return type;
+    return null;
+  }
 
-    /**
-     * To close all instances.
-     */
-    public static void closeAll() {
-        for (HttpReconfigurator instance :
-            // convert to array to allow removal while iterating
-                instances.toArray(new HttpReconfigurator[0]))
-            try {
-                instance.close();
-                instances.remove(instance);
-            } catch (Exception | Error e) {
-                // ignore and try to close rest
-            }
-    }
+  // for case-insensitive, alias-insensitive key match
+  private static String getHTTPKey(JSONObject json, HTTPKeys matchKey) throws HTTPException {
+    String[] keys = JSONObject.getNames(json);
+    if (keys != null)
+      for (String key : keys)
+        if (key.toUpperCase().equals(matchKey.toString().toUpperCase())
+            || key.toUpperCase().equals(matchKey.label.toUpperCase())) return key;
+    throw new HTTPException(
+        ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+        missingKeyMessage(matchKey.toString()) + " in " + json);
+  }
 
-    static class HttpReconfiguratorInitializer extends
-            ChannelInitializer<SocketChannel> {
+  private static String getHTTPKey(String formKey) {
+    for (HTTPKeys key : HTTPKeys.values())
+      if (key.toString().toUpperCase().equals(formKey.toString().toUpperCase())
+          || key.label.toUpperCase().equals(formKey.toUpperCase())) return key.label;
+    return formKey;
+  }
 
-        private final SslContext sslCtx;
-        private final ReconfiguratorFunctions rcFunctions;
-        private final String rcNodeId;
+  private static final ReconfiguratorRequest toReconfiguratorRequest(
+      JSONObject json, Channel channel) throws JSONException, HTTPException {
 
-        HttpReconfiguratorInitializer(SslContext sslCtx,
-                                      final ReconfiguratorFunctions rcFunctions,
-                                      String rcNodeId) {
-            this.sslCtx = sslCtx;
-            this.rcFunctions = rcFunctions;
-            this.rcNodeId = rcNodeId;
-        }
-
-        @Override
-        protected void initChannel(SocketChannel ch) throws Exception {
-            ChannelPipeline p = ch.pipeline();
-            if (sslCtx != null)
-                p.addLast(sslCtx.newHandler(ch.alloc()));
-
-            p.addLast(new HttpRequestDecoder());
-
-            // Uncomment if you don't want to handle HttpChunks.
-            p.addLast(new HttpObjectAggregator(1048576));
-
-            p.addLast(new HttpResponseEncoder());
-
-            p.addLast(new HttpReconfiguratorHandler(rcFunctions, rcNodeId));
-
-        }
-    }
-
-    private static final JSONObject toJSONObject(
-            Map<String, List<String>> keyValues) throws JSONException {
-        JSONObject json = new JSONObject();
-        for (String key : keyValues.keySet())
-            // replace with last in case key repeats
-            json.put(getHTTPKey(key),
-                    JSONObject.stringToValue(keyValues.get(key).get(0)));
-        return json;
-    }
-
-    private static final String missingKeyMessage(String key) {
-        return "Malformed request missing key " + key;
-    }
-
-    /**
-     * {@link ClientReconfigurationPacket} types handled.
-     */
-    public static final ReconfigurationPacket.PacketType[] types = {
-            ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME,
-            ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME,
-            ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS,
-
-            ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG,
-            ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,};
-
-    private static ReconfigurationPacket.PacketType getRequestType(Object val) {
-        for (ReconfigurationPacket.PacketType type : types)
-            if (val instanceof String && (
-                    // string match
-                    type.toString().toLowerCase()
-                            .equals(val.toString().toLowerCase()) ||
-                            // alias match
-                            type.equals(HTTPRequestTypes.valueOf(val.toString()
-                                    .toUpperCase()).type)))
-                return type;
-            else if (val instanceof Integer && type.getInt() == (Integer) val)
-                return type;
-        return null;
-    }
-
-    // for case-insensitive, alias-insensitive key match
-    private static String getHTTPKey(JSONObject json, HTTPKeys matchKey)
-            throws HTTPException {
-        String[] keys = JSONObject.getNames(json);
-        if (keys != null)
-            for (String key : keys)
-                if (key.toUpperCase().equals(matchKey.toString().toUpperCase())
-                        || key.toUpperCase().equals(
-                        matchKey.label.toUpperCase()))
-                    return key;
-        throw new HTTPException(
-                ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
-                missingKeyMessage(matchKey.toString()) + " in " + json);
-    }
-
-    private static String getHTTPKey(String formKey) {
-        for (HTTPKeys key : HTTPKeys.values())
-            if (key.toString().toUpperCase()
-                    .equals(formKey.toString().toUpperCase())
-                    || key.label.toUpperCase().equals(formKey.toUpperCase()))
-                return key.label;
-        return formKey;
-    }
-
-    private static final ReconfiguratorRequest toReconfiguratorRequest(
-            JSONObject json, Channel channel) throws JSONException,
-            HTTPException {
-
-        ReconfigurationPacket.PacketType type = getRequestType(json.get(
+    ReconfigurationPacket.PacketType type =
+        getRequestType(
+            json.get(
                 // must contain type key, else exception
                 getHTTPKey(json, HTTPKeys.TYPE)));
 
-        String name = json.getString(
-                // must contain name key, else exception
-                getHTTPKey(json, HTTPKeys.NAME));
+    String name =
+        json.getString(
+            // must contain name key, else exception
+            getHTTPKey(json, HTTPKeys.NAME));
 
-        if (type == ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG
-                || type == ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG)
-            return toServerReconfigurationRequest(json, channel, type, name);
+    if (type == ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG
+        || type == ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG)
+      return toServerReconfigurationRequest(json, channel, type, name);
 
-        long requestID = (type == ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS ? json
-                .optLong(RequestActiveReplicas.Keys.QID.toString(), 0) : 0);
+    long requestID =
+        (type == ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS
+            ? json.optLong(RequestActiveReplicas.Keys.QID.toString(), 0)
+            : 0);
 
-        // else must be ClientReconfigurationPacket; insert necessary fields
-        json.put(HTTPKeys.TYPE.label, type.getInt())
-                .put(HTTPKeys.NAME.label, name)
-                // epoch can be always set to 0
-                .put(BasicReconfigurationPacket.Keys.EPOCH.toString(), 0)
-                // is_query is always true at this server
-                .put(ClientReconfigurationPacket.Keys.IS_QUERY.toString(), true)
-                // *some* creator needed for inter-reconfigurator forwarding
-                .put(ClientReconfigurationPacket.Keys.CREATOR.toString(),
-                        channel.remoteAddress())
-                // myReceiver probably not necessary
-                .put(ClientReconfigurationPacket.Keys.MY_RECEIVER.toString(),
-                        channel.localAddress())
-                // request ID
-                .put(RequestActiveReplicas.Keys.QID.toString(), requestID);
+    // else must be ClientReconfigurationPacket; insert necessary fields
+    json.put(HTTPKeys.TYPE.label, type.getInt())
+        .put(HTTPKeys.NAME.label, name)
+        // epoch can be always set to 0
+        .put(BasicReconfigurationPacket.Keys.EPOCH.toString(), 0)
+        // is_query is always true at this server
+        .put(ClientReconfigurationPacket.Keys.IS_QUERY.toString(), true)
+        // *some* creator needed for inter-reconfigurator forwarding
+        .put(ClientReconfigurationPacket.Keys.CREATOR.toString(), channel.remoteAddress())
+        // myReceiver probably not necessary
+        .put(ClientReconfigurationPacket.Keys.MY_RECEIVER.toString(), channel.localAddress())
+        // request ID
+        .put(RequestActiveReplicas.Keys.QID.toString(), requestID);
 
-        if (json.has(HTTPKeys.INITIAL_STATE.label)) {
-            json.put(HTTPKeys.INITIAL_STATE.label, json.getString(HTTPKeys.INITIAL_STATE.label));
+    if (json.has(HTTPKeys.INITIAL_STATE.label)) {
+      json.put(HTTPKeys.INITIAL_STATE.label, json.getString(HTTPKeys.INITIAL_STATE.label));
+    }
+
+    ClientReconfigurationPacket crp;
+    try {
+      crp =
+          (ClientReconfigurationPacket)
+              ReconfigurationPacket.getReconfigurationPacket(
+                  json, ClientReconfigurationPacket.unstringer);
+    } catch (Exception e) {
+      throw new HTTPException(
+          ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+          "Unable to decode request: " + e.getMessage());
+    }
+    return crp;
+  }
+
+  private static final ReconfiguratorRequest toServerReconfigurationRequest(
+      JSONObject json, Channel channel, PacketType type, String name) {
+    throw new RuntimeException("Unimplemented");
+  }
+
+  static class HttpReconfiguratorHandler extends SimpleChannelInboundHandler<Object> {
+
+    private final String rcNodeId;
+
+    private HttpRequest request;
+
+    /** Buffer that stores the response content */
+    private final StringBuilder buf = new StringBuilder();
+
+    final ReconfiguratorFunctions rcFunctions;
+
+    private static final String DASHBOARD_3D_HTML = loadDashboardHtml("dashboard3d.html");
+    private static final String DASHBOARD_2D_HTML = loadDashboardHtml("dashboard2d.html");
+
+    private static String loadDashboardHtml(String filename) {
+      try (InputStream is =
+          HttpReconfigurator.class.getResourceAsStream(String.format("/%s", filename))) {
+        if (is == null) return String.format("<h1>%s not found in classpath</h1>", filename);
+        return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+      } catch (IOException e) {
+        return "<h1>Failed to load dashboard: " + e.getMessage() + "</h1>";
+      }
+    }
+
+    public HttpReconfiguratorHandler(ReconfiguratorFunctions rcFunctions, String rcNodeId) {
+      this.rcFunctions = rcFunctions;
+      this.rcNodeId = rcNodeId;
+    }
+
+    @Override
+    public void channelReadComplete(ChannelHandlerContext ctx) {
+      ctx.flush();
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, Object msg) {
+      if (msg instanceof HttpRequest) {
+        HttpRequest request = this.request = (HttpRequest) msg;
+        buf.setLength(0);
+
+        // Serve the demand visualization dashboard
+        // GET /dashboard3d/{service}
+        if ((request.uri().equals("/dashboard3d/") || request.uri().startsWith("/dashboard3d/"))) {
+          FullHttpResponse resp =
+              new DefaultFullHttpResponse(
+                  HTTP_1_1,
+                  OK,
+                  Unpooled.copiedBuffer(DASHBOARD_3D_HTML.getBytes(StandardCharsets.UTF_8)));
+          resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+          resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, resp.content().readableBytes());
+          ctx.writeAndFlush(resp);
+          return;
         }
 
-        ClientReconfigurationPacket crp;
+        // 2D Grid visualization dashboard
+        // GET /dashboard/{service}
+        if ((request.uri().equals("/dashboard/") || request.uri().startsWith("/dashboard/"))) {
+          FullHttpResponse resp =
+              new DefaultFullHttpResponse(
+                  HTTP_1_1,
+                  OK,
+                  Unpooled.copiedBuffer(DASHBOARD_2D_HTML.getBytes(StandardCharsets.UTF_8)));
+          resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
+          resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, resp.content().readableBytes());
+          ctx.writeAndFlush(resp);
+          return;
+        }
+
+        // All HTTP requests for Reconfiguration with '/api/v2/services' prefix
+        // are being handled separately. We keep other requests (e.g. /?type=CREATE&name=..)
+        // processed by the original handler for backward compatability (that is v1).
+        if (this.isV2ApiRequest(request)) {
+          this.handleReconfigurationV2Request(ctx, msg);
+          return;
+        }
+
+        ReconfiguratorRequest crp = null;
         try {
-            crp = (ClientReconfigurationPacket) ReconfigurationPacket
-                    .getReconfigurationPacket(json,
-                            ClientReconfigurationPacket.unstringer);
-        } catch (Exception e) {
-            throw new HTTPException(
-                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
-                    "Unable to decode request: " + e.getMessage());
+          JSONObject json = toJSONObject(new QueryStringDecoder(request.uri()).parameters());
+          log.log(Level.INFO, "JSON converted from uri is {0}", new Object[] {json});
+          crp = toReconfiguratorRequest(json, ctx.channel());
+
+          if (rcFunctions != null) {
+            crp = (ReconfiguratorRequest) this.rcFunctions.sendRequest(crp);
+          }
+          buf.append(crp.toString());
+
+        } catch (JSONException | HTTPException e) {
+          // e.printStackTrace();
+          log.log(
+              Level.INFO,
+              "Incurred exception {0} while trying" + " to parse message {1}",
+              new Object[] {e, msg});
+          buf.append(crp != null ? crp.setFailed().setResponseMessage(e.getMessage()) : "");
         }
-        return crp;
-    }
+        buf.append("\r\n");
+      }
 
-    private static final ReconfiguratorRequest toServerReconfigurationRequest(
-            JSONObject json, Channel channel, PacketType type, String name) {
-        throw new RuntimeException("Unimplemented");
-    }
+      if (msg instanceof HttpContent) {
+        HttpContent httpContent = (HttpContent) msg;
 
-    static class HttpReconfiguratorHandler extends
-            SimpleChannelInboundHandler<Object> {
-
-        private final String rcNodeId;
-
-        private HttpRequest request;
-        /**
-         * Buffer that stores the response content
-         */
-        private final StringBuilder buf = new StringBuilder();
-        final ReconfiguratorFunctions rcFunctions;
-
-        private static final String DASHBOARD_3D_HTML = loadDashboardHtml("dashboard3d.html");
-        private static final String DASHBOARD_2D_HTML = loadDashboardHtml("dashboard2d.html");
-
-        private static String loadDashboardHtml(String filename) {
-            try (InputStream is = HttpReconfigurator.class
-                    .getResourceAsStream(String.format("/%s", filename))) {
-                if (is == null)
-                    return String.format("<h1>%s not found in classpath</h1>", filename);
-                return new String(is.readAllBytes(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                return "<h1>Failed to load dashboard: " + e.getMessage() + "</h1>";
-            }
+        ByteBuf content = httpContent.content();
+        if (content.isReadable()) {
+          buf.append("CONTENT: ");
+          buf.append(content.toString(CharsetUtil.UTF_8));
+          buf.append("\r\n");
+          appendDecoderResult(buf, request);
         }
 
-        public HttpReconfiguratorHandler(ReconfiguratorFunctions rcFunctions, String rcNodeId) {
-            this.rcFunctions = rcFunctions;
-            this.rcNodeId = rcNodeId;
-        }
-
-        @Override
-        public void channelReadComplete(ChannelHandlerContext ctx) {
-            ctx.flush();
-        }
-
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, Object msg) {
-            if (msg instanceof HttpRequest) {
-                HttpRequest request = this.request = (HttpRequest) msg;
-                buf.setLength(0);
-
-                // Serve the demand visualization dashboard
-                // GET /dashboard3d/{service}
-                if ((request.uri().equals("/dashboard3d/")
-                        || request.uri().startsWith("/dashboard3d/"))) {
-                    FullHttpResponse resp = new DefaultFullHttpResponse(
-                            HTTP_1_1, OK,
-                            Unpooled.copiedBuffer(
-                                    DASHBOARD_3D_HTML.getBytes(StandardCharsets.UTF_8)));
-                    resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
-                    resp.headers().set(HttpHeaderNames.CONTENT_LENGTH,
-                            resp.content().readableBytes());
-                    ctx.writeAndFlush(resp);
-                    return;
-                }
-
-                // 2D Grid visualization dashboard
-                // GET /dashboard/{service}
-                if ((request.uri().equals("/dashboard/")
-                        || request.uri().startsWith("/dashboard/"))) {
-                    FullHttpResponse resp = new DefaultFullHttpResponse(
-                            HTTP_1_1, OK,
-                            Unpooled.copiedBuffer(
-                                    DASHBOARD_2D_HTML.getBytes(StandardCharsets.UTF_8)));
-                    resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=UTF-8");
-                    resp.headers().set(HttpHeaderNames.CONTENT_LENGTH,
-                            resp.content().readableBytes());
-                    ctx.writeAndFlush(resp);
-                    return;
-                }
-
-                // All HTTP requests for Reconfiguration with '/api/v2/services' prefix
-                // are being handled separately. We keep other requests (e.g. /?type=CREATE&name=..)
-                // processed by the original handler for backward compatability (that is v1).
-                if (this.isV2ApiRequest(request)) {
-                    this.handleReconfigurationV2Request(ctx, msg);
-                    return;
-                }
-
-                ReconfiguratorRequest crp = null;
-                try {
-                    JSONObject json = toJSONObject(new QueryStringDecoder(
-                            request.uri()).parameters());
-                    log.log(Level.INFO, "JSON converted from uri is {0}", new Object[]{json});
-                    crp = toReconfiguratorRequest(json, ctx.channel());
-
-                    if (rcFunctions != null) {
-                        crp = (ReconfiguratorRequest) this.rcFunctions
-                                .sendRequest(crp);
-                    }
-                    buf.append(crp.toString());
-
-                } catch (JSONException | HTTPException e) {
-                    //e.printStackTrace();
-                    log.log(Level.INFO, "Incurred exception {0} while trying" +
-                            " to parse message {1}", new Object[]{e, msg});
-                    buf.append(crp != null ? crp.setFailed()
-                            .setResponseMessage(e.getMessage()) : "");
-                }
-                buf.append("\r\n");
-            }
-
-            if (msg instanceof HttpContent) {
-                HttpContent httpContent = (HttpContent) msg;
-
-                ByteBuf content = httpContent.content();
-                if (content.isReadable()) {
-                    buf.append("CONTENT: ");
-                    buf.append(content.toString(CharsetUtil.UTF_8));
-                    buf.append("\r\n");
-                    appendDecoderResult(buf, request);
-                }
-
-                if (msg instanceof LastHttpContent) {
-                    LastHttpContent trailer = (LastHttpContent) msg;
-                    if (!trailer.trailingHeaders().isEmpty()) {
-                        buf.append("\r\n");
-                        for (CharSequence name : trailer.trailingHeaders()
-                                .names()) {
-                            for (CharSequence value : trailer.trailingHeaders()
-                                    .getAll(name)) {
-                                buf.append("TRAILING HEADER: ");
-                                buf.append(name).append(" = ").append(value)
-                                        .append("\r\n");
-                            }
-                        }
-                        buf.append("\r\n");
-                    }
-
-                    if (!writeResponse(trailer, ctx)) {
-                        // If keep-alive is off, close the connection once the
-                        // content is fully written.
-                        ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(
-                                ChannelFutureListener.CLOSE);
-                    }
-                }
-            }
-        }
-
-        private static void appendDecoderResult(StringBuilder buf, HttpObject o) {
-            DecoderResult result = o.decoderResult();
-            if (result.isSuccess())
-                return;
-
-            buf.append(".. WITH DECODER FAILURE: ");
-            buf.append(result.cause());
+        if (msg instanceof LastHttpContent) {
+          LastHttpContent trailer = (LastHttpContent) msg;
+          if (!trailer.trailingHeaders().isEmpty()) {
             buf.append("\r\n");
-        }
-
-        private boolean isV2ApiRequest(HttpRequest request) {
-            return request.uri().startsWith("/api/v2/services");
-        }
-
-        private void handleReconfigurationV2Request(ChannelHandlerContext ctx, Object msg) {
-            // Ignores non HTTP requests that is not self-contained.
-            if (!(msg instanceof HttpRequest httpRequest && msg instanceof LastHttpContent)) {
-                return;
+            for (CharSequence name : trailer.trailingHeaders().names()) {
+              for (CharSequence value : trailer.trailingHeaders().getAll(name)) {
+                buf.append("TRAILING HEADER: ");
+                buf.append(name).append(" = ").append(value).append("\r\n");
+              }
             }
+            buf.append("\r\n");
+          }
 
-            HttpContent httpContent = (HttpContent) msg;
-            assert this.rcFunctions != null : "Reconfigurator packets handler must be initialized";
-
-            // Parses the sender
-            assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
-                    "Invalid request sender";
-            InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
-
-            // Parses and handles SetReplicaPlacementRequest
-            //  PUT /api/v2/services/{serviceName}/placement
-            Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/placement$");
-            Matcher matcher = pattern.matcher(httpRequest.uri());
-            if ((httpRequest.method().equals(HttpMethod.POST) ||
-                    httpRequest.method().equals(HttpMethod.PUT))
-                    && matcher.matches()) {
-                parseAndHandleHttpSetReplicaPlacementRequest(
-                        ctx, senderAddress, httpRequest, httpContent);
-                return;
-            }
-
-            // Parses and handles GetReplicaPlacementRequest
-            //  GET /api/v2/services/{serviceName}/placement
-            if (httpRequest.method().equals(HttpMethod.GET) && matcher.matches()) {
-                parseAndHandleHttpGetReplicaPlacementRequest(
-                        ctx, senderAddress, httpRequest, httpContent);
-                return;
-            }
-
-            // Parses and handles SetCoordinatorNodeRequest (for Paxos and PrimaryBackup)
-            //  PUT /api/v2/services/{serviceName}/coordinator
-            Pattern scnrPattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/coordinator$");
-            Matcher scnrMatcher = scnrPattern.matcher(httpRequest.uri());
-            if (httpRequest.method().equals(HttpMethod.PUT) && scnrMatcher.matches()) {
-                parseAndHandleHttpSetCoordinatorNodeRequest(
-                        ctx, senderAddress, httpRequest, httpContent);
-                return;
-            }
-
-            // TODO: handle other kind of reconfigurator requests
-            //  POST /api/v2/services/{name}/reconfigure
-            Pattern reconfigurePattern =
-                    Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/reconfigure$");
-            if (httpRequest.method().equals(HttpMethod.POST)
-                    && reconfigurePattern.matcher(httpRequest.uri()).matches()) {
-                String serviceName = httpRequest.uri().split("/")[4];
-                ReconfigurationTriggerResult result =
-                        this.rcFunctions.triggerDemandBasedReconfiguration(serviceName);
-                HttpResponseStatus status = switch (result) {
-                    case INITIATED, NO_DEMAND_DATA, PLACEMENT_UNCHANGED -> OK;
-                    case ALREADY_RECONFIGURING -> HttpResponseStatus.CONFLICT;
-                    case SERVICE_NOT_FOUND -> HttpResponseStatus.NOT_FOUND;
-                };
-                String body = "{\"result\":\"" + result.name() + "\"}";
-                FullHttpResponse resp = new DefaultFullHttpResponse(
-                        HTTP_1_1, status,
-                        Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
-                resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-                resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
-                ctx.write(resp);
-                ctx.flush();
-                return;
-            }
-
-            // GET /api/v2/services/{name}/demand
-            Pattern demandPattern =
-                    Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/demand$");
-            if (httpRequest.method().equals(HttpMethod.GET)
-                    && demandPattern.matcher(httpRequest.uri()).matches()) {
-                String serviceName = httpRequest.uri().split("/")[4];
-                JSONObject snapshot = this.rcFunctions.getDemandSnapshot(serviceName);
-                HttpResponseStatus status;
-                String body;
-                if (snapshot == null) {
-                    status = HttpResponseStatus.NOT_FOUND;
-                    body = "{\"error\":\"no demand data for " + serviceName + "\"}";
-                } else {
-                    status = OK;
-                    body = snapshot.toString();
-                }
-                FullHttpResponse resp = new DefaultFullHttpResponse(
-                        HTTP_1_1, status,
-                        Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
-                resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-                resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
-                ctx.write(resp);
-                ctx.flush();
-                return;
-            }
-
-            // TODO: Parses and handles CreateServiceRequest
-            //  POST /api/v2/services/{serviceName}
-
-            // TODO: Parses and handles GetServiceInfoRequest
-            //  GET /api/v2/services/{serviceName}
-
-            // TODO: Parses and handles DestroyServiceRequest
-            //  DELETE /api/v2/services/{serviceName}
-
-
-            // Handles unknown v2 requests with BadRequestResponse (400).
-            this.writeBadRequestResponse(ctx, "Unknown reconfiguration request.");
+          if (!writeResponse(trailer, ctx)) {
+            // If keep-alive is off, close the connection once the
+            // content is fully written.
+            ctx.writeAndFlush(Unpooled.EMPTY_BUFFER).addListener(ChannelFutureListener.CLOSE);
+          }
         }
-
-        private void parseAndHandleHttpSetReplicaPlacementRequest(ChannelHandlerContext ctx,
-                                                                  InetSocketAddress senderAddress,
-                                                                  HttpRequest httpRequest,
-                                                                  HttpContent httpContent) {
-            SetReplicaPlacementRequest setReplicaPlacementReq =
-                    this.parseSetReplicaPlacementRequest(
-                            senderAddress, httpRequest, httpContent);
-            if (setReplicaPlacementReq == null) {
-                this.writeBadRequestResponse(
-                        ctx, "Invalid format for set replica placement request.");
-                return;
-            }
-            this.rcFunctions.sendRequest(setReplicaPlacementReq, response -> {
-                assert response instanceof ClientReconfigurationPacket :
-                        "Unexpected response type from Reconfigurator: " +
-                                response.getClass().getSimpleName();
-                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
-                this.writeResponse(crp, ctx);
-                return null;
-            });
-        }
-
-        private void parseAndHandleHttpGetReplicaPlacementRequest(ChannelHandlerContext ctx,
-                                                                  InetSocketAddress senderAddress,
-                                                                  HttpRequest httpRequest,
-                                                                  HttpContent httpContent) {
-            GetReplicaPlacementRequest getReplicaPlacementReq =
-                    this.parseGetReplicaPlacementRequest(
-                            senderAddress, httpRequest, httpContent);
-            this.rcFunctions.sendRequest(getReplicaPlacementReq, response -> {
-                assert response instanceof ClientReconfigurationPacket :
-                        "Unexpected response type from Reconfigurator: " +
-                                response.getClass().getSimpleName();
-                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
-                this.writeResponse(crp, ctx);
-                return null;
-            });
-        }
-
-        // returns null if the content is invalid
-        private SetReplicaPlacementRequest parseSetReplicaPlacementRequest(InetSocketAddress sender,
-                                                                           HttpRequest request,
-                                                                           HttpContent content) {
-            assert sender != null;
-            assert request != null;
-            assert content != null;
-
-            // Parse service name in the URI
-            // example: /api/v2/services/{name}/placement
-            String[] uriComponents = request.uri().split("/");
-            assert uriComponents.length == 6 : "Invalid uri for set replica placement request";
-            String serviceName = uriComponents[4];
-
-            // Parse active names from the body
-            // example: `{"NODES" : ["AR0", "AR2", "AR3"]}`
-            // example: `{"NODES" : ["AR0", "AR2", "AR3"], "COORDINATOR": "AR0"}`
-            String contentBody = content.content().toString(StandardCharsets.ISO_8859_1);
-            Set<String> nodeIds = new HashSet<>();
-            String coordinatorId = null;
-            try {
-                JSONObject contentJson = new JSONObject(contentBody);
-                JSONArray nodeIdArray = contentJson.getJSONArray("NODES");
-                for (int i = 0; i < nodeIdArray.length(); i++) {
-                    String nodeId = nodeIdArray.getString(i);
-                    nodeIds.add(nodeId);
-                }
-                coordinatorId = contentJson.has("COORDINATOR") ?
-                        contentJson.getString("COORDINATOR") : null;
-            } catch (JSONException e) {
-                return null;
-            }
-
-            return new SetReplicaPlacementRequest(
-                    sender, serviceName, nodeIds, coordinatorId);
-        }
-
-        private GetReplicaPlacementRequest parseGetReplicaPlacementRequest(InetSocketAddress sender,
-                                                                           HttpRequest request,
-                                                                           HttpContent content) {
-            assert sender != null;
-            assert request != null;
-            assert content != null;
-
-            // Parse service name in the URI
-            // example: /api/v2/services/{name}/placement
-            String[] uriComponents = request.uri().split("/");
-            assert uriComponents.length == 6 : "Invalid uri for get replica placement request";
-            String serviceName = uriComponents[4];
-
-            return new GetReplicaPlacementRequest(sender, serviceName);
-        }
-
-        private void parseAndHandleHttpSetCoordinatorNodeRequest(ChannelHandlerContext ctx,
-                                                                 InetSocketAddress senderAddress,
-                                                                 HttpRequest httpRequest,
-                                                                 HttpContent httpContent) {
-            // Example of the expected payload: {"newCoordinatorNodeId": "AR0"}
-            String[] uriComponents = httpRequest.uri().split("/");
-            assert uriComponents.length == 6 : "Invalid uri for set coordinator node request";
-            String serviceName = uriComponents[4];
-
-            String contentBody = httpContent.content().toString(StandardCharsets.ISO_8859_1);
-            final String newCoordinatorNodeId;
-            try {
-                JSONObject contentJson = new JSONObject(contentBody);
-                newCoordinatorNodeId = contentJson.getString("newCoordinatorNodeId");
-            } catch (JSONException e) {
-                this.writeBadRequestResponse(
-                        ctx, "Invalid format for set coordinator node request, " +
-                                "expecting `newCoordinatorNodeId` inside the json payload.");
-                return;
-            }
-
-            if (newCoordinatorNodeId == null || newCoordinatorNodeId.trim().isEmpty()) {
-                this.writeBadRequestResponse(
-                        ctx, "Invalid format for set coordinator node request, " +
-                                "expecting `newCoordinatorNodeId` inside the json payload.");
-                return;
-            }
-
-            SetCoordinatorNodeRequest<String> request = new SetCoordinatorNodeRequest<>(
-                    senderAddress, serviceName, rcNodeId, newCoordinatorNodeId);
-            this.rcFunctions.sendRequest(request, response -> {
-                assert response instanceof ClientReconfigurationPacket :
-                        "Unexpected response type from Reconfigurator: " +
-                                response.getClass().getSimpleName();
-                ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
-                this.writeResponse(crp, ctx);
-                return null;
-            });
-        }
-
-        private void writeBadRequestResponse(ChannelHandlerContext ctx, String errMessage) {
-            HttpResponse httpResponse = new DefaultFullHttpResponse(
-                    HTTP_1_1,
-                    BAD_REQUEST,
-                    Unpooled.copiedBuffer(errMessage.getBytes(StandardCharsets.UTF_8)));
-            httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
-            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, errMessage.length());
-            ctx.write(httpResponse);
-            ctx.flush();
-        }
-
-        private void writeResponse(ClientReconfigurationPacket response,
-                                   ChannelHandlerContext ctx) {
-            // TODO: convert ClientReconfigurationPacket into HttpResponse
-            FullHttpResponse httpResponse = new DefaultFullHttpResponse(
-                    HTTP_1_1,
-                    response.isFailed()
-                            ? HttpResponseStatus.INTERNAL_SERVER_ERROR
-                            : HttpResponseStatus.OK,
-                    Unpooled.copiedBuffer(response.toString().getBytes(StandardCharsets.UTF_8)));
-            httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
-            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH,
-                    httpResponse.content().readableBytes());
-            ctx.write(httpResponse);
-            ctx.flush();
-        }
-
-        private boolean writeResponse(HttpObject currentObj,
-                                      ChannelHandlerContext ctx) {
-            // Decide whether to close the connection or not.
-            boolean keepAlive = HttpUtil.isKeepAlive(request);
-            // Build the response object.
-            FullHttpResponse response = new DefaultFullHttpResponse(HTTP_1_1,
-                    currentObj.decoderResult().isSuccess() ? OK : BAD_REQUEST,
-                    Unpooled.copiedBuffer(buf.toString(), CharsetUtil.UTF_8));
-
-            response.headers().set(HttpHeaderNames.CONTENT_TYPE,
-                    "text/plain; charset=UTF-8");
-
-            if (keepAlive) {
-                // Add 'Content-Length' header only for a keep-alive connection.
-                response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH,
-                        response.content().readableBytes());
-                // Add keep alive header as per:
-                // -
-                // http://www.w3.org/Protocols/HTTP/1.1/draft-ietf-http-v11-spec-01.html#Connection
-                response.headers().set(HttpHeaderNames.CONNECTION,
-                        HttpHeaderValues.KEEP_ALIVE);
-            }
-
-            // Encode the cookie.
-            String cookieString = request.headers().get(HttpHeaderNames.COOKIE);
-            if (cookieString != null) {
-                Set<Cookie> cookies = ServerCookieDecoder.STRICT
-                        .decode(cookieString);
-                if (!cookies.isEmpty()) {
-                    // Reset the cookies if necessary.
-                    for (Cookie cookie : cookies) {
-                        response.headers().add(HttpHeaderNames.SET_COOKIE,
-                                ServerCookieEncoder.STRICT.encode(cookie));
-                    }
-                }
-            } else {
-                // Browser sent no cookie. Add some.
-                response.headers().add(HttpHeaderNames.SET_COOKIE,
-                        ServerCookieEncoder.STRICT.encode("key1", "value1"));
-                response.headers().add(HttpHeaderNames.SET_COOKIE,
-                        ServerCookieEncoder.STRICT.encode("key2", "value2"));
-            }
-
-            // Write the response.
-            ctx.write(response);
-
-            return keepAlive;
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            cause.printStackTrace();
-            ctx.close();
-        }
+      }
     }
 
-    /**
-     * @param args
-     * @throws CertificateException
-     * @throws SSLException
-     * @throws InterruptedException
-     */
-    public static void main(String[] args) throws CertificateException,
-            SSLException, InterruptedException {
-        new HttpReconfigurator(null, new InetSocketAddress(8080), false);
+    private static void appendDecoderResult(StringBuilder buf, HttpObject o) {
+      DecoderResult result = o.decoderResult();
+      if (result.isSuccess()) return;
+
+      buf.append(".. WITH DECODER FAILURE: ");
+      buf.append(result.cause());
+      buf.append("\r\n");
     }
 
+    private boolean isV2ApiRequest(HttpRequest request) {
+      return request.uri().startsWith("/api/v2/services");
+    }
+
+    private void handleReconfigurationV2Request(ChannelHandlerContext ctx, Object msg) {
+      // Ignores non HTTP requests that is not self-contained.
+      if (!(msg instanceof HttpRequest httpRequest && msg instanceof LastHttpContent)) {
+        return;
+      }
+
+      HttpContent httpContent = (HttpContent) msg;
+      assert this.rcFunctions != null : "Reconfigurator packets handler must be initialized";
+
+      // Parses the sender
+      assert ctx.channel().remoteAddress() instanceof InetSocketAddress : "Invalid request sender";
+      InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+
+      // Parses and handles SetReplicaPlacementRequest
+      //  PUT /api/v2/services/{serviceName}/placement
+      Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/placement$");
+      Matcher matcher = pattern.matcher(httpRequest.uri());
+      if ((httpRequest.method().equals(HttpMethod.POST)
+              || httpRequest.method().equals(HttpMethod.PUT))
+          && matcher.matches()) {
+        parseAndHandleHttpSetReplicaPlacementRequest(ctx, senderAddress, httpRequest, httpContent);
+        return;
+      }
+
+      // Parses and handles GetReplicaPlacementRequest
+      //  GET /api/v2/services/{serviceName}/placement
+      if (httpRequest.method().equals(HttpMethod.GET) && matcher.matches()) {
+        parseAndHandleHttpGetReplicaPlacementRequest(ctx, senderAddress, httpRequest, httpContent);
+        return;
+      }
+
+      // Parses and handles SetCoordinatorNodeRequest (for Paxos and PrimaryBackup)
+      //  PUT /api/v2/services/{serviceName}/coordinator
+      Pattern scnrPattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/coordinator$");
+      Matcher scnrMatcher = scnrPattern.matcher(httpRequest.uri());
+      if (httpRequest.method().equals(HttpMethod.PUT) && scnrMatcher.matches()) {
+        parseAndHandleHttpSetCoordinatorNodeRequest(ctx, senderAddress, httpRequest, httpContent);
+        return;
+      }
+
+      // TODO: handle other kind of reconfigurator requests
+      //  POST /api/v2/services/{name}/reconfigure
+      Pattern reconfigurePattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/reconfigure$");
+      if (httpRequest.method().equals(HttpMethod.POST)
+          && reconfigurePattern.matcher(httpRequest.uri()).matches()) {
+        String serviceName = httpRequest.uri().split("/")[4];
+        ReconfigurationTriggerResult result =
+            this.rcFunctions.triggerDemandBasedReconfiguration(serviceName);
+        HttpResponseStatus status =
+            switch (result) {
+              case INITIATED, NO_DEMAND_DATA, PLACEMENT_UNCHANGED -> OK;
+              case ALREADY_RECONFIGURING -> HttpResponseStatus.CONFLICT;
+              case SERVICE_NOT_FOUND -> HttpResponseStatus.NOT_FOUND;
+            };
+        String body = "{\"result\":\"" + result.name() + "\"}";
+        FullHttpResponse resp =
+            new DefaultFullHttpResponse(
+                HTTP_1_1, status, Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
+        resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+        resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
+        ctx.write(resp);
+        ctx.flush();
+        return;
+      }
+
+      // GET /api/v2/services/{name}/demand
+      Pattern demandPattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/demand$");
+      if (httpRequest.method().equals(HttpMethod.GET)
+          && demandPattern.matcher(httpRequest.uri()).matches()) {
+        String serviceName = httpRequest.uri().split("/")[4];
+        JSONObject snapshot = this.rcFunctions.getDemandSnapshot(serviceName);
+        HttpResponseStatus status;
+        String body;
+        if (snapshot == null) {
+          status = HttpResponseStatus.NOT_FOUND;
+          body = "{\"error\":\"no demand data for " + serviceName + "\"}";
+        } else {
+          status = OK;
+          body = snapshot.toString();
+        }
+        FullHttpResponse resp =
+            new DefaultFullHttpResponse(
+                HTTP_1_1, status, Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
+        resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+        resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
+        ctx.write(resp);
+        ctx.flush();
+        return;
+      }
+
+      // TODO: Parses and handles CreateServiceRequest
+      //  POST /api/v2/services/{serviceName}
+
+      // TODO: Parses and handles GetServiceInfoRequest
+      //  GET /api/v2/services/{serviceName}
+
+      // TODO: Parses and handles DestroyServiceRequest
+      //  DELETE /api/v2/services/{serviceName}
+
+      // Handles unknown v2 requests with BadRequestResponse (400).
+      this.writeBadRequestResponse(ctx, "Unknown reconfiguration request.");
+    }
+
+    private void parseAndHandleHttpSetReplicaPlacementRequest(
+        ChannelHandlerContext ctx,
+        InetSocketAddress senderAddress,
+        HttpRequest httpRequest,
+        HttpContent httpContent) {
+      SetReplicaPlacementRequest setReplicaPlacementReq =
+          this.parseSetReplicaPlacementRequest(senderAddress, httpRequest, httpContent);
+      if (setReplicaPlacementReq == null) {
+        this.writeBadRequestResponse(ctx, "Invalid format for set replica placement request.");
+        return;
+      }
+      this.rcFunctions.sendRequest(
+          setReplicaPlacementReq,
+          response -> {
+            assert response instanceof ClientReconfigurationPacket
+                : "Unexpected response type from Reconfigurator: "
+                    + response.getClass().getSimpleName();
+            ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+            this.writeResponse(crp, ctx);
+            return null;
+          });
+    }
+
+    private void parseAndHandleHttpGetReplicaPlacementRequest(
+        ChannelHandlerContext ctx,
+        InetSocketAddress senderAddress,
+        HttpRequest httpRequest,
+        HttpContent httpContent) {
+      GetReplicaPlacementRequest getReplicaPlacementReq =
+          this.parseGetReplicaPlacementRequest(senderAddress, httpRequest, httpContent);
+      this.rcFunctions.sendRequest(
+          getReplicaPlacementReq,
+          response -> {
+            assert response instanceof ClientReconfigurationPacket
+                : "Unexpected response type from Reconfigurator: "
+                    + response.getClass().getSimpleName();
+            ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+            this.writeResponse(crp, ctx);
+            return null;
+          });
+    }
+
+    // returns null if the content is invalid
+    private SetReplicaPlacementRequest parseSetReplicaPlacementRequest(
+        InetSocketAddress sender, HttpRequest request, HttpContent content) {
+      assert sender != null;
+      assert request != null;
+      assert content != null;
+
+      // Parse service name in the URI
+      // example: /api/v2/services/{name}/placement
+      String[] uriComponents = request.uri().split("/");
+      assert uriComponents.length == 6 : "Invalid uri for set replica placement request";
+      String serviceName = uriComponents[4];
+
+      // Parse active names from the body
+      // example: `{"NODES" : ["AR0", "AR2", "AR3"]}`
+      // example: `{"NODES" : ["AR0", "AR2", "AR3"], "COORDINATOR": "AR0"}`
+      String contentBody = content.content().toString(StandardCharsets.ISO_8859_1);
+      Set<String> nodeIds = new HashSet<>();
+      String coordinatorId = null;
+      try {
+        JSONObject contentJson = new JSONObject(contentBody);
+        JSONArray nodeIdArray = contentJson.getJSONArray("NODES");
+        for (int i = 0; i < nodeIdArray.length(); i++) {
+          String nodeId = nodeIdArray.getString(i);
+          nodeIds.add(nodeId);
+        }
+        coordinatorId =
+            contentJson.has("COORDINATOR") ? contentJson.getString("COORDINATOR") : null;
+      } catch (JSONException e) {
+        return null;
+      }
+
+      return new SetReplicaPlacementRequest(sender, serviceName, nodeIds, coordinatorId);
+    }
+
+    private GetReplicaPlacementRequest parseGetReplicaPlacementRequest(
+        InetSocketAddress sender, HttpRequest request, HttpContent content) {
+      assert sender != null;
+      assert request != null;
+      assert content != null;
+
+      // Parse service name in the URI
+      // example: /api/v2/services/{name}/placement
+      String[] uriComponents = request.uri().split("/");
+      assert uriComponents.length == 6 : "Invalid uri for get replica placement request";
+      String serviceName = uriComponents[4];
+
+      return new GetReplicaPlacementRequest(sender, serviceName);
+    }
+
+    private void parseAndHandleHttpSetCoordinatorNodeRequest(
+        ChannelHandlerContext ctx,
+        InetSocketAddress senderAddress,
+        HttpRequest httpRequest,
+        HttpContent httpContent) {
+      // Example of the expected payload: {"newCoordinatorNodeId": "AR0"}
+      String[] uriComponents = httpRequest.uri().split("/");
+      assert uriComponents.length == 6 : "Invalid uri for set coordinator node request";
+      String serviceName = uriComponents[4];
+
+      String contentBody = httpContent.content().toString(StandardCharsets.ISO_8859_1);
+      final String newCoordinatorNodeId;
+      try {
+        JSONObject contentJson = new JSONObject(contentBody);
+        newCoordinatorNodeId = contentJson.getString("newCoordinatorNodeId");
+      } catch (JSONException e) {
+        this.writeBadRequestResponse(
+            ctx,
+            "Invalid format for set coordinator node request, "
+                + "expecting `newCoordinatorNodeId` inside the json payload.");
+        return;
+      }
+
+      if (newCoordinatorNodeId == null || newCoordinatorNodeId.trim().isEmpty()) {
+        this.writeBadRequestResponse(
+            ctx,
+            "Invalid format for set coordinator node request, "
+                + "expecting `newCoordinatorNodeId` inside the json payload.");
+        return;
+      }
+
+      SetCoordinatorNodeRequest<String> request =
+          new SetCoordinatorNodeRequest<>(
+              senderAddress, serviceName, rcNodeId, newCoordinatorNodeId);
+      this.rcFunctions.sendRequest(
+          request,
+          response -> {
+            assert response instanceof ClientReconfigurationPacket
+                : "Unexpected response type from Reconfigurator: "
+                    + response.getClass().getSimpleName();
+            ClientReconfigurationPacket crp = (ClientReconfigurationPacket) response;
+            this.writeResponse(crp, ctx);
+            return null;
+          });
+    }
+
+    private void writeBadRequestResponse(ChannelHandlerContext ctx, String errMessage) {
+      HttpResponse httpResponse =
+          new DefaultFullHttpResponse(
+              HTTP_1_1,
+              BAD_REQUEST,
+              Unpooled.copiedBuffer(errMessage.getBytes(StandardCharsets.UTF_8)));
+      httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
+      httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, errMessage.length());
+      ctx.write(httpResponse);
+      ctx.flush();
+    }
+
+    private void writeResponse(ClientReconfigurationPacket response, ChannelHandlerContext ctx) {
+      // TODO: convert ClientReconfigurationPacket into HttpResponse
+      FullHttpResponse httpResponse =
+          new DefaultFullHttpResponse(
+              HTTP_1_1,
+              response.isFailed()
+                  ? HttpResponseStatus.INTERNAL_SERVER_ERROR
+                  : HttpResponseStatus.OK,
+              Unpooled.copiedBuffer(response.toString().getBytes(StandardCharsets.UTF_8)));
+      httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
+      httpResponse
+          .headers()
+          .set(HttpHeaderNames.CONTENT_LENGTH, httpResponse.content().readableBytes());
+      ctx.write(httpResponse);
+      ctx.flush();
+    }
+
+    private boolean writeResponse(HttpObject currentObj, ChannelHandlerContext ctx) {
+      // Decide whether to close the connection or not.
+      boolean keepAlive = HttpUtil.isKeepAlive(request);
+      // Build the response object.
+      FullHttpResponse response =
+          new DefaultFullHttpResponse(
+              HTTP_1_1,
+              currentObj.decoderResult().isSuccess() ? OK : BAD_REQUEST,
+              Unpooled.copiedBuffer(buf.toString(), CharsetUtil.UTF_8));
+
+      response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+
+      if (keepAlive) {
+        // Add 'Content-Length' header only for a keep-alive connection.
+        response
+            .headers()
+            .setInt(HttpHeaderNames.CONTENT_LENGTH, response.content().readableBytes());
+        // Add keep alive header as per:
+        // -
+        // http://www.w3.org/Protocols/HTTP/1.1/draft-ietf-http-v11-spec-01.html#Connection
+        response.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
+      }
+
+      // Encode the cookie.
+      String cookieString = request.headers().get(HttpHeaderNames.COOKIE);
+      if (cookieString != null) {
+        Set<Cookie> cookies = ServerCookieDecoder.STRICT.decode(cookieString);
+        if (!cookies.isEmpty()) {
+          // Reset the cookies if necessary.
+          for (Cookie cookie : cookies) {
+            response
+                .headers()
+                .add(HttpHeaderNames.SET_COOKIE, ServerCookieEncoder.STRICT.encode(cookie));
+          }
+        }
+      } else {
+        // Browser sent no cookie. Add some.
+        response
+            .headers()
+            .add(HttpHeaderNames.SET_COOKIE, ServerCookieEncoder.STRICT.encode("key1", "value1"));
+        response
+            .headers()
+            .add(HttpHeaderNames.SET_COOKIE, ServerCookieEncoder.STRICT.encode("key2", "value2"));
+      }
+
+      // Write the response.
+      ctx.write(response);
+
+      return keepAlive;
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+      cause.printStackTrace();
+      ctx.close();
+    }
+  }
+
+  /**
+   * @param args
+   * @throws CertificateException
+   * @throws SSLException
+   * @throws InterruptedException
+   */
+  public static void main(String[] args)
+      throws CertificateException, SSLException, InterruptedException {
+    new HttpReconfigurator(null, new InetSocketAddress(8080), false);
+  }
 }

@@ -1,18 +1,18 @@
 /*
  * Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
  * may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
  * implied. See the License for the specific language governing
  * permissions and limitations under the License.
- * 
+ *
  * Initial developer(s): V. Arun
  */
 package edu.umass.cs.nio.interfaces;
@@ -33,42 +33,35 @@ import org.json.JSONException;
  */
 public interface Stringifiable<ObjectType> {
 
-	/**
-	 *
-	 * Converts a string representation of a node id into the appropriate node
-	 * id type. Put another way, this performs the reverse of the toString()
-	 * method for things that are Stringifiable.
-	 *
-	 * @param strValue
-	 * @return Returns the <ObjectType> object constructed from strValue.
-	 */
-	public ObjectType valueOf(String strValue);
+  /**
+   * Converts a string representation of a node id into the appropriate node id type. Put another
+   * way, this performs the reverse of the toString() method for things that are Stringifiable.
+   *
+   * @param strValue
+   * @return Returns the <ObjectType> object constructed from strValue.
+   */
+  public ObjectType valueOf(String strValue);
 
-	/**
-	 * Converts a set of string node ids using valueOf.
-	 *
-	 * @param strNodes
-	 * @return Returns an ObjectType set constructed from a String set.
-	 */
-	default Set<ObjectType> getValuesFromStringSet(Set<String> strNodes) {
-		Set<ObjectType> set = new HashSet<ObjectType>();
-		for(String strNode: strNodes)
-			set.add(valueOf(strNode));
-		return set;
-	}
+  /**
+   * Converts a set of string node ids using valueOf.
+   *
+   * @param strNodes
+   * @return Returns an ObjectType set constructed from a String set.
+   */
+  default Set<ObjectType> getValuesFromStringSet(Set<String> strNodes) {
+    Set<ObjectType> set = new HashSet<ObjectType>();
+    for (String strNode : strNodes) set.add(valueOf(strNode));
+    return set;
+  }
 
-	/**
-	 *
-	 * @param array
-	 * @return Returns an ObjectType set constructed from a JSONObject array.
-	 * @throws JSONException
-	 */
-	default Set<ObjectType> getValuesFromJSONArray(JSONArray array)
-			throws JSONException {
-		Set<ObjectType> set = new HashSet<ObjectType>();
-		for(int i=0; i<array.length(); i++)
-			set.add(valueOf(array.get(i).toString()));
-		return set;
-	}
-
+  /**
+   * @param array
+   * @return Returns an ObjectType set constructed from a JSONObject array.
+   * @throws JSONException
+   */
+  default Set<ObjectType> getValuesFromJSONArray(JSONArray array) throws JSONException {
+    Set<ObjectType> set = new HashSet<ObjectType>();
+    for (int i = 0; i < array.length(); i++) set.add(valueOf(array.get(i).toString()));
+    return set;
+  }
 }

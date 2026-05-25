@@ -13,6 +13,5 @@ import java.util.logging.Logger;
 //         first in EMULATE_UNREPLICATED mode, then in REPLICATED mode.
 public class HttpActiveReplicaMax {
 
-    private static final Logger logger = Logger.getLogger(HttpActiveReplicaMax.class.getName());
-    
+  private static final Logger logger = Logger.getLogger(HttpActiveReplicaMax.class.getName());
 }

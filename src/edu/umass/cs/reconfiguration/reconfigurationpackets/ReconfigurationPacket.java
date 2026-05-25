@@ -15,16 +15,6 @@
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration.reconfigurationpackets;
 
-import java.io.UnsupportedEncodingException;
-import java.lang.reflect.InvocationTargetException;
-import java.nio.ByteBuffer;
-import java.util.HashMap;
-import java.util.Map;
-
-import edu.umass.cs.reconfiguration.ReconfigurationConfig;
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import edu.umass.cs.gigapaxos.PaxosConfig.PC;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.JSONPacket;
@@ -33,471 +23,460 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.protocoltask.ProtocolTask;
 import edu.umass.cs.protocoltask.json.ProtocolPacket;
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.utils.DelayProfiler;
 import edu.umass.cs.utils.IntegerPacketTypeMap;
+import java.io.UnsupportedEncodingException;
+import java.lang.reflect.InvocationTargetException;
+import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * @author V. Arun
  * @param <NodeIDType>
  */
 @SuppressWarnings("javadoc")
-public abstract class ReconfigurationPacket<NodeIDType> extends
-		ProtocolPacket<NodeIDType, ReconfigurationPacket.PacketType> implements Byteable {
+public abstract class ReconfigurationPacket<NodeIDType>
+    extends ProtocolPacket<NodeIDType, ReconfigurationPacket.PacketType> implements Byteable {
 
-	/**
-	 * Reconfiguration packet type JSON key.
-	 */
-	public static final String PACKET_TYPE = JSONPacket.PACKET_TYPE;
-	/**
-	 * Used for reflection for invoking packet handling methods.
-	 */
-	public static final String HANDLER_METHOD_PREFIX = "handle";
+  /** Reconfiguration packet type JSON key. */
+  public static final String PACKET_TYPE = JSONPacket.PACKET_TYPE;
 
-	/********************************* End of ReconfigurationpacketType ***********************/
-	public enum PacketType implements IntegerPacketType {
+  /** Used for reflection for invoking packet handling methods. */
+  public static final String HANDLER_METHOD_PREFIX = "handle";
 
-		/**
-		 * A typical sequence of events is as follows. Active replicas regularly
-		 * send DEMAND_REPORTs to reconfigurators. Upon the receipt of some (but
-		 * far from all) demand report, a reconfigurator might decide to
-		 * initiate a reconfiguration that proceeds as follows:
-		 *
-		 * DEMAND_REPORT: coordinate "reconfiguration intent" RC_RECORD_REQUEST
-		 * with other reconfigurators.
-		 *
-		 * RC_RECORD_REQUEST (RECONFIGURATION_INTENT) : send STOP_EPOCH to all
-		 * active replicas.
-		 *
-		 * STOP_EPOCH: coordinate STOP_EPOCH with other active replicas.
-		 *
-		 * PaxosPacket.DECISION(STOP_EPOCH) : send ACK_STOP_EPOCH to
-		 * reconfigurators.
-		 *
-		 * ACK_STOP_EPOCH : send START_EPOCH to next epoch active replicas.
-		 *
-		 * START_EPOCH : send REQUEST_EPOCH_FINAL_STATE to previous epoch active
-		 * replicas.
-		 *
-		 * REQUEST_EPOCH_FINAL_STATE : send EPOCH_FINAL_STATE
-		 *
-		 * EPOCH_FINAL_STATE : create new epoch group locally and send
-		 * ACK_START_EPOCH to initiating reconfigurator.
-		 *
-		 * ACK_START_EPOCH : upon receiving a majority of these from the new
-		 * epoch, send DROP_EPOCH_FINAL_STATE to old epoch active replicas, and
-		 * and coordinate RC_RECORD_REQUEST marking "reconfiguration complete"
-		 * with other reconfigurators (although the reconfiguration is not
-		 * completely complete yet).
-		 *
-		 * RC_RECORD_REQUEST (RECONFIGURATION_COMPLETE) : mark the reconfigured
-		 * name as READY to receive client requests.
-		 *
-		 * DROP_EPOCH_FINAL_STATE : drop old, stopped epoch's final state and
-		 * send ACK_DROP_EPOCH_FINAL_STATE to reconfigurator.
-		 *
-		 * ACK_DROP_EPOCH_FINAL_STATE : wait until all old epoch active replicas
-		 * have dropped their state, marking the final completion of the
-		 * reconfiguration.
-		 *
-		 */
+  /********************************* End of ReconfigurationpacketType ***********************/
+  public enum PacketType implements IntegerPacketType {
 
-		// reconfigurator -> active_replica
-		STOP_EPOCH(224), // : coordinate stop with other actives
-		START_EPOCH(226), // : request previous epoch final state
-		DROP_EPOCH_FINAL_STATE(227), // : drop final state locally
+    /**
+     * A typical sequence of events is as follows. Active replicas regularly send DEMAND_REPORTs to
+     * reconfigurators. Upon the receipt of some (but far from all) demand report, a reconfigurator
+     * might decide to initiate a reconfiguration that proceeds as follows:
+     *
+     * <p>DEMAND_REPORT: coordinate "reconfiguration intent" RC_RECORD_REQUEST with other
+     * reconfigurators.
+     *
+     * <p>RC_RECORD_REQUEST (RECONFIGURATION_INTENT) : send STOP_EPOCH to all active replicas.
+     *
+     * <p>STOP_EPOCH: coordinate STOP_EPOCH with other active replicas.
+     *
+     * <p>PaxosPacket.DECISION(STOP_EPOCH) : send ACK_STOP_EPOCH to reconfigurators.
+     *
+     * <p>ACK_STOP_EPOCH : send START_EPOCH to next epoch active replicas.
+     *
+     * <p>START_EPOCH : send REQUEST_EPOCH_FINAL_STATE to previous epoch active replicas.
+     *
+     * <p>REQUEST_EPOCH_FINAL_STATE : send EPOCH_FINAL_STATE
+     *
+     * <p>EPOCH_FINAL_STATE : create new epoch group locally and send ACK_START_EPOCH to initiating
+     * reconfigurator.
+     *
+     * <p>ACK_START_EPOCH : upon receiving a majority of these from the new epoch, send
+     * DROP_EPOCH_FINAL_STATE to old epoch active replicas, and and coordinate RC_RECORD_REQUEST
+     * marking "reconfiguration complete" with other reconfigurators (although the reconfiguration
+     * is not completely complete yet).
+     *
+     * <p>RC_RECORD_REQUEST (RECONFIGURATION_COMPLETE) : mark the reconfigured name as READY to
+     * receive client requests.
+     *
+     * <p>DROP_EPOCH_FINAL_STATE : drop old, stopped epoch's final state and send
+     * ACK_DROP_EPOCH_FINAL_STATE to reconfigurator.
+     *
+     * <p>ACK_DROP_EPOCH_FINAL_STATE : wait until all old epoch active replicas have dropped their
+     * state, marking the final completion of the reconfiguration.
+     */
 
-		// active_replica -> active_replica
-		REQUEST_EPOCH_FINAL_STATE(228), // : send epoch final state
-		EPOCH_FINAL_STATE(229), // : record locally and ack to reconfigurator
+    // reconfigurator -> active_replica
+    STOP_EPOCH(224), // : coordinate stop with other actives
+    START_EPOCH(226), // : request previous epoch final state
+    DROP_EPOCH_FINAL_STATE(227), // : drop final state locally
 
-		// active_replica -> reconfigurator
-		DEMAND_REPORT(230), // : send stop_epoch if reconfiguration needed
-		ACK_STOP_EPOCH(231), // : record locally
-		ACK_START_EPOCH(232), // : record locally
-		ACK_DROP_EPOCH_FINAL_STATE(233), // : record locally
+    // active_replica -> active_replica
+    REQUEST_EPOCH_FINAL_STATE(228), // : send epoch final state
+    EPOCH_FINAL_STATE(229), // : record locally and ack to reconfigurator
 
-		// app_client -> reconfigurator
-		CREATE_SERVICE_NAME(234), // : initiate create
-		DELETE_SERVICE_NAME(235), // : initiate delete
-		REQUEST_ACTIVE_REPLICAS(236), // : send current active replicas
+    // active_replica -> reconfigurator
+    DEMAND_REPORT(230), // : send stop_epoch if reconfiguration needed
+    ACK_STOP_EPOCH(231), // : record locally
+    ACK_START_EPOCH(232), // : record locally
+    ACK_DROP_EPOCH_FINAL_STATE(233), // : record locally
 
-		// active_replica -> app_client
-		ACTIVE_REPLICA_ERROR(237),
+    // app_client -> reconfigurator
+    CREATE_SERVICE_NAME(234), // : initiate create
+    DELETE_SERVICE_NAME(235), // : initiate delete
+    REQUEST_ACTIVE_REPLICAS(236), // : send current active replicas
 
-		// reconfigurator -> reconfigurator
-		RC_RECORD_REQUEST(238),
+    // active_replica -> app_client
+    ACTIVE_REPLICA_ERROR(237),
 
-		// admin -> reconfigurator
-		RECONFIGURE_RC_NODE_CONFIG(239), RECONFIGURE_ACTIVE_NODE_CONFIG(240),
+    // reconfigurator -> reconfigurator
+    RC_RECORD_REQUEST(238),
 
-		// client <-> active
-		ECHO_REQUEST(241),
+    // admin -> reconfigurator
+    RECONFIGURE_RC_NODE_CONFIG(239),
+    RECONFIGURE_ACTIVE_NODE_CONFIG(240),
 
-		// client <-> active
-		REPLICABLE_CLIENT_REQUEST (242),
+    // client <-> active
+    ECHO_REQUEST(241),
 
-		// active -> active, or active -> reconfigurator: initialize a connection behind NAT
-		HELLO_REQUEST(243),
+    // client <-> active
+    REPLICABLE_CLIENT_REQUEST(242),
 
-		// change the replica placement
-        SET_REPLICA_PLACEMENT_REQUEST(244),
+    // active -> active, or active -> reconfigurator: initialize a connection behind NAT
+    HELLO_REQUEST(243),
 
-		// get the latest replica placement, similar to REQUEST_ACTIVE_REPLICAS
-		// but with more metadata returned.
-		GET_REPLICA_PLACEMENT_REQUEST(245),
+    // change the replica placement
+    SET_REPLICA_PLACEMENT_REQUEST(244),
 
-		// change the coordinator (i.e., leader in Paxos or primary in PrimaryBackup)
-		SET_COORDINATOR_NODE_REQUEST(246),
-		SET_COORDINATOR_NODE_RESPONSE(247),
+    // get the latest replica placement, similar to REQUEST_ACTIVE_REPLICAS
+    // but with more metadata returned.
+    GET_REPLICA_PLACEMENT_REQUEST(245),
 
-		NO_TYPE (999),
+    // change the coordinator (i.e., leader in Paxos or primary in PrimaryBackup)
+    SET_COORDINATOR_NODE_REQUEST(246),
+    SET_COORDINATOR_NODE_RESPONSE(247),
 
-		;
+    NO_TYPE(999),
+    ;
 
-		private final int number;
+    private final int number;
 
-		PacketType(int t) {
-			this.number = t;
-		}
+    PacketType(int t) {
+      this.number = t;
+    }
 
-		public int getInt() {
-			return number;
-		}
+    public int getInt() {
+      return number;
+    }
 
-		public static final IntegerPacketTypeMap<PacketType> intToType = new IntegerPacketTypeMap<PacketType>(
-				PacketType.values());
-	}
+    public static final IntegerPacketTypeMap<PacketType> intToType =
+        new IntegerPacketTypeMap<PacketType>(PacketType.values());
+  }
 
-	public static final ReconfigurationPacket.PacketType[] clientPacketTypes = {
-			PacketType.CREATE_SERVICE_NAME, PacketType.DELETE_SERVICE_NAME,
-			PacketType.REQUEST_ACTIVE_REPLICAS, PacketType.ACTIVE_REPLICA_ERROR, PacketType.ECHO_REQUEST,
-			PacketType.REPLICABLE_CLIENT_REQUEST};
-	public static final ReconfigurationPacket.PacketType[] serverPacketTypes = {
-			PacketType.RECONFIGURE_RC_NODE_CONFIG,
-			PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG };
+  public static final ReconfigurationPacket.PacketType[] clientPacketTypes = {
+    PacketType.CREATE_SERVICE_NAME,
+    PacketType.DELETE_SERVICE_NAME,
+    PacketType.REQUEST_ACTIVE_REPLICAS,
+    PacketType.ACTIVE_REPLICA_ERROR,
+    PacketType.ECHO_REQUEST,
+    PacketType.REPLICABLE_CLIENT_REQUEST
+  };
+  public static final ReconfigurationPacket.PacketType[] serverPacketTypes = {
+    PacketType.RECONFIGURE_RC_NODE_CONFIG, PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG
+  };
 
-	/********************************* End of ReconfigurationpacketType ***********************/
+  /********************************* End of ReconfigurationpacketType ***********************/
 
-	/**************************** Start of ReconfigurationpacketType class map **************/
-	private static final HashMap<ReconfigurationPacket.PacketType, Class<?>> typeMap = new HashMap<ReconfigurationPacket.PacketType, Class<?>>();
-	static {
-		/* This map prevents the need for laborious switch/case sequences as it
-		 * automatically handles both json-to-ReconfigurationPacket conversion
-		 * and invocation of the corresponding handler method. We have to rely
-		 * on reflection for both and the cost of the former seems to be the
-		 * bottleneck as it adds ~25us per conversion, but it seems not
-		 * problematic for now. */
-		typeMap.put(ReconfigurationPacket.PacketType.STOP_EPOCH,
-				StopEpoch.class);
-		typeMap.put(ReconfigurationPacket.PacketType.START_EPOCH,
-				StartEpoch.class);
-		typeMap.put(ReconfigurationPacket.PacketType.REQUEST_EPOCH_FINAL_STATE,
-				RequestEpochFinalState.class);
-		typeMap.put(ReconfigurationPacket.PacketType.EPOCH_FINAL_STATE,
-				EpochFinalState.class);
-		typeMap.put(ReconfigurationPacket.PacketType.DROP_EPOCH_FINAL_STATE,
-				DropEpochFinalState.class);
+  /**************************** Start of ReconfigurationpacketType class map **************/
+  private static final HashMap<ReconfigurationPacket.PacketType, Class<?>> typeMap =
+      new HashMap<ReconfigurationPacket.PacketType, Class<?>>();
 
-		typeMap.put(ReconfigurationPacket.PacketType.DEMAND_REPORT,
-				DemandReport.class);
-		typeMap.put(ReconfigurationPacket.PacketType.ACK_STOP_EPOCH,
-				AckStopEpoch.class);
-		typeMap.put(ReconfigurationPacket.PacketType.ACK_START_EPOCH,
-				AckStartEpoch.class);
-		typeMap.put(
-				ReconfigurationPacket.PacketType.ACK_DROP_EPOCH_FINAL_STATE,
-				AckDropEpochFinalState.class);
+  static {
+    /* This map prevents the need for laborious switch/case sequences as it
+     * automatically handles both json-to-ReconfigurationPacket conversion
+     * and invocation of the corresponding handler method. We have to rely
+     * on reflection for both and the cost of the former seems to be the
+     * bottleneck as it adds ~25us per conversion, but it seems not
+     * problematic for now. */
+    typeMap.put(ReconfigurationPacket.PacketType.STOP_EPOCH, StopEpoch.class);
+    typeMap.put(ReconfigurationPacket.PacketType.START_EPOCH, StartEpoch.class);
+    typeMap.put(
+        ReconfigurationPacket.PacketType.REQUEST_EPOCH_FINAL_STATE, RequestEpochFinalState.class);
+    typeMap.put(ReconfigurationPacket.PacketType.EPOCH_FINAL_STATE, EpochFinalState.class);
+    typeMap.put(ReconfigurationPacket.PacketType.DROP_EPOCH_FINAL_STATE, DropEpochFinalState.class);
 
-		typeMap.put(ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME,
-				CreateServiceName.class);
-		typeMap.put(ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME,
-				DeleteServiceName.class);
-		typeMap.put(ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS,
-				RequestActiveReplicas.class);
+    typeMap.put(ReconfigurationPacket.PacketType.DEMAND_REPORT, DemandReport.class);
+    typeMap.put(ReconfigurationPacket.PacketType.ACK_STOP_EPOCH, AckStopEpoch.class);
+    typeMap.put(ReconfigurationPacket.PacketType.ACK_START_EPOCH, AckStartEpoch.class);
+    typeMap.put(
+        ReconfigurationPacket.PacketType.ACK_DROP_EPOCH_FINAL_STATE, AckDropEpochFinalState.class);
 
-		typeMap.put(ReconfigurationPacket.PacketType.ACTIVE_REPLICA_ERROR,
-				ActiveReplicaError.class);
+    typeMap.put(ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME, CreateServiceName.class);
+    typeMap.put(ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME, DeleteServiceName.class);
+    typeMap.put(
+        ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS, RequestActiveReplicas.class);
 
-		typeMap.put(ReconfigurationPacket.PacketType.RC_RECORD_REQUEST,
-				RCRecordRequest.class);
+    typeMap.put(ReconfigurationPacket.PacketType.ACTIVE_REPLICA_ERROR, ActiveReplicaError.class);
 
-		typeMap.put(
-				ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG,
-				ReconfigureRCNodeConfig.class);
-		typeMap.put(
-				ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,
-				ReconfigureActiveNodeConfig.class);
-		typeMap.put(ReconfigurationPacket.PacketType.ECHO_REQUEST,
-				EchoRequest.class);
-		typeMap.put(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST,
-				ReplicableClientRequest.class);
-		typeMap.put(ReconfigurationPacket.PacketType.HELLO_REQUEST,
-				HelloRequest.class);
+    typeMap.put(ReconfigurationPacket.PacketType.RC_RECORD_REQUEST, RCRecordRequest.class);
 
-		typeMap.put(PacketType.SET_REPLICA_PLACEMENT_REQUEST, SetReplicaPlacementRequest.class);
-		typeMap.put(PacketType.GET_REPLICA_PLACEMENT_REQUEST, GetReplicaPlacementRequest.class);
-		typeMap.put(PacketType.SET_COORDINATOR_NODE_REQUEST, SetCoordinatorNodeRequest.class);
-		typeMap.put(PacketType.SET_COORDINATOR_NODE_RESPONSE, SetCoordinatorNodeResponse.class);
+    typeMap.put(
+        ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG, ReconfigureRCNodeConfig.class);
+    typeMap.put(
+        ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,
+        ReconfigureActiveNodeConfig.class);
+    typeMap.put(ReconfigurationPacket.PacketType.ECHO_REQUEST, EchoRequest.class);
+    typeMap.put(
+        ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST, ReplicableClientRequest.class);
+    typeMap.put(ReconfigurationPacket.PacketType.HELLO_REQUEST, HelloRequest.class);
 
-		for (ReconfigurationPacket.PacketType type : ReconfigurationPacket.PacketType.intToType
-				.values()) {
-			// we don't expect to receive NO_TYPE over the network
-			assert (getPacketTypeClassName(type) != null || type==PacketType.NO_TYPE) : type;
-		}
-	}
+    typeMap.put(PacketType.SET_REPLICA_PLACEMENT_REQUEST, SetReplicaPlacementRequest.class);
+    typeMap.put(PacketType.GET_REPLICA_PLACEMENT_REQUEST, GetReplicaPlacementRequest.class);
+    typeMap.put(PacketType.SET_COORDINATOR_NODE_REQUEST, SetCoordinatorNodeRequest.class);
+    typeMap.put(PacketType.SET_COORDINATOR_NODE_RESPONSE, SetCoordinatorNodeResponse.class);
 
-	/**************************** End of ReconfigurationpacketType class map **************/
+    for (ReconfigurationPacket.PacketType type :
+        ReconfigurationPacket.PacketType.intToType.values()) {
+      // we don't expect to receive NO_TYPE over the network
+      assert (getPacketTypeClassName(type) != null || type == PacketType.NO_TYPE) : type;
+    }
+  }
 
-	// FIXME: probably should be removed
-	protected ReconfigurationPacket(NodeIDType initiator) {
-		super(initiator);
-		// this.setType(t);
-	}
+  /**************************** End of ReconfigurationpacketType class map **************/
 
-	public ReconfigurationPacket(JSONObject json,
-			Stringifiable<NodeIDType> unstringer) throws JSONException {
-		super(json, unstringer);
-		this.setType(getPacketType(json));
-	}
+  // FIXME: probably should be removed
+  protected ReconfigurationPacket(NodeIDType initiator) {
+    super(initiator);
+    // this.setType(t);
+  }
 
-	@Override
-	public JSONObject toJSONObjectImpl() throws JSONException {
-		JSONObject json = new JSONObject();
-		return json;
-	}
+  public ReconfigurationPacket(JSONObject json, Stringifiable<NodeIDType> unstringer)
+      throws JSONException {
+    super(json, unstringer);
+    this.setType(getPacketType(json));
+  }
 
-	@Override
-	public Object getMessage() {
-		return this;
-	}
+  @Override
+  public JSONObject toJSONObjectImpl() throws JSONException {
+    JSONObject json = new JSONObject();
+    return json;
+  }
 
-	@Override
-	public PacketType getPacketType(JSONObject json) throws JSONException {
-		return getReconfigurationPacketType(json);
-	}
+  @Override
+  public Object getMessage() {
+    return this;
+  }
 
-	@Override
-	public void putPacketType(JSONObject json, PacketType type)
-			throws JSONException {
-		json.put(PACKET_TYPE, type.getInt());
-	}
+  @Override
+  public PacketType getPacketType(JSONObject json) throws JSONException {
+    return getReconfigurationPacketType(json);
+  }
 
-	public String toString() {
-		try {
-			return this.toJSONObject().toString();
-		} catch (JSONException je) {
-			je.printStackTrace();
-		}
-		return null;
-	}
+  @Override
+  public void putPacketType(JSONObject json, PacketType type) throws JSONException {
+    json.put(PACKET_TYPE, type.getInt());
+  }
 
-	public ReconfigurationPacket.PacketType getReconfigurationPacketType() {
-		return this.type;
-	}
+  public String toString() {
+    try {
+      return this.toJSONObject().toString();
+    } catch (JSONException je) {
+      je.printStackTrace();
+    }
+    return null;
+  }
 
-	public static final boolean isReconfigurationPacket(JSONObject json)
-			throws JSONException {
-		return getReconfigurationPacketType(json) != null;
-	}
+  public ReconfigurationPacket.PacketType getReconfigurationPacketType() {
+    return this.type;
+  }
 
-	public static final ReconfigurationPacket.PacketType getReconfigurationPacketType(
-			JSONObject json) throws JSONException {
-		if (json.has(ReconfigurationPacket.PACKET_TYPE))
-			return ReconfigurationPacket.PacketType.intToType.get(json
-					.getInt(PACKET_TYPE));
-		else
-			return null;
-	}
+  public static final boolean isReconfigurationPacket(JSONObject json) throws JSONException {
+    return getReconfigurationPacketType(json) != null;
+  }
 
-	public static final String getPacketTypeCanonicalClassName(
-			ReconfigurationPacket.PacketType type) {
-		return typeMap.get(type) != null ? typeMap.get(type).getCanonicalName()
-				: null;
-	}
+  public static final ReconfigurationPacket.PacketType getReconfigurationPacketType(JSONObject json)
+      throws JSONException {
+    if (json.has(ReconfigurationPacket.PACKET_TYPE))
+      return ReconfigurationPacket.PacketType.intToType.get(json.getInt(PACKET_TYPE));
+    else return null;
+  }
 
-	public static final String getPacketTypeClassName(
-			ReconfigurationPacket.PacketType type) {
-		return typeMap.get(type) != null ? typeMap.get(type).getSimpleName()
-				: null;
-	}
+  public static final String getPacketTypeCanonicalClassName(
+      ReconfigurationPacket.PacketType type) {
+    return typeMap.get(type) != null ? typeMap.get(type).getCanonicalName() : null;
+  }
 
-	public static final Class<?> getPacketTypeClass(
-			ReconfigurationPacket.PacketType type) {
-		return typeMap.get(type) != null ? typeMap.get(type) : null;
-	}
+  public static final String getPacketTypeClassName(ReconfigurationPacket.PacketType type) {
+    return typeMap.get(type) != null ? typeMap.get(type).getSimpleName() : null;
+  }
 
-	private static BasicReconfigurationPacket<?> getReconfigurationPacket(
-			JSONObject json,
-			Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
-			Stringifiable<?> unstringer) throws JSONException {
-		return getReconfigurationPacket(json, typeMap, unstringer, false);
-	}
+  public static final Class<?> getPacketTypeClass(ReconfigurationPacket.PacketType type) {
+    return typeMap.get(type) != null ? typeMap.get(type) : null;
+  }
 
-	private static BasicReconfigurationPacket<?> getReconfigurationPacket(
-			JSONObject json,
-			Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
-			Stringifiable<?> unstringer, boolean forcePrintException)
-			throws JSONException {
-		BasicReconfigurationPacket<?> rcPacket = null;
-		ReconfigurationPacket.PacketType rcType = null;
-		String canonicalClassName = null;
-		try {
-			long t = System.nanoTime();
-			if ((rcType = ReconfigurationPacket.PacketType.intToType
-					.get(JSONPacket.getPacketType(json))) != null
-					&& (canonicalClassName = getPacketTypeCanonicalClassName(rcType)) != null) {
-				rcPacket = (BasicReconfigurationPacket<?>) (Class.forName(
-						canonicalClassName).getConstructor(JSONObject.class,
-						Stringifiable.class).newInstance(json, unstringer));
-			}
-			DelayProfiler.updateDelayNano("rc_reflection", t);
-		} catch (NoSuchMethodException nsme) {
-			nsme.printStackTrace();
-		} catch (InvocationTargetException ite) {
-			ite.printStackTrace();
-		} catch (IllegalAccessException iae) {
-			iae.printStackTrace();
-		} catch (ClassNotFoundException cnfe) {
-			ReconfigurationConfig.getLogger().info(
-					"Class " + canonicalClassName + " not found");
-			cnfe.printStackTrace();
-		} catch (InstantiationException ie) {
-			ie.printStackTrace();
-		} finally {
-			if (forcePrintException
-					&& ReconfigurationPacket.PacketType.intToType
-							.get(JSONPacket.getPacketType(json)) == null) {
-				(new RuntimeException(
-						"No reconfiguration packet type found in: " + json))
-						.printStackTrace();
-			}
-		}
+  private static BasicReconfigurationPacket<?> getReconfigurationPacket(
+      JSONObject json,
+      Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
+      Stringifiable<?> unstringer)
+      throws JSONException {
+    return getReconfigurationPacket(json, typeMap, unstringer, false);
+  }
 
-		return rcPacket;
-	}
+  private static BasicReconfigurationPacket<?> getReconfigurationPacket(
+      JSONObject json,
+      Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
+      Stringifiable<?> unstringer,
+      boolean forcePrintException)
+      throws JSONException {
+    BasicReconfigurationPacket<?> rcPacket = null;
+    ReconfigurationPacket.PacketType rcType = null;
+    String canonicalClassName = null;
+    try {
+      long t = System.nanoTime();
+      if ((rcType = ReconfigurationPacket.PacketType.intToType.get(JSONPacket.getPacketType(json)))
+              != null
+          && (canonicalClassName = getPacketTypeCanonicalClassName(rcType)) != null) {
+        rcPacket =
+            (BasicReconfigurationPacket<?>)
+                (Class.forName(canonicalClassName)
+                    .getConstructor(JSONObject.class, Stringifiable.class)
+                    .newInstance(json, unstringer));
+      }
+      DelayProfiler.updateDelayNano("rc_reflection", t);
+    } catch (NoSuchMethodException nsme) {
+      nsme.printStackTrace();
+    } catch (InvocationTargetException ite) {
+      ite.printStackTrace();
+    } catch (IllegalAccessException iae) {
+      iae.printStackTrace();
+    } catch (ClassNotFoundException cnfe) {
+      ReconfigurationConfig.getLogger().info("Class " + canonicalClassName + " not found");
+      cnfe.printStackTrace();
+    } catch (InstantiationException ie) {
+      ie.printStackTrace();
+    } finally {
+      if (forcePrintException
+          && ReconfigurationPacket.PacketType.intToType.get(JSONPacket.getPacketType(json))
+              == null) {
+        (new RuntimeException("No reconfiguration packet type found in: " + json))
+            .printStackTrace();
+      }
+    }
 
-	public static BasicReconfigurationPacket<?> getReconfigurationPacketSuppressExceptions(
-			JSONObject json, Stringifiable<?> unstringer) {
-		try {
-			return getReconfigurationPacket(json, typeMap, unstringer);
-		} catch (Exception e) {
-			// do nothing
-		}
-		return null;
-	}
+    return rcPacket;
+  }
 
-	public static BasicReconfigurationPacket<?> getReconfigurationPacketSuppressExceptions(
-			String str, Stringifiable<?> unstringer) {
-		try {
-			return JSONPacket.couldBeJSON(str) ? getReconfigurationPacket(
-					new JSONObject(str), typeMap, unstringer) : null;
-		} catch (Exception e) {
-			// do nothing
-		}
-		return null;
-	}
+  public static BasicReconfigurationPacket<?> getReconfigurationPacketSuppressExceptions(
+      JSONObject json, Stringifiable<?> unstringer) {
+    try {
+      return getReconfigurationPacket(json, typeMap, unstringer);
+    } catch (Exception e) {
+      // do nothing
+    }
+    return null;
+  }
 
-	public static BasicReconfigurationPacket<?> getReconfigurationPacket(
-			JSONObject json, Stringifiable<?> unstringer) throws JSONException {
-		return getReconfigurationPacket(json, typeMap, unstringer);
-	}
+  public static BasicReconfigurationPacket<?> getReconfigurationPacketSuppressExceptions(
+      String str, Stringifiable<?> unstringer) {
+    try {
+      return JSONPacket.couldBeJSON(str)
+          ? getReconfigurationPacket(new JSONObject(str), typeMap, unstringer)
+          : null;
+    } catch (Exception e) {
+      // do nothing
+    }
+    return null;
+  }
 
-	public static BasicReconfigurationPacket<?> getReconfigurationPacket(
-			Request request, Stringifiable<?> unstringer) throws JSONException {
-		if (request instanceof BasicReconfigurationPacket<?>)
-			return (BasicReconfigurationPacket<?>) request;
-		return getReconfigurationPacket(new JSONObject(request.toString()),
-				typeMap, unstringer);
-	}
+  public static BasicReconfigurationPacket<?> getReconfigurationPacket(
+      JSONObject json, Stringifiable<?> unstringer) throws JSONException {
+    return getReconfigurationPacket(json, typeMap, unstringer);
+  }
 
-	/*  ************************ Start of assertion methods
-	 * ************************************************* */
-	/* The assertion methods below are just convenience methods to let
-	 * protocoltasks assert that they have set up handlers for all packet types
-	 * for which they are responsible. */
-	public static void assertPacketTypeChecks(
-			ReconfigurationPacket.PacketType[] types, Class<?> target,
-			String handlerMethodPrefix) {
-		for (ReconfigurationPacket.PacketType type : types) {
-			assertPacketTypeChecks(type, getPacketTypeClassName(type), target,
-					handlerMethodPrefix);
-		}
-	}
+  public static BasicReconfigurationPacket<?> getReconfigurationPacket(
+      Request request, Stringifiable<?> unstringer) throws JSONException {
+    if (request instanceof BasicReconfigurationPacket<?>)
+      return (BasicReconfigurationPacket<?>) request;
+    return getReconfigurationPacket(new JSONObject(request.toString()), typeMap, unstringer);
+  }
 
-	public static void assertPacketTypeChecks(
-			Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
-			Class<?> target, String handlerMethodPrefix) {
-		// Assertions ensure that method name changes do not break code.
-		for (ReconfigurationPacket.PacketType type : typeMap.keySet()) {
-			assertPacketTypeChecks(type, getPacketTypeClassName(type), target,
-					handlerMethodPrefix);
-		}
-	}
+  /*  ************************ Start of assertion methods
+   * ************************************************* */
+  /* The assertion methods below are just convenience methods to let
+   * protocoltasks assert that they have set up handlers for all packet types
+   * for which they are responsible. */
+  public static void assertPacketTypeChecks(
+      ReconfigurationPacket.PacketType[] types, Class<?> target, String handlerMethodPrefix) {
+    for (ReconfigurationPacket.PacketType type : types) {
+      assertPacketTypeChecks(type, getPacketTypeClassName(type), target, handlerMethodPrefix);
+    }
+  }
 
-	public static void assertPacketTypeChecks(
-			ReconfigurationPacket.PacketType type, String packetName,
-			Class<?> target, String handlerMethodPrefix) {
-		String errMsg = "Method " + handlerMethodPrefix + packetName
-				+ " does not exist in " + target.getSimpleName();
-		try {
-			// System.out.println(type + " : " + packetName + " : " +
-			// handlerMethodPrefix+packetName);
-			if (packetName != null)
-				assert (target.getMethod(handlerMethodPrefix + packetName,
-						getPacketTypeClass(type), ProtocolTask[].class) != null) : errMsg;
-		} catch (NoSuchMethodException nsme) {
-			System.err.println(errMsg);
-			nsme.printStackTrace();
-		}
-	}
+  public static void assertPacketTypeChecks(
+      Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
+      Class<?> target,
+      String handlerMethodPrefix) {
+    // Assertions ensure that method name changes do not break code.
+    for (ReconfigurationPacket.PacketType type : typeMap.keySet()) {
+      assertPacketTypeChecks(type, getPacketTypeClassName(type), target, handlerMethodPrefix);
+    }
+  }
 
-	public static void assertPacketTypeChecks(
-			Map<ReconfigurationPacket.PacketType, Class<?>> typeMap,
-			Class<?> target) {
-		assertPacketTypeChecks(typeMap, target, HANDLER_METHOD_PREFIX);
-	}
+  public static void assertPacketTypeChecks(
+      ReconfigurationPacket.PacketType type,
+      String packetName,
+      Class<?> target,
+      String handlerMethodPrefix) {
+    String errMsg =
+        "Method "
+            + handlerMethodPrefix
+            + packetName
+            + " does not exist in "
+            + target.getSimpleName();
+    try {
+      // System.out.println(type + " : " + packetName + " : " +
+      // handlerMethodPrefix+packetName);
+      if (packetName != null)
+        assert (target.getMethod(
+                    handlerMethodPrefix + packetName,
+                    getPacketTypeClass(type),
+                    ProtocolTask[].class)
+                != null)
+            : errMsg;
+    } catch (NoSuchMethodException nsme) {
+      System.err.println(errMsg);
+      nsme.printStackTrace();
+    }
+  }
 
-	public static ReconfigurationPacket.PacketType[] concatenate(
-			ReconfigurationPacket.PacketType[]... types) {
-		int size = 0;
-		for (ReconfigurationPacket.PacketType[] tarray : types)
-			size += tarray.length;
-		ReconfigurationPacket.PacketType[] allTypes = new ReconfigurationPacket.PacketType[size];
-		int i = 0;
-		for (ReconfigurationPacket.PacketType[] tarray : types) {
-			for (ReconfigurationPacket.PacketType type : tarray) {
-				allTypes[i++] = type;
-			}
-		}
-		return allTypes;
-	}
+  public static void assertPacketTypeChecks(
+      Map<ReconfigurationPacket.PacketType, Class<?>> typeMap, Class<?> target) {
+    assertPacketTypeChecks(typeMap, target, HANDLER_METHOD_PREFIX);
+  }
 
-	/************************* End of assertion methods **************************************************/
+  public static ReconfigurationPacket.PacketType[] concatenate(
+      ReconfigurationPacket.PacketType[]... types) {
+    int size = 0;
+    for (ReconfigurationPacket.PacketType[] tarray : types) size += tarray.length;
+    ReconfigurationPacket.PacketType[] allTypes = new ReconfigurationPacket.PacketType[size];
+    int i = 0;
+    for (ReconfigurationPacket.PacketType[] tarray : types) {
+      for (ReconfigurationPacket.PacketType type : tarray) {
+        allTypes[i++] = type;
+      }
+    }
+    return allTypes;
+  }
 
-	static void main(String[] args) {
-		System.out.println(ReconfigurationPacket.PacketType.intToType.get(225));
-	}
+  /************************* End of assertion methods **************************************************/
 
-	private static final String CHARSET = "ISO-8859-1";
+  static void main(String[] args) {
+    System.out.println(ReconfigurationPacket.PacketType.intToType.get(225));
+  }
 
-	private static final boolean BYTEIFICATION = Config.getGlobalBoolean(PC.BYTEIFICATION);
+  private static final String CHARSET = "ISO-8859-1";
 
-	@Override
-	public byte[] toBytes() {
-		byte[] body=null;
-		try {
-			body = this.toString().getBytes(CHARSET);
-		} catch (UnsupportedEncodingException e) {
-			e.printStackTrace();
-			return null;
-		}
-		if(!BYTEIFICATION) return body;
-		// else
-		byte[] bytes = new byte[body.length+4];
-		ByteBuffer bbuf = ByteBuffer.wrap(bytes);
-		bbuf.putInt(this.getType().getInt());
-		bbuf.put(body);
-		return bytes;
-	}
+  private static final boolean BYTEIFICATION = Config.getGlobalBoolean(PC.BYTEIFICATION);
+
+  @Override
+  public byte[] toBytes() {
+    byte[] body = null;
+    try {
+      body = this.toString().getBytes(CHARSET);
+    } catch (UnsupportedEncodingException e) {
+      e.printStackTrace();
+      return null;
+    }
+    if (!BYTEIFICATION) return body;
+    // else
+    byte[] bytes = new byte[body.length + 4];
+    ByteBuffer bbuf = ByteBuffer.wrap(bytes);
+    bbuf.putInt(this.getType().getInt());
+    bbuf.put(body);
+    return bytes;
+  }
 }

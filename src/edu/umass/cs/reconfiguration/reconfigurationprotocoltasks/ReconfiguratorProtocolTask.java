@@ -1,24 +1,19 @@
 /* Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
  * the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
  * License for the specific language governing permissions and limitations under
  * the License.
- * 
+ *
  * Initial developer(s): V. Arun */
 package edu.umass.cs.reconfiguration.reconfigurationprotocoltasks;
-
-import java.lang.reflect.InvocationTargetException;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 
 import edu.umass.cs.gigapaxos.interfaces.Callback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -29,169 +24,164 @@ import edu.umass.cs.reconfiguration.Reconfigurator;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.BasicReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
+import java.lang.reflect.InvocationTargetException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * @author V. Arun
  * @param <NodeIDType>
  */
-public class ReconfiguratorProtocolTask<NodeIDType> implements
-		ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String> {
+public class ReconfiguratorProtocolTask<NodeIDType>
+    implements ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String> {
 
-	private static final String HANDLER_METHOD_PREFIX = ReconfigurationPacket.HANDLER_METHOD_PREFIX; 
-	private static final ReconfigurationPacket.PacketType[] localTypes = {
-			// active -> reconfigurator
-			ReconfigurationPacket.PacketType.DEMAND_REPORT,
+  private static final String HANDLER_METHOD_PREFIX = ReconfigurationPacket.HANDLER_METHOD_PREFIX;
+  private static final ReconfigurationPacket.PacketType[] localTypes = {
+    // active -> reconfigurator
+    ReconfigurationPacket.PacketType.DEMAND_REPORT,
 
-			// client -> reconfigurator
-			ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME,
-			ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME,
-			ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS,
-			ReconfigurationPacket.PacketType.ECHO_REQUEST,
+    // client -> reconfigurator
+    ReconfigurationPacket.PacketType.CREATE_SERVICE_NAME,
+    ReconfigurationPacket.PacketType.DELETE_SERVICE_NAME,
+    ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS,
+    ReconfigurationPacket.PacketType.ECHO_REQUEST,
 
-			// reconfigurator -> reconfigurator
-			ReconfigurationPacket.PacketType.RC_RECORD_REQUEST,
+    // reconfigurator -> reconfigurator
+    ReconfigurationPacket.PacketType.RC_RECORD_REQUEST,
 
-			// any node with ssl credentials -> reconfigurator
-			ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG,
-			ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,
-	
-			// hello request for active replica to update its InetSocketAddress if it's behind NAT
-			ReconfigurationPacket.PacketType.HELLO_REQUEST,
+    // any node with ssl credentials -> reconfigurator
+    ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG,
+    ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG,
 
-			// reconfigurator -> active: change coordinator node
-			ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_REQUEST,
+    // hello request for active replica to update its InetSocketAddress if it's behind NAT
+    ReconfigurationPacket.PacketType.HELLO_REQUEST,
 
-			// active -> reconfigurator: response of SET_COORDINATOR_NODE_REQUEST
-			ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_RESPONSE
-	};
-	private static final ReconfigurationPacket.PacketType[] types = ReconfigurationPacket
-			.concatenate(localTypes, WaitAckStopEpoch.types,
-					WaitAckStartEpoch.types, WaitAckDropEpoch.types);
+    // reconfigurator -> active: change coordinator node
+    ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_REQUEST,
 
-	static { // all but DEMAND_REPORT are handled by temporary protocol tasks
-		ReconfigurationPacket.assertPacketTypeChecks(localTypes,
-				Reconfigurator.class, HANDLER_METHOD_PREFIX);
-	}
+    // active -> reconfigurator: response of SET_COORDINATOR_NODE_REQUEST
+    ReconfigurationPacket.PacketType.SET_COORDINATOR_NODE_RESPONSE
+  };
+  private static final ReconfigurationPacket.PacketType[] types =
+      ReconfigurationPacket.concatenate(
+          localTypes, WaitAckStopEpoch.types, WaitAckStartEpoch.types, WaitAckDropEpoch.types);
 
-	private final String key;
-	private final NodeIDType myID;
-	private final Object reconfigurator;
+  static { // all but DEMAND_REPORT are handled by temporary protocol tasks
+    ReconfigurationPacket.assertPacketTypeChecks(
+        localTypes, Reconfigurator.class, HANDLER_METHOD_PREFIX);
+  }
 
-	/**
-	 * @param id
-	 * @param reconfigurator
-	 */
-	public ReconfiguratorProtocolTask(NodeIDType id,
-			Reconfigurator<NodeIDType> reconfigurator) {
-		this.myID = id;
-		this.reconfigurator = reconfigurator;
-		this.key = refreshKey();
-	}
+  private final String key;
+  private final NodeIDType myID;
+  private final Object reconfigurator;
 
-	@Override
-	public String getKey() {
-		return this.key;
-	}
+  /**
+   * @param id
+   * @param reconfigurator
+   */
+  public ReconfiguratorProtocolTask(NodeIDType id, Reconfigurator<NodeIDType> reconfigurator) {
+    this.myID = id;
+    this.reconfigurator = reconfigurator;
+    this.key = refreshKey();
+  }
 
-	@Override
-	public GenericMessagingTask<NodeIDType, ?>[] start() {
-		// do nothing in particular to bootstrap
-		return null;
-	}
+  @Override
+  public String getKey() {
+    return this.key;
+  }
 
-	/**
-	 * @return The refreshed key.
-	 */
-	public String refreshKey() {
-		return ((this.myID.toString() + (int) (Math.random() * Integer.MAX_VALUE)));
-	}
+  @Override
+  public GenericMessagingTask<NodeIDType, ?>[] start() {
+    // do nothing in particular to bootstrap
+    return null;
+  }
 
-	@Override
-	public Set<ReconfigurationPacket.PacketType> getEventTypes() {
-		return new HashSet<ReconfigurationPacket.PacketType>(
-				Arrays.asList(types));
-	}
+  /**
+   * @return The refreshed key.
+   */
+  public String refreshKey() {
+    return ((this.myID.toString() + (int) (Math.random() * Integer.MAX_VALUE)));
+  }
 
-	/**
-	 * @return Default reconfiguration packet types handled, i.e., not counting
-	 *         temporary protocol tasks.
-	 */
-	public Set<ReconfigurationPacket.PacketType> getDefaultTypes() {
-		return new HashSet<ReconfigurationPacket.PacketType>(
-				Arrays.asList(localTypes));
-	}
+  @Override
+  public Set<ReconfigurationPacket.PacketType> getEventTypes() {
+    return new HashSet<ReconfigurationPacket.PacketType>(Arrays.asList(types));
+  }
 
-	@SuppressWarnings("unchecked")
-	@Override
-	public GenericMessagingTask<NodeIDType, ?>[] handleEvent(
-			ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
-			ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
+  /**
+   * @return Default reconfiguration packet types handled, i.e., not counting temporary protocol
+   *     tasks.
+   */
+  public Set<ReconfigurationPacket.PacketType> getDefaultTypes() {
+    return new HashSet<ReconfigurationPacket.PacketType>(Arrays.asList(localTypes));
+  }
 
-		return (GenericMessagingTask<NodeIDType, ?>[]) (autoInvokeMethod(
-				this.reconfigurator, event, ptasks));
-	}
+  @SuppressWarnings("unchecked")
+  @Override
+  public GenericMessagingTask<NodeIDType, ?>[] handleEvent(
+      ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
+      ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks) {
 
-	/**
-	 * @param event
-	 * @param ptasks
-	 * @param callback
-	 * @return Messaging task.
-	 */
-	@SuppressWarnings("unchecked")
-	public GenericMessagingTask<NodeIDType, ?>[] handleEvent(
-			ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
-			ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
-			Callback<Request,ReconfiguratorRequest> callback) {
-		ReconfigurationPacket.PacketType type = event.getType();
-		try {
-			return (GenericMessagingTask<NodeIDType, ?>[]) (this.reconfigurator
-					.getClass()
-					.getMethod(
-							HANDLER_METHOD_PREFIX
-									+ ReconfigurationPacket
-											.getPacketTypeClassName(type),
-							ReconfigurationPacket.getPacketTypeClass(type),
-							ProtocolTask[].class, Callback.class)
-					.invoke(this.reconfigurator,
-							(BasicReconfigurationPacket<?>) event, ptasks,
-							callback));
-		} catch (NoSuchMethodException | InvocationTargetException
-				| IllegalAccessException e) {
-			e.printStackTrace();
-		}
-		return null;
+    return (GenericMessagingTask<NodeIDType, ?>[])
+        (autoInvokeMethod(this.reconfigurator, event, ptasks));
+  }
 
-	}
+  /**
+   * @param event
+   * @param ptasks
+   * @param callback
+   * @return Messaging task.
+   */
+  @SuppressWarnings("unchecked")
+  public GenericMessagingTask<NodeIDType, ?>[] handleEvent(
+      ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
+      ProtocolTask<NodeIDType, ReconfigurationPacket.PacketType, String>[] ptasks,
+      Callback<Request, ReconfiguratorRequest> callback) {
+    ReconfigurationPacket.PacketType type = event.getType();
+    try {
+      return (GenericMessagingTask<NodeIDType, ?>[])
+          (this.reconfigurator
+              .getClass()
+              .getMethod(
+                  HANDLER_METHOD_PREFIX + ReconfigurationPacket.getPacketTypeClassName(type),
+                  ReconfigurationPacket.getPacketTypeClass(type),
+                  ProtocolTask[].class,
+                  Callback.class)
+              .invoke(
+                  this.reconfigurator, (BasicReconfigurationPacket<?>) event, ptasks, callback));
+    } catch (NoSuchMethodException | InvocationTargetException | IllegalAccessException e) {
+      e.printStackTrace();
+    }
+    return null;
+  }
 
-	/**
-	 * @param target
-	 * @param event
-	 * @param ptasks
-	 * @return Object returned by the packet handler.
-	 */
-	public static Object autoInvokeMethod(Object target,
-			ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
-			ProtocolTask<?, ReconfigurationPacket.PacketType, String>[] ptasks) {
-		ReconfigurationPacket.PacketType type = event.getType();
-		try {
-			return target
-					.getClass()
-					.getMethod(
-							HANDLER_METHOD_PREFIX
-									+ ReconfigurationPacket
-											.getPacketTypeClassName(type),
-							ReconfigurationPacket.getPacketTypeClass(type),
-							ProtocolTask[].class)
-					.invoke(target, (BasicReconfigurationPacket<?>) event,
-							ptasks);
-		} catch (NoSuchMethodException nsme) {
-			nsme.printStackTrace();
-		} catch (InvocationTargetException ite) {
-			ite.printStackTrace();
-		} catch (IllegalAccessException iae) {
-			iae.printStackTrace();
-		}
-		return null;
-	}
-
+  /**
+   * @param target
+   * @param event
+   * @param ptasks
+   * @return Object returned by the packet handler.
+   */
+  public static Object autoInvokeMethod(
+      Object target,
+      ProtocolEvent<ReconfigurationPacket.PacketType, String> event,
+      ProtocolTask<?, ReconfigurationPacket.PacketType, String>[] ptasks) {
+    ReconfigurationPacket.PacketType type = event.getType();
+    try {
+      return target
+          .getClass()
+          .getMethod(
+              HANDLER_METHOD_PREFIX + ReconfigurationPacket.getPacketTypeClassName(type),
+              ReconfigurationPacket.getPacketTypeClass(type),
+              ProtocolTask[].class)
+          .invoke(target, (BasicReconfigurationPacket<?>) event, ptasks);
+    } catch (NoSuchMethodException nsme) {
+      nsme.printStackTrace();
+    } catch (InvocationTargetException ite) {
+      ite.printStackTrace();
+    } catch (IllegalAccessException iae) {
+      iae.printStackTrace();
+    }
+    return null;
+  }
 }

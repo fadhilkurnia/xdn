@@ -5,14 +5,13 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 
 /**
  * @author arun
- *
  */
 public interface AppRequestParserBytes {
-	/**
-	 * @param message
-	 * @param header
-	 * @return Request parsed from {@code message}.
-	 * @throws RequestParseException 
-	 */
-	public Request getRequest(byte[] message, NIOHeader header) throws RequestParseException;
+  /**
+   * @param message
+   * @param header
+   * @return Request parsed from {@code message}.
+   * @throws RequestParseException
+   */
+  public Request getRequest(byte[] message, NIOHeader header) throws RequestParseException;
 }

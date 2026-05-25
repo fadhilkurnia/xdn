@@ -5,26 +5,26 @@ import org.json.JSONObject;
 
 public class TxStateRequest extends TXPacket {
 
-	public static enum State {
-		COMMITTED, 
-		
-		ABORTED, 
-		
-		EXECUTING,
-	}
+  public static enum State {
+    COMMITTED,
 
-	private State state = State.EXECUTING;
+    ABORTED,
 
-	public TxStateRequest(String txGroupName) {
-		super(TXPacket.PacketType.TX_STATE_REQUEST, null);
-	}
+    EXECUTING,
+  }
 
-	public TxStateRequest(JSONObject json) throws JSONException {
-		super(json);
-		// TODO Auto-generated constructor stub
-	}
+  private State state = State.EXECUTING;
 
-	public State getState() {
-		return this.state;
-	}
+  public TxStateRequest(String txGroupName) {
+    super(TXPacket.PacketType.TX_STATE_REQUEST, null);
+  }
+
+  public TxStateRequest(JSONObject json) throws JSONException {
+    super(json);
+    // TODO Auto-generated constructor stub
+  }
+
+  public State getState() {
+    return this.state;
+  }
 }

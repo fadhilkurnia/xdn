@@ -4,6 +4,7 @@ package edu.umass.cs.clientcentric.interfaces;
 //  e.g., Cookie.sessionToken. Also identifiable request, which specify the requestID
 //  (or idempotency-key)
 public interface SessionAwareRequest {
-    String getSessionID();
-    void setSessionID(String sessionID);
+  String getSessionID();
+
+  void setSessionID(String sessionID);
 }

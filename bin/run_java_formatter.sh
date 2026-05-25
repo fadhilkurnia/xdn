@@ -8,7 +8,8 @@ VERSION="${VERSION//[[:space:]]/}"
 VERSION="${VERSION#v}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIRS=(
-  "${REPO_ROOT}/src/edu/umass/cs/xdn"
+  #"${REPO_ROOT}/src/edu/umass/cs/xdn"
+  "${REPO_ROOT}/src"
   "${REPO_ROOT}/test"
 )
 JAR_PATH="${REPO_ROOT}/jars/google-java-format-${VERSION}-all-deps.jar"

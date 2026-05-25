@@ -1,124 +1,125 @@
 /*
  * Copyright (c) 2015 University of Massachusetts
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
  * may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
  * implied. See the License for the specific language governing
  * permissions and limitations under the License.
- * 
+ *
  * Initial developer(s): V. Arun
  */
 package edu.umass.cs.reconfiguration.reconfigurationpackets;
 
-import org.json.JSONException;
-import org.json.JSONObject;
-
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * @author V. Arun
- * @param <NodeIDType> 
+ * @param <NodeIDType>
  */
-public class StopEpoch<NodeIDType> extends
-		BasicReconfigurationPacket<NodeIDType> implements
-		ReconfigurableRequest, ReplicableRequest {
+public class StopEpoch<NodeIDType> extends BasicReconfigurationPacket<NodeIDType>
+    implements ReconfigurableRequest, ReplicableRequest {
 
-	private static enum Keys {
-		GET_FINALSTATE, QID, EXECUTE_STOP
-	};
+  private static enum Keys {
+    GET_FINALSTATE,
+    QID,
+    EXECUTE_STOP
+  };
 
-	private final boolean getFinalState;
-	private final long requestID;
-	private final boolean executeStop;
+  private final boolean getFinalState;
+  private final long requestID;
+  private final boolean executeStop;
 
-	/**
-	 * @param initiator
-	 * @param name
-	 * @param epochNumber
-	 * @param getFinalState
-	 * @param executeStop 
-	 */
-	public StopEpoch(NodeIDType initiator, String name, int epochNumber,
-			boolean getFinalState, boolean executeStop) {
-		super(initiator, ReconfigurationPacket.PacketType.STOP_EPOCH, name,
-				epochNumber);
-		this.getFinalState = getFinalState;
-		this.requestID = (long)(Math.random()*Long.MAX_VALUE);
-		this.executeStop = executeStop;
-	}
+  /**
+   * @param initiator
+   * @param name
+   * @param epochNumber
+   * @param getFinalState
+   * @param executeStop
+   */
+  public StopEpoch(
+      NodeIDType initiator,
+      String name,
+      int epochNumber,
+      boolean getFinalState,
+      boolean executeStop) {
+    super(initiator, ReconfigurationPacket.PacketType.STOP_EPOCH, name, epochNumber);
+    this.getFinalState = getFinalState;
+    this.requestID = (long) (Math.random() * Long.MAX_VALUE);
+    this.executeStop = executeStop;
+  }
 
-	/**
-	 * @param initiator
-	 * @param name
-	 * @param epochNumber
-	 */
-	public StopEpoch(NodeIDType initiator, String name, int epochNumber) {
-		this(initiator, name, epochNumber, false, true);
-	}
+  /**
+   * @param initiator
+   * @param name
+   * @param epochNumber
+   */
+  public StopEpoch(NodeIDType initiator, String name, int epochNumber) {
+    this(initiator, name, epochNumber, false, true);
+  }
 
-	/**
-	 * @param json
-	 * @param unstringer
-	 * @throws JSONException
-	 */
-	public StopEpoch(JSONObject json, Stringifiable<NodeIDType> unstringer)
-			throws JSONException {
-		super(json, unstringer);
-		this.getFinalState = json.optBoolean(Keys.GET_FINALSTATE.toString());
-		this.requestID = json.getLong(Keys.QID.toString());
-		this.executeStop = json.getBoolean(Keys.EXECUTE_STOP.toString());
-	}
+  /**
+   * @param json
+   * @param unstringer
+   * @throws JSONException
+   */
+  public StopEpoch(JSONObject json, Stringifiable<NodeIDType> unstringer) throws JSONException {
+    super(json, unstringer);
+    this.getFinalState = json.optBoolean(Keys.GET_FINALSTATE.toString());
+    this.requestID = json.getLong(Keys.QID.toString());
+    this.executeStop = json.getBoolean(Keys.EXECUTE_STOP.toString());
+  }
 
-	@Override
-	public JSONObject toJSONObjectImpl() throws JSONException {
-		JSONObject json = super.toJSONObjectImpl();
-		json.put(Keys.GET_FINALSTATE.toString(), this.getFinalState);
-		json.put(Keys.QID.toString(), this.requestID);
-		json.put(Keys.EXECUTE_STOP.toString(), this.executeStop);
-		return json;
-	}
+  @Override
+  public JSONObject toJSONObjectImpl() throws JSONException {
+    JSONObject json = super.toJSONObjectImpl();
+    json.put(Keys.GET_FINALSTATE.toString(), this.getFinalState);
+    json.put(Keys.QID.toString(), this.requestID);
+    json.put(Keys.EXECUTE_STOP.toString(), this.executeStop);
+    return json;
+  }
 
-	@Override
-	public boolean isStop() {
-		return true;
-	}
-	
-	/**
-	 * @return True if stop must be coordinated.
-	 */
-	public boolean shouldExecuteStop() {
-		return this.executeStop;
-	}
+  @Override
+  public boolean isStop() {
+    return true;
+  }
 
-	@Override
-	public boolean needsCoordination() {
-		return true;
-	}
+  /**
+   * @return True if stop must be coordinated.
+   */
+  public boolean shouldExecuteStop() {
+    return this.executeStop;
+  }
 
-	@Override
-	public void setNeedsCoordination(boolean b) {
-		// do nothing
-	}
-	
-	/**
-	 * @return True if the epoch final state should be sent with the
-	 *         AckStopEpoch packet.
-	 */
-	public boolean shouldGetFinalState() {	
-		return this.getFinalState;
-	}
+  @Override
+  public boolean needsCoordination() {
+    return true;
+  }
 
-	@Override
-	public long getRequestID() {
-		return this.requestID;
-	}
+  @Override
+  public void setNeedsCoordination(boolean b) {
+    // do nothing
+  }
+
+  /**
+   * @return True if the epoch final state should be sent with the AckStopEpoch packet.
+   */
+  public boolean shouldGetFinalState() {
+    return this.getFinalState;
+  }
+
+  @Override
+  public long getRequestID() {
+    return this.requestID;
+  }
 }

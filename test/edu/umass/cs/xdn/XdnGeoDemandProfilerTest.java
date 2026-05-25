@@ -28,13 +28,12 @@ import org.junit.jupiter.api.Test;
 /**
  * Integration tests for XdnGeoDemandProfiler.
  *
- * XdnHttpRequest is constructed directly from Netty objects (matching the
- * pattern used in the existing test suite). ReconfigurableAppInfo is stubbed
- * with a minimal anonymous implementation — no Mockito needed.
+ * <p>XdnHttpRequest is constructed directly from Netty objects (matching the pattern used in the
+ * existing test suite). ReconfigurableAppInfo is stubbed with a minimal anonymous implementation —
+ * no Mockito needed.
  *
- * Tests that exercise the background worker use waitForWorker() or
- * awaitWorkerDrain() to give the daemon thread time to drain the event queue
- * before asserting.
+ * <p>Tests that exercise the background worker use waitForWorker() or awaitWorkerDrain() to give
+ * the daemon thread time to drain the event queue before asserting.
  */
 public class XdnGeoDemandProfilerTest {
 
@@ -45,8 +44,8 @@ public class XdnGeoDemandProfilerTest {
   // ---- helpers ---------------------------------------------------------------
 
   /**
-   * Minimal stub for ReconfigurableAppInfo. Only getActiveReplicaGeolocations()
-   * returns real data; all other methods return null as they are not needed.
+   * Minimal stub for ReconfigurableAppInfo. Only getActiveReplicaGeolocations() returns real data;
+   * all other methods return null as they are not needed.
    */
   private static ReconfigurableAppInfo stubAppInfo(Map<String, Geolocation> nodeGeo) {
     return new ReconfigurableAppInfo() {
@@ -55,15 +54,26 @@ public class XdnGeoDemandProfilerTest {
         return nodeGeo;
       }
 
-      @Override public Set<String> getReplicaGroup(String s)                { return null; }
-      @Override public String snapshot(String s)                             { return null; }
-      @Override public Map<String, InetSocketAddress> getAllActiveReplicas() { return null; }
+      @Override
+      public Set<String> getReplicaGroup(String s) {
+        return null;
+      }
+
+      @Override
+      public String snapshot(String s) {
+        return null;
+      }
+
+      @Override
+      public Map<String, InetSocketAddress> getAllActiveReplicas() {
+        return null;
+      }
     };
   }
 
   /**
-   * Fuller stub that also implements getReplicaGroup() and getAllActiveReplicas(),
-   * used by tests that need a more complete ReconfigurableAppInfo.
+   * Fuller stub that also implements getReplicaGroup() and getAllActiveReplicas(), used by tests
+   * that need a more complete ReconfigurableAppInfo.
    */
   private static ReconfigurableAppInfo makeAppInfo(Map<String, Geolocation> nodeGeo) {
     return new ReconfigurableAppInfo() {
@@ -95,12 +105,10 @@ public class XdnGeoDemandProfilerTest {
 
   /**
    * Constructs a real XdnHttpRequest with an X-Client-Location header so that
-   * getClientGeolocation() returns a non-null value, and with the given HTTP
-   * method so that getBehaviors() classifies it correctly as read or write.
+   * getClientGeolocation() returns a non-null value, and with the given HTTP method so that
+   * getBehaviors() classifies it correctly as read or write.
    */
-  private static XdnHttpRequest makeRequest(String svc,
-                                            double lat, double lon,
-                                            HttpMethod method) {
+  private static XdnHttpRequest makeRequest(String svc, double lat, double lon, HttpMethod method) {
     DefaultHttpHeaders headers = new DefaultHttpHeaders();
     headers.set("XDN", svc);
     headers.set(XdnHttpRequest.X_CLIENT_LOCATION_HEADER, lat + "," + lon);
@@ -115,35 +123,37 @@ public class XdnGeoDemandProfilerTest {
   }
 
   private static Request makeRequestForService(String serviceName, double lat, double lon) {
-    HttpRequest raw = new DefaultHttpRequest(
+    HttpRequest raw =
+        new DefaultHttpRequest(
             HttpVersion.HTTP_1_1,
             HttpMethod.GET,
             "/?_xdnsvc=" + serviceName,
             new DefaultHttpHeaders()
-                    .add("XDN", serviceName)
-                    .add(XdnHttpRequest.X_CLIENT_LOCATION_HEADER, lat + "," + lon));
-    HttpContent content = new DefaultHttpContent(
-            Unpooled.copiedBuffer("x".getBytes(StandardCharsets.UTF_8)));
+                .add("XDN", serviceName)
+                .add(XdnHttpRequest.X_CLIENT_LOCATION_HEADER, lat + "," + lon));
+    HttpContent content =
+        new DefaultHttpContent(Unpooled.copiedBuffer("x".getBytes(StandardCharsets.UTF_8)));
     return new XdnHttpRequest(raw, content);
   }
 
   /** Request with no X-Client-Location header. */
   private static Request makeRequestNoGeo() {
-    HttpRequest raw = new DefaultHttpRequest(
+    HttpRequest raw =
+        new DefaultHttpRequest(
             HttpVersion.HTTP_1_1,
             HttpMethod.GET,
             "/?_xdnsvc=" + SVC,
             new DefaultHttpHeaders().add("XDN", SVC));
-    HttpContent content = new DefaultHttpContent(
-            Unpooled.copiedBuffer("x".getBytes(StandardCharsets.UTF_8)));
+    HttpContent content =
+        new DefaultHttpContent(Unpooled.copiedBuffer("x".getBytes(StandardCharsets.UTF_8)));
     return new XdnHttpRequest(raw, content);
   }
 
   /**
-   * Encodes a sparse grid into the same base64 binary format used by getDemandStats(),
-   * allowing tests to construct a profiler with known state via the JSONObject constructor.
+   * Encodes a sparse grid into the same base64 binary format used by getDemandStats(), allowing
+   * tests to construct a profiler with known state via the JSONObject constructor.
    *
-   * Binary layout: [int32 count][count × (int32 cellIdx, int32 requests)]
+   * <p>Binary layout: [int32 count][count × (int32 cellIdx, int32 requests)]
    */
   private static String encodeSparseGrid(Map<Integer, Integer> grid) {
     ByteBuffer buf = ByteBuffer.allocate(4 + grid.size() * 8);
@@ -155,13 +165,13 @@ public class XdnGeoDemandProfilerTest {
     return Base64.getEncoder().encodeToString(buf.array());
   }
 
-  private static JSONObject buildStats(String name, long numReqs,
-                                       Map<Integer, Integer> reads,
-                                       Map<Integer, Integer> writes) throws Exception {
+  private static JSONObject buildStats(
+      String name, long numReqs, Map<Integer, Integer> reads, Map<Integer, Integer> writes)
+      throws Exception {
     JSONObject stats = new JSONObject();
     stats.put("name", name);
     stats.put("num_reqs", numReqs);
-    stats.put("grid_sparse_reads_b64",  encodeSparseGrid(reads));
+    stats.put("grid_sparse_reads_b64", encodeSparseGrid(reads));
     stats.put("grid_sparse_writes_b64", encodeSparseGrid(writes));
     return stats;
   }
@@ -172,12 +182,11 @@ public class XdnGeoDemandProfilerTest {
   }
 
   /**
-   * Polls until the worker has drained the expected number of events.
-   * Re-injects demand via combine() after each snapshot so subsequent
-   * assertions still see the accumulated state.
+   * Polls until the worker has drained the expected number of events. Re-injects demand via
+   * combine() after each snapshot so subsequent assertions still see the accumulated state.
    */
   private static void awaitWorkerDrain(XdnGeoDemandProfiler profiler, long expectedTotal)
-          throws Exception {
+      throws Exception {
     long deadline = System.currentTimeMillis() + 2000;
     while (System.currentTimeMillis() < deadline) {
       Thread.sleep(25);
@@ -191,7 +200,7 @@ public class XdnGeoDemandProfilerTest {
       }
     }
     throw new AssertionError(
-            "Worker did not drain " + expectedTotal + " events in time for " + profiler);
+        "Worker did not drain " + expectedTotal + " events in time for " + profiler);
   }
 
   @BeforeEach
@@ -209,15 +218,17 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testUnregisteredService_defaultsToEventual() throws Exception {
-    XdnGeoDemandProfiler populated = new XdnGeoDemandProfiler(
+    XdnGeoDemandProfiler populated =
+        new XdnGeoDemandProfiler(
             buildStats(SVC, 100, Map.of(500_500, 100), Collections.emptyMap()));
 
-    Map<String, Geolocation> nodeGeo = Map.of(
-            "A", new Geolocation(0.0,  0.0),
+    Map<String, Geolocation> nodeGeo =
+        Map.of(
+            "A", new Geolocation(0.0, 0.0),
             "B", new Geolocation(80.0, 0.0));
 
     NodeIdsMetadataPair<String> result =
-            populated.getNewActivesPlacement(Set.of("A", "B"), stubAppInfo(nodeGeo));
+        populated.getNewActivesPlacement(Set.of("A", "B"), stubAppInfo(nodeGeo));
 
     assertNotNull(result);
     assertFalse(result.nodeIds().isEmpty());
@@ -227,16 +238,17 @@ public class XdnGeoDemandProfilerTest {
   void testRegisterConsistencyModel_isPickedUp() throws Exception {
     XdnGeoDemandProfiler.registerConsistencyModel(SVC, ConsistencyModel.LINEARIZABLE);
 
-    XdnGeoDemandProfiler populated = new XdnGeoDemandProfiler(
-            buildStats(SVC, 100, Map.of(500_500, 100), Map.of(500_500, 50)));
+    XdnGeoDemandProfiler populated =
+        new XdnGeoDemandProfiler(buildStats(SVC, 100, Map.of(500_500, 100), Map.of(500_500, 50)));
 
-    Map<String, Geolocation> nodeGeo = Map.of(
-            "A", new Geolocation(0.0,   0.0),
-            "B", new Geolocation(20.0,  20.0),
+    Map<String, Geolocation> nodeGeo =
+        Map.of(
+            "A", new Geolocation(0.0, 0.0),
+            "B", new Geolocation(20.0, 20.0),
             "C", new Geolocation(-20.0, -20.0));
 
     NodeIdsMetadataPair<String> result =
-            populated.getNewActivesPlacement(Set.of("A", "B", "C"), stubAppInfo(nodeGeo));
+        populated.getNewActivesPlacement(Set.of("A", "B", "C"), stubAppInfo(nodeGeo));
 
     assertNotNull(result);
     assertFalse(result.nodeIds().isEmpty());
@@ -264,9 +276,7 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testSerializationRoundTrip_preservesCounts() throws Exception {
-    JSONObject original = buildStats(SVC, 67,
-            Map.of(100_200, 42, 300_400, 17),
-            Map.of(500_500, 8));
+    JSONObject original = buildStats(SVC, 67, Map.of(100_200, 42, 300_400, 17), Map.of(500_500, 8));
 
     XdnGeoDemandProfiler deserialized = new XdnGeoDemandProfiler(original);
     JSONObject roundTripped = deserialized.getDemandStats();
@@ -295,8 +305,7 @@ public class XdnGeoDemandProfilerTest {
     assertEquals(5L, rehydrated.getLong("num_reqs"));
     // Reads grid must match — all 5 were GETs.
     assertEquals(
-            first.getString("grid_sparse_reads_b64"),
-            rehydrated.getString("grid_sparse_reads_b64"));
+        first.getString("grid_sparse_reads_b64"), rehydrated.getString("grid_sparse_reads_b64"));
 
     // Second call on the original should now be empty (reset-on-report).
     JSONObject second = profiler.getDemandStats();
@@ -305,7 +314,8 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testGetDemandStats_resetsGridsAfterCall() throws Exception {
-    XdnGeoDemandProfiler populated = new XdnGeoDemandProfiler(
+    XdnGeoDemandProfiler populated =
+        new XdnGeoDemandProfiler(
             buildStats(SVC, 100, Map.of(500_500, 100), Collections.emptyMap()));
 
     assertEquals(100, populated.getDemandStats().getLong("num_reqs"));
@@ -338,8 +348,8 @@ public class XdnGeoDemandProfilerTest {
     JSONObject stats = profiler.getDemandStats();
     // Payload must fit within the configured DB cap (4096 bytes).
     assertTrue(
-            stats.toString().length() < 4096,
-            "Serialized stats exceed MAX_DEMAND_PROFILE_SIZE: " + stats.toString().length());
+        stats.toString().length() < 4096,
+        "Serialized stats exceed MAX_DEMAND_PROFILE_SIZE: " + stats.toString().length());
     // Round-trip survives and does not crash on truncation.
     XdnGeoDemandProfiler round = new XdnGeoDemandProfiler(stats);
     assertNotNull(round.getDemandStats());
@@ -349,10 +359,10 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testCombine_accumulatesReadCounts() throws Exception {
-    XdnGeoDemandProfiler p1 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 30, Map.of(500_500, 30), Collections.emptyMap()));
-    XdnGeoDemandProfiler p2 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 20, Map.of(500_500, 20), Collections.emptyMap()));
+    XdnGeoDemandProfiler p1 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 30, Map.of(500_500, 30), Collections.emptyMap()));
+    XdnGeoDemandProfiler p2 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 20, Map.of(500_500, 20), Collections.emptyMap()));
 
     p1.combine(p2);
 
@@ -361,10 +371,10 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testCombine_accumulatesWriteCounts() throws Exception {
-    XdnGeoDemandProfiler p1 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 15, Collections.emptyMap(), Map.of(200_200, 15)));
-    XdnGeoDemandProfiler p2 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 25, Collections.emptyMap(), Map.of(200_200, 25)));
+    XdnGeoDemandProfiler p1 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 15, Collections.emptyMap(), Map.of(200_200, 15)));
+    XdnGeoDemandProfiler p2 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 25, Collections.emptyMap(), Map.of(200_200, 25)));
 
     p1.combine(p2);
 
@@ -373,12 +383,12 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testCombine_multipleProfilers_accumulatesCorrectly() throws Exception {
-    XdnGeoDemandProfiler p1 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 100, Map.of(1, 100), Collections.emptyMap()));
-    XdnGeoDemandProfiler p2 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 200, Map.of(2, 200), Collections.emptyMap()));
-    XdnGeoDemandProfiler p3 = new XdnGeoDemandProfiler(
-            buildStats(SVC, 50,  Map.of(3,  50), Collections.emptyMap()));
+    XdnGeoDemandProfiler p1 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 100, Map.of(1, 100), Collections.emptyMap()));
+    XdnGeoDemandProfiler p2 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 200, Map.of(2, 200), Collections.emptyMap()));
+    XdnGeoDemandProfiler p3 =
+        new XdnGeoDemandProfiler(buildStats(SVC, 50, Map.of(3, 50), Collections.emptyMap()));
 
     p1.combine(p2);
     p1.combine(p3);
@@ -416,8 +426,7 @@ public class XdnGeoDemandProfilerTest {
   void testShouldReportDemandStats_noGeolocationHeader_returnsFalse() {
     DefaultHttpHeaders headers = new DefaultHttpHeaders();
     headers.set("XDN", SVC);
-    HttpRequest http = new DefaultHttpRequest(
-            HttpVersion.HTTP_1_1, HttpMethod.GET, "/", headers);
+    HttpRequest http = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/", headers);
     HttpContent content = new DefaultHttpContent(Unpooled.EMPTY_BUFFER);
     XdnHttpRequest req = new XdnHttpRequest(http, content);
 
@@ -455,8 +464,9 @@ public class XdnGeoDemandProfilerTest {
     waitForWorker();
 
     JSONObject stats = profiler.getDemandStats();
-    assertFalse(stats.getString("grid_sparse_reads_b64").isEmpty(),
-            "Read grid should be non-empty after a GET request");
+    assertFalse(
+        stats.getString("grid_sparse_reads_b64").isEmpty(),
+        "Read grid should be non-empty after a GET request");
   }
 
   @Test
@@ -466,8 +476,9 @@ public class XdnGeoDemandProfilerTest {
     waitForWorker();
 
     JSONObject stats = profiler.getDemandStats();
-    assertFalse(stats.getString("grid_sparse_writes_b64").isEmpty(),
-            "Write grid should be non-empty after a POST request");
+    assertFalse(
+        stats.getString("grid_sparse_writes_b64").isEmpty(),
+        "Write grid should be non-empty after a POST request");
   }
 
   @Test
@@ -487,13 +498,15 @@ public class XdnGeoDemandProfilerTest {
   void testGetNewActivesPlacement_noRequests_returnsNull() {
     Map<String, Geolocation> nodeGeo = Map.of("A", new Geolocation(0.0, 0.0));
 
-    assertNull(profiler.getNewActivesPlacement(Set.of("A"), stubAppInfo(nodeGeo)),
-            "No requests yet — should not trigger reconfiguration");
+    assertNull(
+        profiler.getNewActivesPlacement(Set.of("A"), stubAppInfo(nodeGeo)),
+        "No requests yet — should not trigger reconfiguration");
   }
 
   @Test
   void testGetNewActivesPlacement_nullActives_returnsNull() throws Exception {
-    XdnGeoDemandProfiler populated = new XdnGeoDemandProfiler(
+    XdnGeoDemandProfiler populated =
+        new XdnGeoDemandProfiler(
             buildStats(SVC, 100, Map.of(500_500, 100), Collections.emptyMap()));
 
     assertNull(populated.getNewActivesPlacement(null, stubAppInfo(Collections.emptyMap())));
@@ -501,21 +514,22 @@ public class XdnGeoDemandProfilerTest {
 
   @Test
   void testGetNewActivesPlacement_withDemand_returnsValidPlacement() throws Exception {
-    XdnGeoDemandProfiler populated = new XdnGeoDemandProfiler(
-            buildStats(SVC, 150, Map.of(500_500, 100), Map.of(500_500, 50)));
+    XdnGeoDemandProfiler populated =
+        new XdnGeoDemandProfiler(buildStats(SVC, 150, Map.of(500_500, 100), Map.of(500_500, 50)));
 
     Map<String, Geolocation> nodeGeo = new LinkedHashMap<>();
-    nodeGeo.put("A", new Geolocation(0.0,   0.0));
-    nodeGeo.put("B", new Geolocation(40.0,  40.0));
+    nodeGeo.put("A", new Geolocation(0.0, 0.0));
+    nodeGeo.put("B", new Geolocation(40.0, 40.0));
     nodeGeo.put("C", new Geolocation(-40.0, -40.0));
 
     NodeIdsMetadataPair<String> result =
-            populated.getNewActivesPlacement(Set.of("A", "B", "C"), stubAppInfo(nodeGeo));
+        populated.getNewActivesPlacement(Set.of("A", "B", "C"), stubAppInfo(nodeGeo));
 
     assertNotNull(result);
     assertFalse(result.nodeIds().isEmpty());
-    assertTrue(nodeGeo.keySet().containsAll(result.nodeIds()),
-            "All selected nodes must be known candidates");
+    assertTrue(
+        nodeGeo.keySet().containsAll(result.nodeIds()),
+        "All selected nodes must be known candidates");
   }
 
   @Test
@@ -527,27 +541,26 @@ public class XdnGeoDemandProfilerTest {
     awaitWorkerDrain(profiler, 50);
 
     Map<String, Geolocation> nodeGeo = new HashMap<>();
-    nodeGeo.put("AR_boston", new Geolocation(42.3,  -71.1));
-    nodeGeo.put("AR_london", new Geolocation(51.5,   -0.1));
-    nodeGeo.put("AR_tokyo",  new Geolocation(35.7,  139.7));
+    nodeGeo.put("AR_boston", new Geolocation(42.3, -71.1));
+    nodeGeo.put("AR_london", new Geolocation(51.5, -0.1));
+    nodeGeo.put("AR_tokyo", new Geolocation(35.7, 139.7));
     nodeGeo.put("AR_sydney", new Geolocation(-33.9, 151.2));
 
     Set<String> curActives = Set.of("AR_london", "AR_tokyo");
     NodeIdsMetadataPair<String> result =
-            profiler.getNewActivesPlacement(curActives, makeAppInfo(nodeGeo));
+        profiler.getNewActivesPlacement(curActives, makeAppInfo(nodeGeo));
 
     assertNotNull(result);
     assertEquals(2, result.nodeIds().size());
-    assertTrue(result.nodeIds().contains("AR_boston"),
-            "Boston must be among closest to demand");
-    assertTrue(result.placementMetadata().contains("AR_boston"),
-            "Boston must be preferred coordinator");
+    assertTrue(result.nodeIds().contains("AR_boston"), "Boston must be among closest to demand");
+    assertTrue(
+        result.placementMetadata().contains("AR_boston"), "Boston must be preferred coordinator");
   }
 
   @Test
   void testNoReconfigWhenNoDemand() {
     Map<String, Geolocation> nodeGeo = new HashMap<>();
-    nodeGeo.put("AR_a", new Geolocation(0.0,  0.0));
+    nodeGeo.put("AR_a", new Geolocation(0.0, 0.0));
     nodeGeo.put("AR_b", new Geolocation(10.0, 10.0));
 
     assertNull(profiler.getNewActivesPlacement(Set.of("AR_a", "AR_b"), makeAppInfo(nodeGeo)));
@@ -558,34 +571,34 @@ public class XdnGeoDemandProfilerTest {
     profiler.shouldReportDemandStats(makeRequest(42.0, -71.0), null, null);
     awaitWorkerDrain(profiler, 1);
 
-    assertNull(profiler.getNewActivesPlacement(Set.of("AR_a", "AR_b"),
-            makeAppInfo(Map.of())));
+    assertNull(profiler.getNewActivesPlacement(Set.of("AR_a", "AR_b"), makeAppInfo(Map.of())));
   }
 
   @Test
   void testGetNewActivesPlacement_metadataContainsPreferredCoordinator() throws Exception {
-    XdnGeoDemandProfiler populated = new XdnGeoDemandProfiler(
+    XdnGeoDemandProfiler populated =
+        new XdnGeoDemandProfiler(
             buildStats(SVC, 100, Map.of(500_500, 100), Collections.emptyMap()));
 
-    Map<String, Geolocation> nodeGeo = Map.of(
-            "A", new Geolocation(0.0,  0.0),
+    Map<String, Geolocation> nodeGeo =
+        Map.of(
+            "A", new Geolocation(0.0, 0.0),
             "B", new Geolocation(20.0, 20.0));
 
     NodeIdsMetadataPair<String> result =
-            populated.getNewActivesPlacement(Set.of("A", "B"), stubAppInfo(nodeGeo));
+        populated.getNewActivesPlacement(Set.of("A", "B"), stubAppInfo(nodeGeo));
 
     assertNotNull(result);
     assertNotNull(result.placementMetadata(), "Metadata must be present");
 
     JSONObject metadata = new JSONObject(result.placementMetadata());
-    String coordinator = metadata.getString(
-            AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
+    String coordinator =
+        metadata.getString(AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
 
     assertNotNull(coordinator);
-    assertTrue(nodeGeo.containsKey(coordinator),
-            "Coordinator must be a known node");
-    assertTrue(result.nodeIds().contains(coordinator),
-            "Coordinator must be inside the replica set");
+    assertTrue(nodeGeo.containsKey(coordinator), "Coordinator must be a known node");
+    assertTrue(
+        result.nodeIds().contains(coordinator), "Coordinator must be inside the replica set");
   }
 
   // ---- justReconfigured ------------------------------------------------------

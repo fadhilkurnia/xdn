@@ -6,50 +6,49 @@ import edu.umass.cs.gigapaxos.interfaces.AppRequestParser;
 import edu.umass.cs.nio.AbstractPacketDemultiplexer;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-
 import java.io.IOException;
 
 public class ClientCentricPacketDemultiplexer
-        extends AbstractPacketDemultiplexer<ClientCentricPacket> {
+    extends AbstractPacketDemultiplexer<ClientCentricPacket> {
 
-    private final BayouReplicaCoordinator<?> coordinator;
-    private final AppRequestParser appRequestParser;
+  private final BayouReplicaCoordinator<?> coordinator;
+  private final AppRequestParser appRequestParser;
 
-    public ClientCentricPacketDemultiplexer(BayouReplicaCoordinator<?> coordinator,
-                                            AppRequestParser appRequestParser) {
-        this.coordinator = coordinator;
-        this.appRequestParser = appRequestParser;
-        this.register(ClientCentricPacketType.values());
+  public ClientCentricPacketDemultiplexer(
+      BayouReplicaCoordinator<?> coordinator, AppRequestParser appRequestParser) {
+    this.coordinator = coordinator;
+    this.appRequestParser = appRequestParser;
+    this.register(ClientCentricPacketType.values());
+  }
+
+  @Override
+  protected Integer getPacketType(ClientCentricPacket message) {
+    return message.getRequestType().getInt();
+  }
+
+  @Override
+  protected ClientCentricPacket processHeader(byte[] message, NIOHeader header) {
+    ClientCentricPacketType packetType =
+        ClientCentricPacket.getQuickPacketTypeFromEncodedPacket(message);
+    if (packetType == null) {
+      return null;
     }
 
-    @Override
-    protected Integer getPacketType(ClientCentricPacket message) {
-        return message.getRequestType().getInt();
-    }
+    return ClientCentricPacket.createFromBytes(message, this.appRequestParser);
+  }
 
-    @Override
-    protected ClientCentricPacket processHeader(byte[] message, NIOHeader header) {
-        ClientCentricPacketType packetType =
-                ClientCentricPacket.getQuickPacketTypeFromEncodedPacket(message);
-        if (packetType == null) {
-            return null;
-        }
+  @Override
+  protected boolean matchesType(Object message) {
+    return message instanceof ClientCentricPacket;
+  }
 
-        return ClientCentricPacket.createFromBytes(message, this.appRequestParser);
+  @Override
+  public boolean handleMessage(ClientCentricPacket message, NIOHeader header) {
+    if (message == null) return false;
+    try {
+      return coordinator.coordinateRequest(message, null);
+    } catch (IOException | RequestParseException e) {
+      throw new RuntimeException(e);
     }
-
-    @Override
-    protected boolean matchesType(Object message) {
-        return message instanceof ClientCentricPacket;
-    }
-
-    @Override
-    public boolean handleMessage(ClientCentricPacket message, NIOHeader header) {
-        if (message == null) return false;
-        try {
-            return coordinator.coordinateRequest(message, null);
-        } catch (IOException | RequestParseException e) {
-            throw new RuntimeException(e);
-        }
-    }
+  }
 }

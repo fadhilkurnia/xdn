@@ -301,10 +301,10 @@ public class XdnHttpRequest extends XdnRequest
     }
 
     String ip = httpRequest.headers().get(X_CLIENT_IP_HEADER);
-    LOG.log(Level.INFO, "X-Client-IP header value: {0}", ip);  // ← add this
+    LOG.log(Level.INFO, "X-Client-IP header value: {0}", ip); // ← add this
     if (ip != null && !ip.isEmpty()) {
       Geolocation geo = GeoIpLookup.lookup(ip.trim());
-      LOG.log(Level.INFO, "GeoIpLookup result for {0}: {1}", new Object[]{ ip, geo }); // ← add this
+      LOG.log(Level.INFO, "GeoIpLookup result for {0}: {1}", new Object[] {ip, geo}); // ← add this
       return geo;
     }
 

@@ -1,5 +1,3 @@
 package edu.umass.cs.causal.packets;
 
-public class CausalRequestPacket {
-
-}
+public class CausalRequestPacket {}

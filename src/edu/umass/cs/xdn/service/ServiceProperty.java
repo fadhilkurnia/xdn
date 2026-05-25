@@ -50,8 +50,7 @@ public class ServiceProperty {
       Integer minReplicas,
       Integer maxReplicas,
       Long minReconfigurationIntervalSec,
-      Long minRequestsForReconfiguration
-      ) {
+      Long minRequestsForReconfiguration) {
     this.serviceName = serviceName;
     this.isDeterministic = isDeterministic;
     this.stateDirectory = stateDirectory;
@@ -196,10 +195,14 @@ public class ServiceProperty {
     Integer minReplicas = optionalReplicaField(json, "min_replicas");
     Integer maxReplicas = optionalReplicaField(json, "max_replicas");
     validateReplicaConfig(numReplicas, minReplicas, maxReplicas);
-    Long minReconfigurationIntervalSec = json.has("min_reconfiguration_interval_sec")
-            ? json.getLong("min_reconfiguration_interval_sec") : 0;
-    Long minRequestsForReconfiguration = json.has("min_requests_for_reconfiguration")
-            ? json.getLong("min_requests_for_reconfiguration") : 0;
+    Long minReconfigurationIntervalSec =
+        json.has("min_reconfiguration_interval_sec")
+            ? json.getLong("min_reconfiguration_interval_sec")
+            : 0;
+    Long minRequestsForReconfiguration =
+        json.has("min_requests_for_reconfiguration")
+            ? json.getLong("min_requests_for_reconfiguration")
+            : 0;
 
     ServiceProperty prop =
         new ServiceProperty(
@@ -631,8 +634,10 @@ public class ServiceProperty {
       servicePropertyJsonObject.put("state", this.stateDirectory);
       servicePropertyJsonObject.put("deterministic", this.isDeterministic);
       servicePropertyJsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
-      servicePropertyJsonObject.put("min_reconfiguration_interval_sec", this.getMinReconfigurationIntervalSec());
-      servicePropertyJsonObject.put("min_requests_for_reconfiguration", this.getMinRequestsForReconfiguration());
+      servicePropertyJsonObject.put(
+          "min_reconfiguration_interval_sec", this.getMinReconfigurationIntervalSec());
+      servicePropertyJsonObject.put(
+          "min_requests_for_reconfiguration", this.getMinRequestsForReconfiguration());
       JSONArray componentArray = new JSONArray();
       for (ServiceComponent component : this.components) {
         JSONObject componentJsonObject = component.toJsonObject();

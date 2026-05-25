@@ -1,8 +1,8 @@
 package edu.umass.cs.nio.interfaces;
 
 /**
- * Typed geographic coordinate for a node. Latitude is in [-90, 90] degrees,
- * longitude in [-180, 180] degrees.
+ * Typed geographic coordinate for a node. Latitude is in [-90, 90] degrees, longitude in [-180,
+ * 180] degrees.
  */
 public record Geolocation(double latitude, double longitude) {
 
@@ -17,8 +17,8 @@ public record Geolocation(double latitude, double longitude) {
 
   /**
    * Parses {@code "lat,lon"}. Surrounding double quotes and whitespace are tolerated. Returns
-   * {@code null} on malformed input (non-numeric parts, wrong cardinality, out-of-range values,
-   * or {@code null} input) so callers can warn-and-skip.
+   * {@code null} on malformed input (non-numeric parts, wrong cardinality, out-of-range values, or
+   * {@code null} input) so callers can warn-and-skip.
    */
   public static Geolocation parse(String raw) {
     if (raw == null) {

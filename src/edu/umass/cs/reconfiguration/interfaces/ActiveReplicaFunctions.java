@@ -1,42 +1,40 @@
 package edu.umass.cs.reconfiguration.interfaces;
 
-import java.net.InetAddress;
-
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.ActiveReplica;
+import java.net.InetAddress;
 
 /**
- * A minimal interface defining active replica server functions. This
- * interface is implemented by {@link ActiveReplica}.
- * 
- * @author gaozy
+ * A minimal interface defining active replica server functions. This interface is implemented by
+ * {@link ActiveReplica}.
  *
+ * @author gaozy
  */
 public interface ActiveReplicaFunctions {
-	
-	/**
-	 * @param request 
-	 * @param callback 
-	 * @return true if request is executed successfully
-	 */
-	public boolean handRequestToAppForHttp(Request request, ExecutedCallback callback);
 
-	/**
-	 * @param request
-	 * @param addr
-	 */
-	public void updateDemandStatsFromHttp(Request request, InetAddress addr);
+  /**
+   * @param request
+   * @param callback
+   * @return true if request is executed successfully
+   */
+  public boolean handRequestToAppForHttp(Request request, ExecutedCallback callback);
 
-	/**
-	 * @param serviceName the name of the service
-	 * @return true if the service uses primary-backup coordination
-	 */
-	default boolean usesPrimaryBackup(String serviceName) {
-		return false;
-	}
+  /**
+   * @param request
+   * @param addr
+   */
+  public void updateDemandStatsFromHttp(Request request, InetAddress addr);
 
-	default java.util.List<?> getRequestMatchersForService(String serviceName) {
-		return null;
-	}
+  /**
+   * @param serviceName the name of the service
+   * @return true if the service uses primary-backup coordination
+   */
+  default boolean usesPrimaryBackup(String serviceName) {
+    return false;
+  }
+
+  default java.util.List<?> getRequestMatchersForService(String serviceName) {
+    return null;
+  }
 }

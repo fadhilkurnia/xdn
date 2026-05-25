@@ -6,33 +6,29 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ServerReconfiguration
 
 /**
  * @author arun
- * 
- *         An interface for methods common to
- *         {@link ClientReconfigurationPacket} and
- *         {@link ServerReconfigurationPacket}.
- *
+ *     <p>An interface for methods common to {@link ClientReconfigurationPacket} and {@link
+ *     ServerReconfigurationPacket}.
  */
 public interface ReconfiguratorRequest extends Request {
 
-	/**
-	 * @return {@code this}
-	 */
-	public abstract ReconfiguratorRequest setFailed();
+  /**
+   * @return {@code this}
+   */
+  public abstract ReconfiguratorRequest setFailed();
 
-	/**
-	 * @return True if failed.
-	 */
-	public abstract boolean isFailed();
+  /**
+   * @return True if failed.
+   */
+  public abstract boolean isFailed();
 
-	/**
-	 * @param msg
-	 * @return {@code this}
-	 */
-	public abstract ReconfiguratorRequest setResponseMessage(String msg);
+  /**
+   * @param msg
+   * @return {@code this}
+   */
+  public abstract ReconfiguratorRequest setResponseMessage(String msg);
 
-	/**
-	 * @return The success or failure message.
-	 */
-	public abstract String getResponseMessage();
-
+  /**
+   * @return The success or failure message.
+   */
+  public abstract String getResponseMessage();
 }

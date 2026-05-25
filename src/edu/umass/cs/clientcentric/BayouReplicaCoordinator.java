@@ -12,8 +12,6 @@ import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import org.json.JSONObject;
-
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,6 +19,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.json.JSONObject;
 
 // TODO: allowing client to specify the requested consistency-model per-request (per session)
 //  not only per-service that we are currently have.
@@ -37,210 +36,256 @@ import java.util.logging.Logger;
 
 public class BayouReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator<NodeIDType> {
 
-    public static final ConsistencyModel DEFAULT_CLIENT_CENTRIC_CONSISTENCY_MODEL =
-            ConsistencyModel.MONOTONIC_READS;
+  public static final ConsistencyModel DEFAULT_CLIENT_CENTRIC_CONSISTENCY_MODEL =
+      ConsistencyModel.MONOTONIC_READS;
 
-    public record ReplicaInstance<NodeIDType>
-            (String name,                                    // the service name
-             ConsistencyModel consistencyModel,              // the requested consistency model
-             int currEpoch,                                  // current placement epoch
-             String lastSnapshot,                            // last checkpoint snapshot
-             Set<NodeIDType> nodeIDs,                        // set of replicas for this service
-             VectorTimestamp currTimestamp,                  // the service's current timestamp
-             Map<Long, RequestAndCallback> pendingRequests,  // buffered request, waiting for sync
-             List<byte[]> executedRequests,                  // ordered executed write requests
-             long offsetSeqNumExecutedRequest,               // starting seq number for executedRequests // TODO: use this for pruning executedRequests
-             Map<NodeIDType, VectorTimestamp> peerTimestamp,
-             Map<NodeIDType, Long> peerLastSyncRequestSeqNum // last sequence number that we have requested to peer, preventing storming our peer with redundant request
-            ) {
+  public record ReplicaInstance<NodeIDType>(
+      String name, // the service name
+      ConsistencyModel consistencyModel, // the requested consistency model
+      int currEpoch, // current placement epoch
+      String lastSnapshot, // last checkpoint snapshot
+      Set<NodeIDType> nodeIDs, // set of replicas for this service
+      VectorTimestamp currTimestamp, // the service's current timestamp
+      Map<Long, RequestAndCallback> pendingRequests, // buffered request, waiting for sync
+      List<byte[]> executedRequests, // ordered executed write requests
+      long
+          offsetSeqNumExecutedRequest, // starting seq number for executedRequests // TODO: use this
+                                       // for pruning executedRequests
+      Map<NodeIDType, VectorTimestamp> peerTimestamp,
+      Map<NodeIDType, Long>
+          peerLastSyncRequestSeqNum // last sequence number that we have requested to peer,
+                                    // preventing storming our peer with redundant request
+      ) {}
+
+  private static final int DEFAULT_EXECUTE_WORKERS =
+      Math.max(32, Runtime.getRuntime().availableProcessors() * 4);
+
+  private final NodeIDType myNodeID;
+  private final Stringifiable<NodeIDType> nodeIdDeserializer;
+  private final Replicable app;
+  private final Logger logger = Logger.getLogger(BayouReplicaCoordinator.class.getSimpleName());
+  private final Set<IntegerPacketType> packetTypes;
+  private final Map<String, ReplicaInstance<NodeIDType>> instances;
+  private final ExecutorService executePool;
+
+  public BayouReplicaCoordinator(
+      Replicable app,
+      NodeIDType myNodeID,
+      Stringifiable<NodeIDType> nodeIdDeserializer,
+      Messenger<NodeIDType, JSONObject> messenger) {
+    super(app, messenger);
+    this.myNodeID = myNodeID;
+    this.nodeIdDeserializer = nodeIdDeserializer;
+    this.app = app;
+    this.instances = new ConcurrentHashMap<>();
+
+    int nWorkers = Integer.getInteger("BAYOU_N_EXECUTE_WORKERS", DEFAULT_EXECUTE_WORKERS);
+    this.executePool =
+        Executors.newFixedThreadPool(
+            nWorkers,
+            r -> {
+              Thread t = new Thread(r, "bayou-exec-" + myNodeID);
+              t.setDaemon(true);
+              return t;
+            });
+
+    // validate the nodeIdDeserializer
+    assert this.nodeIdDeserializer.valueOf(myNodeID.toString()).equals(myNodeID)
+        : "Invalid NodeIDType deserializer given";
+    assert messenger.getMyID().equals(myNodeID) : "Invalid NodeID given in the messenger";
+
+    // initialize all the supported packet types
+    this.packetTypes = new HashSet<>();
+    packetTypes.addAll(List.of(ClientCentricPacketType.values()));
+
+    // add packet demultiplexer for ClientCentricPacket that will invoke
+    // the coordinateRequest() method
+    ClientCentricPacketDemultiplexer packetDemultiplexer =
+        new ClientCentricPacketDemultiplexer(this, app);
+    this.messenger.precedePacketDemultiplexer(packetDemultiplexer);
+  }
+
+  @Override
+  public Set<IntegerPacketType> getRequestTypes() {
+    return this.packetTypes;
+  }
+
+  @Override
+  public boolean coordinateRequest(Request request, ExecutedCallback callback)
+      throws IOException, RequestParseException {
+    if (logger.isLoggable(Level.FINE)) {
+      logger.log(
+          Level.FINE,
+          "{0}:{1} - Coordinating request {2} name={3}",
+          new Object[] {
+            this.myNodeID,
+            this.getClass().getSimpleName(),
+            request.getClass().getSimpleName(),
+            request.getServiceName()
+          });
     }
 
-    private static final int DEFAULT_EXECUTE_WORKERS =
-            Math.max(32, Runtime.getRuntime().availableProcessors() * 4);
-
-    private final NodeIDType myNodeID;
-    private final Stringifiable<NodeIDType> nodeIdDeserializer;
-    private final Replicable app;
-    private final Logger logger = Logger.getLogger(BayouReplicaCoordinator.class.getSimpleName());
-    private final Set<IntegerPacketType> packetTypes;
-    private final Map<String, ReplicaInstance<NodeIDType>> instances;
-    private final ExecutorService executePool;
-
-    public BayouReplicaCoordinator(Replicable app,
-                                   NodeIDType myNodeID,
-                                   Stringifiable<NodeIDType> nodeIdDeserializer,
-                                   Messenger<NodeIDType, JSONObject> messenger) {
-        super(app, messenger);
-        this.myNodeID = myNodeID;
-        this.nodeIdDeserializer = nodeIdDeserializer;
-        this.app = app;
-        this.instances = new ConcurrentHashMap<>();
-
-        int nWorkers = Integer.getInteger("BAYOU_N_EXECUTE_WORKERS", DEFAULT_EXECUTE_WORKERS);
-        this.executePool = Executors.newFixedThreadPool(nWorkers, r -> {
-            Thread t = new Thread(r, "bayou-exec-" + myNodeID);
-            t.setDaemon(true);
-            return t;
-        });
-
-        // validate the nodeIdDeserializer
-        assert this.nodeIdDeserializer.valueOf(myNodeID.toString()).equals(myNodeID) :
-                "Invalid NodeIDType deserializer given";
-        assert messenger.getMyID().equals(myNodeID) : "Invalid NodeID given in the messenger";
-
-        // initialize all the supported packet types
-        this.packetTypes = new HashSet<>();
-        packetTypes.addAll(List.of(ClientCentricPacketType.values()));
-
-        // add packet demultiplexer for ClientCentricPacket that will invoke
-        // the coordinateRequest() method
-        ClientCentricPacketDemultiplexer packetDemultiplexer =
-                new ClientCentricPacketDemultiplexer(this, app);
-        this.messenger.precedePacketDemultiplexer(packetDemultiplexer);
+    String serviceName = request.getServiceName();
+    ReplicaInstance<NodeIDType> serviceInstance = instances.get(serviceName);
+    if (serviceInstance == null) {
+      String msg =
+          String.format(
+              "%s:%s - coordinating request for unknown service type=%s id=%s name=%s sender=%s",
+              this.myNodeID,
+              BayouReplicaCoordinator.class.getSimpleName(),
+              request.getClass().getSimpleName(),
+              request instanceof ReplicableClientRequest rcr ? rcr.getRequestID() : "?",
+              request.getServiceName(),
+              request instanceof ClientCentricSyncResponsePacket cc ? cc.getSenderId() : "?");
+      logger.log(Level.WARNING, msg);
+      return true;
     }
 
-    @Override
-    public Set<IntegerPacketType> getRequestTypes() {
-        return this.packetTypes;
+    // handle StopEpoch request
+    if (request instanceof ReplicableClientRequest rcr
+        && rcr.getRequest() instanceof ReconfigurableRequest rcRequest
+        && rcRequest.isStop()) {
+      boolean isSuccess = this.app.restore(serviceName, null);
+      callback.executed(rcRequest, isSuccess);
+      return true;
     }
 
-    @Override
-    public boolean coordinateRequest(Request request, ExecutedCallback callback)
-            throws IOException, RequestParseException {
-        if (logger.isLoggable(Level.FINE)) {
-            logger.log(Level.FINE, "{0}:{1} - Coordinating request {2} name={3}",
-                    new Object[]{this.myNodeID, this.getClass().getSimpleName(),
-                            request.getClass().getSimpleName(), request.getServiceName()});
-        }
-
-        String serviceName = request.getServiceName();
-        ReplicaInstance<NodeIDType> serviceInstance = instances.get(serviceName);
-        if (serviceInstance == null) {
-            String msg = String.format(
-                    "%s:%s - coordinating request for unknown service type=%s id=%s name=%s sender=%s",
-                    this.myNodeID, BayouReplicaCoordinator.class.getSimpleName(),
-                    request.getClass().getSimpleName(),
-                    request instanceof ReplicableClientRequest rcr ? rcr.getRequestID() : "?",
-                    request.getServiceName(),
-                    request instanceof ClientCentricSyncResponsePacket cc ? cc.getSenderId() : "?");
-            logger.log(Level.WARNING, msg);
-            return true;
-        }
-
-        // handle StopEpoch request
-        if (request instanceof ReplicableClientRequest rcr &&
-                rcr.getRequest() instanceof ReconfigurableRequest rcRequest &&
-                rcRequest.isStop()) {
-            boolean isSuccess = this.app.restore(serviceName, null);
-            callback.executed(rcRequest, isSuccess);
-            return true;
-        }
-
-        if (serviceInstance.consistencyModel.equals(ConsistencyModel.MONOTONIC_READS)) {
-            return MonotonicReadsHandler.coordinateRequest(
-                    request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger, this.executePool);
-        }
-
-        if (serviceInstance.consistencyModel.equals(ConsistencyModel.MONOTONIC_WRITES)) {
-            return MonotonicWritesHandler.coordinateRequest(
-                    request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger, this.executePool);
-        }
-
-        if (serviceInstance.consistencyModel.equals(ConsistencyModel.READ_YOUR_WRITES)) {
-            return ReadYourWritesHandler.coordinateRequest(
-                    request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger, this.executePool);
-        }
-
-        if (serviceInstance.consistencyModel.equals(ConsistencyModel.WRITES_FOLLOW_READS)) {
-            return WritesFollowReadsHandler.coordinateRequest(
-                    request, callback, serviceInstance, this.app, this.nodeIdDeserializer,
-                    this.messenger, this.executePool);
-        }
-
-        throw new RuntimeException("Unknown client-centric consistency model " +
-                serviceInstance.consistencyModel.name() + " for service with name=" + serviceName);
+    if (serviceInstance.consistencyModel.equals(ConsistencyModel.MONOTONIC_READS)) {
+      return MonotonicReadsHandler.coordinateRequest(
+          request,
+          callback,
+          serviceInstance,
+          this.app,
+          this.nodeIdDeserializer,
+          this.messenger,
+          this.executePool);
     }
 
-    @Override
-    public boolean createReplicaGroup(String serviceName, int epoch, String state,
-                                      Set<NodeIDType> nodes, String placementMetadata) {
-        return this.createReplicaGroup(
-                /*consistencyModel=*/DEFAULT_CLIENT_CENTRIC_CONSISTENCY_MODEL,
-                /*serviceName=*/serviceName,
-                /*epoch=*/epoch,
-                /*state=*/state,
-                /*nodes=*/nodes);
+    if (serviceInstance.consistencyModel.equals(ConsistencyModel.MONOTONIC_WRITES)) {
+      return MonotonicWritesHandler.coordinateRequest(
+          request,
+          callback,
+          serviceInstance,
+          this.app,
+          this.nodeIdDeserializer,
+          this.messenger,
+          this.executePool);
     }
 
-    public boolean createReplicaGroup(ConsistencyModel consistencyModel, String serviceName,
-                                      int epoch, String state, Set<NodeIDType> nodes) {
-        // Initialize an empty vector timestamp.
-        List<String> nodeIDs = new ArrayList<>();
-        for (NodeIDType nodeID : nodes) {
-            nodeIDs.add(nodeID.toString());
-        }
-        VectorTimestamp timestamp = new VectorTimestamp(nodeIDs);
-
-        // Initialize empty vector timestamp for each of the peer.
-        Map<NodeIDType, VectorTimestamp> peerTimestamp = new HashMap<>();
-        for (NodeIDType nodeID : nodes) {
-            if (nodeID.equals(myNodeID)) continue;
-            peerTimestamp.put(nodeID, new VectorTimestamp(nodeIDs));
-        }
-
-        // initialize empty last requested sequence number cache
-        Map<NodeIDType, Long> lastRequestedSeqNum = new ConcurrentHashMap<>();
-        for (NodeIDType nodeId : nodes) {
-            lastRequestedSeqNum.put(nodeId, 0L);
-        }
-
-        // Register the created instance.
-        this.instances.put(serviceName,
-                new ReplicaInstance<>(
-                        /*name=*/serviceName,
-                        /*consistencyModel=*/consistencyModel,
-                        /*currEpoch=*/epoch,
-                        /*lastSnapshot=*/state,
-                        /*nodeIDs=*/nodes,
-                        /*currTimestamp=*/timestamp,
-                        /*pendingRequests=*/new ConcurrentHashMap<>(),
-                        /*executedRequests=*/Collections.synchronizedList(new ArrayList<>()),
-                        /*offsetSeqNumExecutedRequest=*/0,
-                        /*peerTimestamp=*/peerTimestamp,
-                        /*peerLastSyncRequestSeqNum=*/lastRequestedSeqNum));
-
-        // Start the app using the restore method with the passed initial state.
-        return this.app.restore(serviceName, state);
-
-        // TODO: start periodic synchronization based on serviceInstance.peerTimestamp.
+    if (serviceInstance.consistencyModel.equals(ConsistencyModel.READ_YOUR_WRITES)) {
+      return ReadYourWritesHandler.coordinateRequest(
+          request,
+          callback,
+          serviceInstance,
+          this.app,
+          this.nodeIdDeserializer,
+          this.messenger,
+          this.executePool);
     }
 
-    @Override
-    public boolean deleteReplicaGroup(String serviceName, int epoch) {
-        ReplicaInstance<NodeIDType> removedInstance = this.instances.remove(serviceName);
-        if (removedInstance == null) {
-            return true;
-        }
-        return this.app.restore(serviceName, null);
+    if (serviceInstance.consistencyModel.equals(ConsistencyModel.WRITES_FOLLOW_READS)) {
+      return WritesFollowReadsHandler.coordinateRequest(
+          request,
+          callback,
+          serviceInstance,
+          this.app,
+          this.nodeIdDeserializer,
+          this.messenger,
+          this.executePool);
     }
 
-    @Override
-    public Set<NodeIDType> getReplicaGroup(String serviceName) {
-        ReplicaInstance<NodeIDType> targetInstance = this.instances.get(serviceName);
-        if (targetInstance == null) return null;
-        return targetInstance.nodeIDs;
+    throw new RuntimeException(
+        "Unknown client-centric consistency model "
+            + serviceInstance.consistencyModel.name()
+            + " for service with name="
+            + serviceName);
+  }
+
+  @Override
+  public boolean createReplicaGroup(
+      String serviceName,
+      int epoch,
+      String state,
+      Set<NodeIDType> nodes,
+      String placementMetadata) {
+    return this.createReplicaGroup(
+        /* consistencyModel= */ DEFAULT_CLIENT_CENTRIC_CONSISTENCY_MODEL,
+        /* serviceName= */ serviceName,
+        /* epoch= */ epoch,
+        /* state= */ state,
+        /* nodes= */ nodes);
+  }
+
+  public boolean createReplicaGroup(
+      ConsistencyModel consistencyModel,
+      String serviceName,
+      int epoch,
+      String state,
+      Set<NodeIDType> nodes) {
+    // Initialize an empty vector timestamp.
+    List<String> nodeIDs = new ArrayList<>();
+    for (NodeIDType nodeID : nodes) {
+      nodeIDs.add(nodeID.toString());
+    }
+    VectorTimestamp timestamp = new VectorTimestamp(nodeIDs);
+
+    // Initialize empty vector timestamp for each of the peer.
+    Map<NodeIDType, VectorTimestamp> peerTimestamp = new HashMap<>();
+    for (NodeIDType nodeID : nodes) {
+      if (nodeID.equals(myNodeID)) continue;
+      peerTimestamp.put(nodeID, new VectorTimestamp(nodeIDs));
     }
 
-    public String getServiceConsistencyModel(String serviceName) {
-        assert serviceName != null : "Service Name cannot be null";
-        ReplicaInstance<NodeIDType> currInstance = instances.get(serviceName);
-        if (currInstance == null) {
-            return null;
-        }
-        return currInstance.consistencyModel.toString();
+    // initialize empty last requested sequence number cache
+    Map<NodeIDType, Long> lastRequestedSeqNum = new ConcurrentHashMap<>();
+    for (NodeIDType nodeId : nodes) {
+      lastRequestedSeqNum.put(nodeId, 0L);
     }
 
+    // Register the created instance.
+    this.instances.put(
+        serviceName,
+        new ReplicaInstance<>(
+            /* name= */ serviceName,
+            /* consistencyModel= */ consistencyModel,
+            /* currEpoch= */ epoch,
+            /* lastSnapshot= */ state,
+            /* nodeIDs= */ nodes,
+            /* currTimestamp= */ timestamp,
+            /* pendingRequests= */ new ConcurrentHashMap<>(),
+            /* executedRequests= */ Collections.synchronizedList(new ArrayList<>()),
+            /* offsetSeqNumExecutedRequest= */ 0,
+            /* peerTimestamp= */ peerTimestamp,
+            /* peerLastSyncRequestSeqNum= */ lastRequestedSeqNum));
+
+    // Start the app using the restore method with the passed initial state.
+    return this.app.restore(serviceName, state);
+
+    // TODO: start periodic synchronization based on serviceInstance.peerTimestamp.
+  }
+
+  @Override
+  public boolean deleteReplicaGroup(String serviceName, int epoch) {
+    ReplicaInstance<NodeIDType> removedInstance = this.instances.remove(serviceName);
+    if (removedInstance == null) {
+      return true;
+    }
+    return this.app.restore(serviceName, null);
+  }
+
+  @Override
+  public Set<NodeIDType> getReplicaGroup(String serviceName) {
+    ReplicaInstance<NodeIDType> targetInstance = this.instances.get(serviceName);
+    if (targetInstance == null) return null;
+    return targetInstance.nodeIDs;
+  }
+
+  public String getServiceConsistencyModel(String serviceName) {
+    assert serviceName != null : "Service Name cannot be null";
+    ReplicaInstance<NodeIDType> currInstance = instances.get(serviceName);
+    if (currInstance == null) {
+      return null;
+    }
+    return currInstance.consistencyModel.toString();
+  }
 }

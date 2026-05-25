@@ -2,15 +2,12 @@ package edu.umass.cs.gigapaxos.interfaces;
 
 /**
  * @author arun
- * 
- *         Mainly useful for debugging to print summaries of application
- *         requests in gigapaxos.
- *
+ *     <p>Mainly useful for debugging to print summaries of application requests in gigapaxos.
  */
 public interface SummarizableRequest extends Request, Summarizable {
-	/**
-	 * @return A compact summary generally in the format name:epoch:type and any
-	 *         additional relevant information.
-	 */
-	public Object getSummary();
+  /**
+   * @return A compact summary generally in the format name:epoch:type and any additional relevant
+   *     information.
+   */
+  public Object getSummary();
 }
