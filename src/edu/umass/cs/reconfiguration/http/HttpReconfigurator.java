@@ -526,14 +526,36 @@ public class HttpReconfigurator {
       assert ctx.channel().remoteAddress() instanceof InetSocketAddress : "Invalid request sender";
       InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
 
-      // Parses and handles SetReplicaPlacementRequest
-      //  PUT /api/v2/services/{serviceName}/placement
+      // Parses and handles SetReplicaPlacementRequest or triggers demand-based reconfiguration
+      //  POST/PUT /api/v2/services/{serviceName}/placement
+      //  - empty body     -> triggers demand-based reconfiguration
+      //  - non-empty body -> explicit replica placement
       Pattern pattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/placement$");
       Matcher matcher = pattern.matcher(httpRequest.uri());
       if ((httpRequest.method().equals(HttpMethod.POST)
               || httpRequest.method().equals(HttpMethod.PUT))
-          && matcher.matches()) {
-        parseAndHandleHttpSetReplicaPlacementRequest(ctx, senderAddress, httpRequest, httpContent);
+              && matcher.matches()) {
+        if (httpContent.content().readableBytes() == 0) {
+          String serviceName = httpRequest.uri().split("/")[4];
+          ReconfigurationTriggerResult result =
+                  this.rcFunctions.triggerDemandBasedReconfiguration(serviceName);
+          HttpResponseStatus status =
+                  switch (result) {
+                    case INITIATED, NO_DEMAND_DATA, PLACEMENT_UNCHANGED -> OK;
+                    case ALREADY_RECONFIGURING -> HttpResponseStatus.CONFLICT;
+                    case SERVICE_NOT_FOUND -> HttpResponseStatus.NOT_FOUND;
+                  };
+          String body = "{\"result\":\"" + result.name() + "\"}";
+          FullHttpResponse resp =
+                  new DefaultFullHttpResponse(
+                          HTTP_1_1, status, Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
+          resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+          resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
+          ctx.write(resp);
+          ctx.flush();
+        } else {
+          parseAndHandleHttpSetReplicaPlacementRequest(ctx, senderAddress, httpRequest, httpContent);
+        }
         return;
       }
 
@@ -550,31 +572,6 @@ public class HttpReconfigurator {
       Matcher scnrMatcher = scnrPattern.matcher(httpRequest.uri());
       if (httpRequest.method().equals(HttpMethod.PUT) && scnrMatcher.matches()) {
         parseAndHandleHttpSetCoordinatorNodeRequest(ctx, senderAddress, httpRequest, httpContent);
-        return;
-      }
-
-      // TODO: handle other kind of reconfigurator requests
-      //  POST /api/v2/services/{name}/reconfigure
-      Pattern reconfigurePattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/reconfigure$");
-      if (httpRequest.method().equals(HttpMethod.POST)
-          && reconfigurePattern.matcher(httpRequest.uri()).matches()) {
-        String serviceName = httpRequest.uri().split("/")[4];
-        ReconfigurationTriggerResult result =
-            this.rcFunctions.triggerDemandBasedReconfiguration(serviceName);
-        HttpResponseStatus status =
-            switch (result) {
-              case INITIATED, NO_DEMAND_DATA, PLACEMENT_UNCHANGED -> OK;
-              case ALREADY_RECONFIGURING -> HttpResponseStatus.CONFLICT;
-              case SERVICE_NOT_FOUND -> HttpResponseStatus.NOT_FOUND;
-            };
-        String body = "{\"result\":\"" + result.name() + "\"}";
-        FullHttpResponse resp =
-            new DefaultFullHttpResponse(
-                HTTP_1_1, status, Unpooled.copiedBuffer(body.getBytes(StandardCharsets.UTF_8)));
-        resp.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
-        resp.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length());
-        ctx.write(resp);
-        ctx.flush();
         return;
       }
 
