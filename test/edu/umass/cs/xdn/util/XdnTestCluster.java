@@ -147,6 +147,74 @@ public class XdnTestCluster implements AutoCloseable {
   }
 
   /**
+   * Launches a self-clustering service via {@code xdn cluster launch}'s wire format. Distinct from
+   * {@link #launchService}: this one omits consistency/deterministic, sets {@code mode:cluster},
+   * and requires {@code peer_port} + {@code num_replicas}. Used by {@code XdnClusterLaunchTest}.
+   */
+  public void launchClusterService(
+      String serviceName,
+      String imageName,
+      String stateDirectory,
+      int httpPort,
+      int peerPort,
+      int numReplicas)
+      throws IOException, InterruptedException, JSONException {
+
+    JSONObject serviceJson = new JSONObject();
+    serviceJson.put("name", serviceName);
+    serviceJson.put("image", imageName);
+    serviceJson.put("port", httpPort);
+    serviceJson.put("state", stateDirectory.endsWith("/") ? stateDirectory : stateDirectory + "/");
+    serviceJson.put("mode", "cluster");
+    serviceJson.put("peer_port", peerPort);
+    serviceJson.put("num_replicas", numReplicas);
+
+    String initialState = "xdn:init:" + serviceJson;
+    String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
+    String endpoint =
+        "http://%s:%d/?type=CREATE&name=%s&initial_state=%s"
+            .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName, encodedInitialState);
+    HttpRequest request =
+        HttpRequest.newBuilder().uri(URI.create(endpoint)).timeout(REQUEST_TIMEOUT).GET().build();
+    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    if (response.statusCode() != 200) {
+      throw new IllegalStateException(
+          "Cluster service creation failed with status " + response.statusCode());
+    }
+    JSONObject responseJson = new JSONObject(response.body());
+    if (responseJson.optBoolean("FAILED", false)) {
+      throw new IllegalStateException(
+          "Cluster service creation failed: "
+              + responseJson.optString("RESPONSE_MESSAGE", "unknown error"));
+    }
+    createdServices.add(serviceName);
+  }
+
+  /**
+   * Idempotent: ensures the local Docker daemon is part of a swarm (single-node is fine). The
+   * attachable overlay networks that cluster services use require this. Tests should call it before
+   * {@link #launchClusterService} when running on a CI runner that may have a fresh Docker daemon.
+   */
+  public static boolean ensureDockerSwarm() {
+    int state =
+        Shell.runCommand(
+            "sh -c \"docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active\"", true);
+    if (state == 0) {
+      return true;
+    }
+    return Shell.runCommand("docker swarm init", true) == 0;
+  }
+
+  /**
+   * Issues {@code docker build} for the etcd cluster reference image. Used by {@code
+   * XdnClusterLaunchTest}; idempotent enough that calling it twice is harmless.
+   */
+  public static boolean buildEtcdClusterImage() {
+    return Shell.runCommand("docker build -t xdn-etcd-cluster:test services/etcd-cluster/", true)
+        == 0;
+  }
+
+  /**
    * Waits for a service to respond with a successful HTTP status by periodically issuing requests.
    */
   public HttpResponse<String> awaitServiceReady(String serviceName, Duration timeout)

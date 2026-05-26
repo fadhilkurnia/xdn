@@ -25,6 +25,7 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.reconfiguration.reconfigurationpackets.SetCoordinatorNodeRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
+import edu.umass.cs.xdn.cluster.StatefulClusterReplicaCoordinator;
 import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
 import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
@@ -88,6 +89,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   private final AbstractReplicaCoordinator<NodeIDType> clientCentricReplicaCoordinator;
   private final AbstractReplicaCoordinator<NodeIDType> causalReplicaCoordinator;
   private final AbstractReplicaCoordinator<NodeIDType> lazyReplicaCoordinator;
+  private final AbstractReplicaCoordinator<NodeIDType> statefulClusterCoordinator;
 
   // mapping between service name to the service's coordination manager
   private final Map<String, AbstractReplicaCoordinator<NodeIDType>> serviceCoordinator;
@@ -151,6 +153,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         new CausalReplicaCoordinator<>(app, myID, unstringer, messenger);
     LazyReplicaCoordinator<NodeIDType> lazyReplicaCoordinator =
         new LazyReplicaCoordinator<>(app, myID, unstringer, messenger);
+    StatefulClusterReplicaCoordinator<NodeIDType> statefulClusterCoordinator =
+        new StatefulClusterReplicaCoordinator<>(app, myID, unstringer, messenger);
 
     this.primaryBackupCoordinator = primaryBackupReplicaCoordinator;
     this.paxosCoordinator = paxosReplicaCoordinator;
@@ -160,6 +164,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     this.clientCentricReplicaCoordinator = bayouReplicaCoordinator;
     this.causalReplicaCoordinator = causalReplicaCoordinator;
     this.lazyReplicaCoordinator = lazyReplicaCoordinator;
+    this.statefulClusterCoordinator = statefulClusterCoordinator;
 
     // initialize empty service -> coordinator mapping
     this.serviceCoordinator = new ConcurrentHashMap<>();
@@ -590,6 +595,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     if (coordinator instanceof LazyReplicaCoordinator<NodeIDType>) {
       return ConsistencyModel.EVENTUAL.toString();
     }
+    if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>) {
+      // Consistency is owned by the cluster itself (e.g. etcd's Raft), not by XDN.
+      return "cluster-managed";
+    }
     return "?";
   }
 
@@ -733,6 +742,13 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
   private AbstractReplicaCoordinator<NodeIDType> inferCoordinatorByProperties(
       ServiceProperty serviceProperties) {
+    // Cluster services run their own consensus inside the containers; XDN only places, names,
+    // and routes. Picked before the determinism/consistency branches because those fields are
+    // meaningless for a self-clustering service.
+    if (serviceProperties.isClusterManaged()) {
+      return this.statefulClusterCoordinator;
+    }
+
     // For non-deterministic service we always use primary-backup, the only coordinator
     // we have implemented that can handle non-determinism.
     if (!serviceProperties.isDeterministic()) {

@@ -75,6 +75,66 @@ function parse_common_dist_args() {
   printf "%s %s %s\n" "$config" "$ssh_key" "$username"
 }
 
+# init_docker_swarm bootstraps a Docker swarm spanning every XDN host so cluster services
+# (xdn cluster launch) can share an attachable overlay network. All hosts join as managers —
+# small research clusters, and we want any AR to be able to create per-cluster overlay nets.
+#
+# Args: <ip1> <ip2> ... <ipN> <ssh_key> <username>
+# Idempotent: a host already in a swarm is left alone.
+function init_docker_swarm() {
+  local args=("$@")
+  local n=${#args[@]}
+  if [ "$n" -lt 3 ]; then
+    return 0
+  fi
+  local USERNAME="${args[$((n - 1))]}"
+  local SSH_KEY="${args[$((n - 2))]}"
+  local IPS=("${args[@]:0:$((n - 2))}")
+  if [ "${#IPS[@]}" -lt 1 ]; then
+    return 0
+  fi
+
+  local MANAGER="${IPS[0]}"
+  echo "[swarm] init on manager $MANAGER ..."
+  if ! ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$USERNAME@$MANAGER" \
+    "set -e; \
+     state=\$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo unknown); \
+     if [ \"\$state\" != \"active\" ]; then \
+       docker swarm init --advertise-addr $MANAGER >/dev/null; \
+     fi"; then
+    echo "[swarm] init failed on $MANAGER" >&2
+    return 1
+  fi
+
+  local TOKEN
+  TOKEN=$(ssh -i "$SSH_KEY" "$USERNAME@$MANAGER" "docker swarm join-token manager -q")
+  if [ -z "$TOKEN" ]; then
+    echo "[swarm] could not retrieve manager join token from $MANAGER" >&2
+    return 1
+  fi
+
+  local failed=0
+  for ((i = 1; i < ${#IPS[@]}; i++)); do
+    local node="${IPS[$i]}"
+    echo "[swarm] join $node ..."
+    if ! ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$USERNAME@$node" \
+      "set -e; \
+       state=\$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo unknown); \
+       if [ \"\$state\" != \"active\" ]; then \
+         docker swarm join --token $TOKEN $MANAGER:2377 >/dev/null; \
+       fi"; then
+      echo "[swarm] join failed on $node" >&2
+      failed=1
+    fi
+  done
+
+  if [ $failed -ne 0 ]; then
+    return 1
+  fi
+  echo "[swarm] ${#IPS[@]} node(s) in swarm — overlay networks ready"
+  return 0
+}
+
 function do_distributed_initialization() {
   echo "Initializing all the machines from the provided config ..."
 
@@ -148,6 +208,15 @@ function do_distributed_initialization() {
   if [ $failed -ne 0 ]; then
     echo ""
     echo "[dist-init] completed with failures. Logs in: $LOG_DIR"
+    exit 1
+  fi
+
+  # Bootstrap a Docker swarm across the same hosts so cluster services (xdn cluster launch)
+  # have an attachable overlay network for their replicas. XDN does not use Swarm for
+  # scheduling — only for cross-host container networking.
+  if ! init_docker_swarm "${unique_ips[@]}" "$SSH_KEY" "$USERNAME"; then
+    echo ""
+    echo "[dist-init] swarm bootstrap failed; cluster launches will not work until swarm is up." >&2
     exit 1
   fi
 

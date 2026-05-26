@@ -15,6 +15,9 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.utils.ZipFiles;
+import edu.umass.cs.xdn.cluster.ClusterTopology;
+import edu.umass.cs.xdn.cluster.ClusterTopologyAware;
+import edu.umass.cs.xdn.cluster.SwarmOverlayManager;
 import edu.umass.cs.xdn.docker.DockerComposeManager;
 import edu.umass.cs.xdn.recorder.*;
 import edu.umass.cs.xdn.request.*;
@@ -51,7 +54,11 @@ import java.util.regex.Pattern;
 import org.json.JSONException;
 
 public class XdnGigapaxosApp
-    implements Replicable, Reconfigurable, BackupableApplication, InitialStateValidator {
+    implements Replicable,
+        Reconfigurable,
+        BackupableApplication,
+        InitialStateValidator,
+        ClusterTopologyAware {
 
   private final boolean IS_RESTART_UPON_STATE_DIFF_APPLY = false;
 
@@ -79,6 +86,12 @@ public class XdnGigapaxosApp
 
   // mapping of service name to the current service instance
   private final Map<String, ServiceInstance> services;
+
+  // mapping of cluster service name to its per-replica topology (ordinal, size, phase).
+  // Pushed by StatefulClusterReplicaCoordinator just before restore() so the cluster branch in
+  // initContainerizedService2 can build the right XDN_CLUSTER_* env and --network-alias.
+  private final ConcurrentHashMap<String, ClusterTopology> clusterTopologies =
+      new ConcurrentHashMap<>();
 
   private final HashMap<String, SocketChannel> fsSocketConnection;
   private final HashMap<String, Boolean> isServiceActive;
@@ -220,6 +233,20 @@ public class XdnGigapaxosApp
     String cmd = "docker version";
     int exitCode = Shell.runCommand(cmd);
     return exitCode == 0;
+  }
+
+  @Override
+  public void setClusterTopology(String serviceName, ClusterTopology topology) {
+    if (topology == null) {
+      this.clusterTopologies.remove(serviceName);
+    } else {
+      this.clusterTopologies.put(serviceName, topology);
+    }
+  }
+
+  @Override
+  public void clearClusterTopology(String serviceName) {
+    this.clusterTopologies.remove(serviceName);
   }
 
   @Override
@@ -729,6 +756,19 @@ public class XdnGigapaxosApp
         throw new RuntimeException(e);
       }
 
+      // Cluster reconfiguration is deferred (Component 6): the xdn:final: branch needs to
+      // recompute the persistent ordinal map, signal XDN_CLUSTER_PHASE=join for fresh
+      // members, and run the per-service add/remove-replica commands declared in the spec
+      // YAML (see project_cluster_reconfig_hooks memory) before starting the new container.
+      // Until that lands, cluster services launch with pinned placement at epoch 0; trying
+      // to reconfigure fails fast here instead of silently corrupting cluster state.
+      if (property.isClusterManaged()) {
+        throw new UnsupportedOperationException(
+            "cluster service reconfiguration is not yet supported for "
+                + serviceName
+                + " — pin placement at launch (Component 6 follow-up)");
+      }
+
       // prepare statediff directory, if required
       String stateDirMountSource =
           stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
@@ -800,12 +840,22 @@ public class XdnGigapaxosApp
         throw new RuntimeException("Invalid initial state as JSON: " + e);
       }
 
-      if (!property.isDeterministic()) {
-        stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
-      } else {
-        String dir = stateDiffRecorder.getTargetDirectory(serviceName, initialPlacementEpoch);
-        Shell.runCommand("rm -rf " + dir);
-        Shell.runCommand("mkdir -p " + dir);
+      // Cluster services share a swarm overlay so peers see each other at replica-N;
+      // replicated services use the per-node bridge as before.
+      if (property.isClusterManaged()) {
+        networkName = SwarmOverlayManager.networkName(serviceName);
+      }
+
+      // Statediff is XDN's mechanism for blackbox state capture. Cluster services replicate
+      // their state via the cluster's own protocol, so the recorder is skipped entirely.
+      if (!property.isClusterManaged()) {
+        if (!property.isDeterministic()) {
+          stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+        } else {
+          String dir = stateDiffRecorder.getTargetDirectory(serviceName, initialPlacementEpoch);
+          Shell.runCommand("rm -rf " + dir);
+          Shell.runCommand("mkdir -p " + dir);
+        }
       }
       // Prepare container names for each service component.
       // Format  : c<component-id>.e<reconfiguration-epoch>.<service-name>.<node-id>.xdn.io
@@ -873,6 +923,12 @@ public class XdnGigapaxosApp
               + " initialization",
           new Object[] {this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName});
       return true;
+    }
+
+    // Cluster services take a dedicated path: swarm overlay network, stable replica-N alias,
+    // XDN_CLUSTER_* env, and no XDN-managed statediff (the cluster handles its own state).
+    if (service.property.isClusterManaged()) {
+      return initContainerizedClusterService(service, serviceName, initialPlacementEpoch);
     }
 
     int allocatedPort = getRandomPort();
@@ -1002,6 +1058,202 @@ public class XdnGigapaxosApp
 
     // store all the current service metadata
     this.activeServicePorts.put(serviceName, allocatedPort);
+    return true;
+  }
+
+  /**
+   * Initializes a self-clustering ({@code mode: cluster}) service.
+   *
+   * <p>Diverges from the regular path in four ways: (1) attaches the container to a Docker swarm
+   * overlay network ({@code xdn-cluster-<svc>}) instead of the per-node bridge so peers see each
+   * other clusterwide; (2) gives the container a stable {@code replica-<ordinal>} hostname and
+   * network alias so peers can address it the same way from every host; (3) injects the {@code
+   * XDN_CLUSTER_*} env contract so the image (or a thin entrypoint wrapper) can wire itself up; (4)
+   * skips the statediff recorder entirely — the cluster replicates its state via its own protocol
+   * (e.g. etcd's Raft), so XDN has no blackbox state to capture.
+   */
+  private boolean initContainerizedClusterService(
+      ServiceInstance service, String serviceName, int placementEpoch) {
+
+    int allocatedPort = getRandomPort();
+    service.allocatedHttpPort = allocatedPort;
+
+    // idempotent restart: drop any stale containers from a previous attempt
+    for (String name : service.containerNames) {
+      Shell.runCommand("docker rm -f " + name, true);
+    }
+
+    // ensure the swarm overlay exists. Created on the manager and propagates to workers on
+    // attach; idempotent so any AR can race here without a coordinator.
+    String overlay = SwarmOverlayManager.networkName(serviceName);
+    if (!SwarmOverlayManager.ensureOverlay(overlay)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:{1} failed to create overlay network {2}; is `docker swarm init` run on this"
+              + " node?",
+          new Object[] {this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), overlay});
+      return false;
+    }
+
+    // bind-mount state dir lives under /tmp/xdn/cluster/state — distinct from the statediff
+    // recorder's tree because cluster services don't use the recorder at all.
+    String stateDirMountSource =
+        String.format(
+            "/tmp/xdn/cluster/state/%s/%s/e%d/", this.myNodeId, serviceName, placementEpoch);
+    String stateDirMountTarget = service.property.getStatefulComponentDirectory();
+    Shell.runCommand("rm -rf " + stateDirMountSource, true);
+    Shell.runCommand("mkdir -p " + stateDirMountSource, true);
+
+    ClusterTopology topology = this.clusterTopologies.get(serviceName);
+    if (topology == null) {
+      throw new RuntimeException(
+          "missing cluster topology for "
+              + serviceName
+              + " — coordinator must call setClusterTopology() before restore()");
+    }
+
+    // Identify the cluster member (the stateful component — the one whose Raft joins peers
+    // across the overlay) and the entry component (whose port gets published to the host so
+    // XDN's HTTP frontend can reach it). In a single-image cluster both are the same
+    // component; in a multi-component cluster (e.g. bookcatalog + local rqlite) they are
+    // different and the sidecars share the cluster member's network namespace.
+    ServiceComponent clusterMember = service.property.getStatefulComponent();
+    ServiceComponent entry = service.property.getEntryComponent();
+    if (clusterMember == null) {
+      clusterMember = entry;
+    }
+    int clusterIdx = service.property.getComponents().indexOf(clusterMember);
+    String clusterContainerName = service.containerNames.get(clusterIdx);
+
+    // Build XDN_CLUSTER_* env for the cluster member.
+    Map<String, String> clusterEnv = new LinkedHashMap<>();
+    if (clusterMember.getEnvironmentVariables() != null) {
+      clusterEnv.putAll(clusterMember.getEnvironmentVariables());
+    }
+    String stableName = "replica-" + topology.myOrdinal();
+    StringBuilder peers = new StringBuilder();
+    for (int i = 0; i < topology.clusterSize(); i++) {
+      if (i > 0) peers.append(',');
+      peers.append("replica-").append(i);
+    }
+    clusterEnv.put("XDN_CLUSTER_ORDINAL", String.valueOf(topology.myOrdinal()));
+    clusterEnv.put("XDN_CLUSTER_SIZE", String.valueOf(topology.clusterSize()));
+    clusterEnv.put("XDN_CLUSTER_SELF", stableName);
+    clusterEnv.put("XDN_CLUSTER_PEERS", peers.toString());
+    if (service.property.getPeerPort() != null) {
+      clusterEnv.put("XDN_CLUSTER_PEER_PORT", String.valueOf(service.property.getPeerPort()));
+    }
+    clusterEnv.put(
+        "XDN_CLUSTER_PHASE", topology.phase() == ClusterTopology.Phase.JOIN ? "join" : "bootstrap");
+
+    // The published host port maps to whichever component is the entry. In a multi-component
+    // cluster the entry sidecar shares the cluster member's network namespace, so binding
+    // alloc:<entry-port> on the cluster member's docker run routes external traffic into the
+    // sidecar listening on that port inside the namespace.
+    Integer publishedContainerPort = entry != null ? entry.getEntryPort() : null;
+
+    boolean isSuccess =
+        startClusterContainer(
+            clusterMember.getImageName(),
+            clusterContainerName,
+            overlay,
+            stableName,
+            publishedContainerPort,
+            allocatedPort,
+            clusterMember.isStateful() ? stateDirMountSource : null,
+            clusterMember.isStateful() ? stateDirMountTarget : null,
+            clusterEnv);
+    if (!isSuccess) {
+      throw new RuntimeException("failed to start cluster member for " + serviceName);
+    }
+
+    // Start any sidecar components sharing the cluster member's network namespace, in their
+    // declared order. Each sidecar inherits the cluster member's hostname, network aliases,
+    // and published ports — so a sidecar listening on the entry port becomes externally
+    // reachable, and a sidecar that connects to 127.0.0.1:<cluster-member-port> talks to the
+    // local cluster member with zero hops.
+    for (int i = 0; i < service.property.getComponents().size(); i++) {
+      if (i == clusterIdx) {
+        continue;
+      }
+      ServiceComponent sidecar = service.property.getComponents().get(i);
+      Map<String, String> sidecarEnv =
+          sidecar.getEnvironmentVariables() != null
+              ? new LinkedHashMap<>(sidecar.getEnvironmentVariables())
+              : new LinkedHashMap<>();
+      boolean ok =
+          startClusterSidecar(
+              sidecar.getImageName(),
+              service.containerNames.get(i),
+              clusterContainerName,
+              sidecarEnv);
+      if (!ok) {
+        throw new RuntimeException("failed to start cluster sidecar " + sidecar.getComponentName());
+      }
+    }
+
+    service.composeFilePath = null;
+    service.composeProjectName = null;
+    service.initializationSucceed = true;
+    this.activeServicePorts.put(serviceName, allocatedPort);
+    return true;
+  }
+
+  /**
+   * Starts a sidecar container that shares the cluster member's network namespace.
+   *
+   * <p>The sidecar gets no {@code --network-alias}, {@code --hostname}, or {@code --publish} flags
+   * — those are inherited from the cluster member that owns the namespace. The sidecar just runs
+   * its image with its own env; from inside, it sees the cluster member as {@code 127.0.0.1} (and
+   * conversely, a port the sidecar binds inside the namespace becomes reachable on the host through
+   * whatever {@code --publish} the cluster member set).
+   */
+  private boolean startClusterSidecar(
+      String imageName,
+      String containerName,
+      String namespaceOwnerContainerName,
+      Map<String, String> env) {
+
+    Shell.runCommand("docker container rm --force " + containerName, true);
+
+    List<String> cmd = new ArrayList<>();
+    cmd.add("docker");
+    cmd.add("run");
+    cmd.add("-d");
+    cmd.add("--restart");
+    cmd.add("unless-stopped");
+    cmd.add("--name=" + containerName);
+    cmd.add("--network=container:" + namespaceOwnerContainerName);
+    if (env != null) {
+      for (Map.Entry<String, String> e : env.entrySet()) {
+        cmd.add("--env");
+        cmd.add(e.getKey() + "=" + e.getValue());
+      }
+    }
+    cmd.add(imageName);
+
+    int exitCode = Shell.runCommand(cmd, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:{1} failed to start cluster sidecar {2} sharing namespace of {3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            containerName,
+            namespaceOwnerContainerName
+          });
+      return false;
+    }
+    logger.log(
+        Level.INFO,
+        "{0}:{1} - {2} sidecar started (sharing namespace of {3})",
+        new Object[] {
+          this.myNodeId.toUpperCase(),
+          this.getClass().getSimpleName(),
+          containerName,
+          namespaceOwnerContainerName
+        });
     return true;
   }
 
@@ -1951,6 +2203,18 @@ public class XdnGigapaxosApp
       return true;
     }
 
+    // Cluster services own their state via their own protocol — there is nothing for XDN to
+    // capture as a blackbox tar, so skip the rsync+tar pipeline entirely.
+    if (serviceInstance.property.isClusterManaged()) {
+      logger.log(
+          Level.FINE,
+          "{0}:{1} skipping final-state capture for cluster service {2}:{3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, epoch
+          });
+      return true;
+    }
+
     // Remove the previously captured final state, if any.
     String removeCommand = String.format("rm -rf %s", finalStateDirPath);
     int code = Shell.runCommand(removeCommand, true);
@@ -2259,6 +2523,91 @@ public class XdnGigapaxosApp
         "{0}:{1} - {2} docker instance started",
         new Object[] {this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), containerName});
 
+    return true;
+  }
+
+  /**
+   * Starts a cluster-mode container on a swarm overlay network with a stable {@code
+   * replica-<ordinal>} hostname and network alias.
+   *
+   * <p>The HTTP entry port is {@code --publish}ed to the host so the local XDN frontend can forward
+   * to it at {@code 127.0.0.1:<allocatedHttpPort>} (Path 1). The cluster's internal peer port is
+   * <em>not</em> published — peers reach each other on the overlay via Docker's embedded DNS (e.g.
+   * {@code replica-2:2380}).
+   *
+   * <p>This is intentionally a separate method from the regular {@link #startContainer} so the
+   * cluster path stays focused on a single component, with no statediff plumbing or healthcheck
+   * dependencies.
+   */
+  private boolean startClusterContainer(
+      String imageName,
+      String containerName,
+      String overlayNetwork,
+      String replicaName,
+      Integer entryPort,
+      int allocatedHttpPort,
+      String mountDirSource,
+      String mountDirTarget,
+      Map<String, String> env) {
+
+    Shell.runCommand("docker container rm --force " + containerName, true);
+
+    List<String> cmd = new ArrayList<>();
+    cmd.add("docker");
+    cmd.add("run");
+    cmd.add("-d");
+    cmd.add("--restart");
+    cmd.add("unless-stopped");
+    cmd.add("--name=" + containerName);
+    cmd.add("--hostname=" + replicaName);
+    cmd.add("--network=" + overlayNetwork);
+    cmd.add("--network-alias=" + replicaName);
+    if (entryPort != null) {
+      cmd.add(String.format("--publish=%d:%d", allocatedHttpPort, entryPort));
+    }
+    if (mountDirSource != null && !mountDirSource.isEmpty() && mountDirTarget != null) {
+      cmd.add("--mount");
+      cmd.add(String.format("type=bind,source=%s,target=%s", mountDirSource, mountDirTarget));
+    }
+    if (env != null) {
+      for (Map.Entry<String, String> e : env.entrySet()) {
+        cmd.add("--env");
+        cmd.add(e.getKey() + "=" + e.getValue());
+      }
+    }
+    int uid = Utils.getUid();
+    int gid = Utils.getGid();
+    if (uid != 0 && mountDirTarget != null && !mountDirTarget.isEmpty()) {
+      cmd.add("-v");
+      cmd.add("/etc/passwd:/etc/passwd:ro");
+      cmd.add(String.format("--user=%d:%d", uid, gid));
+      cmd.add("--cap-add=sys_nice");
+    }
+    cmd.add(imageName);
+
+    int exitCode = Shell.runCommand(cmd, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:{1} failed to start cluster container {2} on overlay {3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            containerName,
+            overlayNetwork
+          });
+      return false;
+    }
+    logger.log(
+        Level.INFO,
+        "{0}:{1} - {2} cluster container started ({3} on {4})",
+        new Object[] {
+          this.myNodeId.toUpperCase(),
+          this.getClass().getSimpleName(),
+          containerName,
+          replicaName,
+          overlayNetwork
+        });
     return true;
   }
 
