@@ -1,0 +1,35 @@
+#!/bin/bash
+# Launch-time bootstrap for the XDN Reconfigurator (RC) + coredns node.
+# Writes the per-deployment config that the baked, ConditionPathExists-gated
+# systemd units wait for, then starts them.
+set -euo pipefail
+
+install -d -m 0755 /opt/xdn/conf
+
+cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
+${gigapaxos_properties}
+PROPS
+
+# node id + JVM opts (RC = node 0). JAVA_TOOL_OPTIONS forces the IPv4 stack:
+# gigapaxos RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this
+# dual-stack VPC the wildcard bind fallback (the public EIP is not bindable)
+# would be IPv6 (16 bytes), breaking Paxos packet serialization. The xdn-rc unit
+# reads this file via EnvironmentFile, so the JVM picks it up.
+cat > /opt/xdn/conf/node-id <<'NODEID'
+NODE_ID=0
+JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
+NODEID
+
+cat > /opt/xdn/conf/Corefile <<'COREFILE'
+xdnapp.com {
+    xdn cp.xdnapp.com ${rc_eip}
+    errors
+    log
+}
+. {
+    forward . 1.1.1.1
+}
+COREFILE
+
+systemctl daemon-reload
+systemctl start xdn-rc xdn-dns

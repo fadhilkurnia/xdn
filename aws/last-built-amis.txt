@@ -1,0 +1,2 @@
+xdn-ar-20260529-025247	ami-049eaacc453e1f0ae	us-east-1
+xdn-rc-20260529-044253	ami-0af90e71c86a6ac6b	us-east-1
