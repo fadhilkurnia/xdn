@@ -32,3 +32,5 @@ merge-review
 .claude
 *.tar.gz
 
+.github/appmod/
+.github/modernize/
