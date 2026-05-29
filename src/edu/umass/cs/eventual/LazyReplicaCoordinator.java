@@ -196,14 +196,8 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
                         "Expecting (Monotonic and WriteOnly) request for LazyReplicaCoordinator");
             }
 
-            if (clientRequest instanceof XdnHttpRequest xhr) {
-                xhr.clearHttpResponse();
-            } else if (clientRequest instanceof XdnHttpRequestBatch batch) {
-                for (XdnHttpRequest xhr: batch.getRequestList()) {
-                    xhr.clearHttpResponse();
-                }
-            }
-
+            // LazyWriteAfterPacket#toBytes strips the sender's response from
+            // the wire, so app.execute() sees a response-less request.
             return this.app.execute(clientRequest, true);
         }
 
