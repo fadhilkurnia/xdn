@@ -435,6 +435,86 @@ func validateImageName(imageName string) error {
 	return nil
 }
 
+// sendCreateRequest wraps rawJSON with the xdn:init: prefix and issues the gigapaxos CREATE
+// request to the control plane. Returns nil on success or an error otherwise; prints the
+// failure message to stderr in either case so callers don't have to. Shared by both the
+// regular `xdn launch` and `xdn cluster launch` paths.
+func sendCreateRequest(serviceName, rawJSON string) error {
+	errColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
+	controlPlane := os.Getenv("XDN_CONTROL_PLANE")
+	if controlPlane == "" {
+		controlPlane = DEFAULT_CONTROL_PLANE
+	}
+	controlPlaneHost := fmt.Sprintf("%s:%d", controlPlane, CONTROL_PLANE_PORT)
+
+	// Contact the control plane to actually deploy the service (RESTful create:
+	// POST /api/v2/services/{name} with the initial state in the JSON body).
+	encodedInitialState := fmt.Sprintf("xdn:init:%s", rawJSON)
+	createBody, err := json.Marshal(struct {
+		InitialState string `json:"initial_state"`
+	}{InitialState: encodedInitialState})
+	if err != nil {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to encode launch request: %s\n", err.Error())
+		return fmt.Errorf("failed to encode launch request: %s", err.Error())
+	}
+	createEndpoint := fmt.Sprintf("http://%s/api/v2/services/%s",
+		controlPlaneHost, serviceName)
+	httpReq, err := http.NewRequest(http.MethodPost, createEndpoint, bytes.NewReader(createBody))
+	if err != nil {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to build launch request: %s\n", err.Error())
+		return fmt.Errorf("failed to build launch request: %s", err.Error())
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			fmt.Printf(" ")
+			_, _ = errColorPrint.Printf("ERROR")
+			fmt.Printf(": Cannot reach XDN control plane at `%s`.\n\n", controlPlane)
+			fmt.Printf(" Is the Control Plane running there?\n\n")
+			return fmt.Errorf("cannot reach XDN control plane at `%s`", controlPlane)
+		}
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
+		return fmt.Errorf("cannot send launch request to XDN control plane at `%s`", controlPlane)
+	}
+	// RESTful create returns 201 Created on success (202/200 also tolerated).
+	if resp.StatusCode/100 != 2 {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to launch the service, received non success code.\n")
+		return fmt.Errorf("failed to launch the service, received http non success code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
+		return fmt.Errorf("failed to launch the service, error reading the response: %s", err.Error())
+	}
+
+	bodyStr := string(body)
+	if strings.Contains(bodyStr, "\"FAILED\":true") {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(" ")
+		fmt.Printf("Failed to launch the service: \n")
+		var jsonMap map[string]interface{}
+		_ = json.Unmarshal([]byte(bodyStr), &jsonMap)
+		errMsg, _ := jsonMap["RESPONSE_MESSAGE"].(string)
+		fmt.Printf(" %s\n", errMsg)
+		return fmt.Errorf("failed to launch the service, error: %s", errMsg)
+	}
+	return nil
+}
+
 func runLaunchCommand(prop CommonProperties) error {
 	colorPrint := color.New(color.FgYellow).Add(color.Bold).Add(color.Underline)
 	errColorPrint := color.New(color.FgRed).Add(color.Bold).Add(color.Underline)
@@ -478,72 +558,8 @@ func runLaunchCommand(prop CommonProperties) error {
 		return fmt.Errorf("cannot reach XDN control plane at `%s`", controlPlane)
 	}
 
-	// contact the control plane to actually deploy the service (RESTful create:
-	// POST /api/v2/services/{name} with the initial state in the JSON body).
-	encodedInitialState := fmt.Sprintf("xdn:init:%s", prop.rawJsonProperties)
-	createBody, err := json.Marshal(struct {
-		InitialState string `json:"initial_state"`
-	}{InitialState: encodedInitialState})
-	if err != nil {
-		fmt.Printf(" ")
-		_, _ = errColorPrint.Printf("ERROR")
-		fmt.Printf(": Failed to encode launch request: %s\n", err.Error())
-		return fmt.Errorf("failed to encode launch request: %s", err.Error())
-	}
-	createEndpoint := fmt.Sprintf("http://%s/api/v2/services/%s",
-		controlPlaneHost, prop.serviceName)
-	httpReq, err := http.NewRequest(http.MethodPost, createEndpoint, bytes.NewReader(createBody))
-	if err != nil {
-		fmt.Printf(" ")
-		_, _ = errColorPrint.Printf("ERROR")
-		fmt.Printf(": Failed to build launch request: %s\n", err.Error())
-		return fmt.Errorf("failed to build launch request: %s", err.Error())
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	client := http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		if errors.Is(err, syscall.ECONNREFUSED) {
-			fmt.Printf(" ")
-			_, _ = errColorPrint.Printf("ERROR")
-			fmt.Printf(": Cannot reach XDN control plane at `%s`.\n\n",
-				controlPlane)
-			fmt.Printf(" Is the Control Plane running there?\n\n")
-			return fmt.Errorf("cannot reach XDN control plane at `%s`", controlPlane)
-		}
-		fmt.Printf(" ")
-		_, _ = errColorPrint.Printf("ERROR")
-		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
-		return fmt.Errorf("cannot send launch request to XDN control plane at `%s`", controlPlane)
-	}
-	// RESTful create returns 201 Created on success (202/200 also tolerated).
-	if resp.StatusCode/100 != 2 {
-		fmt.Printf(" ")
-		_, _ = errColorPrint.Printf("ERROR")
-		fmt.Printf(": Failed to launch the service, received non success code.\n")
-		return fmt.Errorf("failed to launch the service, received http non success code %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf(" ")
-		_, _ = errColorPrint.Printf("ERROR")
-		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
-		return fmt.Errorf("failed to launch the service, error reading the response: %s", err.Error())
-	}
-
-	bodyStr := string(body)
-	if strings.Contains(bodyStr, "\"FAILED\":true") {
-		fmt.Printf(" ")
-		_, _ = errColorPrint.Printf("ERROR")
-		fmt.Printf(" ")
-		fmt.Printf("Failed to launch the service: \n")
-		var jsonMap map[string]interface{}
-		_ = json.Unmarshal([]byte(bodyStr), &jsonMap)
-		errMsgIf := jsonMap["RESPONSE_MESSAGE"]
-		errMsg := errMsgIf.(string)
-		fmt.Printf(" %s\n", errMsg)
-		return fmt.Errorf("failed to launch the service, error: %s", errMsg)
+	if err := sendCreateRequest(prop.serviceName, prop.rawJsonProperties); err != nil {
+		return err
 	}
 
 	dummyServiceURL := colorPrint.Sprintf(

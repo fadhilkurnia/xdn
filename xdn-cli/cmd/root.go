@@ -56,6 +56,7 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.AddCommand(LaunchCmd)
 	rootCmd.AddCommand(ServiceRootCmd)
+	rootCmd.AddCommand(ClusterRootCmd)
 }
 
 func Execute() {
