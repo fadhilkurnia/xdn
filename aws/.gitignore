@@ -1,0 +1,15 @@
+# Terraform state (may contain secrets; never commit)
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Note: .terraform.lock.hcl and last-built-amis.txt ARE committed on purpose
+# (provider version pinning; AMI build history).

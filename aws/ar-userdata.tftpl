@@ -1,0 +1,24 @@
+#!/bin/bash
+# Launch-time bootstrap for an XDN ActiveReplica (AR) node.
+# Writes the per-deployment config + this node's unique id, then starts the
+# baked, ConditionPathExists-gated xdn-ar unit.
+set -euo pipefail
+
+install -d -m 0755 /opt/xdn/conf
+
+cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
+${gigapaxos_properties}
+PROPS
+
+# node id + JVM opts. JAVA_TOOL_OPTIONS forces the IPv4 stack: gigapaxos
+# RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this dual-stack
+# VPC the wildcard bind fallback (the public EIP is not bindable) would be IPv6
+# (16 bytes), breaking Paxos packet serialization (AssertionError "N != M").
+# The xdn-ar unit reads this file via EnvironmentFile, so the JVM picks it up.
+cat > /opt/xdn/conf/node-id <<'NODEID'
+NODE_ID=${node_id}
+JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
+NODEID
+
+systemctl daemon-reload
+systemctl start xdn-ar
