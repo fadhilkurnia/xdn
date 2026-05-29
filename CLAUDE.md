@@ -266,3 +266,27 @@ Top-level `eval/` contains Python/Go benchmarking and experiment scripts (distin
 - `docs/request-flow.md` — end-to-end request path through GigaPaxos
 - `docs/HTTP-API.md` — HTTP API surface exposed by ActiveReplicas
 - `docs/paxos-reconfiguration.md`, `docs/paxos-compaction.md` — GigaPaxos internals
+- `docs/wordpress-pb-investigation.md` — full WordPress primary-backup throughput investigation (see summary below)
+
+## Investigating Primary Backup with WordPress on CloudLab
+
+Full investigation log (hypotheses, fixes, code changes): [`docs/wordpress-pb-investigation.md`](docs/wordpress-pb-investigation.md).
+
+**Setup:** Start the cluster with `gpServer.sh` using `conf/gigapaxos.xdn.wordpress-pb.cloudlab.properties`; deploy via `xdn` with `xdn-cli/examples/wordpress.yaml`. WordPress runs as a primary-backup group — only the primary runs the containerized service. Always `forceclear` after an error.
+
+**Baselines (CloudLab 3-way, WordPress XML-RPC editPost):** XDN PB ~1500 rps peak (~1200 rps at ≤16ms avg) — beats OpenEBS (~800 rps) and MySQL semi-sync (~500 rps).
+
+**PB request pipeline:**
+```
+Client → HTTP frontend (Netty) → writePool dispatch → PBReplicaCoordinator
+  → PBM queue → PBM worker → XdnGigapaxosApp.execute(XdnHttpRequestBatch)
+  → forwardHttpRequestBatchToContainerizedService → WordPress container (via FUSE)
+  → doneQueue → capture thread → captureStateDiff → Paxos propose → commit callback
+  → async response to client
+```
+
+**Benchmark scripts:** `eval/investigate_wp_bottleneck.py` (per-rate isolation), `eval/investigate_wordpress_pb.py` (cluster mgmt + `GP_JVM_ARGS`), `eval/get_latency_at_rate.go` (Poisson load gen).
+
+**Resolved root cause (2026-03-11):** WordPress Apache sends `Connection: close`, which `HttpActiveReplica` forwarded to the client, tearing down TCP per request and exhausting ephemeral ports (TIME_WAIT) at a ~500 rps ceiling — not an XDN-internal bottleneck. Fixed by overriding the `Connection` header to honor the client's keep-alive preference (`HttpActiveReplica.java`), plus a `ByteBuf.copy()` refCnt fix (`XdnGigapaxosApp.java`) and fully async dispatch. See the docs file for the eliminated-hypotheses table.
+
+**Debug flags:** `-DPB_SKIP_REPLICATION=true` (skip captureStateDiff + Paxos propose), `-DPB_N_PARALLEL_WORKERS=32`, `-DPB_CAPTURE_ACCUMULATION_MS=1`, `-DPB_BYPASS_COORDINATOR=true` (bypass PBM, dispatch directly via async path), `___DDE` HTTP header (bypass coordinator, legacy direct-execute path).
