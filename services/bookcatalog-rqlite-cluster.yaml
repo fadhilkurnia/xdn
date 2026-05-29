@@ -1,0 +1,26 @@
+# bookcat — a multi-component XDN cluster service: bookcatalog frontend + a local rqlite
+# sidecar on every replica. The three rqlite containers form a Raft cluster across the
+# swarm overlay (xdn-cluster-bookcat); bookcatalog talks to its local rqlite at
+# 127.0.0.1:4001 because the two containers share a network namespace.
+#
+# Launch:
+#   xdn cluster launch bookcat -f services/bookcatalog-rqlite-cluster.yaml
+name: bookcat
+mode: cluster
+state: rqlite:/rqlite-data/
+peer_port: 4002
+num_replicas: 3
+
+components:
+  - rqlite:
+      image: xdn-rqlite-cluster:test
+      stateful: true            # marks rqlite as the cluster member (joins peers on the overlay)
+      expose: 4001              # exposed inside the shared namespace, not published to host
+  - bookcatalog:
+      image: fadhilkurnia/xdn-bookcatalog
+      port: 80                  # entry port; XDN frontend → host:<alloc> → namespace:80
+      entry: true
+      environments:
+        - DB_TYPE: rqlite
+        - DB_HOST: 127.0.0.1
+        - DB_PORT: "4001"
