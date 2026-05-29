@@ -30,4 +30,5 @@ screen_logs
 merge-review
 *-paper/
 .claude
+*.tar.gz
 

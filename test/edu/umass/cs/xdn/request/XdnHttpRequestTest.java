@@ -381,7 +381,11 @@ public class XdnHttpRequestTest {
     response.headers().set(HttpHeaderNames.CONTENT_LENGTH, 5);
     xdnRequest.setHttpResponse(response);
 
-    String encoded = xdnRequest.toString();
+    // The default wire form strips the locally-computed response (see
+    // XdnHttpRequest#toBytes); only the explicit toBytes(true) opt-in carries it.
+    assertFalse(XdnHttpRequest.doesHasResponse(xdnRequest.toString()));
+
+    String encoded = new String(xdnRequest.toBytes(true), StandardCharsets.ISO_8859_1);
     assertTrue(XdnHttpRequest.doesHasResponse(encoded));
 
     HttpResponse decodedResponse = XdnHttpRequest.parseHttpResponse(encoded);

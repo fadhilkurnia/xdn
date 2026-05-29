@@ -110,12 +110,15 @@ public class AwReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinator
         boolean isLeaderAtPropose = this.paxosManager.isPaxosCoordinator(serviceName);
         long proposeStartNs = System.nanoTime();
         ExecutedCallback instrumentedCallback = (response, handled) -> {
-            long elapsedMs = (System.nanoTime() - proposeStartNs) / 1_000_000;
-            boolean isLeaderAtCallback = this.paxosManager.isPaxosCoordinator(serviceName);
-            System.err.println("AwRC propose-to-callback " + elapsedMs
-                    + "ms leaderAtPropose=" + isLeaderAtPropose
-                    + " leaderAtCallback=" + isLeaderAtCallback
-                    + " node=" + this.myNodeID);
+            if (logger.isLoggable(Level.FINE)) {
+                long elapsedMs = (System.nanoTime() - proposeStartNs) / 1_000_000;
+                boolean isLeaderAtCallback = this.paxosManager.isPaxosCoordinator(serviceName);
+                logger.log(Level.FINE,
+                        "AwRC propose-to-callback {0}ms leaderAtPropose={1}"
+                                + " leaderAtCallback={2} node={3}",
+                        new Object[]{elapsedMs, isLeaderAtPropose,
+                                isLeaderAtCallback, this.myNodeID});
+            }
             callback.executed(response, handled);
         };
         this.paxosManager.propose(serviceName, rcr, instrumentedCallback);

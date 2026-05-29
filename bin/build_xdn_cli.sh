@@ -34,12 +34,13 @@ function main() {
   HOST_OS="$(uname -s)"
   HOST_ARCH="$(uname -m)"
 
+  local HOST_BIN=""
   case "${HOST_OS}-${HOST_ARCH}" in
     Linux-x86_64)
-      ln -sf "${LINUX_AMD64_BIN}" "${BIN_DIR}/xdn"
+      HOST_BIN="${LINUX_AMD64_BIN}"
       ;;
     Darwin-arm64)
-      ln -sf "${DARWIN_ARM64_BIN}" "${BIN_DIR}/xdn"
+      HOST_BIN="${DARWIN_ARM64_BIN}"
       ;;
     *)
       echo "Warning: Unsupported host (${HOST_OS}/${HOST_ARCH})."
@@ -50,15 +51,27 @@ function main() {
       ;;
   esac
 
+  local SYSTEM_LINK="/usr/local/bin/xdn"
+  if [[ -n "${HOST_BIN}" ]]; then
+    ln -sf "${HOST_BIN}" "${BIN_DIR}/xdn"
+
+    # Also expose `xdn` system-wide so it resolves on $PATH without manual setup.
+    # Try without sudo first (works on CI runners and on macOS where
+    # /usr/local/bin is user-writable); fall back to sudo on Linux dev machines.
+    if ln -sf "${HOST_BIN}" "${SYSTEM_LINK}" 2>/dev/null; then
+      echo "Symlink created: ${SYSTEM_LINK} -> ${HOST_BIN}"
+    elif command -v sudo &> /dev/null && sudo ln -sf "${HOST_BIN}" "${SYSTEM_LINK}"; then
+      echo "Symlink created (with sudo): ${SYSTEM_LINK} -> ${HOST_BIN}"
+    else
+      echo "Warning: could not create ${SYSTEM_LINK}. To install manually:"
+      echo "  sudo ln -sf ${HOST_BIN} ${SYSTEM_LINK}"
+    fi
+  fi
+
   echo "Success! binaries generated:"
   echo "  ${LINUX_AMD64_BIN}"
   echo "  ${DARWIN_ARM64_BIN}"
-  echo "Alias (if supported) at ${BIN_DIR}/xdn"
-  echo ""
-  echo "To run 'xdn' from anywhere in your machine, add XDN's binary directory into your \$PATH:"
-  echo "  export PATH=$XDN_ROOT/bin/:\$PATH"
-  echo ""
-  echo "assuming \$XDN_ROOT is $XDN_ROOT"
+  echo "Alias (if supported) at ${BIN_DIR}/xdn and ${SYSTEM_LINK}"
 }
 
 main "$@"
