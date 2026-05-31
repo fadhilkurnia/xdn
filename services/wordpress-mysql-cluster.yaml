@@ -1,0 +1,36 @@
+---
+# WordPress backed by a self-clustering MySQL, as an XDN *cluster-mode* service.
+#
+# This is the multi-component shape: the stateful member (MySQL Group Replication) joins
+# the swarm overlay as replica-N and runs its own consensus, while the WordPress entry
+# sidecar shares that member's network namespace and reaches it at 127.0.0.1:3306. Contrast
+# with xdn-cli/examples/wordpress.yaml, which is the *replicated* shape (plain mysql:8.4,
+# XDN does the replication).
+#
+# Build the clustered MySQL image first:  docker build -t xdn-mysql-cluster:test services/mysql-cluster/
+# Then:                                    xdn cluster launch wordpress-mysql-cluster -f services/wordpress-mysql-cluster.yaml
+name: wordpress-mysql-cluster
+mode: cluster
+peer_port: 33061              # MySQL Group Replication group-communication port (not 3306)
+num_replicas: 3
+state: mysql:/var/lib/mysql/  # the stateful component's data dir
+components:
+  - mysql:
+      image: xdn-mysql-cluster:test
+      stateful: true          # the cluster member: joins the overlay, runs Group Replication
+      expose: 3306            # client port, reachable by the sidecar at 127.0.0.1 (shared netns)
+      environments:
+        - MYSQL_ROOT_PASSWORD: supersecret
+  - wordpress:
+      image: wordpress:6.5.4-apache
+      port: 80                # entry port, published to the host and routed by the XDN frontend
+      entry: true
+      environments:
+        - WORDPRESS_DB_HOST: 127.0.0.1   # MySQL shares this container's network namespace
+        - WORDPRESS_DB_USER: root
+        - WORDPRESS_DB_PASSWORD: supersecret
+        - WORDPRESS_DB_NAME: wordpress
+        - WORDPRESS_CONFIG_EXTRA: |
+            define('DISABLE_WP_CRON', true);
+            define('AUTOMATIC_UPDATER_DISABLED', true);
+            define('WP_AUTO_UPDATE_CORE', false);

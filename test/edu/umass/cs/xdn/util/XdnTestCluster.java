@@ -7,6 +7,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.reconfigurationutils.DefaultNodeConfig;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.utils.Shell;
+import edu.umass.cs.xdn.utils.ShellOutput;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -51,6 +52,9 @@ public class XdnTestCluster implements AutoCloseable {
   public static final Duration PORT_WAIT_TIMEOUT = Duration.ofSeconds(30);
   public static final Duration SERVICE_READY_TIMEOUT = Duration.ofSeconds(90);
   public static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+  // Cluster creates are synchronous on container startup (and may pull large images on first
+  // use), so the CREATE response can take far longer than a normal request.
+  public static final Duration CLUSTER_CREATE_TIMEOUT = Duration.ofSeconds(120);
 
   private final HttpClient httpClient =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -161,13 +165,24 @@ public class XdnTestCluster implements AutoCloseable {
       throws IOException, InterruptedException, JSONException {
 
     JSONObject serviceJson = new JSONObject();
-    serviceJson.put("name", serviceName);
     serviceJson.put("image", imageName);
     serviceJson.put("port", httpPort);
     serviceJson.put("state", stateDirectory.endsWith("/") ? stateDirectory : stateDirectory + "/");
     serviceJson.put("mode", "cluster");
     serviceJson.put("peer_port", peerPort);
     serviceJson.put("num_replicas", numReplicas);
+    launchClusterService(serviceName, serviceJson);
+  }
+
+  /**
+   * Launches a cluster service from a fully-formed spec. The spec must already carry {@code
+   * mode:cluster}, {@code peer_port}, {@code num_replicas}, and either an {@code image}
+   * (single-image cluster) or a {@code components} array (multi-component cluster, e.g. a stateful
+   * DB member plus an entry sidecar). Used by {@code XdnWordPressClusterTest}.
+   */
+  public void launchClusterService(String serviceName, JSONObject serviceJson)
+      throws IOException, InterruptedException, JSONException {
+    serviceJson.put("name", serviceName);
 
     String initialState = "xdn:init:" + serviceJson;
     String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
@@ -175,7 +190,11 @@ public class XdnTestCluster implements AutoCloseable {
         "http://%s:%d/?type=CREATE&name=%s&initial_state=%s"
             .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName, encodedInitialState);
     HttpRequest request =
-        HttpRequest.newBuilder().uri(URI.create(endpoint)).timeout(REQUEST_TIMEOUT).GET().build();
+        HttpRequest.newBuilder()
+            .uri(URI.create(endpoint))
+            .timeout(CLUSTER_CREATE_TIMEOUT)
+            .GET()
+            .build();
     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     if (response.statusCode() != 200) {
       throw new IllegalStateException(
@@ -196,13 +215,23 @@ public class XdnTestCluster implements AutoCloseable {
    * {@link #launchClusterService} when running on a CI runner that may have a fresh Docker daemon.
    */
   public static boolean ensureDockerSwarm() {
-    int state =
-        Shell.runCommand(
-            "sh -c \"docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active\"", true);
-    if (state == 0) {
+    // Detect an existing swarm by capturing the node state directly. We must NOT use a shell
+    // pipeline here ("docker info ... | grep ...") because Shell.runCommand splits the command
+    // on whitespace and runs it without a shell, so the quotes/pipe would be mangled and the
+    // check would always (wrongly) report "not a swarm". The Go-template has no spaces, so it
+    // survives the split as a single argument.
+    ShellOutput info =
+        Shell.runCommandWithOutput("docker info --format {{.Swarm.LocalNodeState}}", true);
+    if (info.exitCode == 0 && info.stdout.trim().equals("active")) {
       return true;
     }
-    return Shell.runCommand("docker swarm init", true) == 0;
+    if (Shell.runCommand("docker swarm init", true) == 0) {
+      return true;
+    }
+    // On hosts with multiple network interfaces, `docker swarm init` refuses to choose an
+    // advertise address ("could not choose an IP address ... use --advertise-addr"). Loopback
+    // is fine here: this single-node swarm exists only to enable attachable overlay networks.
+    return Shell.runCommand("docker swarm init --advertise-addr 127.0.0.1", true) == 0;
   }
 
   /**
@@ -210,8 +239,12 @@ public class XdnTestCluster implements AutoCloseable {
    * XdnClusterLaunchTest}; idempotent enough that calling it twice is harmless.
    */
   public static boolean buildEtcdClusterImage() {
-    return Shell.runCommand("docker build -t xdn-etcd-cluster:test services/etcd-cluster/", true)
-        == 0;
+    return buildImage("xdn-etcd-cluster:test", "services/etcd-cluster/");
+  }
+
+  /** Issues {@code docker build -t <tag> <contextDir>}; idempotent enough to call repeatedly. */
+  public static boolean buildImage(String tag, String contextDir) {
+    return Shell.runCommand("docker build -t " + tag + " " + contextDir, true) == 0;
   }
 
   /**

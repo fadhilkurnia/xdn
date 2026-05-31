@@ -274,9 +274,16 @@ skipped.
 - `services/etcd-cluster/` — single-image cluster (etcd), entrypoint maps
   `XDN_CLUSTER_*` → etcd's `--initial-cluster`, `--initial-cluster-state`, etc.
 - `services/rqlite-cluster/` — single-image cluster (rqlite), same pattern.
+- `services/mysql-cluster/` — self-clustering MySQL via Group Replication;
+  the entrypoint maps `XDN_CLUSTER_*` onto GR (server_id, group seeds, bootstrap
+  on ordinal 0). Unlike etcd/rqlite, MySQL has no one-flag clustering, so the
+  entrypoint clears init GTIDs and wires the recovery channel itself.
 - `services/bookcatalog-rqlite-cluster.yaml` — multi-component spec:
   `bookcatalog` (entry, talks to `127.0.0.1:4001`) + `rqlite` (stateful,
   cluster member on the overlay).
+- `services/wordpress-mysql-cluster.yaml` — multi-component spec exercising the
+  sidecar-netns path: `wordpress` (entry) + `mysql` (stateful GR member). Covered
+  by `XdnWordPressClusterTest`.
 
 **Reconfiguration is deferred** (Component 6 in the design plan). The
 `xdn:final:` cluster path in `XdnGigapaxosApp.createServiceInstance` throws
