@@ -26,8 +26,10 @@ import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import io.netty.handler.codec.http.cors.CorsConfig;
 import io.netty.handler.codec.http.cors.CorsConfigBuilder;
 import io.netty.handler.codec.http.cors.CorsHandler;
+import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.handler.timeout.ReadTimeoutException;
 import io.netty.handler.timeout.ReadTimeoutHandler;
@@ -39,6 +41,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
@@ -172,9 +175,37 @@ public class HttpActiveReplica {
         // Configure SSL.
         final SslContext sslCtx;
         if (ssl) {
-            SelfSignedCertificate ssc = new SelfSignedCertificate();
-            sslCtx = SslContextBuilder.forServer(ssc.certificate(),
-                    ssc.privateKey()).build();
+            String certChainPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.ACTIVE_REPLICA_TLS_CERT_CHAIN);
+            String privateKeyPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.ACTIVE_REPLICA_TLS_PRIVATE_KEY);
+            SslContextBuilder sslBuilder;
+            if (certChainPath != null && !certChainPath.isEmpty()
+                    && privateKeyPath != null && !privateKeyPath.isEmpty()) {
+                // Real (e.g., Let's Encrypt) certificate: PEM fullchain + private key.
+                sslBuilder = SslContextBuilder.forServer(
+                        new File(certChainPath), new File(privateKeyPath));
+                logger.log(Level.INFO,
+                        "HttpActiveReplica terminating TLS with cert chain {0}",
+                        new Object[]{certChainPath});
+            } else {
+                // Fallback: ephemeral self-signed cert (browsers will not trust it).
+                SelfSignedCertificate ssc = new SelfSignedCertificate();
+                sslBuilder = SslContextBuilder.forServer(
+                        ssc.certificate(), ssc.privateKey());
+                logger.log(Level.WARNING,
+                        "HttpActiveReplica TLS enabled but no cert configured; "
+                                + "using an untrusted self-signed certificate");
+            }
+            // Prefer native OpenSSL/BoringSSL (netty-tcnative) for TLS throughput;
+            // fall back to the JDK provider when the native lib is unavailable.
+            if (OpenSsl.isAvailable()) {
+                sslBuilder.sslProvider(SslProvider.OPENSSL);
+                logger.log(Level.INFO, "HttpActiveReplica TLS provider: OpenSSL");
+            } else {
+                logger.log(Level.INFO, "HttpActiveReplica TLS provider: JDK (tcnative unavailable)");
+            }
+            sslCtx = sslBuilder.build();
         } else {
             sslCtx = null;
         }
@@ -247,6 +278,13 @@ public class HttpActiveReplica {
             // Listen at port 80 if ENABLE_ACTIVE_REPLICA_HTTP_PORT_80 is true.
             if (Config.getGlobalBoolean(ReconfigurationConfig.RC.ENABLE_ACTIVE_REPLICA_HTTP_PORT_80)) {
                 sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
+            }
+            // When terminating TLS in-process, bind the configured HTTPS port
+            // (default 443) instead of the cleartext offset/80 port.
+            if (ssl) {
+                int httpsPort = Config.getGlobalInt(
+                        ReconfigurationConfig.RC.ACTIVE_REPLICA_HTTPS_PORT);
+                sockAddr = new InetSocketAddress(sockAddr.getAddress(), httpsPort);
             }
             Channel channel = b.bind(sockAddr).sync().channel();
 
