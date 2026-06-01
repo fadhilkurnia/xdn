@@ -20,5 +20,42 @@ NODE_ID=${node_id}
 JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
 NODEID
 
+# --- Caddy: terminate TLS for *.<base_domain> and reverse-proxy to the local
+#     XDN HTTP frontend. With ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false the
+#     frontend binds 0.0.0.0:${upstream_port}, leaving :80 (redirect) and :443
+#     (TLS) for Caddy. The wildcard cert is obtained via DNS-01 over Route53
+#     (creds come from the instance profile), so issuance never depends on which
+#     AR the geo-DNS routes Let's Encrypt to. ---
+install -d -m 0755 /opt/xdn/conf
+cat > /opt/xdn/conf/Caddyfile <<'CADDY'
+{
+%{ if acme_email != "" ~}
+    email ${acme_email}
+%{ endif ~}
+    acme_ca ${acme_ca}
+}
+
+*.${base_domain} {
+    tls {
+        dns route53 {
+            max_retries 20
+        }
+        resolvers 1.1.1.1
+    }
+    reverse_proxy 127.0.0.1:${upstream_port}
+}
+CADDY
+
+# Caddy runs as root with no HOME, so certmagic would scatter its cert/key
+# storage under ./caddy (cwd). Pin a stable storage root and the SDK region;
+# both are read by the caddy.service EnvironmentFile.
+install -d -m 0700 /var/lib/caddy
+cat > /opt/xdn/conf/caddy.env <<'CADDYENV'
+AWS_REGION=${aws_region}
+HOME=/var/lib/caddy
+XDG_DATA_HOME=/var/lib/caddy
+XDG_CONFIG_HOME=/var/lib/caddy
+CADDYENV
+
 systemctl daemon-reload
-systemctl start xdn-ar
+systemctl start xdn-ar caddy

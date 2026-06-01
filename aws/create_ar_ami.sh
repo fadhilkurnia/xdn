@@ -66,11 +66,47 @@ done
 
 # allow non-root mounts to expose files to other users (bin/xdnd:539)
 sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+
+# --- Caddy (HTTPS termination): a custom build that bundles the route53 DNS-01
+#     provider, fetched from Caddy's download API (no Go/xcaddy needed here).
+#     Per-deployment config (Caddyfile) is injected at launch by user_data. ---
+sudo curl -fsSL -o /opt/xdn/bin/caddy \
+  "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/route53"
+sudo chmod +x /opt/xdn/bin/caddy
+sudo ln -sf /opt/xdn/bin/caddy /usr/local/bin/caddy
 EOF
 
   emit_prestage_helper
   emit_ar_unit
-  emit_finalize "xdn-ar.service"
+  emit_caddy_unit
+  emit_finalize "xdn-ar.service caddy.service"
+}
+
+# emit_caddy_unit - install the Caddy systemd unit. Runs as root (matches the
+# other XDN units) so it can bind :80/:443. ConditionPathExists keeps it inert
+# until launch-time user_data writes the Caddyfile.
+emit_caddy_unit() {
+  cat <<'EOF'
+sudo tee /etc/systemd/system/caddy.service >/dev/null <<'UNIT'
+[Unit]
+Description=Caddy (TLS termination + reverse proxy for *.<domain>)
+After=network-online.target xdn-ar.service
+Wants=network-online.target
+ConditionPathExists=/opt/xdn/conf/Caddyfile
+
+[Service]
+Type=notify
+EnvironmentFile=/opt/xdn/conf/caddy.env
+ExecStart=/opt/xdn/bin/caddy run --environ --config /opt/xdn/conf/Caddyfile --adapter caddyfile
+ExecReload=/opt/xdn/bin/caddy reload --config /opt/xdn/conf/Caddyfile --adapter caddyfile --force
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+EOF
 }
 
 # emit_ar_unit - install the AR systemd unit. Runs as root for Docker access

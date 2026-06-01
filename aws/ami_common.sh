@@ -249,7 +249,7 @@ common_cleanup() {
   ssh_remote 'bash -s' <<'EOF'
 set -e
 # stop anything we may have started; ignore if not present
-sudo systemctl stop xdn-rc xdn-dns xdn-ar 2>/dev/null || true
+sudo systemctl stop xdn-rc xdn-dns xdn-ar caddy 2>/dev/null || true
 # drop the source clone and build caches
 rm -rf "$HOME/xdn" "$HOME/go" "$HOME/.cargo" "$HOME/.rustup" 2>/dev/null || true
 go clean -cache -modcache 2>/dev/null || true

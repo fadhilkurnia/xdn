@@ -131,6 +131,19 @@ resource "aws_security_group" "allow_ssh_ipv6" {
     ipv6_cidr_blocks = ["::/0"]
   }
 
+  # Rule B3b: AR data-plane HTTPS frontend. Caddy on each AR terminates TLS for
+  #           <service>.xdnapp.com (wildcard *.xdnapp.com cert from Let's Encrypt)
+  #           and reverse-proxies to the local XDN HTTP frontend. The :80 rule
+  #           above stays open so Caddy can 301-redirect HTTP->HTTPS.
+  ingress {
+    description      = "HTTPS service traffic to ActiveReplicas"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
   # Rule B4: RC control-plane API (xdn-cli contacts cp.xdnapp.com:3300)
   ingress {
     description      = "XDN control-plane API on the RC"
@@ -197,7 +210,7 @@ variable "rc_ami" {
 variable "ar_ami" {
   description = "AMI for the ActiveReplica (AR) edge nodes."
   type        = string
-  default     = "ami-049eaacc453e1f0ae"
+  default     = "ami-02037dbf544575eef"
 }
 
 variable "ar_count" {
@@ -206,11 +219,35 @@ variable "ar_count" {
   default     = 3
 }
 
+# --- HTTPS / Let's Encrypt (Caddy on the ARs) ---
+variable "base_domain" {
+  description = "Apex domain served by coredns; Caddy obtains a wildcard *.<base_domain> cert so every <service>.<base_domain> is reachable over HTTPS."
+  type        = string
+  default     = "xdnapp.com"
+}
+
+variable "acme_email" {
+  description = "Contact email for the Let's Encrypt ACME account (expiry notices). Empty registers anonymously."
+  type        = string
+  default     = ""
+}
+
+variable "acme_ca" {
+  description = "ACME CA directory endpoint. Defaults to Let's Encrypt PRODUCTION. While testing, set to the staging endpoint (https://acme-staging-v02.api.letsencrypt.org/directory) to avoid burning the strict prod rate limits on the wildcard."
+  type        = string
+  default     = "https://acme-v02.api.letsencrypt.org/directory"
+}
+
 # Static private IPs make the full cluster view known at plan time, so the
 # user_data templates can reference every node without resource cycles.
 locals {
   rc_private_ip  = "10.0.1.10" # in subnet[0] = 10.0.1.0/24
   ar_private_ips = [for i in range(var.ar_count) : "10.0.${i + 2}.10"]
+
+  # Clear HTTP port the XDN frontend binds on each AR when PORT_80=false:
+  # the AR's gigapaxos listen port (2000, from active.N below) + HTTP_PORT_OFFSET
+  # (300). Caddy reverse-proxies to 127.0.0.1 on this port.
+  ar_http_upstream_port = 2300
 
   # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
   # Nodes advertise their PUBLIC Elastic IPs so that coredns returns
@@ -224,10 +261,13 @@ locals {
     "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
-    # AR data-plane HTTP frontend on port 80 (the RC ignores these flags; the
-    # frontend is gated off for reconfigurators in ActiveReplica.java).
+    # AR data-plane HTTP frontend (the RC ignores these flags; the frontend is
+    # gated off for reconfigurators in ActiveReplica.java). PORT_80 is FALSE so
+    # the frontend binds its offset clear port (active 2000 + HTTP_PORT_OFFSET
+    # 300 = 2300, on 0.0.0.0) instead of :80. That frees :80/:443 for Caddy,
+    # which terminates TLS and reverse-proxies to 127.0.0.1:${local.ar_http_upstream_port}.
     "ENABLE_ACTIVE_REPLICA_HTTP=true",
-    "ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=true",
+    "ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false",
     # RC control-plane API on :3300, which xdn-cli + coredns depend on
     # (default true; set explicitly for clarity).
     "ENABLE_RECONFIGURATOR_HTTP=true",
@@ -253,6 +293,10 @@ resource "aws_instance" "rc" {
   user_data = templatefile("${path.module}/rc-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     rc_eip               = aws_eip.rc.public_ip
+    base_domain          = var.base_domain
+    # NS records of the delegated _acme-challenge zone; coredns refers ACME
+    # resolvers here so Caddy's DNS-01 TXT (written in Route53) is reachable.
+    acme_ns = aws_route53_zone.acme.name_servers
   })
 
   root_block_device {
@@ -273,6 +317,9 @@ resource "aws_instance" "ar" {
   vpc_security_group_ids = [aws_security_group.allow_ssh_ipv6.id]
   key_name               = aws_key_pair.deployer.key_name
 
+  # Lets the baked Caddy answer the ACME DNS-01 challenge via Route53 (no keys).
+  iam_instance_profile = aws_iam_instance_profile.ar_acme.name
+
   # Bootstrap: drop config + a unique numeric node id (1..N) so the baked
   # xdn-ar unit starts. The RC is node 0; ARs continue from 1.
   # Replace on config change so cloud-init re-runs with the new properties.
@@ -280,6 +327,11 @@ resource "aws_instance" "ar" {
   user_data = templatefile("${path.module}/ar-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     node_id              = count.index + 1
+    base_domain          = var.base_domain
+    upstream_port        = local.ar_http_upstream_port
+    acme_email           = var.acme_email
+    acme_ca              = var.acme_ca
+    aws_region           = "us-east-1"
   })
 
   root_block_device {
@@ -320,6 +372,70 @@ resource "aws_eip_association" "ar" {
   allocation_id = aws_eip.ar[count.index].id
 }
 
+# 10c. ACME DNS-01 delegation zone.
+#      coredns (the xdn plugin) is authoritative for the apex and only knows how
+#      to answer A queries for service names -- it cannot serve the dynamic
+#      _acme-challenge TXT that Let's Encrypt needs for a wildcard. So we host
+#      ONLY _acme-challenge.<base_domain> in Route53 and delegate to it from the
+#      coredns zone file (see rc-userdata.tftpl). Caddy on each AR writes the
+#      challenge TXT here via the AWS API; LE follows the coredns NS referral to
+#      Route53 to read it. The apex stays on coredns (geo-routing untouched).
+resource "aws_route53_zone" "acme" {
+  name    = "_acme-challenge.${var.base_domain}"
+  comment = "ACME DNS-01 challenge records for the *.${var.base_domain} wildcard (delegated from coredns)."
+}
+
+# 10d. Instance role so each AR's Caddy can write the challenge TXT into the zone
+#      above using the EC2 instance profile (no static keys on the hosts).
+data "aws_iam_policy_document" "ar_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ar_acme" {
+  name               = "xdn-ar-acme-route53"
+  assume_role_policy = data.aws_iam_policy_document.ar_assume.json
+}
+
+data "aws_iam_policy_document" "ar_acme" {
+  # Zone discovery (libdns route53 finds the hosted zone by name).
+  statement {
+    actions   = ["route53:ListHostedZones", "route53:ListHostedZonesByName"]
+    resources = ["*"]
+  }
+  # Poll until the change is INSYNC.
+  statement {
+    actions   = ["route53:GetChange"]
+    resources = ["arn:aws:route53:::change/*"]
+  }
+  # Read/write the TXT, scoped to the delegated challenge zone only -- the ARs
+  # cannot touch the geo-routing records (those live in coredns) or any other zone.
+  statement {
+    actions = [
+      "route53:ChangeResourceRecordSets",
+      "route53:ListResourceRecordSets",
+      "route53:GetHostedZone",
+    ]
+    resources = ["arn:aws:route53:::hostedzone/${aws_route53_zone.acme.zone_id}"]
+  }
+}
+
+resource "aws_iam_role_policy" "ar_acme" {
+  name   = "xdn-ar-acme-route53"
+  role   = aws_iam_role.ar_acme.id
+  policy = data.aws_iam_policy_document.ar_acme.json
+}
+
+resource "aws_iam_instance_profile" "ar_acme" {
+  name = "xdn-ar-acme-route53"
+  role = aws_iam_role.ar_acme.name
+}
+
 # 11. Delegate the xdnapp.com zone to coredns on the RC.
 #     coredns is authoritative for the whole zone and self-serves its own
 #     ns1/ns2 glue (see xdn-dns/plugin/xdn/xdn.go). Both nameservers point to
@@ -356,4 +472,9 @@ output "cluster_node_addresses" {
     { for i in range(var.ar_count) : tostring(i + 1) => "${aws_eip.ar[i].public_ip} (AR)" },
   )
   description = "Numeric node id -> PUBLIC address advertised in gigapaxos.properties (node 0 is the RC)."
+}
+
+output "acme_delegation_ns" {
+  value       = aws_route53_zone.acme.name_servers
+  description = "Route53 nameservers for the delegated _acme-challenge zone. coredns refers ACME resolvers here; verify with: dig +short NS _acme-challenge.<base_domain> @<rc_elastic_ip>"
 }
