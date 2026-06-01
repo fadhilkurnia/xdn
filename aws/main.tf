@@ -144,6 +144,23 @@ resource "aws_security_group" "allow_ssh_ipv6" {
     ipv6_cidr_blocks = ["::/0"]
   }
 
+  # Rule B3c: AR data-plane HTTP frontend on its offset port (2300, since
+  #           ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false). Clients normally reach
+  #           services via Caddy on :443, but `xdn-cli service info` and direct
+  #           per-replica addressing probe each replica's frontend BY IP at the
+  #           HTTP_ADDRESS port the control plane advertises (this port). Without
+  #           this rule those probes time out from outside the cluster and every
+  #           replica shows "unreachable". This is plaintext (same exposure class
+  #           as the legacy :80 frontend); the geo-DNS service URL stays on TLS.
+  ingress {
+    description      = "XDN per-replica HTTP frontend (xdn-cli service info / direct replica access)"
+    from_port        = 2300
+    to_port          = 2300
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
   # Rule B4: RC control-plane API (xdn-cli contacts cp.xdnapp.com:3300)
   ingress {
     description      = "XDN control-plane API on the RC"
