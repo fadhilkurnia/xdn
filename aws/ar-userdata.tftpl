@@ -1,14 +1,26 @@
 #!/bin/bash
 # Launch-time bootstrap for an XDN ActiveReplica (AR) node.
-# Writes the per-deployment config + this node's unique id, then starts the
-# baked, ConditionPathExists-gated xdn-ar unit.
+# Writes the per-deployment config + this node's unique id, brings up Caddy as a
+# cert-only manager (DNS-01 -> PEM), then starts the baked xdn-ar unit which now
+# terminates TLS itself on :443 (no reverse-proxy hop).
 set -euo pipefail
 
-install -d -m 0755 /opt/xdn/conf
+install -d -m 0755 /opt/xdn/conf /opt/xdn/conf/tls
 
 cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
 ${gigapaxos_properties}
 PROPS
+
+# AR-only TLS settings (appended here, NOT in the shared cluster properties, so
+# the RC's config is byte-identical and the RC is never replaced). The patched
+# frontend terminates TLS on :443 using the wildcard PEM that xdn-tls-sync drops
+# at /opt/xdn/conf/tls/. The RC would ignore these keys anyway (unknown enums).
+cat >> /opt/xdn/conf/gigapaxos.properties <<'TLSPROPS'
+ENABLE_ACTIVE_REPLICA_HTTPS=true
+ACTIVE_REPLICA_HTTPS_PORT=443
+ACTIVE_REPLICA_TLS_CERT_CHAIN=/opt/xdn/conf/tls/fullchain.pem
+ACTIVE_REPLICA_TLS_PRIVATE_KEY=/opt/xdn/conf/tls/privkey.pem
+TLSPROPS
 
 # node id + JVM opts. JAVA_TOOL_OPTIONS forces the IPv4 stack: gigapaxos
 # RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this dual-stack
@@ -20,19 +32,21 @@ NODE_ID=${node_id}
 JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
 NODEID
 
-# --- Caddy: terminate TLS for *.<base_domain> and reverse-proxy to the local
-#     XDN HTTP frontend. With ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false the
-#     frontend binds 0.0.0.0:${upstream_port}, leaving :80 (redirect) and :443
-#     (TLS) for Caddy. The wildcard cert is obtained via DNS-01 over Route53
-#     (creds come from the instance profile), so issuance never depends on which
-#     AR the geo-DNS routes Let's Encrypt to. ---
-install -d -m 0755 /opt/xdn/conf
+# --- Caddy in CERT-ONLY mode. It obtains + auto-renews the wildcard
+#     *.${base_domain} cert via ACME DNS-01 over Route53 (creds from the instance
+#     profile), but does NOT serve the data plane: its HTTP/HTTPS listeners are
+#     moved to unused high ports (8080/8443) so the XDN frontend can own :443.
+#     xdn-tls-sync (below) copies the issued PEM to /opt/xdn/conf/tls/ where the
+#     frontend loads it. ---
+install -d -m 0700 /var/lib/caddy
 cat > /opt/xdn/conf/Caddyfile <<'CADDY'
 {
 %{ if acme_email != "" ~}
     email ${acme_email}
 %{ endif ~}
     acme_ca ${acme_ca}
+    http_port 8080
+    https_port 8443
 }
 
 *.${base_domain} {
@@ -42,14 +56,12 @@ cat > /opt/xdn/conf/Caddyfile <<'CADDY'
         }
         resolvers 1.1.1.1
     }
-    reverse_proxy 127.0.0.1:${upstream_port}
+    respond "xdn cert manager" 200
 }
 CADDY
 
-# Caddy runs as root with no HOME, so certmagic would scatter its cert/key
-# storage under ./caddy (cwd). Pin a stable storage root and the SDK region;
-# both are read by the caddy.service EnvironmentFile.
-install -d -m 0700 /var/lib/caddy
+# Region for the AWS SDK + a stable cert-storage root (Caddy runs as root with
+# no HOME, so certmagic would otherwise scatter storage under ./caddy).
 cat > /opt/xdn/conf/caddy.env <<'CADDYENV'
 AWS_REGION=${aws_region}
 HOME=/var/lib/caddy
@@ -57,5 +69,48 @@ XDG_DATA_HOME=/var/lib/caddy
 XDG_CONFIG_HOME=/var/lib/caddy
 CADDYENV
 
+# Cert-sync helper: copy Caddy's issued wildcard PEM to the stable path the
+# frontend loads, converting the key to PKCS#8 (Caddy emits SEC1 "EC PRIVATE
+# KEY" which Netty/JDK can't parse). Written here (overriding the baked copy)
+# so the running fleet gets the fix without an AMI rebuild; the baked timer
+# re-invokes this same path on renewal.
+cat > /opt/xdn/bin/xdn-tls-sync.sh <<'SYNC'
+#!/usr/bin/env bash
+set -euo pipefail
+shopt -s nullglob
+crt=""
+for f in /var/lib/caddy/caddy/certificates/*/wildcard_.*/wildcard_.*.crt; do crt="$f"; done
+if [ -z "$crt" ]; then echo "xdn-tls-sync: no wildcard cert issued yet" >&2; exit 1; fi
+key="$${crt%.crt}.key"
+[ -f "$key" ] || { echo "xdn-tls-sync: missing key for $crt" >&2; exit 1; }
+dst=/opt/xdn/conf/tls
+install -d -m 0755 "$dst"
+changed=0
+cmp -s "$crt" "$dst/.src.crt" || changed=1
+cmp -s "$key" "$dst/.src.key" || changed=1
+if [ "$changed" = 1 ]; then
+  install -m 0644 "$crt" "$dst/.src.crt"
+  install -m 0600 "$key" "$dst/.src.key"
+  install -m 0644 "$crt" "$dst/fullchain.pem"
+  openssl pkcs8 -topk8 -nocrypt -in "$dst/.src.key" -out "$dst/privkey.pem"
+  chmod 600 "$dst/privkey.pem"
+  echo "xdn-tls-sync: updated $dst (PKCS#8) from $crt"
+  systemctl try-restart xdn-ar 2>/dev/null || true
+fi
+SYNC
+chmod +x /opt/xdn/bin/xdn-tls-sync.sh
+
 systemctl daemon-reload
-systemctl start xdn-ar caddy
+systemctl start caddy
+
+# Sync the freshly issued wildcard PEM into the stable path the frontend reads,
+# waiting for Caddy's first issuance. The baked xdn-tls-sync.timer keeps it in
+# sync across renewals (and restarts xdn-ar when the cert changes).
+for i in $(seq 1 60); do
+  if /opt/xdn/bin/xdn-tls-sync.sh; then break; fi
+  sleep 5
+done
+systemctl start xdn-tls-sync.timer
+
+# Start the frontend (gated on /opt/xdn/conf/tls/fullchain.pem, now present).
+systemctl start xdn-ar

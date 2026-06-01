@@ -227,7 +227,7 @@ variable "rc_ami" {
 variable "ar_ami" {
   description = "AMI for the ActiveReplica (AR) edge nodes."
   type        = string
-  default     = "ami-02037dbf544575eef"
+  default     = "ami-0beb9798e469f1fc7"
 }
 
 variable "ar_count" {
@@ -261,11 +261,6 @@ locals {
   rc_private_ip  = "10.0.1.10" # in subnet[0] = 10.0.1.0/24
   ar_private_ips = [for i in range(var.ar_count) : "10.0.${i + 2}.10"]
 
-  # Clear HTTP port the XDN frontend binds on each AR when PORT_80=false:
-  # the AR's gigapaxos listen port (2000, from active.N below) + HTTP_PORT_OFFSET
-  # (300). Caddy reverse-proxies to 127.0.0.1 on this port.
-  ar_http_upstream_port = 2300
-
   # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
   # Nodes advertise their PUBLIC Elastic IPs so that coredns returns
   # client-reachable addresses for <service>.xdnapp.com (and geo-routing works on
@@ -278,11 +273,11 @@ locals {
     "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
-    # AR data-plane HTTP frontend (the RC ignores these flags; the frontend is
-    # gated off for reconfigurators in ActiveReplica.java). PORT_80 is FALSE so
-    # the frontend binds its offset clear port (active 2000 + HTTP_PORT_OFFSET
-    # 300 = 2300, on 0.0.0.0) instead of :80. That frees :80/:443 for Caddy,
-    # which terminates TLS and reverse-proxies to 127.0.0.1:${local.ar_http_upstream_port}.
+    # AR data-plane HTTP frontend (the RC ignores these flags; gated off for
+    # reconfigurators in ActiveReplica.java). The frontend terminates TLS itself
+    # (Netty + BoringSSL) directly on :443 -- no reverse-proxy hop. The HTTPS
+    # flags + cert paths are appended PER-AR in ar-userdata.tftpl (not here) so
+    # the RC's shared properties are untouched and the RC isn't replaced.
     "ENABLE_ACTIVE_REPLICA_HTTP=true",
     "ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false",
     # RC control-plane API on :3300, which xdn-cli + coredns depend on
@@ -345,7 +340,6 @@ resource "aws_instance" "ar" {
     gigapaxos_properties = local.gigapaxos_properties
     node_id              = count.index + 1
     base_domain          = var.base_domain
-    upstream_port        = local.ar_http_upstream_port
     acme_email           = var.acme_email
     acme_ca              = var.acme_ca
     aws_region           = "us-east-1"
