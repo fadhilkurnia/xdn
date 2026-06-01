@@ -4,11 +4,27 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    # Obtains the wildcard cert ONCE via ACME DNS-01 and keeps it in TF state,
+    # so AR replacements reuse it (no re-issuance -> no LE rate-limit burn).
+    acme = {
+      source  = "vancluever/acme"
+      version = "~> 2.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
 provider "aws" {
   region = "us-east-1"
+}
+
+provider "acme" {
+  # Directory endpoint (var.acme_ca): LE production by default, staging while
+  # testing. Same var the rest of the config uses.
+  server_url = var.acme_ca
 }
 
 # 1. Fetch available zones (filtering out the older zone 'e')
@@ -339,10 +355,12 @@ resource "aws_instance" "ar" {
   user_data = templatefile("${path.module}/ar-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     node_id              = count.index + 1
-    base_domain          = var.base_domain
-    acme_email           = var.acme_email
-    acme_ca              = var.acme_ca
     aws_region           = "us-east-1"
+    # Cert is issued once by Terraform (acme_certificate) and stashed in S3; the
+    # AR pulls it on boot/renewal. No per-AR issuance -> no rate-limit burn.
+    tls_bucket    = aws_s3_bucket.tls.id
+    fullchain_key = aws_s3_object.fullchain.key
+    privkey_key   = aws_s3_object.privkey.key
   })
 
   root_block_device {
@@ -434,6 +452,11 @@ data "aws_iam_policy_document" "ar_acme" {
     ]
     resources = ["arn:aws:route53:::hostedzone/${aws_route53_zone.acme.zone_id}"]
   }
+  # Pull the Terraform-issued wildcard cert (PEM) from the cert store on boot.
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.tls.arn}/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "ar_acme" {
@@ -445,6 +468,89 @@ resource "aws_iam_role_policy" "ar_acme" {
 resource "aws_iam_instance_profile" "ar_acme" {
   name = "xdn-ar-acme-route53"
   role = aws_iam_role.ar_acme.name
+}
+
+# 10e. Wildcard certificate, issued ONCE by Terraform via ACME DNS-01 and kept
+#      in state, so AR replacements reuse it instead of re-issuing (which would
+#      burn the Let's Encrypt rate limit). Terraform renews only on apply when
+#      within min_days_remaining of expiry. The DNS-01 TXT is written into the
+#      delegated Route53 zone (10c) using Terraform's own AWS creds; LE validates
+#      it through the coredns delegation, exactly like before.
+resource "tls_private_key" "acme_account" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "acme_registration" "reg" {
+  account_key_pem = tls_private_key.acme_account.private_key_pem
+  email_address   = var.acme_email
+}
+
+resource "acme_certificate" "wildcard" {
+  account_key_pem    = acme_registration.reg.account_key_pem
+  common_name        = "*.${var.base_domain}"
+  min_days_remaining = 30
+
+  dns_challenge {
+    provider = "route53"
+    # lego's route53 solver reads AWS creds from Terraform's environment; pin the
+    # region. It writes the TXT into the _acme-challenge.<base_domain> zone (10c).
+    config = {
+      AWS_REGION = "us-east-1"
+    }
+  }
+
+  # Validation resolves _acme-challenge through coredns -> Route53, so the RC
+  # (coredns) must be reachable. On a fully cold apply this may need a re-apply
+  # if coredns isn't serving yet; on AR-only applies the cert is reused from state.
+  depends_on = [
+    aws_route53_zone.acme,
+    aws_route53domains_registered_domain.xdnapp,
+    aws_eip_association.rc,
+  ]
+}
+
+# 10f. Durable cert store. Terraform writes the issued PEM here; ARs pull it on
+#      boot (and hourly, to pick up renewals). This is what makes the cert
+#      survive instance replacement without re-issuing.
+resource "aws_s3_bucket" "tls" {
+  bucket_prefix = "xdn-tls-"
+  force_destroy = true
+  tags          = { Name = "xdn-tls-store" }
+}
+
+resource "aws_s3_bucket_public_access_block" "tls" {
+  bucket                  = aws_s3_bucket.tls.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "tls" {
+  bucket = aws_s3_bucket.tls.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# fullchain = leaf + issuer chain (what Netty's SslContextBuilder wants).
+resource "aws_s3_object" "fullchain" {
+  bucket       = aws_s3_bucket.tls.id
+  key          = "wildcard/fullchain.pem"
+  content      = "${acme_certificate.wildcard.certificate_pem}${acme_certificate.wildcard.issuer_pem}"
+  content_type = "application/x-pem-file"
+  etag         = md5("${acme_certificate.wildcard.certificate_pem}${acme_certificate.wildcard.issuer_pem}")
+}
+
+resource "aws_s3_object" "privkey" {
+  bucket       = aws_s3_bucket.tls.id
+  key          = "wildcard/privkey.pem"
+  content      = acme_certificate.wildcard.private_key_pem
+  content_type = "application/x-pem-file"
+  etag         = md5(acme_certificate.wildcard.private_key_pem)
 }
 
 # 11. Delegate the xdnapp.com zone to coredns on the RC.

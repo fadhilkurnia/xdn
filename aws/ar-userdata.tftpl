@@ -1,8 +1,8 @@
 #!/bin/bash
 # Launch-time bootstrap for an XDN ActiveReplica (AR) node.
-# Writes the per-deployment config + this node's unique id, brings up Caddy as a
-# cert-only manager (DNS-01 -> PEM), then starts the baked xdn-ar unit which now
-# terminates TLS itself on :443 (no reverse-proxy hop).
+# Pulls the Terraform-issued wildcard cert from S3 (no per-AR ACME issuance, so
+# instance replacement never burns the Let's Encrypt rate limit), then starts
+# the baked xdn-ar unit which terminates TLS itself on :443 (no proxy hop).
 set -euo pipefail
 
 install -d -m 0755 /opt/xdn/conf /opt/xdn/conf/tls
@@ -12,9 +12,8 @@ ${gigapaxos_properties}
 PROPS
 
 # AR-only TLS settings (appended here, NOT in the shared cluster properties, so
-# the RC's config is byte-identical and the RC is never replaced). The patched
-# frontend terminates TLS on :443 using the wildcard PEM that xdn-tls-sync drops
-# at /opt/xdn/conf/tls/. The RC would ignore these keys anyway (unknown enums).
+# the RC config is byte-identical and the RC is never replaced). The patched
+# frontend terminates TLS on :443 using the wildcard PEM pulled to /opt/xdn/conf/tls/.
 cat >> /opt/xdn/conf/gigapaxos.properties <<'TLSPROPS'
 ENABLE_ACTIVE_REPLICA_HTTPS=true
 ACTIVE_REPLICA_HTTPS_PORT=443
@@ -26,91 +25,76 @@ TLSPROPS
 # RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this dual-stack
 # VPC the wildcard bind fallback (the public EIP is not bindable) would be IPv6
 # (16 bytes), breaking Paxos packet serialization (AssertionError "N != M").
-# The xdn-ar unit reads this file via EnvironmentFile, so the JVM picks it up.
 cat > /opt/xdn/conf/node-id <<'NODEID'
 NODE_ID=${node_id}
 JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
 NODEID
 
-# --- Caddy in CERT-ONLY mode. It obtains + auto-renews the wildcard
-#     *.${base_domain} cert via ACME DNS-01 over Route53 (creds from the instance
-#     profile), but does NOT serve the data plane: its HTTP/HTTPS listeners are
-#     moved to unused high ports (8080/8443) so the XDN frontend can own :443.
-#     xdn-tls-sync (below) copies the issued PEM to /opt/xdn/conf/tls/ where the
-#     frontend loads it. ---
-install -d -m 0700 /var/lib/caddy
-cat > /opt/xdn/conf/Caddyfile <<'CADDY'
-{
-%{ if acme_email != "" ~}
-    email ${acme_email}
-%{ endif ~}
-    acme_ca ${acme_ca}
-    http_port 8080
-    https_port 8443
-}
+# AWS CLI is needed to pull the cert from S3 (not baked into the current AMI).
+# Ubuntu 24.04 dropped the apt `awscli` package, so use the official v2 bundle.
+if ! command -v aws >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y unzip curl
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  ( cd /tmp && unzip -oq awscliv2.zip && ./aws/install )
+  rm -rf /tmp/awscliv2.zip /tmp/aws
+fi
 
-*.${base_domain} {
-    tls {
-        dns route53 {
-            max_retries 20
-        }
-        resolvers 1.1.1.1
-    }
-    respond "xdn cert manager" 200
-}
-CADDY
-
-# Region for the AWS SDK + a stable cert-storage root (Caddy runs as root with
-# no HOME, so certmagic would otherwise scatter storage under ./caddy).
-cat > /opt/xdn/conf/caddy.env <<'CADDYENV'
-AWS_REGION=${aws_region}
-HOME=/var/lib/caddy
-XDG_DATA_HOME=/var/lib/caddy
-XDG_CONFIG_HOME=/var/lib/caddy
-CADDYENV
-
-# Cert-sync helper: copy Caddy's issued wildcard PEM to the stable path the
-# frontend loads, converting the key to PKCS#8 (Caddy emits SEC1 "EC PRIVATE
-# KEY" which Netty/JDK can't parse). Written here (overriding the baked copy)
-# so the running fleet gets the fix without an AMI rebuild; the baked timer
-# re-invokes this same path on renewal.
-cat > /opt/xdn/bin/xdn-tls-sync.sh <<'SYNC'
+# Cert-pull helper: download the wildcard PEM that Terraform's acme_certificate
+# issued once and stored in S3, converting the key to PKCS#8 (Netty/JDK can't
+# parse PKCS#1/SEC1). A timer re-pulls hourly so a Terraform-driven renewal
+# (new S3 object) propagates to the running fleet.
+cat > /opt/xdn/bin/xdn-tls-pull.sh <<'PULL'
 #!/usr/bin/env bash
 set -euo pipefail
-shopt -s nullglob
-crt=""
-for f in /var/lib/caddy/caddy/certificates/*/wildcard_.*/wildcard_.*.crt; do crt="$f"; done
-if [ -z "$crt" ]; then echo "xdn-tls-sync: no wildcard cert issued yet" >&2; exit 1; fi
-key="$${crt%.crt}.key"
-[ -f "$key" ] || { echo "xdn-tls-sync: missing key for $crt" >&2; exit 1; }
+export AWS_REGION="${aws_region}"
+b="${tls_bucket}"
 dst=/opt/xdn/conf/tls
 install -d -m 0755 "$dst"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+aws s3 cp "s3://$b/${fullchain_key}" "$tmp/fullchain.pem" --quiet
+aws s3 cp "s3://$b/${privkey_key}"  "$tmp/src.key"      --quiet
+openssl pkcs8 -topk8 -nocrypt -in "$tmp/src.key" -out "$tmp/privkey.pem"
 changed=0
-cmp -s "$crt" "$dst/.src.crt" || changed=1
-cmp -s "$key" "$dst/.src.key" || changed=1
+cmp -s "$tmp/fullchain.pem" "$dst/fullchain.pem" || changed=1
+cmp -s "$tmp/privkey.pem"  "$dst/privkey.pem"   || changed=1
 if [ "$changed" = 1 ]; then
-  install -m 0644 "$crt" "$dst/.src.crt"
-  install -m 0600 "$key" "$dst/.src.key"
-  install -m 0644 "$crt" "$dst/fullchain.pem"
-  openssl pkcs8 -topk8 -nocrypt -in "$dst/.src.key" -out "$dst/privkey.pem"
-  chmod 600 "$dst/privkey.pem"
-  echo "xdn-tls-sync: updated $dst (PKCS#8) from $crt"
+  install -m 0644 "$tmp/fullchain.pem" "$dst/fullchain.pem"
+  install -m 0600 "$tmp/privkey.pem"  "$dst/privkey.pem"
+  echo "xdn-tls-pull: updated cert from s3://$b"
   systemctl try-restart xdn-ar 2>/dev/null || true
 fi
-SYNC
-chmod +x /opt/xdn/bin/xdn-tls-sync.sh
+PULL
+chmod +x /opt/xdn/bin/xdn-tls-pull.sh
 
-systemctl daemon-reload
-systemctl start caddy
-
-# Sync the freshly issued wildcard PEM into the stable path the frontend reads,
-# waiting for Caddy's first issuance. The baked xdn-tls-sync.timer keeps it in
-# sync across renewals (and restarts xdn-ar when the cert changes).
-for i in $(seq 1 60); do
-  if /opt/xdn/bin/xdn-tls-sync.sh; then break; fi
+# Pull the cert now (retry until the S3 objects are readable).
+for i in $(seq 1 30); do
+  if /opt/xdn/bin/xdn-tls-pull.sh; then break; fi
   sleep 5
 done
-systemctl start xdn-tls-sync.timer
+
+# Re-pull periodically to pick up renewals (Terraform updates the S3 object).
+cat > /etc/systemd/system/xdn-tls-pull.service <<'UNIT'
+[Unit]
+Description=Pull the Terraform-issued wildcard cert from S3 for the XDN frontend
+[Service]
+Type=oneshot
+ExecStart=/opt/xdn/bin/xdn-tls-pull.sh
+UNIT
+cat > /etc/systemd/system/xdn-tls-pull.timer <<'UNIT'
+[Unit]
+Description=Periodically re-pull the renewed wildcard cert from S3
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now xdn-tls-pull.timer
 
 # Start the frontend (gated on /opt/xdn/conf/tls/fullchain.pem, now present).
 systemctl start xdn-ar
