@@ -200,6 +200,20 @@ resource "aws_security_group" "allow_ssh_ipv6" {
     cidr_blocks = concat(["${aws_eip.rc.public_ip}/32"], [for e in aws_eip.ar : "${e.public_ip}/32"])
   }
 
+  # Rule B6: intra-cluster consensus over IPv6. gigapaxos now advertises the
+  #          nodes' GLOBAL IPv6 addresses, so consensus (:2000/:3000) and the
+  #          client-facing offset ports flow node->node over IPv6. Allow all
+  #          ports from the VPC's own IPv6 range (only the cluster nodes live
+  #          there) -- keeps consensus off the open internet while letting
+  #          members reach each other over IPv6.
+  ingress {
+    description      = "Intra-cluster consensus over IPv6 (VPC range only)"
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    ipv6_cidr_blocks = [aws_vpc.ipv6_vpc.ipv6_cidr_block]
+  }
+
   # Rule C: Allow all 4 servers to talk to each other on any port (private path)
   ingress {
     description = "Allow all internal VPC traffic"
@@ -277,12 +291,24 @@ locals {
   rc_private_ip  = "10.0.1.10" # in subnet[0] = 10.0.1.0/24
   ar_private_ips = [for i in range(var.ar_count) : "10.0.${i + 2}.10"]
 
+  # Static GLOBAL IPv6 per node, derived from each subnet's /64 (host ::10).
+  # Unlike the IPv4 EIP (NAT'd, not locally bindable), an instance's IPv6 is on
+  # its ENI and IS directly bindable -- so gigapaxos can advertise AND bind the
+  # same IPv6 for consensus. Derived from the subnet (not the instance), so
+  # using it in both ipv6_addresses and user_data creates no dependency cycle.
+  # Note: the subnet IPv6 CIDR is known only after apply (AWS assigns the VPC
+  # block), which is fine -- these resolve at apply time.
+  rc_ipv6  = cidrhost(aws_subnet.ipv6_subnets[0].ipv6_cidr_block, 10)
+  ar_ipv6s = [for i in range(var.ar_count) : cidrhost(aws_subnet.ipv6_subnets[i + 1].ipv6_cidr_block, 10)]
+
   # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
-  # Nodes advertise their PUBLIC Elastic IPs so that coredns returns
-  # client-reachable addresses for <service>.xdnapp.com (and geo-routing works on
-  # real geolocated IPs). Consequence: consensus traffic flows node->node over
-  # public IPs; ports 2000/3000 are therefore restricted to the cluster's own
-  # EIPs in the security group (Rule B5) and never exposed to the open internet.
+  # Nodes advertise their GLOBAL IPv6 addresses for consensus (reconfigurator/
+  # active) -- the gigapaxos wire format is now IPv6-capable (16-byte addresses,
+  # see AddressCodec) and the JVM no longer forces the IPv4 stack. coredns returns
+  # these IPv6 addresses as AAAA for <service>.xdnapp.com, so the data plane is
+  # IPv6 too. IPv4 EIPs remain for SSH, the registrar NS glue, cp/rc/ns, and the
+  # ACME DNS-01 path. Consensus ports (2000/3000) are reachable node->node over
+  # IPv6 within the VPC (security group Rule B6), not exposed to the open internet.
   gigapaxos_properties = join("\n", concat([
     "APPLICATION=edu.umass.cs.xdn.XdnGigapaxosApp",
     "REPLICA_COORDINATOR_CLASS=edu.umass.cs.xdn.XdnReplicaCoordinator",
@@ -299,9 +325,9 @@ locals {
     # RC control-plane API on :3300, which xdn-cli + coredns depend on
     # (default true; set explicitly for clarity).
     "ENABLE_RECONFIGURATOR_HTTP=true",
-    "reconfigurator.0=${aws_eip.rc.public_ip}:3000",
+    "reconfigurator.0=[${local.rc_ipv6}]:3000",
     ], [
-    for i in range(var.ar_count) : "active.${i + 1}=${aws_eip.ar[i].public_ip}:2000"
+    for i in range(var.ar_count) : "active.${i + 1}=[${local.ar_ipv6s[i]}]:2000"
   ]))
 }
 
@@ -311,6 +337,7 @@ resource "aws_instance" "rc" {
   instance_type          = "t3.large"
   subnet_id              = aws_subnet.ipv6_subnets[0].id
   private_ip             = local.rc_private_ip
+  ipv6_addresses         = [local.rc_ipv6] # consensus advertises + binds this
   vpc_security_group_ids = [aws_security_group.allow_ssh_ipv6.id]
   key_name               = aws_key_pair.deployer.key_name
 
@@ -342,6 +369,7 @@ resource "aws_instance" "ar" {
   instance_type          = "t3.large"
   subnet_id              = aws_subnet.ipv6_subnets[count.index + 1].id
   private_ip             = local.ar_private_ips[count.index]
+  ipv6_addresses         = [local.ar_ipv6s[count.index]] # consensus + frontend bind
   vpc_security_group_ids = [aws_security_group.allow_ssh_ipv6.id]
   key_name               = aws_key_pair.deployer.key_name
 

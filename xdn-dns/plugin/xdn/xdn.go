@@ -119,22 +119,20 @@ func (x XDN) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (in
 		return dns.RcodeRefused, nil
 	}
 
-	// prepare the A record to be sent
-	var rr dns.RR
-	rr = new(dns.A)
-	rr.(*dns.A).Hdr = dns.RR_Header{
-		Name:   state.QName(),
-		Rrtype: dns.TypeA,
-		Class:  state.QClass(),
-		Ttl:    responseTTLSec,
+	// Service names resolve to the AR's GLOBAL IPv6 (consensus advertises IPv6,
+	// so getIPSets returns IPv6 addresses). We answer AAAA only; an A query gets
+	// NODATA (empty NOERROR) so clients connect over IPv6.
+	if state.QType() != dns.TypeAAAA {
+		if err := w.WriteMsg(a); err != nil {
+			return dns.RcodeServerFailure, err
+		}
+		return dns.RcodeSuccess, nil
 	}
 
 	// send request to RC
 	IPs := x.getIPSets(serviceName)
-	if IPs == nil || len(IPs) == 0 {
-		a.Answer = []dns.RR{rr}
-		err := w.WriteMsg(a)
-		if err != nil {
+	if len(IPs) == 0 {
+		if err := w.WriteMsg(a); err != nil {
 			return dns.RcodeServerFailure, err
 		}
 		return dns.RcodeNameError, nil
@@ -150,12 +148,17 @@ func (x XDN) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (in
 	}
 	fmt.Println(">> IP: ", resultedIP)
 
-	rr.(*dns.A).A = net.ParseIP(resultedIP).To4()
-
-	// put the record into the answer, then send it
+	// prepare and send the AAAA record
+	rr := new(dns.AAAA)
+	rr.Hdr = dns.RR_Header{
+		Name:   state.QName(),
+		Rrtype: dns.TypeAAAA,
+		Class:  state.QClass(),
+		Ttl:    responseTTLSec,
+	}
+	rr.AAAA = net.ParseIP(resultedIP).To16()
 	a.Answer = []dns.RR{rr}
-	err = w.WriteMsg(a)
-	if err != nil {
+	if err = w.WriteMsg(a); err != nil {
 		return dns.RcodeServerFailure, err
 	}
 
@@ -202,26 +205,41 @@ func (x *XDN) getIPSets(serviceName string) []string {
 	var IPs []string
 	if respJSON["ACTIVE_REPLICAS"] != nil {
 		actives := respJSON["ACTIVE_REPLICAS"].([]interface{})
-		// example format: "p113.utah.cloudlab.us/127.0.0.1:2000"
+		// example formats: "p113.utah.cloudlab.us/127.0.0.1:2000"
+		//                  "host/[2001:db8::1]:2000"  or  "/[2001:db8::1]:2000"
 		for i := 0; i < len(actives); i++ {
 			rawString := actives[i].(string)
-			rawHostPort := strings.Split(rawString, ":")
-			if len(rawHostPort) != 2 {
+			ip := extractIP(rawString)
+			if ip == "" {
 				fmt.Println(">> error, invalid address format received:" +
 					rawString)
 				return nil
 			}
-			rawHost := strings.Split(rawHostPort[0], "/")
-			if len(rawHostPort) != 2 {
-				fmt.Println(">> error, invalid address host format received:" +
-					rawHostPort[0])
-				return nil
-			}
-			IPs = append(IPs, rawHost[1])
+			IPs = append(IPs, ip)
 		}
 	}
 
 	return IPs
+}
+
+// extractIP pulls the bare IP (IPv4 or IPv6) out of a gigapaxos address string
+// like "host/1.2.3.4:2000" or "host/[2001:db8::1]:2000". Splitting on ":" is
+// wrong for IPv6, so we drop the "host/" prefix and the trailing ":port",
+// honoring the [..] brackets around an IPv6 literal.
+func extractIP(raw string) string {
+	if i := strings.LastIndex(raw, "/"); i >= 0 {
+		raw = raw[i+1:]
+	}
+	if strings.HasPrefix(raw, "[") {
+		if j := strings.Index(raw, "]"); j > 0 {
+			return raw[1:j]
+		}
+		return ""
+	}
+	if i := strings.LastIndex(raw, ":"); i >= 0 {
+		return raw[:i]
+	}
+	return raw
 }
 
 // Picks one random IP from the list of IP Address. Assume IPs is not empty.
