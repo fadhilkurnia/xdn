@@ -243,7 +243,7 @@ variable "rc_ami" {
 variable "ar_ami" {
   description = "AMI for the ActiveReplica (AR) edge nodes."
   type        = string
-  default     = "ami-0beb9798e469f1fc7"
+  default     = "ami-0895cd15a28b707aa"
 }
 
 variable "ar_count" {
