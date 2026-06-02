@@ -286,29 +286,48 @@ public class Util {
 	}
 
 	public static InetSocketAddress getInetSocketAddressFromString(String s) {
+		if (s == null)
+			return null;
 		// remove anything upto and including the first slash
 		// handles these inputs:
 		//   "10.0.1.50/10.0.1.50:24404"
 		//   "localhost/[0:0:0:0:0:0:0:1]:24404"
 		s = s.replaceAll(".*/", "");
-		String[] tokens = s.split(":");
-		if (tokens.length < 2) {
-			return null;
-		}
-		String ipHostName = s.substring(0, s.lastIndexOf(":"));
-		String portStr = tokens[tokens.length-1];
-		int port = Integer.parseInt(portStr);
-		return new InetSocketAddress(ipHostName, port);
+		return parseHostPort(s);
 	}
 
 	// assumes strict formatting and is more efficient
 	public static InetSocketAddress getInetSocketAddressFromStringStrict(
 			String s) {
-		String[] tokens = s.split(":");
-		if (tokens.length < 2) {
+		return parseHostPort(s);
+	}
+
+	/**
+	 * Parse a "host:port" string into an {@link InetSocketAddress}, supporting
+	 * IPv4, hostnames, and IPv6 in both bracketed ("[2001:db8::1]:80") and bare
+	 * ("2001:db8::1:80") forms. The port is taken after the last colon; for IPv6
+	 * the surrounding brackets, if any, are stripped from the host. Returns
+	 * {@code null} if there is no port or it is not a number.
+	 */
+	private static InetSocketAddress parseHostPort(String s) {
+		if (s == null)
+			return null;
+		int lastColon = s.lastIndexOf(':');
+		if (lastColon < 0)
+			return null;
+		String host = s.substring(0, lastColon);
+		String portStr = s.substring(lastColon + 1);
+		// strip [] around an IPv6 literal, e.g. "[::1]" -> "::1"
+		if (host.length() >= 2 && host.charAt(0) == '['
+				&& host.charAt(host.length() - 1) == ']')
+			host = host.substring(1, host.length() - 1);
+		int port;
+		try {
+			port = Integer.parseInt(portStr);
+		} catch (NumberFormatException e) {
 			return null;
 		}
-		return new InetSocketAddress(tokens[0], Integer.valueOf(tokens[1]));
+		return new InetSocketAddress(host, port);
 	}
 
 	public static InetAddress getInetAddressFromString(String s)

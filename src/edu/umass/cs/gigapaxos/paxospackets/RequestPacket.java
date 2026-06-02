@@ -38,6 +38,7 @@ import edu.umass.cs.gigapaxos.paxosutil.Ballot;
 import edu.umass.cs.gigapaxos.paxosutil.IntegerMap;
 import edu.umass.cs.gigapaxos.testing.TESTPaxosConfig.TC;
 import edu.umass.cs.nio.JSONNIOTransport;
+import edu.umass.cs.nio.nioutils.AddressCodec;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.utils.Config;
@@ -284,7 +285,7 @@ public class RequestPacket extends PaxosPacket implements Request,
 		case "short":
 			return Short.BYTES;
 		case "InetSocketAddress":
-			return Integer.BYTES + Short.BYTES;
+			return AddressCodec.SOCKADDR_BYTES;
 		}
 		assert (false) : clazz;
 		return -1;
@@ -775,9 +776,9 @@ public class RequestPacket extends PaxosPacket implements Request,
 	protected static final int SIZEOF_REQUEST_FIXED = 8 // long requestID
 			+ 1 // boolean stop
 
-			+ Integer.BYTES // client IP
+			+ AddressCodec.ADDRESS_BYTES // client IP (16B, IPv4-mapped)
 			+ Short.BYTES // client port
-			+ Integer.BYTES // received IP
+			+ AddressCodec.ADDRESS_BYTES // received IP (16B, IPv4-mapped)
 			+ Short.BYTES // received port
 
 			+ Integer.BYTES // int entryReplica
@@ -853,26 +854,14 @@ public class RequestPacket extends PaxosPacket implements Request,
 			bbuf.put(this.stop ? (byte) 1 : (byte) 0);
 			exactLength += (Long.BYTES + 1);
 
-			// addresses
-			/* Note: 0 is ambiguous with wildcard address, but that's okay
-			 * because an incoming packet will never come with a wildcard
-			 * address. */
-			bbuf.put(this.clientAddress != null ? this.clientAddress
-					.getAddress().getAddress() : new byte[4]);
-			// 0 (not -1) means invalid port
-			bbuf.putShort(this.clientAddress != null ? (short) this.clientAddress
-					.getPort() : 0);
-			/* Note: 0 is an ambiguous wildcard address that could also be a
-			 * legitimate value of the listening socket address. If the request
-			 * happens to have no listening address, we will end up assuming it
-			 * was received on the wildcard address. At worst, the matching for
-			 * the corresponding response back to the client can fail. */
-			bbuf.put(this.listenAddress != null ? this.listenAddress
-					.getAddress().getAddress() : new byte[4]);
-			// 0 (not -1) means invalid port
-			bbuf.putShort(this.listenAddress != null ? (short) this.listenAddress
-					.getPort() : 0);
-			exactLength += 2 * (Integer.BYTES + Short.BYTES);
+			// addresses (each 16-byte IPv4-mapped IP + 2-byte port; AddressCodec).
+			/* Note: port 0 means "no address" on read. 0 is ambiguous with the
+			 * wildcard address, but that's okay because an incoming packet will
+			 * never come with a wildcard address; and for the listen address, at
+			 * worst the matching of the response back to the client can fail. */
+			AddressCodec.put(bbuf, this.clientAddress);
+			AddressCodec.put(bbuf, this.listenAddress);
+			exactLength += 2 * AddressCodec.SOCKADDR_BYTES;
 
 			// other non-final fields
 			bbuf.putInt(this.entryReplica);
@@ -958,20 +947,11 @@ public class RequestPacket extends PaxosPacket implements Request,
 		this.stop = bbuf.get() == (byte) 1;
 		exactLength += (8 + 1);
 
-		// addresses
-		byte[] ca = new byte[4];
-		bbuf.get(ca);
-		int cport = (int) bbuf.getShort();
-		cport = cport >= 0 ? cport : cport + 2 * (Short.MAX_VALUE + 1);
-		this.clientAddress = cport != 0 ? new InetSocketAddress(
-				InetAddress.getByAddress(ca), cport) : null;
-		byte[] la = new byte[4];
-		bbuf.get(la);
-		int lport = (int) bbuf.getShort();
-		lport = lport >= 0 ? lport : lport + 2 * (Short.MAX_VALUE + 1);
-		this.listenAddress = lport != 0 ? new InetSocketAddress(
-				InetAddress.getByAddress(la), lport) : null;
-		exactLength += (4 + 2 + 4 + 2);
+		// addresses (each 16-byte IPv4-mapped IP + 2-byte port; AddressCodec).
+		// port 0 -> null (absent address).
+		this.clientAddress = AddressCodec.getOrNull(bbuf);
+		this.listenAddress = AddressCodec.getOrNull(bbuf);
+		exactLength += 2 * AddressCodec.SOCKADDR_BYTES;
 
 		// other non-final fields
 		this.entryReplica = bbuf.getInt();

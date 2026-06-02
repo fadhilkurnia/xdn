@@ -21,13 +21,13 @@ ACTIVE_REPLICA_TLS_CERT_CHAIN=/opt/xdn/conf/tls/fullchain.pem
 ACTIVE_REPLICA_TLS_PRIVATE_KEY=/opt/xdn/conf/tls/privkey.pem
 TLSPROPS
 
-# node id + JVM opts. JAVA_TOOL_OPTIONS forces the IPv4 stack: gigapaxos
-# RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this dual-stack
-# VPC the wildcard bind fallback (the public EIP is not bindable) would be IPv6
-# (16 bytes), breaking Paxos packet serialization (AssertionError "N != M").
+# node id + JVM opts. The gigapaxos wire format is now IPv6-capable (16-byte
+# addresses, see AddressCodec), so we NO LONGER force the IPv4 stack -- the AR
+# advertises and binds its GLOBAL IPv6 for consensus, and the TLS frontend binds
+# that IPv6 on :443. preferIPv6Addresses nudges name resolution toward IPv6.
 cat > /opt/xdn/conf/node-id <<'NODEID'
 NODE_ID=${node_id}
-JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
+JAVA_TOOL_OPTIONS=-Djava.net.preferIPv6Addresses=true
 NODEID
 
 # AWS CLI is needed to pull the cert from S3 (not baked into the current AMI).
@@ -49,6 +49,8 @@ cat > /opt/xdn/bin/xdn-tls-pull.sh <<'PULL'
 #!/usr/bin/env bash
 set -euo pipefail
 export AWS_REGION="${aws_region}"
+# ARs are IPv6-only (no public IPv4), so reach S3 over its dual-stack (IPv6) endpoint.
+export AWS_USE_DUALSTACK_ENDPOINT=true
 b="${tls_bucket}"
 dst=/opt/xdn/conf/tls
 install -d -m 0755 "$dst"

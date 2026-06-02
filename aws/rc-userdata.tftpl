@@ -10,14 +10,13 @@ cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
 ${gigapaxos_properties}
 PROPS
 
-# node id + JVM opts (RC = node 0). JAVA_TOOL_OPTIONS forces the IPv4 stack:
-# gigapaxos RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this
-# dual-stack VPC the wildcard bind fallback (the public EIP is not bindable)
-# would be IPv6 (16 bytes), breaking Paxos packet serialization. The xdn-rc unit
-# reads this file via EnvironmentFile, so the JVM picks it up.
+# node id + JVM opts (RC = node 0). The gigapaxos wire format is now IPv6-capable
+# (16-byte addresses, see AddressCodec), so we NO LONGER force the IPv4 stack --
+# the RC advertises and binds its GLOBAL IPv6 for consensus. preferIPv6Addresses
+# nudges name resolution toward IPv6. The xdn-rc unit reads this via EnvironmentFile.
 cat > /opt/xdn/conf/node-id <<'NODEID'
 NODE_ID=0
-JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
+JAVA_TOOL_OPTIONS=-Djava.net.preferIPv6Addresses=true
 NODEID
 
 # Resolve the Route53 nameservers of the delegated _acme-challenge zone to IPs.

@@ -37,6 +37,7 @@ import edu.umass.cs.nio.AbstractPacketDemultiplexer;
 import edu.umass.cs.nio.JSONPacket;
 import edu.umass.cs.nio.MessageExtractor;
 import edu.umass.cs.nio.interfaces.Stringifiable;
+import edu.umass.cs.nio.nioutils.AddressCodec;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.utils.DelayProfiler;
@@ -234,39 +235,41 @@ public abstract class PaxosPacketDemultiplexerFast extends
 			long t = System.nanoTime();
 			if (PaxosPacket.getType(bytes) == PaxosPacketType.REQUEST) {
 				// affix header info only for request packets
-				byte[] caddress = header.sndr.getAddress().getAddress();
-				short cport = (short) header.sndr.getPort();
-				byte[] laddress = header.rcvr.getAddress().getAddress();
-				short lport = (short) header.rcvr.getPort();
 				ByteBuffer bbuf = ByteBuffer.wrap(bytes);
 				for (int i = 0; i < 3; i++)
 					bbuf.getInt();
 				int paxosIDLength = bbuf.get();
 
+				// Start of clientAddress in the RequestPacket layout: 3 ints
+				// (type, paxos type, version) + 1 (paxosID length) = 13, then the
+				// paxosID bytes + 8 (requestID) + 1 (stop). Each address is now a
+				// 16-byte (IPv4-mapped) IP + 2-byte port (see AddressCodec).
 				int offset = 13 + paxosIDLength + 8 + 1;
-				int expectedPos = offset + 4 + 2 + 4 + 2;
-				assert (bytes.length > offset + 12) : bytes.length + " <= "
-						+ expectedPos;
-				
-				//bbuf = ByteBuffer.wrap(bytes, offset, 12);
-				bbuf.position(offset).limit(offset +12);
-				
-				boolean noCA = bytes[offset + 4] == 0 && (bytes[offset + 5] == 0); 
-				boolean noLA = bytes[offset + 6 + 4] == 0
-						&& bytes[offset + 6 + 5] == 0;
+				final int addrPair = AddressCodec.SOCKADDR_BYTES;   // 18
+				final int bothAddrs = 2 * addrPair;                 // 36
+				assert (bytes.length > offset + bothAddrs) : bytes.length
+						+ " <= " + (offset + bothAddrs);
+
+				bbuf.position(offset).limit(offset + bothAddrs);
+
+				// port==0 (the 2 bytes right after each 16-byte IP) means "absent".
+				boolean noCA = bytes[offset + AddressCodec.ADDRESS_BYTES] == 0
+						&& bytes[offset + AddressCodec.ADDRESS_BYTES + 1] == 0;
+				boolean noLA = bytes[offset + addrPair + AddressCodec.ADDRESS_BYTES] == 0
+						&& bytes[offset + addrPair + AddressCodec.ADDRESS_BYTES + 1] == 0;
 				try {
 					if (noCA)
-						bbuf.put(caddress).putShort(cport);
+						AddressCodec.put(bbuf, header.sndr);
 					else
-						bbuf.position(bbuf.position() + 6);
+						bbuf.position(bbuf.position() + addrPair);
 					if (noLA)
-						bbuf.put(laddress).putShort(lport);
+						AddressCodec.put(bbuf, header.rcvr);
 					else
-						bbuf.position(bbuf.position() + 6);
+						bbuf.position(bbuf.position() + addrPair);
 
 				} catch (Exception e) {
-					assert (false) : bytes.length + " ? " + 16 + 4
-							+ paxosIDLength + 8 + 1;
+					assert (false) : bytes.length + " ? " + offset + " + "
+							+ bothAddrs;
 				}
 			}
 			try {

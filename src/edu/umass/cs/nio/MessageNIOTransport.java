@@ -34,6 +34,7 @@ import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.InterfaceMessageExtractor;
 import edu.umass.cs.nio.interfaces.InterfaceNIOTransport;
 import edu.umass.cs.nio.interfaces.NodeConfig;
+import edu.umass.cs.nio.nioutils.AddressCodec;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.nio.nioutils.NIOInstrumenter;
 import edu.umass.cs.nio.nioutils.PacketDemultiplexerDefault;
@@ -386,13 +387,9 @@ public class MessageNIOTransport<NodeIDType, MessageType> extends
 	 */
 	public static final InetSocketAddress getSenderAddress(byte[] bytes)
 			throws UnknownHostException {
+		// Sender occupies the first SOCKADDR_BYTES of the NIOHeader.
 		ByteBuffer bbuf = ByteBuffer.wrap(bytes, 0, NIOHeader.BYTES);
-		byte[] addressBytes = new byte[4];
-		bbuf.get(addressBytes);
-		InetAddress address = InetAddress.getByAddress(addressBytes);
-		int port = (int) bbuf.getShort();
-		if(port < 0) port += 2 * (Short.MAX_VALUE + 1);
-		return new InetSocketAddress(address, port);
+		return AddressCodec.get(bbuf);
 	}
 
 	/**
@@ -402,13 +399,10 @@ public class MessageNIOTransport<NodeIDType, MessageType> extends
 	 */
 	public static final InetSocketAddress getReceiverAddress(byte[] bytes)
 			throws UnknownHostException {
-		ByteBuffer bbuf = ByteBuffer.wrap(bytes, 6, NIOHeader.BYTES);
-		byte[] addressBytes = new byte[4];
-		bbuf.get(addressBytes);
-		InetAddress address = InetAddress.getByAddress(addressBytes);
-		int port = (int)bbuf.getShort() ;
-		if(port < 0) port += 2 * (Short.MAX_VALUE + 1);
-		return new InetSocketAddress(address, port);
+		// Receiver immediately follows the sender (SOCKADDR_BYTES in).
+		ByteBuffer bbuf = ByteBuffer.wrap(bytes, AddressCodec.SOCKADDR_BYTES,
+				AddressCodec.SOCKADDR_BYTES);
+		return AddressCodec.get(bbuf);
 	}
 
 	/**
