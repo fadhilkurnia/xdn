@@ -187,18 +187,9 @@ resource "aws_security_group" "allow_ssh_ipv6" {
     ipv6_cidr_blocks = ["::/0"]
   }
 
-  # Rule B5: intra-cluster traffic over PUBLIC IPs. Because gigapaxos.properties
-  #          advertises the nodes' EIPs, consensus (e.g. :2000, :3000) flows
-  #          node->node via public IPs. Allow all ports ONLY from the cluster's
-  #          own EIPs -- this keeps :2000/:3000 off the open internet (they are
-  #          NOT in any 0.0.0.0/0 rule) while letting members reach each other.
-  ingress {
-    description = "Intra-cluster consensus over public IPs (RC + AR EIPs only)"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = concat(["${aws_eip.rc.public_ip}/32"], [for e in aws_eip.ar : "${e.public_ip}/32"])
-  }
+  # (Former Rule B5 -- intra-cluster consensus over public IPv4 EIPs -- removed:
+  #  consensus now flows over IPv6 (Rule B6), and the ARs no longer have public
+  #  IPv4. The RC keeps its EIP for management/DNS only.)
 
   # Rule B6: intra-cluster consensus over IPv6. gigapaxos now advertises the
   #          nodes' GLOBAL IPv6 addresses, so consensus (:2000/:3000) and the
@@ -364,14 +355,15 @@ resource "aws_instance" "rc" {
 
 # 9b. ActiveReplica edge nodes, one per remaining subnet (subnet[i+1]).
 resource "aws_instance" "ar" {
-  count                  = var.ar_count
-  ami                    = var.ar_ami
-  instance_type          = "t3.large"
-  subnet_id              = aws_subnet.ipv6_subnets[count.index + 1].id
-  private_ip             = local.ar_private_ips[count.index]
-  ipv6_addresses         = [local.ar_ipv6s[count.index]] # consensus + frontend bind
-  vpc_security_group_ids = [aws_security_group.allow_ssh_ipv6.id]
-  key_name               = aws_key_pair.deployer.key_name
+  count                       = var.ar_count
+  ami                         = var.ar_ami
+  instance_type               = "t3.large"
+  subnet_id                   = aws_subnet.ipv6_subnets[count.index + 1].id
+  private_ip                  = local.ar_private_ips[count.index]
+  ipv6_addresses              = [local.ar_ipv6s[count.index]] # consensus + frontend bind
+  associate_public_ip_address = false                         # IPv6-only: no billed public IPv4
+  vpc_security_group_ids      = [aws_security_group.allow_ssh_ipv6.id]
+  key_name                    = aws_key_pair.deployer.key_name
 
   # Lets the baked Caddy answer the ACME DNS-01 challenge via Route53 (no keys).
   iam_instance_profile = aws_iam_instance_profile.ar_acme.name
@@ -412,22 +404,11 @@ resource "aws_eip_association" "rc" {
   allocation_id = aws_eip.rc.id
 }
 
-# 10b. Stable public IPs for the ARs. Required now that gigapaxos.properties
-#      advertises public addresses: coredns returns these to clients, so they
-#      must be stable (ephemeral IPs change on stop/start and would break DNS).
-#      Allocated standalone (no instance) so the AR user_data can reference them
-#      without a dependency cycle.
-resource "aws_eip" "ar" {
-  count  = var.ar_count
-  domain = "vpc"
-  tags   = { Name = "xdn-ar-eip-${count.index}" }
-}
-
-resource "aws_eip_association" "ar" {
-  count         = var.ar_count
-  instance_id   = aws_instance.ar[count.index].id
-  allocation_id = aws_eip.ar[count.index].id
-}
+# 10b. (Removed) The ARs no longer have public IPv4. Their data plane is IPv6
+#      (coredns returns AAAA -> the AR's global IPv6) and their egress is IPv6
+#      (Docker Hub/S3-dualstack/apt all reachable over IPv6). SSH/management is
+#      via the RC as a jump host over the private/IPv6 path. This drops 3 billed
+#      public IPv4 addresses.
 
 # 10c. ACME DNS-01 delegation zone.
 #      coredns (the xdn plugin) is authoritative for the apex and only knows how
@@ -606,17 +587,17 @@ output "rc_elastic_ip" {
   description = "RC address for everything (SSH, XDN_CONTROL_PLANE :3300, and the xdnapp.com authoritative NS). The instance's auto-assigned public IP is released once this EIP attaches, so always use this."
 }
 
-output "ar_public_ips" {
-  value       = aws_eip.ar[*].public_ip
-  description = "Elastic IPs of the ActiveReplica nodes (also what coredns returns for service names)."
+output "ar_ipv6_addresses" {
+  value       = local.ar_ipv6s
+  description = "Global IPv6 of the ActiveReplica nodes (what coredns returns as AAAA for <service>.xdnapp.com). The ARs have no public IPv4."
 }
 
 output "cluster_node_addresses" {
   value = merge(
-    { "0" = "${aws_eip.rc.public_ip} (RC)" },
-    { for i in range(var.ar_count) : tostring(i + 1) => "${aws_eip.ar[i].public_ip} (AR)" },
+    { "0" = "${aws_eip.rc.public_ip} (RC, IPv4 mgmt) / [${local.rc_ipv6}] (consensus)" },
+    { for i in range(var.ar_count) : tostring(i + 1) => "[${local.ar_ipv6s[i]}] (AR, IPv6-only)" },
   )
-  description = "Numeric node id -> PUBLIC address advertised in gigapaxos.properties (node 0 is the RC)."
+  description = "Numeric node id -> advertised consensus address (IPv6). The RC also keeps an IPv4 EIP for management/DNS."
 }
 
 output "acme_delegation_ns" {

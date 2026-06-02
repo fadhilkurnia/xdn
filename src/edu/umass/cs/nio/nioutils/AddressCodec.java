@@ -21,7 +21,7 @@ import java.nio.ByteBuffer;
  * the size constants and offsets change. This is a wire-format change: all
  * nodes in a cluster must run a build that uses this codec.
  *
- * @author arun
+ * @author fadhilkurnia
  */
 public class AddressCodec {
 

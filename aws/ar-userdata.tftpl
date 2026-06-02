@@ -49,6 +49,8 @@ cat > /opt/xdn/bin/xdn-tls-pull.sh <<'PULL'
 #!/usr/bin/env bash
 set -euo pipefail
 export AWS_REGION="${aws_region}"
+# ARs are IPv6-only (no public IPv4), so reach S3 over its dual-stack (IPv6) endpoint.
+export AWS_USE_DUALSTACK_ENDPOINT=true
 b="${tls_bucket}"
 dst=/opt/xdn/conf/tls
 install -d -m 0755 "$dst"
