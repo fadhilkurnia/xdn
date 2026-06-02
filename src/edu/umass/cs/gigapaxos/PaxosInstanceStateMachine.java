@@ -1788,7 +1788,14 @@ public class PaxosInstanceStateMachine implements Keyable<String>, Pausable {
 							"PISM.execute total={0}ms deser={1}ms exec={2}ms cb={3}ms entry={4} req={5}",
 							new Object[]{totalMs, deserMs, execMs, cbMs,
 									isEntryReplica, request != null ? request.getClass().getSimpleName() : "null"});
-					assert (requestPacket.getEntryReplica() > 0) : requestPacket;
+					// The entry replica only needs to be SET, not strictly positive: node 0 is a
+					// valid id (e.g. the reconfigurator, which is the entry replica for the
+					// RECONFIGURATION_INTENT/COMPLETE requests it drives through paxos). The old
+					// `> 0` spuriously tripped under -ea whenever node 0 was the entry replica,
+					// even though the request had already executed above. Use the same
+					// NULL_INT_NODE guard applied to this field at proposal time (see ~L822).
+					assert (requestPacket.getEntryReplica() != IntegerMap.NULL_INT_NODE)
+							: requestPacket;
 
 					// don't try any more if stopped
 					if (pism != null && pism.isStopped())

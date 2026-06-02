@@ -2595,8 +2595,15 @@ public class PaxosManager<NodeIDType> {
         FindReplicaGroupPacket findGroup = new FindReplicaGroupPacket(
                 this.myID, pp); // paxosID and version should be within
         int nodeID = FindReplicaGroupPacket.getNodeID(pp);
-        NodeIDType node = nodeID > 0 ? this.integerMap.get(nodeID) :
-                (pp instanceof RequestPacket && (nodeID = ((RequestPacket) pp).getEntryReplica()) > 0 ?
+        // Treat node 0 as a valid id (e.g. the reconfigurator acting as ballot
+        // coordinator/sender, or as a request's entry replica): compare against the
+        // NULL_INT_NODE (-1) sentinel rather than `> 0`, so a node-0 source resolves
+        // through integerMap instead of spuriously falling through to a null node.
+        // The dispatch below already accepts >= 0, so node 0 was reachable but logged
+        // as null; this makes the lookup consistent. Mirrors the entry-replica guard
+        // relaxed in PaxosInstanceStateMachine (getEntryReplica != NULL_INT_NODE).
+        NodeIDType node = nodeID != IntegerMap.NULL_INT_NODE ? this.integerMap.get(nodeID) :
+                (pp instanceof RequestPacket && (nodeID = ((RequestPacket) pp).getEntryReplica()) != IntegerMap.NULL_INT_NODE ?
                         this.integerMap.get(nodeID)
                         : null);
         if (nodeID >= 0) {

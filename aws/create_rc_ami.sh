@@ -7,11 +7,29 @@
 # values (node IPs, Corefile with the RC EIP) are injected later via Terraform
 # user_data. Baked systemd units stay inert until that config lands.
 #
-# Usage:   ./create_rc_ami.sh
-# Tunables: see ami_common.sh (AWS_REGION, BUILDER_INSTANCE_TYPE, REPO_BRANCH, ...).
+# Usage:   ./create_rc_ami.sh                 # x86-64 (amd64) AMI, default
+#          ARCH=arm64 ./create_rc_ami.sh      # Graviton (arm64) AMI for t4g.* RCs
+#
+# The RC is lean and off the data path, so it runs well on a small Graviton
+# instance (t4g.small/medium, ~20% cheaper per GB than t3). ARCH=arm64 builds a
+# native arm64 image on a Graviton builder (see ami_common.sh); point main.tf's
+# rc_ami + rc_instance_type at it. coredns and docker-ce-cli compile/install
+# natively, and the Java jars are arch-neutral, so nothing else changes.
+#
+# Tunables: see ami_common.sh (ARCH, AWS_REGION, BUILDER_INSTANCE_TYPE, REPO_BRANCH, ...).
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# The RC image is lean (Java jars + coredns + geo DB; no Docker daemon, Rust, or
+# FUSE), so it needs far less disk than the AR build. Default the build volume to
+# 16GB instead of the shared 30GB: the baked AMI's root snapshot is smaller and
+# every RC instance launched from it gets a smaller (cheaper) gp3 volume. Must be
+# >= the runtime RC volume in main.tf (root_block_device.volume_size, also 16) and
+# leave headroom for the transient build (clone + Go module cache + jars ~7-8GB).
+# A user-provided BUILDER_VOLUME_SIZE still wins (set before sourcing).
+: "${BUILDER_VOLUME_SIZE:=16}"
+
 # shellcheck source=ami_common.sh
 source ./ami_common.sh
 
