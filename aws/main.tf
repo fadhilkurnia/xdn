@@ -251,13 +251,13 @@ resource "aws_key_pair" "deployer" {
 variable "rc_ami" {
   description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation)."
   type        = string
-  default     = "ami-0af90e71c86a6ac6b"
+  default     = "ami-0281566cb7fdbd374" # IPv6: coredns AAAA + IPv6-consensus jar
 }
 
 variable "ar_ami" {
   description = "AMI for the ActiveReplica (AR) edge nodes."
   type        = string
-  default     = "ami-0895cd15a28b707aa"
+  default     = "ami-05ab6b5c1b45eb8dd" # IPv6 + TLS jar
 }
 
 variable "ar_count" {
