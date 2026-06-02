@@ -20,16 +20,44 @@ NODE_ID=0
 JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
 NODEID
 
-cat > /opt/xdn/conf/Corefile <<'COREFILE'
-xdnapp.com {
-    xdn cp.xdnapp.com ${rc_eip}
-    errors
-    log
-}
-. {
-    forward . 1.1.1.1
-}
-COREFILE
+# Resolve the Route53 nameservers of the delegated _acme-challenge zone to IPs.
+# coredns serves _acme-challenge.<domain> from its OWN server block that
+# `forward`s to Route53, so Let's Encrypt (recursing through this RC, which is
+# authoritative for the apex) reaches the DNS-01 TXT that Caddy writes there.
+# Why forward and not a zone-file delegation: the bundled coredns `file` plugin
+# lacks `fallthrough` and `template` forces AA=1 (no clean referral), but
+# `forward` needs IP upstreams -- so we resolve the NS hostnames here, at boot,
+# via getent (a Route53 NS-set change is picked up on the next boot). The more
+# specific _acme-challenge zone wins, so every other name still hits `xdn`.
+ACME_FWD=""
+for ns in ${join(" ", acme_ns)}; do
+  ip=$(getent ahostsv4 "$ns" | awk '{print $1; exit}')
+  [ -n "$ip" ] && ACME_FWD="$ACME_FWD $ip"
+done
+
+# Build the Corefile. The _acme-challenge block is included only if we resolved
+# at least one upstream IP -- otherwise coredns would fail to load and take down
+# ALL DNS (incl. geo-routing); failing open keeps the cluster resolvable.
+{
+  echo "${base_domain} {"
+  echo "    xdn cp.${base_domain} ${rc_eip}"
+  echo "    errors"
+  echo "    log"
+  echo "}"
+  if [ -n "$ACME_FWD" ]; then
+    echo "_acme-challenge.${base_domain} {"
+    echo "    forward .$ACME_FWD"
+    echo "    errors"
+    echo "    log"
+    echo "}"
+  else
+    echo "# WARNING: could not resolve _acme-challenge nameservers at boot;" >&2
+    echo "# HTTPS issuance will fail until coredns can forward to Route53." >&2
+  fi
+  echo ". {"
+  echo "    forward . 1.1.1.1"
+  echo "}"
+} > /opt/xdn/conf/Corefile
 
 systemctl daemon-reload
 systemctl start xdn-rc xdn-dns

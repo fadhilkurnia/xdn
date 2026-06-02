@@ -184,11 +184,15 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 			final InetSocketAddress addr = new InetSocketAddress(me.getAddress(),
 					ReconfigurationConfig.getHTTPPort( me.getPort()) );
 			String nodeId = this.getMyID().toString();
+			// Terminate TLS directly in the frontend (no reverse-proxy hop) when
+			// ENABLE_ACTIVE_REPLICA_HTTPS is set; the bind port is then overridden
+			// to ACTIVE_REPLICA_HTTPS_PORT (default 443) inside HttpActiveReplica.
+			final boolean ssl = Config.getGlobalBoolean(RC.ENABLE_ACTIVE_REPLICA_HTTPS);
 
 			this.protocolExecutor.submit(new Runnable() {
 				@Override
 				public void run() {
-					initHTTPServer(nodeId, false, addr);
+					initHTTPServer(nodeId, ssl, addr);
 				}
 			});
 		}

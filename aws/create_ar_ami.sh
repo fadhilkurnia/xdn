@@ -66,11 +66,112 @@ done
 
 # allow non-root mounts to expose files to other users (bin/xdnd:539)
 sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+
+# --- Caddy (HTTPS termination): a custom build that bundles the route53 DNS-01
+#     provider, fetched from Caddy's download API (no Go/xcaddy needed here).
+#     Per-deployment config (Caddyfile) is injected at launch by user_data. ---
+sudo curl -fsSL -o /opt/xdn/bin/caddy \
+  "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/route53"
+sudo chmod +x /opt/xdn/bin/caddy
+sudo ln -sf /opt/xdn/bin/caddy /usr/local/bin/caddy
 EOF
 
   emit_prestage_helper
   emit_ar_unit
-  emit_finalize "xdn-ar.service"
+  emit_caddy_unit
+  emit_tls_sync_unit
+  emit_finalize "xdn-ar.service caddy.service xdn-tls-sync.timer"
+}
+
+# emit_tls_sync_unit - install the cert-sync helper + a timer. Caddy issues and
+# auto-renews the wildcard into its own storage; this copies the latest PEM to
+# the stable path the XDN frontend loads (/opt/xdn/conf/tls/) and restarts the
+# frontend when the cert changes (Netty loads the cert at startup). The CA dir
+# name under Caddy's storage varies (staging vs prod), so we glob for it.
+emit_tls_sync_unit() {
+  cat <<'EOF'
+sudo tee /opt/xdn/bin/xdn-tls-sync.sh >/dev/null <<'SYNC'
+#!/usr/bin/env bash
+set -euo pipefail
+shopt -s nullglob
+crt=""
+for f in /var/lib/caddy/caddy/certificates/*/wildcard_.*/wildcard_.*.crt; do crt="$f"; done
+if [ -z "$crt" ]; then echo "xdn-tls-sync: no wildcard cert issued yet" >&2; exit 1; fi
+key="${crt%.crt}.key"
+[ -f "$key" ] || { echo "xdn-tls-sync: missing key for $crt" >&2; exit 1; }
+dst=/opt/xdn/conf/tls
+install -d -m 0755 "$dst"
+# Detect change against stashed raw sources (the published key is re-encoded, so
+# it can't be cmp'd directly against Caddy's source key).
+changed=0
+cmp -s "$crt" "$dst/.src.crt" || changed=1
+cmp -s "$key" "$dst/.src.key" || changed=1
+if [ "$changed" = 1 ]; then
+  install -m 0644 "$crt" "$dst/.src.crt"
+  install -m 0600 "$key" "$dst/.src.key"
+  install -m 0644 "$crt" "$dst/fullchain.pem"
+  # Caddy emits the key as SEC1 ("EC PRIVATE KEY"); Netty/JDK only parse PKCS#8
+  # ("PRIVATE KEY"). Convert so SslContextBuilder.forServer can load it.
+  openssl pkcs8 -topk8 -nocrypt -in "$dst/.src.key" -out "$dst/privkey.pem"
+  chmod 600 "$dst/privkey.pem"
+  echo "xdn-tls-sync: updated $dst (PKCS#8) from $crt"
+  # Frontend reads the cert at startup; restart it if already running so a
+  # renewal is picked up (no-op during first-boot sync, before xdn-ar starts).
+  systemctl try-restart xdn-ar 2>/dev/null || true
+fi
+SYNC
+sudo chmod +x /opt/xdn/bin/xdn-tls-sync.sh
+
+sudo tee /etc/systemd/system/xdn-tls-sync.service >/dev/null <<'UNIT'
+[Unit]
+Description=Sync Caddy-issued wildcard cert to the XDN frontend cert path
+After=caddy.service
+ConditionPathExists=/var/lib/caddy
+
+[Service]
+Type=oneshot
+ExecStart=/opt/xdn/bin/xdn-tls-sync.sh
+UNIT
+
+sudo tee /etc/systemd/system/xdn-tls-sync.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Periodically sync the renewed wildcard cert to the XDN frontend
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+UNIT
+EOF
+}
+
+# emit_caddy_unit - install the Caddy systemd unit. Runs as root (matches the
+# other XDN units) so it can bind :80/:443. ConditionPathExists keeps it inert
+# until launch-time user_data writes the Caddyfile.
+emit_caddy_unit() {
+  cat <<'EOF'
+sudo tee /etc/systemd/system/caddy.service >/dev/null <<'UNIT'
+[Unit]
+Description=Caddy (cert-only manager: ACME DNS-01 wildcard for *.<domain>)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/xdn/conf/Caddyfile
+
+[Service]
+Type=notify
+EnvironmentFile=/opt/xdn/conf/caddy.env
+ExecStart=/opt/xdn/bin/caddy run --environ --config /opt/xdn/conf/Caddyfile --adapter caddyfile
+ExecReload=/opt/xdn/bin/caddy reload --config /opt/xdn/conf/Caddyfile --adapter caddyfile --force
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+EOF
 }
 
 # emit_ar_unit - install the AR systemd unit. Runs as root for Docker access
@@ -82,11 +183,14 @@ emit_ar_unit() {
 sudo tee /etc/systemd/system/xdn-ar.service >/dev/null <<'UNIT'
 [Unit]
 Description=XDN ActiveReplica (edge server)
-After=network-online.target docker.service
+After=network-online.target docker.service caddy.service
 Wants=network-online.target
 Requires=docker.service
 ConditionPathExists=/opt/xdn/conf/gigapaxos.properties
 ConditionPathExists=/opt/xdn/conf/node-id
+# The frontend terminates TLS itself: don't start until the wildcard PEM exists
+# (Caddy issues it; xdn-tls-sync copies it here).
+ConditionPathExists=/opt/xdn/conf/tls/fullchain.pem
 
 [Service]
 Type=simple

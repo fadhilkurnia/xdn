@@ -26,8 +26,10 @@ import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
 import io.netty.handler.codec.http.cors.CorsConfig;
 import io.netty.handler.codec.http.cors.CorsConfigBuilder;
 import io.netty.handler.codec.http.cors.CorsHandler;
+import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.handler.timeout.ReadTimeoutException;
 import io.netty.handler.timeout.ReadTimeoutHandler;
@@ -39,6 +41,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
@@ -172,9 +175,37 @@ public class HttpActiveReplica {
         // Configure SSL.
         final SslContext sslCtx;
         if (ssl) {
-            SelfSignedCertificate ssc = new SelfSignedCertificate();
-            sslCtx = SslContextBuilder.forServer(ssc.certificate(),
-                    ssc.privateKey()).build();
+            String certChainPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.ACTIVE_REPLICA_TLS_CERT_CHAIN);
+            String privateKeyPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.ACTIVE_REPLICA_TLS_PRIVATE_KEY);
+            SslContextBuilder sslBuilder;
+            if (certChainPath != null && !certChainPath.isEmpty()
+                    && privateKeyPath != null && !privateKeyPath.isEmpty()) {
+                // Real (e.g., Let's Encrypt) certificate: PEM fullchain + private key.
+                sslBuilder = SslContextBuilder.forServer(
+                        new File(certChainPath), new File(privateKeyPath));
+                logger.log(Level.INFO,
+                        "HttpActiveReplica terminating TLS with cert chain {0}",
+                        new Object[]{certChainPath});
+            } else {
+                // Fallback: ephemeral self-signed cert (browsers will not trust it).
+                SelfSignedCertificate ssc = new SelfSignedCertificate();
+                sslBuilder = SslContextBuilder.forServer(
+                        ssc.certificate(), ssc.privateKey());
+                logger.log(Level.WARNING,
+                        "HttpActiveReplica TLS enabled but no cert configured; "
+                                + "using an untrusted self-signed certificate");
+            }
+            // Prefer native OpenSSL/BoringSSL (netty-tcnative) for TLS throughput;
+            // fall back to the JDK provider when the native lib is unavailable.
+            if (OpenSsl.isAvailable()) {
+                sslBuilder.sslProvider(SslProvider.OPENSSL);
+                logger.log(Level.INFO, "HttpActiveReplica TLS provider: OpenSSL");
+            } else {
+                logger.log(Level.INFO, "HttpActiveReplica TLS provider: JDK (tcnative unavailable)");
+            }
+            sslCtx = sslBuilder.build();
         } else {
             sslCtx = null;
         }
@@ -248,9 +279,33 @@ public class HttpActiveReplica {
             if (Config.getGlobalBoolean(ReconfigurationConfig.RC.ENABLE_ACTIVE_REPLICA_HTTP_PORT_80)) {
                 sockAddr = new InetSocketAddress(sockAddr.getAddress(), 80);
             }
+            // When terminating TLS in-process, bind the configured HTTPS port
+            // (default 443) instead of the cleartext offset/80 port.
+            if (ssl) {
+                int httpsPort = Config.getGlobalInt(
+                        ReconfigurationConfig.RC.ACTIVE_REPLICA_HTTPS_PORT);
+                sockAddr = new InetSocketAddress(sockAddr.getAddress(), httpsPort);
+            }
             Channel channel = b.bind(sockAddr).sync().channel();
 
             logger.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
+
+            // When terminating TLS, also run a tiny plaintext listener on :80 that
+            // 308-redirects to https:// so http:// URLs keep working. This is NOT a
+            // data-plane hop -- it only bounces http-first clients, which then
+            // connect directly to the TLS frontend on ACTIVE_REPLICA_HTTPS_PORT.
+            if (ssl && Config.getGlobalBoolean(
+                    ReconfigurationConfig.RC.ENABLE_ACTIVE_REPLICA_HTTPS_REDIRECT)) {
+                try {
+                    int httpsPort = Config.getGlobalInt(
+                            ReconfigurationConfig.RC.ACTIVE_REPLICA_HTTPS_PORT);
+                    startHttpsRedirectListener(bossGroup, workerGroup,
+                            sockAddr.getAddress(), httpsPort);
+                } catch (Exception e) {
+                    logger.log(Level.WARNING,
+                            "Failed to start :80 -> HTTPS redirect listener", e);
+                }
+            }
 
             channel.closeFuture().sync();
         } finally {
@@ -260,6 +315,69 @@ public class HttpActiveReplica {
             writePool.shutdownGracefully();
         }
 
+    }
+
+    // Tiny plaintext listener on :80 that 308-redirects to the https:// URL.
+    // Reuses the existing boss/worker event-loop groups; bound only when TLS is on.
+    private Channel startHttpsRedirectListener(EventLoopGroup bossGroup,
+            EventLoopGroup workerGroup, java.net.InetAddress addr, int httpsPort)
+            throws InterruptedException {
+        ServerBootstrap rb = new ServerBootstrap();
+        rb.group(bossGroup, workerGroup)
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        p.addLast(new HttpRequestDecoder());
+                        p.addLast(new HttpResponseEncoder());
+                        p.addLast(new HttpsRedirectHandler(httpsPort));
+                    }
+                });
+        Channel ch = rb.bind(new InetSocketAddress(addr, 80)).sync().channel();
+        logger.log(Level.INFO, "HttpActiveReplica HTTP->HTTPS redirect ready on :80");
+        return ch;
+    }
+
+    // Responds 308 Permanent Redirect to the https:// equivalent of any request.
+    private static class HttpsRedirectHandler extends ChannelInboundHandlerAdapter {
+        private final int httpsPort;
+
+        HttpsRedirectHandler(int httpsPort) {
+            this.httpsPort = httpsPort;
+        }
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            try {
+                if (msg instanceof HttpRequest) {
+                    HttpRequest req = (HttpRequest) msg;
+                    String host = req.headers().get(HttpHeaderNames.HOST);
+                    if (host == null) {
+                        host = "";
+                    }
+                    int colon = host.indexOf(':');
+                    if (colon >= 0) {
+                        host = host.substring(0, colon); // strip any :port
+                    }
+                    String portSuffix = httpsPort == 443 ? "" : ":" + httpsPort;
+                    String location = "https://" + host + portSuffix + req.uri();
+                    FullHttpResponse resp = new DefaultFullHttpResponse(
+                            HTTP_1_1, PERMANENT_REDIRECT, Unpooled.EMPTY_BUFFER);
+                    resp.headers().set(HttpHeaderNames.LOCATION, location);
+                    resp.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
+                    resp.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+                    ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
+                }
+            } finally {
+                ReferenceCountUtil.release(msg);
+            }
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            ctx.close();
+        }
     }
 
 

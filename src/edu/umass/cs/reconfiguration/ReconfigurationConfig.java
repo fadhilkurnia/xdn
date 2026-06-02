@@ -410,6 +410,42 @@ public class ReconfigurationConfig {
         ENABLE_ACTIVE_REPLICA_HTTP_PORT_80(false),
 
         /**
+         * If true, the ActiveReplica HTTP frontend terminates TLS itself (in
+         * Netty) instead of relying on an external reverse proxy, removing a
+         * data-plane hop. Uses the PEM cert chain + key at
+         * {@link #ACTIVE_REPLICA_TLS_CERT_CHAIN} / {@link #ACTIVE_REPLICA_TLS_PRIVATE_KEY}
+         * when set, otherwise an ephemeral self-signed cert. When enabled, the
+         * frontend binds {@link #ACTIVE_REPLICA_HTTPS_PORT} (default 443).
+         */
+        ENABLE_ACTIVE_REPLICA_HTTPS(false),
+
+        /**
+         * Port the ActiveReplica HTTP frontend binds when
+         * {@link #ENABLE_ACTIVE_REPLICA_HTTPS} is true.
+         */
+        ACTIVE_REPLICA_HTTPS_PORT(443),
+
+        /**
+         * Filesystem path to the PEM certificate chain (fullchain) used for TLS
+         * when {@link #ENABLE_ACTIVE_REPLICA_HTTPS} is true. Empty -> self-signed.
+         */
+        ACTIVE_REPLICA_TLS_CERT_CHAIN(""),
+
+        /**
+         * Filesystem path to the PEM private key used for TLS when
+         * {@link #ENABLE_ACTIVE_REPLICA_HTTPS} is true.
+         */
+        ACTIVE_REPLICA_TLS_PRIVATE_KEY(""),
+
+        /**
+         * When {@link #ENABLE_ACTIVE_REPLICA_HTTPS} is true, also run a tiny
+         * plaintext listener on :80 that 308-redirects to the https:// URL. This
+         * is not a data-plane hop (it only bounces http-first clients, which then
+         * connect directly to the TLS frontend on {@link #ACTIVE_REPLICA_HTTPS_PORT}).
+         */
+        ENABLE_ACTIVE_REPLICA_HTTPS_REDIRECT(true),
+
+        /**
          * If true, transactions are enabled; else disabled.
          */
         ENABLE_TRANSACTIONS(false),

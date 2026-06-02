@@ -1,24 +1,100 @@
 #!/bin/bash
 # Launch-time bootstrap for an XDN ActiveReplica (AR) node.
-# Writes the per-deployment config + this node's unique id, then starts the
-# baked, ConditionPathExists-gated xdn-ar unit.
+# Pulls the Terraform-issued wildcard cert from S3 (no per-AR ACME issuance, so
+# instance replacement never burns the Let's Encrypt rate limit), then starts
+# the baked xdn-ar unit which terminates TLS itself on :443 (no proxy hop).
 set -euo pipefail
 
-install -d -m 0755 /opt/xdn/conf
+install -d -m 0755 /opt/xdn/conf /opt/xdn/conf/tls
 
 cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
 ${gigapaxos_properties}
 PROPS
 
+# AR-only TLS settings (appended here, NOT in the shared cluster properties, so
+# the RC config is byte-identical and the RC is never replaced). The patched
+# frontend terminates TLS on :443 using the wildcard PEM pulled to /opt/xdn/conf/tls/.
+cat >> /opt/xdn/conf/gigapaxos.properties <<'TLSPROPS'
+ENABLE_ACTIVE_REPLICA_HTTPS=true
+ACTIVE_REPLICA_HTTPS_PORT=443
+ACTIVE_REPLICA_TLS_CERT_CHAIN=/opt/xdn/conf/tls/fullchain.pem
+ACTIVE_REPLICA_TLS_PRIVATE_KEY=/opt/xdn/conf/tls/privkey.pem
+TLSPROPS
+
 # node id + JVM opts. JAVA_TOOL_OPTIONS forces the IPv4 stack: gigapaxos
 # RequestPacket.toBytes assumes 4-byte (IPv4) addresses, but on this dual-stack
 # VPC the wildcard bind fallback (the public EIP is not bindable) would be IPv6
 # (16 bytes), breaking Paxos packet serialization (AssertionError "N != M").
-# The xdn-ar unit reads this file via EnvironmentFile, so the JVM picks it up.
 cat > /opt/xdn/conf/node-id <<'NODEID'
 NODE_ID=${node_id}
 JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true
 NODEID
 
+# AWS CLI is needed to pull the cert from S3 (not baked into the current AMI).
+# Ubuntu 24.04 dropped the apt `awscli` package, so use the official v2 bundle.
+if ! command -v aws >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y unzip curl
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  ( cd /tmp && unzip -oq awscliv2.zip && ./aws/install )
+  rm -rf /tmp/awscliv2.zip /tmp/aws
+fi
+
+# Cert-pull helper: download the wildcard PEM that Terraform's acme_certificate
+# issued once and stored in S3, converting the key to PKCS#8 (Netty/JDK can't
+# parse PKCS#1/SEC1). A timer re-pulls hourly so a Terraform-driven renewal
+# (new S3 object) propagates to the running fleet.
+cat > /opt/xdn/bin/xdn-tls-pull.sh <<'PULL'
+#!/usr/bin/env bash
+set -euo pipefail
+export AWS_REGION="${aws_region}"
+b="${tls_bucket}"
+dst=/opt/xdn/conf/tls
+install -d -m 0755 "$dst"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+aws s3 cp "s3://$b/${fullchain_key}" "$tmp/fullchain.pem" --quiet
+aws s3 cp "s3://$b/${privkey_key}"  "$tmp/src.key"      --quiet
+openssl pkcs8 -topk8 -nocrypt -in "$tmp/src.key" -out "$tmp/privkey.pem"
+changed=0
+cmp -s "$tmp/fullchain.pem" "$dst/fullchain.pem" || changed=1
+cmp -s "$tmp/privkey.pem"  "$dst/privkey.pem"   || changed=1
+if [ "$changed" = 1 ]; then
+  install -m 0644 "$tmp/fullchain.pem" "$dst/fullchain.pem"
+  install -m 0600 "$tmp/privkey.pem"  "$dst/privkey.pem"
+  echo "xdn-tls-pull: updated cert from s3://$b"
+  systemctl try-restart xdn-ar 2>/dev/null || true
+fi
+PULL
+chmod +x /opt/xdn/bin/xdn-tls-pull.sh
+
+# Pull the cert now (retry until the S3 objects are readable).
+for i in $(seq 1 30); do
+  if /opt/xdn/bin/xdn-tls-pull.sh; then break; fi
+  sleep 5
+done
+
+# Re-pull periodically to pick up renewals (Terraform updates the S3 object).
+cat > /etc/systemd/system/xdn-tls-pull.service <<'UNIT'
+[Unit]
+Description=Pull the Terraform-issued wildcard cert from S3 for the XDN frontend
+[Service]
+Type=oneshot
+ExecStart=/opt/xdn/bin/xdn-tls-pull.sh
+UNIT
+cat > /etc/systemd/system/xdn-tls-pull.timer <<'UNIT'
+[Unit]
+Description=Periodically re-pull the renewed wildcard cert from S3
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
+systemctl enable --now xdn-tls-pull.timer
+
+# Start the frontend (gated on /opt/xdn/conf/tls/fullchain.pem, now present).
 systemctl start xdn-ar
