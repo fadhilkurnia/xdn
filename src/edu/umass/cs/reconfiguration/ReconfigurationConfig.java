@@ -438,6 +438,14 @@ public class ReconfigurationConfig {
         ACTIVE_REPLICA_TLS_PRIVATE_KEY(""),
 
         /**
+         * When {@link #ENABLE_ACTIVE_REPLICA_HTTPS} is true, also run a tiny
+         * plaintext listener on :80 that 308-redirects to the https:// URL. This
+         * is not a data-plane hop (it only bounces http-first clients, which then
+         * connect directly to the TLS frontend on {@link #ACTIVE_REPLICA_HTTPS_PORT}).
+         */
+        ENABLE_ACTIVE_REPLICA_HTTPS_REDIRECT(true),
+
+        /**
          * If true, transactions are enabled; else disabled.
          */
         ENABLE_TRANSACTIONS(false),

@@ -290,6 +290,23 @@ public class HttpActiveReplica {
 
             logger.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
 
+            // When terminating TLS, also run a tiny plaintext listener on :80 that
+            // 308-redirects to https:// so http:// URLs keep working. This is NOT a
+            // data-plane hop -- it only bounces http-first clients, which then
+            // connect directly to the TLS frontend on ACTIVE_REPLICA_HTTPS_PORT.
+            if (ssl && Config.getGlobalBoolean(
+                    ReconfigurationConfig.RC.ENABLE_ACTIVE_REPLICA_HTTPS_REDIRECT)) {
+                try {
+                    int httpsPort = Config.getGlobalInt(
+                            ReconfigurationConfig.RC.ACTIVE_REPLICA_HTTPS_PORT);
+                    startHttpsRedirectListener(bossGroup, workerGroup,
+                            sockAddr.getAddress(), httpsPort);
+                } catch (Exception e) {
+                    logger.log(Level.WARNING,
+                            "Failed to start :80 -> HTTPS redirect listener", e);
+                }
+            }
+
             channel.closeFuture().sync();
         } finally {
             bossGroup.shutdownGracefully();
@@ -298,6 +315,69 @@ public class HttpActiveReplica {
             writePool.shutdownGracefully();
         }
 
+    }
+
+    // Tiny plaintext listener on :80 that 308-redirects to the https:// URL.
+    // Reuses the existing boss/worker event-loop groups; bound only when TLS is on.
+    private Channel startHttpsRedirectListener(EventLoopGroup bossGroup,
+            EventLoopGroup workerGroup, java.net.InetAddress addr, int httpsPort)
+            throws InterruptedException {
+        ServerBootstrap rb = new ServerBootstrap();
+        rb.group(bossGroup, workerGroup)
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        p.addLast(new HttpRequestDecoder());
+                        p.addLast(new HttpResponseEncoder());
+                        p.addLast(new HttpsRedirectHandler(httpsPort));
+                    }
+                });
+        Channel ch = rb.bind(new InetSocketAddress(addr, 80)).sync().channel();
+        logger.log(Level.INFO, "HttpActiveReplica HTTP->HTTPS redirect ready on :80");
+        return ch;
+    }
+
+    // Responds 308 Permanent Redirect to the https:// equivalent of any request.
+    private static class HttpsRedirectHandler extends ChannelInboundHandlerAdapter {
+        private final int httpsPort;
+
+        HttpsRedirectHandler(int httpsPort) {
+            this.httpsPort = httpsPort;
+        }
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            try {
+                if (msg instanceof HttpRequest) {
+                    HttpRequest req = (HttpRequest) msg;
+                    String host = req.headers().get(HttpHeaderNames.HOST);
+                    if (host == null) {
+                        host = "";
+                    }
+                    int colon = host.indexOf(':');
+                    if (colon >= 0) {
+                        host = host.substring(0, colon); // strip any :port
+                    }
+                    String portSuffix = httpsPort == 443 ? "" : ":" + httpsPort;
+                    String location = "https://" + host + portSuffix + req.uri();
+                    FullHttpResponse resp = new DefaultFullHttpResponse(
+                            HTTP_1_1, PERMANENT_REDIRECT, Unpooled.EMPTY_BUFFER);
+                    resp.headers().set(HttpHeaderNames.LOCATION, location);
+                    resp.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
+                    resp.headers().set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
+                    ctx.writeAndFlush(resp).addListener(ChannelFutureListener.CLOSE);
+                }
+            } finally {
+                ReferenceCountUtil.release(msg);
+            }
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            ctx.close();
+        }
     }
 
 
