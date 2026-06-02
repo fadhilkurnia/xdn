@@ -246,9 +246,9 @@ variable "rc_ami" {
 }
 
 variable "ar_ami" {
-  description = "AMI for the ActiveReplica (AR) edge nodes."
+  description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from the xdn-ar-arm64 branch by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-05ab6b5c1b45eb8dd" # IPv6 + TLS jar
+  default     = "ami-0c22f54b43a823533" # arm64, IPv6 + TLS jar + paxos node-0 fixes
 }
 
 variable "ar_count" {
@@ -271,9 +271,9 @@ variable "rc_instance_type" {
 }
 
 variable "ar_instance_type" {
-  description = "EC2 instance type for the ActiveReplica (AR) edge nodes (run Docker + stateful apps). For Graviton (t4g.*), point ar_ami at an arm64 AR AMI (ARCH=arm64 ./create_ar_ami.sh) and ensure deployed service images are multi-arch."
+  description = "EC2 instance type for the ActiveReplica (AR) edge nodes (run Docker + stateful apps). Defaults to Graviton t4g.large (~20% cheaper than t3.large); requires an arm64 ar_ami (the default is one) and multi-arch service images."
   type        = string
-  default     = "t3.large"
+  default     = "t4g.large" # Graviton, ~$49/mo vs t3.large ~$61/mo (needs arm64 ar_ami)
 }
 
 # Run the ARs as Spot instances (~60-70% cheaper than on-demand) instead of

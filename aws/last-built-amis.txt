@@ -6,3 +6,4 @@ xdn-ar-20260602-000227	ami-0895cd15a28b707aa	us-east-1
 xdn-ar-20260602-140003	ami-05ab6b5c1b45eb8dd	us-east-1
 xdn-rc-20260602-135957	ami-0281566cb7fdbd374	us-east-1
 xdn-rc-arm64-20260602-181006	ami-0b430939d4943fcbb	us-east-1	arm64
+xdn-ar-arm64-20260602-195718	ami-0c22f54b43a823533	us-east-1	arm64

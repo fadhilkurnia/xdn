@@ -36,7 +36,11 @@ if ! command -v aws >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
   apt-get install -y unzip curl
-  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  # Match the host arch: `uname -m` prints x86_64 / aarch64, which is exactly the
+  # AWS CLI v2 bundle naming -- so this works on both x86 and Graviton (t4g) ARs.
+  # (Hardcoding x86_64 here installs a CLI that can't exec on arm64, so the cert
+  # pull silently fails and xdn-ar never starts -- its ConditionPathExists gate.)
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
   ( cd /tmp && unzip -oq awscliv2.zip && ./aws/install )
   rm -rf /tmp/awscliv2.zip /tmp/aws
 fi
