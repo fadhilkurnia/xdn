@@ -1,6 +1,5 @@
 package edu.umass.cs.nio.nioutils;
 
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
@@ -13,9 +12,10 @@ import edu.umass.cs.nio.MessageNIOTransport;
  */
 public class NIOHeader {
 	/**
-	 * Size in bytes.
+	 * Size in bytes: two (address, port) pairs, each 16-byte address + 2-byte
+	 * port (see {@link AddressCodec}). IPv4 addresses are stored IPv4-mapped.
 	 */
-	public static final int BYTES = 12;
+	public static final int BYTES = 2 * AddressCodec.SOCKADDR_BYTES;
 	/**
 	 * 
 	 */
@@ -41,26 +41,15 @@ public class NIOHeader {
 	
 	/**
 	 * @param bytes
-	 * @return NIOHeader constructed from the first 12 bytes.
+	 * @return NIOHeader constructed from the first {@link #BYTES} bytes.
 	 * @throws UnknownHostException
 	 */
 	public static NIOHeader getNIOHeader(byte[] bytes)
 			throws UnknownHostException {
-		ByteBuffer bbuf = ByteBuffer.wrap(bytes, 0, 12);
-		byte[] sip = new byte[4];
-		bbuf.get(sip, 0, 4);
-		int sport = (int)bbuf.getShort();
-		if (sport < 0)
-			sport += 2 * (Short.MAX_VALUE + 1);
-
-		byte[] dip = new byte[4];
-		bbuf.get(dip, 0, 4);
-		int dport = (int)bbuf.getShort();
-		if (dport < 0)
-			dport += 2 * (Short.MAX_VALUE + 1);
-		return new NIOHeader(new InetSocketAddress(
-				InetAddress.getByAddress(sip), sport), new InetSocketAddress(
-				InetAddress.getByAddress(dip), dport));
+		ByteBuffer bbuf = ByteBuffer.wrap(bytes, 0, BYTES);
+		InetSocketAddress sndr = AddressCodec.get(bbuf);
+		InetSocketAddress rcvr = AddressCodec.get(bbuf);
+		return new NIOHeader(sndr, rcvr);
 	}
 
 	public String toString() {
@@ -68,17 +57,13 @@ public class NIOHeader {
 	}
 
 	/**
-	 * @return {@code this} as a 12 byte array with 6 bytes for each IP, port
-	 *         pair.
+	 * @return {@code this} as a {@link #BYTES}-byte array: a 16-byte address +
+	 *         2-byte port for the sender, then the same for the receiver.
 	 */
 	public byte[] toBytes() {
-		ByteBuffer bbuf = ByteBuffer.wrap(new byte[12]);
-		bbuf.put(this.sndr != null ? this.sndr.getAddress().getAddress()
-				: new byte[4]);
-		bbuf.putShort(this.sndr != null ? (short) this.sndr.getPort() : 0);
-		bbuf.put(this.rcvr != null ? this.rcvr.getAddress().getAddress()
-				: new byte[4]);
-		bbuf.putShort(this.rcvr != null ? (short) this.rcvr.getPort() : 0);
+		ByteBuffer bbuf = ByteBuffer.wrap(new byte[BYTES]);
+		AddressCodec.put(bbuf, this.sndr);
+		AddressCodec.put(bbuf, this.rcvr);
 		return bbuf.array();
 	}
 }
