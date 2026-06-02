@@ -10,6 +10,7 @@ Terraform infrastructure and AMI builders for deploying XDN to EC2.
 | `create_rc_ami.sh` | Build an AMI for the Reconfigurator (RC) + coredns nameserver |
 | `create_ar_ami.sh` | Build an AMI for the ActiveReplica (AR) edge node |
 | `ami_common.sh` | Shared AWS plumbing sourced by the two builders (not run directly) |
+| `cluster_power.sh` | `pause`/`resume`/`status` the cluster's EC2 instances to cut idle cost |
 
 ## Prerequisites
 
@@ -64,10 +65,41 @@ terraform apply -var rc_instance_type=t4g.small
 ```
 
 Avoid `t4g.nano` (0.5 GB) for the RC — even with swap, ~128 MB heap is too tight.
-The ARs stay on `amd64` (`t3.large`) since they run Docker + heavy stateful
-apps; only the RC AMI is built for `arm64`. (Note: an EBS *snapshot* is billed
-by used blocks, not the provisioned volume size, so the 30→16 GB change mainly
-trims each running RC's gp3 volume cost; the snapshot was already lean.)
+By default the ARs stay on `amd64` (`t3.large`) since they run Docker + heavy
+stateful apps; see *Cutting AR cost* below for the Graviton/Spot/idle options.
+(Note: an EBS *snapshot* is billed by used blocks, not the provisioned volume
+size, so the 30→16 GB change mainly trims each running RC's gp3 volume cost; the
+snapshot was already lean.)
+
+### Cutting AR cost
+
+The 3 ActiveReplicas are ~90% of the monthly bill. Three compounding levers:
+
+1. **Stop when idle (biggest lever for an experiments cluster).** Stopped
+   instances bill only their EBS (~$7/mo total) instead of compute. The RC EIP
+   and every node's static private + IPv6 address persist across stop/start, so
+   the cluster resumes at the same endpoints:
+   ```bash
+   ./cluster_power.sh pause     # stop all RC + AR instances when idle
+   ./cluster_power.sh resume    # start them again before an experiment
+   ./cluster_power.sh status    # show type + power state per node
+   ```
+   Re-launch your services after a resume — service state under `/tmp` is not
+   guaranteed to survive a stop/start (treat each run as a fresh deploy).
+
+2. **Graviton (`arm64`) ARs — permanent ~20%.** Build an arm64 AR AMI
+   (`ARCH=arm64 ./create_ar_ami.sh`), point `ar_ami` at it, and set
+   `ar_instance_type=t4g.large`. **Requires multi-arch service images** (official
+   `mysql`/`postgres`/`wordpress`/`nginx` qualify; amd64-only custom images do
+   not — they'd fail with `exec format error`).
+
+3. **Spot ARs — ~60–70% off running hours.** Set `-var ar_use_spot=true`. Uses
+   *persistent* spot with `stop` interruption behavior, so a reclaim stops (not
+   terminates) the AR — EBS + addresses survive, AWS restarts it when capacity
+   returns, and `cluster_power.sh` can still pause/resume it. The 3-way quorum
+   tolerates losing one AR; best for long runs where mid-run reclaim is OK.
+
+For a ~25% duty cycle these take the ARs from ~$182/mo to roughly $15–40/mo.
 
 The AMIs are config-free: systemd units (`xdn-rc`, `xdn-dns`, `xdn-ar`) stay
 inert until launch-time `user_data` writes `/opt/xdn/conf/gigapaxos.properties`

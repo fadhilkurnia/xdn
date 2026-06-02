@@ -23,12 +23,15 @@ function main() {
 
   local BIN_DIR="${XDN_ROOT}/bin"
   local LINUX_AMD64_BIN="${BIN_DIR}/xdn-linux-amd64"
+  local LINUX_ARM64_BIN="${BIN_DIR}/xdn-linux-arm64"
   local DARWIN_ARM64_BIN="${BIN_DIR}/xdn-darwin-arm64"
   local HOST_OS
   local HOST_ARCH
 
-  # build the xdn cli for linux/amd64 and darwin/arm64
+  # build the xdn cli for linux/{amd64,arm64} and darwin/arm64. linux/arm64 is
+  # needed so the AR AMI builds natively on Graviton (t4g) builders.
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${LINUX_AMD64_BIN}" .
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o "${LINUX_ARM64_BIN}" .
   CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o "${DARWIN_ARM64_BIN}" .
 
   HOST_OS="$(uname -s)"
@@ -38,6 +41,9 @@ function main() {
   case "${HOST_OS}-${HOST_ARCH}" in
     Linux-x86_64)
       HOST_BIN="${LINUX_AMD64_BIN}"
+      ;;
+    Linux-aarch64 | Linux-arm64)
+      HOST_BIN="${LINUX_ARM64_BIN}"
       ;;
     Darwin-arm64)
       HOST_BIN="${DARWIN_ARM64_BIN}"
@@ -70,6 +76,7 @@ function main() {
 
   echo "Success! binaries generated:"
   echo "  ${LINUX_AMD64_BIN}"
+  echo "  ${LINUX_ARM64_BIN}"
   echo "  ${DARWIN_ARM64_BIN}"
   echo "Alias (if supported) at ${BIN_DIR}/xdn and ${SYSTEM_LINK}"
 }

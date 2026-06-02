@@ -271,9 +271,22 @@ variable "rc_instance_type" {
 }
 
 variable "ar_instance_type" {
-  description = "EC2 instance type for the ActiveReplica (AR) edge nodes (run Docker + stateful apps)."
+  description = "EC2 instance type for the ActiveReplica (AR) edge nodes (run Docker + stateful apps). For Graviton (t4g.*), point ar_ami at an arm64 AR AMI (ARCH=arm64 ./create_ar_ami.sh) and ensure deployed service images are multi-arch."
   type        = string
   default     = "t3.large"
+}
+
+# Run the ARs as Spot instances (~60-70% cheaper than on-demand) instead of
+# on-demand. The 3-way Paxos quorum tolerates losing one AR to a reclaim, so this
+# fits the research/eval cluster -- not stability-critical runs. Spot price is
+# variable and capacity is not guaranteed. Uses PERSISTENT spot with `stop`
+# interruption behavior: a reclaimed AR is STOPPED (EBS + addresses preserved) and
+# auto-restarted by AWS when capacity returns, and cluster_power.sh can still
+# pause/resume it. Best paired with stop-when-idle for long experiment runs.
+variable "ar_use_spot" {
+  description = "Run ActiveReplicas as Spot instances (persistent, stop-on-interruption). ~60-70% cheaper; a reclaim is tolerated by the 3-way quorum. Suitable for the research cluster."
+  type        = bool
+  default     = false
 }
 
 # --- HTTPS / Let's Encrypt (Caddy on the ARs) ---
@@ -386,6 +399,21 @@ resource "aws_instance" "ar" {
 
   # Lets the baked Caddy answer the ACME DNS-01 challenge via Route53 (no keys).
   iam_instance_profile = aws_iam_instance_profile.ar_acme.name
+
+  # Optional Spot pricing for the ARs (var.ar_use_spot). Persistent + stop so a
+  # reclaim stops (not terminates) the AR -- EBS and the static private/IPv6
+  # addresses survive, AWS restarts it when capacity returns, and the quorum only
+  # ever loses one replica transiently. Toggling this forces AR replacement.
+  dynamic "instance_market_options" {
+    for_each = var.ar_use_spot ? [1] : []
+    content {
+      market_type = "spot"
+      spot_options {
+        spot_instance_type             = "persistent"
+        instance_interruption_behavior = "stop"
+      }
+    }
+  }
 
   # Bootstrap: drop config + a unique numeric node id (1..N) so the baked
   # xdn-ar unit starts. The RC is node 0; ARs continue from 1.
