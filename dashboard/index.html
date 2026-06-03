@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XDN Dashboard</title>
+  <!-- Leaflet (map) via CDN — no build step, GitHub-Pages friendly -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>XDN Dashboard</h1>
+    <div id="banner" class="banner" hidden></div>
+  </header>
+
+  <!-- Control-plane endpoint config. Kept in the URL (?cp=) so the page stays
+       stateless: the address bar is the only state. -->
+  <section class="card">
+    <div class="row">
+      <label for="cp">Control plane</label>
+      <input id="cp" type="text" spellcheck="false" placeholder="cp.xdnapp.com:3400" />
+      <button id="connect">Connect</button>
+      <span id="cp-status" class="status"></span>
+    </div>
+    <p class="hint">
+      The dashboard talks directly to the XDN Reconfigurator over HTTPS
+      (<code>:3400</code>). On a research cluster using a Let's Encrypt
+      <em>staging</em> cert, your browser will warn it's untrusted — open
+      <code>https://&lt;control-plane&gt;/api/v2/services</code> once and accept it.
+    </p>
+  </section>
+
+  <main>
+    <!-- Services list + deploy/destroy -->
+    <section class="card">
+      <h2>Services</h2>
+      <div class="row">
+        <button id="refresh">Refresh list</button>
+        <span id="list-note" class="hint"></span>
+      </div>
+      <table id="services">
+        <thead>
+          <tr><th>Service</th><th>Epoch</th><th>Replicas</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <details id="deploy-box">
+        <summary>Deploy a service</summary>
+        <form id="deploy-form" class="grid">
+          <label>Name <input name="name" required pattern="[a-zA-Z0-9_-]{1,64}" /></label>
+          <label>Image <input name="image" required placeholder="fadhilkurnia/xdn-bookcatalog" /></label>
+          <label>Port <input name="port" type="number" value="80" min="1" max="65535" /></label>
+          <label>State dir <input name="state" value="/app/data/" /></label>
+          <label>Consistency
+            <select name="consistency">
+              <option>linearizability</option>
+              <option>sequential</option>
+              <option>causal</option>
+              <option>eventual</option>
+            </select>
+          </label>
+          <label class="check">Deterministic <input name="deterministic" type="checkbox" checked /></label>
+          <button type="submit">Deploy</button>
+        </form>
+      </details>
+      <pre id="action-log" class="log" hidden></pre>
+    </section>
+
+    <!-- Placement view: replica table + map for the selected service -->
+    <section class="card">
+      <h2>Placement <span id="placement-svc" class="muted"></span></h2>
+      <div id="map"></div>
+      <table id="replicas">
+        <thead>
+          <tr><th>Node</th><th>Role</th><th>HTTP address</th><th>Geolocation</th><th>Metadata</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="placement-note" class="hint"></p>
+    </section>
+  </main>
+
+  <footer>
+    <span id="conn-dot" class="dot"></span>
+    <span id="footer-text">not connected</span>
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
