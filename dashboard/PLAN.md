@@ -114,7 +114,9 @@ xdn-cli, and trace_bw use; the security group now allows both.
       button (DELETE), "open research cluster" banner.
 - [ ] Placement map: a marker per replica from `/placement`, colored by `ROLE`,
       `METADATA` popup.
-- [ ] `.github/workflows/deploy-dashboard.yml` → `actions/deploy-pages`.
+- [x] `.github/workflows/deploy-dashboard.yml` → `actions/deploy-pages`
+      (publishes `dashboard/` to GitHub Pages on push; enable Pages → Source:
+      GitHub Actions).
 
 ### Phase 2 — geo-demand
 - [ ] `HttpReconfigurator`: `GET /api/v2/services/<svc>/demand` (decode sparse grid).
