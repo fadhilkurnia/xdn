@@ -115,9 +115,10 @@ xdn-cli, and trace_bw use; the security group now allows both.
 - [x] inspect-a-service-by-name input, deploy form (CREATE), per-service destroy
       (DELETE), "open research cluster" banner, connection status, action log.
 - [x] Placement view: replica table (id/role/http/geo/metadata) + Leaflet map with
-      role-coloured markers + fitBounds. **Map shows no markers yet** because the
-      AWS nodes have no `active.<node>.geolocation` configured (single-region) —
-      add per-node lat/lon (small config + instance-replacing re-apply) to populate it.
+      role-coloured markers + fitBounds. Map is now populated — per-AR
+      `active.<id>.geolocation` added to the AWS config (illustrative US-spread
+      coords; the cluster is physically single-region us-east-1). `/placement`
+      returns lat/lon for all 3 nodes.
 - [x] `.github/workflows/deploy-dashboard.yml` → `actions/deploy-pages`
       (publishes `dashboard/` to GitHub Pages on push; enable Pages → Source:
       GitHub Actions). Also serving live from the RC at `https://cp.xdnapp.com/`.

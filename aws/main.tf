@@ -339,6 +339,14 @@ locals {
   rc_ipv6  = cidrhost(aws_subnet.ipv6_subnets[0].ipv6_cidr_block, 10)
   ar_ipv6s = [for i in range(var.ar_count) : cidrhost(aws_subnet.ipv6_subnets[i + 1].ipv6_cidr_block, 10)]
 
+  # Per-AR coordinates surfaced as active.<id>.geolocation (parsed by PaxosConfig,
+  # returned in the /placement API, plotted on the dashboard map). NOTE: this
+  # cluster physically runs in a single region (us-east-1); these are ILLUSTRATIVE
+  # coordinates spread across the US (East / Central / West) so the placement map
+  # demonstrates XDN's geo-distribution. Replace with real per-region coordinates
+  # for a true multi-region deployment. element() wraps if ar_count > 3.
+  ar_geolocations = ["38.95,-77.45", "41.88,-87.63", "37.36,-121.92"]
+
   # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
   # Nodes advertise their GLOBAL IPv6 addresses for consensus (reconfigurator/
   # active) -- the gigapaxos wire format is now IPv6-capable (16-byte addresses,
@@ -366,6 +374,9 @@ locals {
     "reconfigurator.0=[${local.rc_ipv6}]:3000",
     ], [
     for i in range(var.ar_count) : "active.${i + 1}=[${local.ar_ipv6s[i]}]:2000"
+    ], [
+    # Per-AR geolocation for the dashboard placement map (illustrative; see above).
+    for i in range(var.ar_count) : "active.${i + 1}.geolocation=\"${element(local.ar_geolocations, i)}\""
   ]))
 }
 
