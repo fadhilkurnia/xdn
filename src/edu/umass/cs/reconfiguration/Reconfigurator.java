@@ -180,12 +180,26 @@ public class Reconfigurator<NodeIDType> implements
                         this.consistentNodeConfig.getReconfigurators()});
 
         // we don't keep a handle to http servers here.
+        // Plaintext control-plane HTTP server on the clear port (3300): coredns
+        // geo-DNS, xdn-cli, and trace_bw all call this, so it stays plaintext.
         this.protocolExecutor.submit(new Runnable() {
             @Override
             public void run() {
                 initHTTPServer(false);
             }
         });
+        // Optionally ALSO expose the control-plane API over TLS on the separate SSL
+        // port (3400), so an HTTPS browser dashboard (e.g. GitHub Pages) can reach
+        // it without mixed-content blocking. Additive: the plaintext port above is
+        // untouched, so existing HTTP clients keep working.
+        if (Config.getGlobalBoolean(RC.ENABLE_RECONFIGURATOR_HTTPS)) {
+            this.protocolExecutor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    initHTTPServer(true);
+                }
+            });
+        }
 
         this.protocolExecutor.submit(new Runnable() {
             @Override
@@ -221,14 +235,15 @@ public class Reconfigurator<NodeIDType> implements
         if (!Config.getGlobalBoolean(RC.ENABLE_RECONFIGURATOR_HTTP))
             return;
         InetSocketAddress me = this.messenger.getListeningSocketAddress();
+        // Plaintext binds the clear HTTP port (3300); TLS binds the distinct SSL
+        // HTTP port (3400), so the two listeners can run side by side.
+        int port = ssl ? ReconfigurationConfig.getHTTPSPort(me.getPort())
+                : ReconfigurationConfig.getHTTPPort(me.getPort());
         try {
             /* We don't really need to hold a pointer to the HTTP server except
              * maybe for instrumentation purposes. */
-            new HttpReconfigurator(this, new InetSocketAddress(me.getAddress(),
-                    ReconfigurationConfig.getHTTPPort(me.getPort())), ssl);
-
-            // FIXME: start HTTPS server here as well
-
+            new HttpReconfigurator(this,
+                    new InetSocketAddress(me.getAddress(), port), ssl);
         } catch (CertificateException | InterruptedException | SSLException e) {
             if (!(e instanceof InterruptedException)) // close
                 e.printStackTrace();

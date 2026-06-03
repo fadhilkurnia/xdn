@@ -16,7 +16,7 @@ which the browser calls directly.
 
 | Decision | Choice |
 |---|---|
-| How the CP API is reachable from an HTTPS page | **Native TLS on the RC `:3300`** (Netty, wildcard `*.xdnapp.com` cert) |
+| How the CP API is reachable from an HTTPS page | **Native TLS on the RC** (Netty, wildcard `*.xdnapp.com` cert). To avoid breaking existing plaintext clients (coredns geo-DNS, xdn-cli, trace_bw all use `:3300`), TLS runs on the *separate* SSL port **`:3400`** (`HTTP_PORT_SSL_OFFSET`); `:3300` stays plaintext. |
 | Auth on deploy/destroy | **Fully open** — research cluster; anyone can mutate (show a banner) |
 | "Inter-replica bandwidth" in v1 | **Analytic latency only** (Haversine + fiber, client-side); live bandwidth deferred |
 
@@ -60,10 +60,10 @@ New (this project):
 ```
  Browser  (xdn.cs.umass.edu — static JS, stateless)
    │   Leaflet world map · Chart.js · deploy/destroy forms
-   │   CP endpoint from ?cp=<host:port> or config.js  (default cp.xdnapp.com:3300)
+   │   CP endpoint from ?cp=<host:port> or config.js  (default cp.xdnapp.com:3400)
    │   polls every few seconds
    ▼  HTTPS + CORS
- XDN Reconfigurator API  (https://cp.xdnapp.com:3300, TLS via *.xdnapp.com)
+ XDN Reconfigurator API  (https://cp.xdnapp.com:3400 = TLS SSL port; :3300 plaintext stays)
    GET /api/v2/services                      (NEW)
    GET /api/v2/services/<svc>/placement      (exists)
    GET /api/v2/services/<svc>/demand         (NEW)
@@ -71,7 +71,9 @@ New (this project):
 ```
 
 `cp.xdnapp.com` already resolves to the RC via coredns and is covered by the
-`*.xdnapp.com` wildcard cert; the security group already allows `:3300`.
+`*.xdnapp.com` wildcard cert. TLS is served on the SSL port `:3400`
+(`HTTP_PORT_SSL_OFFSET`), kept distinct from the plaintext `:3300` that coredns,
+xdn-cli, and trace_bw use; the security group now allows both.
 
 ## Tech stack
 
@@ -83,17 +85,20 @@ New (this project):
 ## Phases
 
 ### Phase 0 — backend enablers (Java + Terraform) — unblocks everything
-- [ ] `HttpReconfigurator`: add Netty `CorsHandler(forAnyOrigin())` (mirror
+- [x] `HttpReconfigurator`: add Netty `CorsHandler(forAnyOrigin())` (mirror
       `HttpActiveReplica.java:429`).
-- [ ] `HttpReconfigurator`: native TLS — `ENABLE_RECONFIGURATOR_HTTPS` +
-      cert-chain/private-key path props; build Netty `SslContext` from the
-      wildcard PEM (mirror the AR frontend's TLS init).
-- [ ] `aws/main.tf`: RC instance profile + IAM `s3:GetObject` on the TLS bucket
-      (mirror the `ar_acme` role's S3 statement).
-- [ ] `aws/rc-userdata.tftpl`: pull `fullchain.pem`/`privkey.pem` from S3 and
-      PKCS#8-convert (mirror `ar-userdata.tftpl`); write the HTTPS flags.
-- [ ] Verify: browser `fetch` of `/placement` over `https://cp.xdnapp.com:3300`
-      succeeds, including the CORS preflight (OPTIONS).
+- [x] `HttpReconfigurator`: native TLS — `ENABLE_RECONFIGURATOR_HTTPS` +
+      `RECONFIGURATOR_TLS_CERT_CHAIN`/`_PRIVATE_KEY` props; Netty `SslContext`
+      from the wildcard PEM (mirror the AR), with a self-signed fallback while the
+      cert isn't on disk yet (the RC boots before the cert is issued).
+- [x] `aws/main.tf`: RC instance profile + IAM `s3:GetObject` on the TLS bucket
+      (`rc_tls` role); cert-store vars passed via literal keys (no dep cycle).
+- [x] `aws/rc-userdata.tftpl`: pull `fullchain.pem`/`privkey.pem` from S3 +
+      PKCS#8-convert + `xdn-tls-pull.timer` (mirror `ar-userdata.tftpl`); append
+      the HTTPS flags. Services start first (coredns up → issuance), then pull.
+- [ ] **Verify (needs a deploy):** browser `fetch` of `/placement` over
+      `https://cp.xdnapp.com:3400`, including the CORS preflight (OPTIONS); and
+      confirm `:3300` plaintext still works (coredns/xdn-cli unaffected).
 
 ### Phase 1 — dashboard skeleton + list endpoint + deploy
 - [ ] `HttpReconfigurator`: implement `GET /api/v2/services` (list).

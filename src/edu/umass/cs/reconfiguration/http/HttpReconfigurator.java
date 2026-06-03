@@ -6,6 +6,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorFunctions;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket.PacketType;
+import edu.umass.cs.utils.Config;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -18,8 +19,13 @@ import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
+import io.netty.handler.codec.http.cors.CorsConfig;
+import io.netty.handler.codec.http.cors.CorsConfigBuilder;
+import io.netty.handler.codec.http.cors.CorsHandler;
+import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.CharsetUtil;
 import org.json.JSONArray;
@@ -27,6 +33,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
+import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -174,12 +181,45 @@ public class HttpReconfigurator {
         this.rcf = rcf == null ? "" : rcf.toString();
         this.rcNodeId = this.rcf.substring(3);
 
-        // Configure SSL.
+        // Configure SSL. When enabled, terminate TLS in Netty using the configured
+        // PEM cert chain + key (e.g. the wildcard *.xdnapp.com cert the RC pulls
+        // from S3) so an HTTPS client like the browser dashboard can reach the
+        // control plane without mixed-content blocking; fall back to an (untrusted)
+        // self-signed cert if none is configured. Mirrors HttpActiveReplica.
         final SslContext sslCtx;
         if (ssl) {
-            SelfSignedCertificate ssc = new SelfSignedCertificate();
-            sslCtx = SslContextBuilder.forServer(ssc.certificate(),
-                    ssc.privateKey()).build();
+            String certChainPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.RECONFIGURATOR_TLS_CERT_CHAIN);
+            String privateKeyPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.RECONFIGURATOR_TLS_PRIVATE_KEY);
+            SslContextBuilder sslBuilder;
+            // Require the PEM files to actually exist: the RC boots before the
+            // cert is issued (issuance needs the RC's coredns), so on a cold start
+            // the configured paths may not be on disk yet. Fall back to self-signed
+            // rather than crash; the cert-pull timer restarts the RC once the real
+            // cert lands, and this branch then picks it up.
+            if (certChainPath != null && !certChainPath.isEmpty()
+                    && privateKeyPath != null && !privateKeyPath.isEmpty()
+                    && new File(certChainPath).exists()
+                    && new File(privateKeyPath).exists()) {
+                sslBuilder = SslContextBuilder.forServer(
+                        new File(certChainPath), new File(privateKeyPath));
+                log.log(Level.INFO,
+                        "HttpReconfigurator terminating TLS with cert chain {0}",
+                        new Object[]{certChainPath});
+            } else {
+                SelfSignedCertificate ssc = new SelfSignedCertificate();
+                sslBuilder = SslContextBuilder.forServer(
+                        ssc.certificate(), ssc.privateKey());
+                log.log(Level.WARNING,
+                        "HttpReconfigurator TLS enabled but cert not present yet; "
+                                + "using a temporary untrusted self-signed certificate");
+            }
+            // Prefer native OpenSSL/BoringSSL (netty-tcnative) when available.
+            if (OpenSsl.isAvailable()) {
+                sslBuilder.sslProvider(SslProvider.OPENSSL);
+            }
+            sslCtx = sslBuilder.build();
         } else {
             sslCtx = null;
         }
@@ -289,6 +329,12 @@ public class HttpReconfigurator {
             p.addLast(new HttpObjectAggregator(1048576));
 
             p.addLast(new HttpResponseEncoder());
+
+            // CORS: allow any origin so the browser dashboard (served from a
+            // different origin, e.g. GitHub Pages) can call the control-plane API.
+            // Handles preflight (OPTIONS) automatically. Mirrors HttpActiveReplica.
+            CorsConfig corsConfig = CorsConfigBuilder.forAnyOrigin().build();
+            p.addLast(new CorsHandler(corsConfig));
 
             p.addLast(new HttpReconfiguratorHandler(rcFunctions, rcNodeId));
 

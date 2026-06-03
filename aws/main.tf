@@ -177,11 +177,26 @@ resource "aws_security_group" "allow_ssh_ipv6" {
     ipv6_cidr_blocks = ["::/0"]
   }
 
-  # Rule B4: RC control-plane API (xdn-cli contacts cp.xdnapp.com:3300)
+  # Rule B4: RC control-plane API, plaintext (xdn-cli, coredns geo-DNS, and
+  #          trace_bw contact cp.xdnapp.com:3300 over HTTP).
   ingress {
-    description      = "XDN control-plane API on the RC"
+    description      = "XDN control-plane API on the RC (HTTP)"
     from_port        = 3300
     to_port          = 3300
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  # Rule B4b: RC control-plane API over TLS on the SSL port (HTTP_PORT_SSL_OFFSET
+  #           => 3400). HttpReconfigurator terminates TLS here with the wildcard
+  #           cert so the browser dashboard (HTTPS) can reach the control plane
+  #           without mixed-content blocking. The plaintext :3300 above stays for
+  #           the existing HTTP clients.
+  ingress {
+    description      = "XDN control-plane API on the RC (HTTPS, for the dashboard)"
+    from_port        = 3400
+    to_port          = 3400
     protocol         = "tcp"
     cidr_blocks      = ["0.0.0.0/0"]
     ipv6_cidr_blocks = ["::/0"]
@@ -364,6 +379,10 @@ resource "aws_instance" "rc" {
   vpc_security_group_ids = [aws_security_group.allow_ssh_ipv6.id]
   key_name               = aws_key_pair.deployer.key_name
 
+  # Read-only access to the wildcard cert in S3, so the control-plane API can
+  # terminate TLS for the dashboard (the RC pulls the same PEM the ARs do).
+  iam_instance_profile = aws_iam_instance_profile.rc_tls.name
+
   # Bootstrap: drop the gated config so the baked xdn-rc + xdn-dns units start.
   # Replace the instance when the config changes, so cloud-init re-runs with the
   # new gigapaxos.properties (an in-place user_data update would NOT re-run it).
@@ -375,6 +394,15 @@ resource "aws_instance" "rc" {
     # NS records of the delegated _acme-challenge zone; coredns refers ACME
     # resolvers here so Caddy's DNS-01 TXT (written in Route53) is reachable.
     acme_ns = aws_route53_zone.acme.name_servers
+    # Cert store for the control-plane TLS. Use the bucket id + LITERAL object keys
+    # (NOT aws_s3_object.*.key): the wildcard cert is issued AFTER the RC (issuance
+    # needs the RC's coredns), so referencing the cert objects here would create a
+    # dependency cycle. The RC pulls them once present (boot retry loop + timer);
+    # until then HttpReconfigurator serves a temporary self-signed cert.
+    aws_region    = "us-east-1"
+    tls_bucket    = aws_s3_bucket.tls.id
+    fullchain_key = "wildcard/fullchain.pem"
+    privkey_key   = "wildcard/privkey.pem"
   })
 
   root_block_device {
@@ -524,6 +552,34 @@ resource "aws_iam_role_policy" "ar_acme" {
 resource "aws_iam_instance_profile" "ar_acme" {
   name = "xdn-ar-acme-route53"
   role = aws_iam_role.ar_acme.name
+}
+
+# 10g. RC instance role: read-only pull of the Terraform-issued wildcard cert
+#      from S3, so the control-plane HTTP API (HttpReconfigurator) can terminate
+#      TLS for the browser dashboard. Unlike the ARs, the RC needs NO Route53
+#      access (coredns is baked) -- only s3:GetObject on the cert store. Reuses the
+#      ar_assume policy doc (same ec2.amazonaws.com principal).
+resource "aws_iam_role" "rc_tls" {
+  name               = "xdn-rc-tls-s3"
+  assume_role_policy = data.aws_iam_policy_document.ar_assume.json
+}
+
+data "aws_iam_policy_document" "rc_tls" {
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.tls.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "rc_tls" {
+  name   = "xdn-rc-tls-s3"
+  role   = aws_iam_role.rc_tls.id
+  policy = data.aws_iam_policy_document.rc_tls.json
+}
+
+resource "aws_iam_instance_profile" "rc_tls" {
+  name = "xdn-rc-tls-s3"
+  role = aws_iam_role.rc_tls.name
 }
 
 # 10e. Wildcard certificate, issued ONCE by Terraform via ACME DNS-01 and kept
