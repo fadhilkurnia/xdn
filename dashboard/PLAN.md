@@ -108,15 +108,20 @@ xdn-cli, and trace_bw use; the security group now allows both.
       verbs land (below).
 
 ### Phase 1 — dashboard skeleton + list endpoint + deploy
-- [ ] `HttpReconfigurator`: implement `GET /api/v2/services` (list).
-- [ ] `dashboard/{index.html,app.js,style.css}`; CP endpoint config (`?cp=`).
-- [ ] Service list (from the new list endpoint), deploy form (CREATE), destroy
-      button (DELETE), "open research cluster" banner.
-- [ ] Placement map: a marker per replica from `/placement`, colored by `ROLE`,
-      `METADATA` popup.
+- [ ] `HttpReconfigurator`: implement `GET /api/v2/services` (list). **STILL OPEN**
+      — needs a new reconfigurator request/interface method + an RC AMI rebuild.
+      Dashboard degrades gracefully without it (deploy / `?svc=`).
+- [x] `dashboard/{index.html,app.js,style.css,config.js}`; CP endpoint config (`?cp=`).
+- [x] deploy form (CREATE), per-service destroy (DELETE), "open research cluster"
+      banner, connection status, action log. (Auto-list pending the endpoint above.)
+- [x] Placement view: replica table (id/role/http/geo/metadata) + Leaflet map with
+      role-coloured markers + fitBounds. **Map shows no markers yet** because the
+      AWS nodes have no `active.<node>.geolocation` configured (single-region) —
+      add per-node lat/lon (small config + instance-replacing re-apply) to populate it.
 - [x] `.github/workflows/deploy-dashboard.yml` → `actions/deploy-pages`
       (publishes `dashboard/` to GitHub Pages on push; enable Pages → Source:
-      GitHub Actions).
+      GitHub Actions). Also serving live from the RC at `https://cp.xdnapp.com/`.
+- [ ] Browser-verify the rendering end-to-end (now self-serviceable via the RC URL).
 
 ### Phase 2 — geo-demand
 - [ ] `HttpReconfigurator`: `GET /api/v2/services/<svc>/demand` (decode sparse grid).
