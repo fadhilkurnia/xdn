@@ -107,13 +107,13 @@ xdn-cli, and trace_bw use; the security group now allows both.
       fine for GET, but set `allowedRequestMethods` when the RESTful POST/DELETE
       verbs land (below).
 
-### Phase 1 — dashboard skeleton + list endpoint + deploy
-- [ ] `HttpReconfigurator`: implement `GET /api/v2/services` (list). **STILL OPEN**
-      — needs a new reconfigurator request/interface method + an RC AMI rebuild.
-      Dashboard degrades gracefully without it (deploy / `?svc=`).
+### Phase 1 — dashboard skeleton + deploy
+- [~] ~~`GET /api/v2/services` (list)~~ **DESCOPED for v1** — customers inspect a
+      service by its known name (entered in the UI / `?svc=`), so the auto-list
+      endpoint is not needed. Kept as an optional future nicety (see follow-ups).
 - [x] `dashboard/{index.html,app.js,style.css,config.js}`; CP endpoint config (`?cp=`).
-- [x] deploy form (CREATE), per-service destroy (DELETE), "open research cluster"
-      banner, connection status, action log. (Auto-list pending the endpoint above.)
+- [x] inspect-a-service-by-name input, deploy form (CREATE), per-service destroy
+      (DELETE), "open research cluster" banner, connection status, action log.
 - [x] Placement view: replica table (id/role/http/geo/metadata) + Leaflet map with
       role-coloured markers + fitBounds. **Map shows no markers yet** because the
       AWS nodes have no `active.<node>.geolocation` configured (single-region) —

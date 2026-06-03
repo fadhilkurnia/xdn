@@ -33,19 +33,15 @@
   </section>
 
   <main>
-    <!-- Services list + deploy/destroy -->
+    <!-- Inspect a service by name + deploy/destroy -->
     <section class="card">
-      <h2>Services</h2>
+      <h2>Service</h2>
       <div class="row">
-        <button id="refresh">Refresh list</button>
-        <span id="list-note" class="hint"></span>
+        <input id="svc-name" type="text" placeholder="service name" spellcheck="false" />
+        <button id="inspect-btn">Inspect</button>
+        <button id="destroy-btn" class="danger" disabled>Destroy</button>
       </div>
-      <table id="services">
-        <thead>
-          <tr><th>Service</th><th>Epoch</th><th>Replicas</th><th></th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <p class="hint">Enter a known service name to view its placement, or deploy a new one below.</p>
 
       <details id="deploy-box">
         <summary>Deploy a service</summary>

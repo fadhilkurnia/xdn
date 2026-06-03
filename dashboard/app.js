@@ -60,11 +60,12 @@ async function connect() {
   syncUrl();
   setConn(false, "connecting…");
   try {
-    // Any HTTP response (even 404) means the TLS control plane is reachable.
-    await api("/api/v2/services");
+    // Any HTTP response means the TLS control plane is reachable. (We probe the
+    // placement route for a throwaway name; the list endpoint is intentionally
+    // not used — customers inspect a service by its known name.)
+    await api("/api/v2/services/__probe__/placement");
     setConn(true, `connected to ${controlPlane}`);
-    await refreshList();
-    if (currentSvc) inspect(currentSvc);
+    if (currentSvc) { $("#svc-name").value = currentSvc; inspect(currentSvc); }
   } catch (e) {
     setConn(false, `cannot reach ${controlPlane}`);
     log(
@@ -73,53 +74,6 @@ async function connect() {
       `certificate, then Connect again.`,
       true
     );
-  }
-}
-
-// ---- Service list ----------------------------------------------------------
-async function refreshList() {
-  const tbody = $("#services tbody");
-  const note = $("#list-note");
-  try {
-    const r = await api("/api/v2/services");
-    if (r.ok && r.body && Array.isArray(r.body.SERVICES)) {
-      note.textContent = "";
-      renderServices(r.body.SERVICES);
-      return;
-    }
-    // Endpoint not deployed yet (Phase 1 backend pending) → graceful fallback.
-    tbody.innerHTML = "";
-    note.innerHTML =
-      `<code>GET /api/v2/services</code> not available yet — deploy a service ` +
-      `below, or load <code>?svc=NAME</code> to inspect a known one.`;
-  } catch (e) {
-    note.textContent = `Could not list services: ${e.message}`;
-  }
-}
-
-function renderServices(services) {
-  const tbody = $("#services tbody");
-  tbody.innerHTML = "";
-  if (!services.length) {
-    tbody.innerHTML = `<tr><td colspan="4" class="muted">No services deployed.</td></tr>`;
-    return;
-  }
-  for (const s of services) {
-    const name = s.NAME || s.name;
-    const tr = document.createElement("tr");
-    tr.className = "clickable" + (name === currentSvc ? " selected" : "");
-    tr.innerHTML =
-      `<td class="mono">${esc(name)}</td>` +
-      `<td>${s.EPOCH ?? s.epoch ?? ""}</td>` +
-      `<td>${s.NUM_REPLICAS ?? s.num_replicas ?? ""}</td>` +
-      `<td></td>`;
-    tr.querySelector("td:first-child").onclick = () => inspect(name);
-    const del = document.createElement("button");
-    del.className = "danger";
-    del.textContent = "Destroy";
-    del.onclick = (ev) => { ev.stopPropagation(); destroy(name); };
-    tr.querySelector("td:last-child").appendChild(del);
-    tbody.appendChild(tr);
   }
 }
 
@@ -143,9 +97,7 @@ async function deploy(form) {
     const r = await legacy(q);
     if (r.ok && !(r.body && r.body.FAILED)) {
       log(`Deployed "${cfg.name}". Reconfiguring replicas…`);
-      currentSvc = cfg.name;
-      syncUrl();
-      setTimeout(() => { refreshList(); inspect(cfg.name); }, 1500);
+      setTimeout(() => inspect(cfg.name), 1500);
     } else {
       log(`Deploy failed: ${(r.body && r.body.RESPONSE_MESSAGE) || r.status}`, true);
     }
@@ -162,7 +114,6 @@ async function destroy(name) {
     if (r.ok && !(r.body && r.body.FAILED)) {
       log(`Destroyed "${name}".`);
       if (currentSvc === name) { currentSvc = null; syncUrl(); clearPlacement(); }
-      refreshList();
     } else {
       log(`Destroy failed: ${(r.body && r.body.RESPONSE_MESSAGE) || r.status}`, true);
     }
@@ -175,9 +126,9 @@ async function destroy(name) {
 async function inspect(name) {
   currentSvc = name;
   syncUrl();
+  $("#svc-name").value = name;
+  $("#destroy-btn").disabled = false;
   $("#placement-svc").textContent = `· ${name}`;
-  document.querySelectorAll("#services tbody tr").forEach((tr) =>
-    tr.classList.toggle("selected", tr.firstChild?.textContent === name));
   const note = $("#placement-note");
   note.textContent = "Loading…";
   try {
@@ -202,6 +153,8 @@ async function inspect(name) {
 function clearPlacement() {
   $("#placement-svc").textContent = "";
   $("#placement-note").textContent = "";
+  $("#svc-name").value = "";
+  $("#destroy-btn").disabled = true;
   renderReplicas([]); drawMarkers([]);
 }
 
@@ -272,10 +225,14 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#banner").textContent =
     "⚠ Open research cluster — anyone with this page can deploy or destroy services.";
   $("#cp").value = controlPlane;
+  if (currentSvc) $("#svc-name").value = currentSvc;
   initMap();
+  const doInspect = () => { const n = $("#svc-name").value.trim(); if (n) inspect(n); };
   $("#connect").onclick = connect;
-  $("#refresh").onclick = refreshList;
   $("#cp").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+  $("#inspect-btn").onclick = doInspect;
+  $("#svc-name").addEventListener("keydown", (e) => { if (e.key === "Enter") doInspect(); });
+  $("#destroy-btn").onclick = () => { if (currentSvc) destroy(currentSvc); };
   $("#deploy-form").addEventListener("submit", (e) => { e.preventDefault(); deploy(e.target); });
   connect();
 });
