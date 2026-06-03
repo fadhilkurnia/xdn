@@ -97,9 +97,15 @@ xdn-cli, and trace_bw use; the security group now allows both.
 - [x] `aws/rc-userdata.tftpl`: pull `fullchain.pem`/`privkey.pem` from S3 +
       PKCS#8-convert + `xdn-tls-pull.timer` (mirror `ar-userdata.tftpl`); append
       the HTTPS flags. Services start first (coredns up → issuance), then pull.
-- [ ] **Verify (needs a deploy):** browser `fetch` of `/placement` over
-      `https://cp.xdnapp.com:3400`, including the CORS preflight (OPTIONS); and
-      confirm `:3300` plaintext still works (coredns/xdn-cli unaffected).
+- [x] **Verified on a live cluster (2026-06-03):** `:3400` serves the real
+      `*.xdnapp.com` cert (cold-start self-signed → cert-pull restart works);
+      OPTIONS preflight + GET both return `Access-Control-Allow-Origin: *`;
+      `/api/v2/services/<svc>/placement` returns nodes over HTTPS; `:3300`
+      plaintext + coredns DNS unaffected. RC AMI `ami-05421989023a115de`.
+      Minor: the cold-boot `xdn-tls-pull` retry-loop vs timer can race once (cert
+      still loads); and Netty CORS returns empty `Allow-Methods` on preflight —
+      fine for GET, but set `allowedRequestMethods` when the RESTful POST/DELETE
+      verbs land (below).
 
 ### Phase 1 — dashboard skeleton + list endpoint + deploy
 - [ ] `HttpReconfigurator`: implement `GET /api/v2/services` (list).
