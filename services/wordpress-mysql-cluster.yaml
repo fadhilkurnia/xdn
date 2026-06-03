@@ -34,3 +34,8 @@ components:
             define('DISABLE_WP_CRON', true);
             define('AUTOMATIC_UPDATER_DISABLED', true);
             define('WP_AUTO_UPDATE_CORE', false);
+            // XDN's frontend terminates TLS on :443 and forwards plain HTTP, so WordPress
+            // otherwise thinks it is on http:// and emits mixed-content asset URLs that the
+            // browser blocks. Tell WP it is behind HTTPS (honor X-Forwarded-Proto if the
+            // frontend sets it; otherwise assume https since the frontend always serves TLS).
+            if ((!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') || !isset($_SERVER['HTTPS'])) { $_SERVER['HTTPS'] = 'on'; }
