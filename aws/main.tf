@@ -271,9 +271,9 @@ variable "rc_instance_type" {
 }
 
 variable "ar_instance_type" {
-  description = "EC2 instance type for the ActiveReplica (AR) edge nodes (run Docker + stateful apps). Defaults to Graviton t4g.large (~20% cheaper than t3.large); requires an arm64 ar_ami (the default is one) and multi-arch service images."
+  description = "EC2 instance type for the ActiveReplica (AR) edge nodes. Graviton (needs the arm64 ar_ami + multi-arch service images). t4g.small (2GB) suits light services/eval; bump to t4g.medium (4GB) or t4g.large (8GB) for heavy stateful apps (MySQL/Postgres) where 2GB is too tight."
   type        = string
-  default     = "t4g.large" # Graviton, ~$49/mo vs t3.large ~$61/mo (needs arm64 ar_ami)
+  default     = "t4g.small" # Graviton 2GB, ~$12/mo each; use t4g.large for heavy DB apps
 }
 
 # Run the ARs as Spot instances (~60-70% cheaper than on-demand) instead of

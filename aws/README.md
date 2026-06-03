@@ -87,11 +87,16 @@ The 3 ActiveReplicas are ~90% of the monthly bill. Three compounding levers:
    Re-launch your services after a resume — service state under `/tmp` is not
    guaranteed to survive a stop/start (treat each run as a fresh deploy).
 
-2. **Graviton (`arm64`) ARs — permanent ~20%.** Build an arm64 AR AMI
-   (`ARCH=arm64 ./create_ar_ami.sh`), point `ar_ami` at it, and set
-   `ar_instance_type=t4g.large`. **Requires multi-arch service images** (official
-   `mysql`/`postgres`/`wordpress`/`nginx` qualify; amd64-only custom images do
-   not — they'd fail with `exec format error`).
+2. **Graviton (`arm64`) ARs — the default.** `ar_ami` is an arm64 AR AMI and
+   `ar_instance_type` defaults to **`t4g.small`** (2 GB, ~$12/mo each), which fits
+   light services/eval. Bump to `t4g.medium` (4 GB) or `t4g.large` (8 GB) for
+   heavy stateful apps (MySQL/Postgres) where 2 GB is too tight — same AMI, no
+   rebuild: `terraform apply -var ar_instance_type=t4g.large`. Changing size is an
+   in-place stop/retype/start (not a rebuild), but it still clears service state,
+   so re-launch services afterward. **Requires multi-arch service images**
+   (official `mysql`/`postgres`/`wordpress`/`nginx` qualify; amd64-only custom
+   images fail with `exec format error`). Rebuild the AMI with
+   `ARCH=arm64 ./create_ar_ami.sh`.
 
 3. **Spot ARs — ~60–70% off running hours.** Set `-var ar_use_spot=true`. Uses
    *persistent* spot with `stop` interruption behavior, so a reclaim stops (not
