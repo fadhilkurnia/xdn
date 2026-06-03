@@ -16,8 +16,23 @@ set -euo pipefail
 # Configurable knobs (override via environment before running the entrypoint).
 # ---------------------------------------------------------------------------
 AWS_REGION="${AWS_REGION:-us-east-1}"
-BASE_AMI="${BASE_AMI:-}"                       # empty -> resolve latest Ubuntu 24.04 amd64
-BUILDER_INSTANCE_TYPE="${BUILDER_INSTANCE_TYPE:-t3.large}"
+
+# Target CPU architecture for the baked AMI: amd64 (x86-64; t3/m5/... families)
+# or arm64 (Graviton; t4g/m6g/... families, ~20% cheaper per GB). This drives
+# the base Ubuntu AMI, the Go toolchain download, and the builder family.
+# coredns and docker-ce-cli are compiled/installed NATIVELY on the builder, so
+# an arm64 AMI MUST be built on an arm64 (Graviton) builder -- you cannot
+# cross-compile them here. The Java jars are arch-neutral bytecode, so the only
+# arch-sensitive RC artifacts are the OS, the coredns binary, and the docker CLI.
+ARCH="${ARCH:-amd64}"
+case "$ARCH" in
+  amd64) _default_builder="t3.large" ;;   # x86-64 builder
+  arm64) _default_builder="t4g.large" ;;  # Graviton builder (native arm64 output)
+  *) printf '[err] ARCH must be amd64 or arm64 (got: %s)\n' "$ARCH" >&2; exit 1 ;;
+esac
+
+BASE_AMI="${BASE_AMI:-}"                       # empty -> resolve latest Ubuntu 24.04 for $ARCH
+BUILDER_INSTANCE_TYPE="${BUILDER_INSTANCE_TYPE:-$_default_builder}"  # must match $ARCH
 BUILDER_VOLUME_SIZE="${BUILDER_VOLUME_SIZE:-30}"   # GB, gp3 (8GB default is too small)
 KEY_NAME="${KEY_NAME:-xdn-aws-key}"
 SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/xdn-aws-key}"
@@ -54,16 +69,16 @@ preflight() {
 }
 
 # ---------------------------------------------------------------------------
-# resolve_base_ami - latest Ubuntu 24.04 amd64 via Canonical's public SSM param.
+# resolve_base_ami - latest Ubuntu 24.04 ($ARCH) via Canonical's public SSM param.
 # ---------------------------------------------------------------------------
 resolve_base_ami() {
   if [[ -n "$BASE_AMI" ]]; then
     log "Using provided base AMI: $BASE_AMI"
     return
   fi
-  log "Resolving latest Ubuntu 24.04 amd64 AMI via SSM"
+  log "Resolving latest Ubuntu 24.04 $ARCH AMI via SSM"
   BASE_AMI=$(aws ssm get-parameter --region "$AWS_REGION" \
-    --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
+    --name "/aws/service/canonical/ubuntu/server/24.04/stable/current/${ARCH}/hvm/ebs-gp3/ami-id" \
     --query 'Parameter.Value' --output text)
   [[ "$BASE_AMI" == ami-* ]] || die "Failed to resolve base AMI (got: '$BASE_AMI')"
   log "Base AMI: $BASE_AMI"
@@ -193,11 +208,12 @@ emit_common_provision() {
 sudo apt-get update
 sudo apt-get install -y openjdk-21-jdk ant git rsync wget curl
 
-# --- Go ${GO_VERSION} (NOT 1.22.4 from bin/xdnd; coredns needs 1.23+) ---
-wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+# --- Go ${GO_VERSION} (NOT 1.22.4 from bin/xdnd; coredns needs 1.23+).
+#     Go's arch slug matches \$ARCH (amd64/arm64), so the same line builds both. ---
+wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz"
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"
-rm -f "go${GO_VERSION}.linux-amd64.tar.gz"
+sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-${ARCH}.tar.gz"
+rm -f "go${GO_VERSION}.linux-${ARCH}.tar.gz"
 
 # --- clone source and build the jars ---
 rm -rf "\$HOME/xdn"
@@ -276,14 +292,14 @@ bake_image() {
   log "Creating AMI: $ami_name"
   AMI_ID=$(aws_ec2 create-image --instance-id "$BUILDER_ID" \
     --name "$ami_name" \
-    --description "XDN ${ROLE} node ($REPO_BRANCH)" \
+    --description "XDN ${ROLE} node ($REPO_BRANCH, $ARCH)" \
     --query 'ImageId' --output text)
   [[ "$AMI_ID" == ami-* ]] || die "create-image failed"
   log "Waiting for AMI $AMI_ID to become available"
   aws_ec2 wait image-available --image-ids "$AMI_ID"
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  printf '%s\t%s\t%s\n' "$ami_name" "$AMI_ID" "$AWS_REGION" \
+  printf '%s\t%s\t%s\t%s\n' "$ami_name" "$AMI_ID" "$AWS_REGION" "$ARCH" \
     >> "$script_dir/last-built-amis.txt"
   log "AMI ready: $AMI_ID"
 }
@@ -324,7 +340,7 @@ run_ami_build() {
   : "${AMI_NAME_PREFIX:?AMI_NAME_PREFIX must be set by the entrypoint}"
   local stamp ami_name
   stamp="$(date -u +%Y%m%d-%H%M%S)"   # captured once; stable for this run
-  ami_name="${AMI_NAME_PREFIX}-${stamp}"
+  ami_name="${AMI_NAME_PREFIX}-${ARCH}-${stamp}"
 
   preflight
   resolve_base_ami

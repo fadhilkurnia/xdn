@@ -240,21 +240,53 @@ resource "aws_key_pair" "deployer" {
 # 9. Per-role AMIs (built from the 'main' branch by create_rc_ami.sh /
 #    create_ar_ami.sh; see last-built-amis.txt). Override on the CLI if rebuilt.
 variable "rc_ami" {
-  description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation)."
+  description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation). ARM64/Graviton image (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-0281566cb7fdbd374" # IPv6: coredns AAAA + IPv6-consensus jar
+  default     = "ami-0b430939d4943fcbb" # arm64, IPv6 (coredns AAAA + IPv6-consensus jar), 16GB root
 }
 
 variable "ar_ami" {
-  description = "AMI for the ActiveReplica (AR) edge nodes."
+  description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from the xdn-ar-arm64 branch by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-05ab6b5c1b45eb8dd" # IPv6 + TLS jar
+  default     = "ami-0c22f54b43a823533" # arm64, IPv6 + TLS jar + paxos node-0 fixes
 }
 
 variable "ar_count" {
   description = "Number of ActiveReplica nodes (uses subnets 2..N)."
   type        = number
   default     = 3
+}
+
+# Per-role instance sizing. The RC is a lean control-plane node (reconfigurator
+# JVM + coredns; no Docker daemon, no app containers, off the data path), so it
+# runs comfortably on a smaller, cheaper instance than the ARs. The RC JVM sets
+# no -Xmx, so its max heap is ~1/4 of RAM -- downsizing RAM shrinks the heap
+# automatically (t3.medium => ~1 GB heap, ample for a singleton control plane).
+# The ARs run Docker + possibly heavy stateful apps (MySQL/Postgres), so they
+# keep the larger size.
+variable "rc_instance_type" {
+  description = "EC2 instance type for the Reconfigurator (control plane) node. Defaults to a Graviton t4g.micro -- REQUIRES an arm64 rc_ami (build with ARCH=arm64 ./create_rc_ami.sh). t4g.micro has only 1GB RAM, so the RC JVM runs with a small (~256MB) default heap; the userdata adds a swapfile to absorb GC/boot spikes."
+  type        = string
+  default     = "t4g.micro" # Graviton, ~$6/mo in us-east-1 (needs arm64 rc_ami)
+}
+
+variable "ar_instance_type" {
+  description = "EC2 instance type for the ActiveReplica (AR) edge nodes. Graviton (needs the arm64 ar_ami + multi-arch service images). t4g.small (2GB) suits light services/eval; bump to t4g.medium (4GB) or t4g.large (8GB) for heavy stateful apps (MySQL/Postgres) where 2GB is too tight."
+  type        = string
+  default     = "t4g.small" # Graviton 2GB, ~$12/mo each; use t4g.large for heavy DB apps
+}
+
+# Run the ARs as Spot instances (~60-70% cheaper than on-demand) instead of
+# on-demand. The 3-way Paxos quorum tolerates losing one AR to a reclaim, so this
+# fits the research/eval cluster -- not stability-critical runs. Spot price is
+# variable and capacity is not guaranteed. Uses PERSISTENT spot with `stop`
+# interruption behavior: a reclaimed AR is STOPPED (EBS + addresses preserved) and
+# auto-restarted by AWS when capacity returns, and cluster_power.sh can still
+# pause/resume it. Best paired with stop-when-idle for long experiment runs.
+variable "ar_use_spot" {
+  description = "Run ActiveReplicas as Spot instances (persistent, stop-on-interruption). ~60-70% cheaper; a reclaim is tolerated by the 3-way quorum. Suitable for the research cluster."
+  type        = bool
+  default     = false
 }
 
 # --- HTTPS / Let's Encrypt (Caddy on the ARs) ---
@@ -325,7 +357,7 @@ locals {
 # 9a. Reconfigurator (control plane) + coredns nameserver. Single node, subnet[0].
 resource "aws_instance" "rc" {
   ami                    = var.rc_ami
-  instance_type          = "t3.large"
+  instance_type          = var.rc_instance_type
   subnet_id              = aws_subnet.ipv6_subnets[0].id
   private_ip             = local.rc_private_ip
   ipv6_addresses         = [local.rc_ipv6] # consensus advertises + binds this
@@ -346,7 +378,7 @@ resource "aws_instance" "rc" {
   })
 
   root_block_device {
-    volume_size = 30
+    volume_size = 16 # lean control-plane node; matches the smaller RC AMI snapshot
     volume_type = "gp3"
   }
 
@@ -357,7 +389,7 @@ resource "aws_instance" "rc" {
 resource "aws_instance" "ar" {
   count                       = var.ar_count
   ami                         = var.ar_ami
-  instance_type               = "t3.large"
+  instance_type               = var.ar_instance_type
   subnet_id                   = aws_subnet.ipv6_subnets[count.index + 1].id
   private_ip                  = local.ar_private_ips[count.index]
   ipv6_addresses              = [local.ar_ipv6s[count.index]] # consensus + frontend bind
@@ -367,6 +399,21 @@ resource "aws_instance" "ar" {
 
   # Lets the baked Caddy answer the ACME DNS-01 challenge via Route53 (no keys).
   iam_instance_profile = aws_iam_instance_profile.ar_acme.name
+
+  # Optional Spot pricing for the ARs (var.ar_use_spot). Persistent + stop so a
+  # reclaim stops (not terminates) the AR -- EBS and the static private/IPv6
+  # addresses survive, AWS restarts it when capacity returns, and the quorum only
+  # ever loses one replica transiently. Toggling this forces AR replacement.
+  dynamic "instance_market_options" {
+    for_each = var.ar_use_spot ? [1] : []
+    content {
+      market_type = "spot"
+      spot_options {
+        spot_instance_type             = "persistent"
+        instance_interruption_behavior = "stop"
+      }
+    }
+  }
 
   # Bootstrap: drop config + a unique numeric node id (1..N) so the baked
   # xdn-ar unit starts. The RC is node 0; ARs continue from 1.
@@ -506,8 +553,20 @@ resource "acme_certificate" "wildcard" {
     # region. It writes the TXT into the _acme-challenge.<base_domain> zone (10c).
     config = {
       AWS_REGION = "us-east-1"
+      # Pin the hosted zone id so lego writes the challenge TXT DIRECTLY (and waits
+      # on route53 GetChange -> INSYNC) instead of discovering the zone via a public
+      # SOA walk. On a cold apply that walk runs from the apply host's resolver,
+      # which can SERVFAIL until the xdnapp.com delegation fully propagates and any
+      # negative cache expires -- blocking issuance even though the zone already
+      # exists (it's created in this same apply). Pinning removes that DNS dependency.
+      AWS_HOSTED_ZONE_ID = aws_route53_zone.acme.zone_id
     }
   }
+
+  # The post-present propagation pre-check resolves the TXT before asking the CA to
+  # validate; use public recursive resolvers for it, since the apply host's default
+  # resolver may SERVFAIL on the just-delegated zone.
+  recursive_nameservers = ["8.8.8.8:53", "1.1.1.1:53"]
 
   # Validation resolves _acme-challenge through coredns -> Route53, so the RC
   # (coredns) must be reachable. On a fully cold apply this may need a re-apply

@@ -4,6 +4,21 @@
 # systemd units wait for, then starts them.
 set -euo pipefail
 
+# --- swap: the RC may run on a small instance (e.g. t4g.micro, 1GB RAM). The
+#     reconfigurator JVM (default max heap ~1/4 RAM) plus coredns and the OS can
+#     briefly spike past physical RAM at boot/GC; a modest swapfile turns an
+#     OOM-kill into a slow moment. Idempotent: skipped if /swapfile already
+#     exists, and a no-op (|| true) on instances with ample RAM. ---
+( set +e
+  if [ ! -f /swapfile ]; then
+    fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
+) || true
+
 install -d -m 0755 /opt/xdn/conf
 
 cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'

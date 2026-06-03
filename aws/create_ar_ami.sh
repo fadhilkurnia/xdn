@@ -70,8 +70,10 @@ sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
 # --- Caddy (HTTPS termination): a custom build that bundles the route53 DNS-01
 #     provider, fetched from Caddy's download API (no Go/xcaddy needed here).
 #     Per-deployment config (Caddyfile) is injected at launch by user_data. ---
+# arch matches the builder (dpkg prints amd64/arm64, which is exactly what Caddy's
+# download API expects) so a Graviton AR AMI gets an arm64 Caddy, not an x86 one.
 sudo curl -fsSL -o /opt/xdn/bin/caddy \
-  "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/route53"
+  "https://caddyserver.com/api/download?os=linux&arch=$(dpkg --print-architecture)&p=github.com/caddy-dns/route53"
 sudo chmod +x /opt/xdn/bin/caddy
 sudo ln -sf /opt/xdn/bin/caddy /usr/local/bin/caddy
 EOF

@@ -10,6 +10,7 @@ Terraform infrastructure and AMI builders for deploying XDN to EC2.
 | `create_rc_ami.sh` | Build an AMI for the Reconfigurator (RC) + coredns nameserver |
 | `create_ar_ami.sh` | Build an AMI for the ActiveReplica (AR) edge node |
 | `ami_common.sh` | Shared AWS plumbing sourced by the two builders (not run directly) |
+| `cluster_power.sh` | `pause`/`resume`/`status` the cluster's EC2 instances to cut idle cost |
 
 ## Prerequisites
 
@@ -28,8 +29,82 @@ terminates the builder. The new AMI id is printed and appended to
 ./create_ar_ami.sh
 ```
 
-Common overrides (see `ami_common.sh` for all): `AWS_REGION`, `REPO_BRANCH`,
-`BUILDER_INSTANCE_TYPE`, `BUILDER_VOLUME_SIZE`, `SUBNET_ID`.
+Common overrides (see `ami_common.sh` for all): `ARCH`, `AWS_REGION`,
+`REPO_BRANCH`, `BUILDER_INSTANCE_TYPE`, `BUILDER_VOLUME_SIZE`, `SUBNET_ID`.
+
+### Architecture (x86-64 vs Graviton/arm64)
+
+`ARCH` selects the AMI's CPU architecture (`amd64`, the default, or `arm64`).
+It drives the base Ubuntu AMI, the Go toolchain download, and the builder
+family — `coredns` and `docker-ce-cli` are compiled/installed **natively**, so
+an `arm64` AMI is built on a Graviton builder (auto-defaults to `t4g.large`);
+you cannot cross-compile them here. The Java jars are arch-neutral bytecode.
+
+```bash
+ARCH=arm64 ./create_rc_ami.sh    # Graviton RC AMI for t4g.* instances
+```
+
+The RC is a lean control-plane node (reconfigurator JVM + coredns; no Docker
+daemon, no app containers, off the data path), so it's a good fit for the
+smallest Graviton instance. `main.tf` exposes per-role sizing via
+`rc_instance_type` (**default `t4g.micro`**, Graviton, ~$6/mo) and
+`ar_instance_type` (default `t3.large`). The default `rc_ami` is the **arm64**
+RC image; build/refresh it with `ARCH=arm64 ./create_rc_ami.sh` (clones
+`fork/main`, which carries the IPv6 jar). The RC build also uses a smaller
+16 GB root volume (vs the AR's 30 GB), matched by the RC's `root_block_device`,
+so the AMI snapshot and each RC instance's gp3 volume are smaller and cheaper.
+
+`t4g.micro` has only 1 GB RAM, so the RC JVM runs with a small (~256 MB) default
+max heap. To keep that safe, `rc-userdata.tftpl` provisions a 1 GB **swapfile**
+on boot, which absorbs boot/GC spikes (JVM + coredns + geo DB + OS) that would
+otherwise risk an OOM-kill. If you want more headroom, bump to `t4g.small`
+(2 GB) — same arm64 AMI, no rebuild:
+
+```bash
+terraform apply -var rc_instance_type=t4g.small
+```
+
+Avoid `t4g.nano` (0.5 GB) for the RC — even with swap, ~128 MB heap is too tight.
+By default the ARs stay on `amd64` (`t3.large`) since they run Docker + heavy
+stateful apps; see *Cutting AR cost* below for the Graviton/Spot/idle options.
+(Note: an EBS *snapshot* is billed by used blocks, not the provisioned volume
+size, so the 30→16 GB change mainly trims each running RC's gp3 volume cost; the
+snapshot was already lean.)
+
+### Cutting AR cost
+
+The 3 ActiveReplicas are ~90% of the monthly bill. Three compounding levers:
+
+1. **Stop when idle (biggest lever for an experiments cluster).** Stopped
+   instances bill only their EBS (~$7/mo total) instead of compute. The RC EIP
+   and every node's static private + IPv6 address persist across stop/start, so
+   the cluster resumes at the same endpoints:
+   ```bash
+   ./cluster_power.sh pause     # stop all RC + AR instances when idle
+   ./cluster_power.sh resume    # start them again before an experiment
+   ./cluster_power.sh status    # show type + power state per node
+   ```
+   Re-launch your services after a resume — service state under `/tmp` is not
+   guaranteed to survive a stop/start (treat each run as a fresh deploy).
+
+2. **Graviton (`arm64`) ARs — the default.** `ar_ami` is an arm64 AR AMI and
+   `ar_instance_type` defaults to **`t4g.small`** (2 GB, ~$12/mo each), which fits
+   light services/eval. Bump to `t4g.medium` (4 GB) or `t4g.large` (8 GB) for
+   heavy stateful apps (MySQL/Postgres) where 2 GB is too tight — same AMI, no
+   rebuild: `terraform apply -var ar_instance_type=t4g.large`. Changing size is an
+   in-place stop/retype/start (not a rebuild), but it still clears service state,
+   so re-launch services afterward. **Requires multi-arch service images**
+   (official `mysql`/`postgres`/`wordpress`/`nginx` qualify; amd64-only custom
+   images fail with `exec format error`). Rebuild the AMI with
+   `ARCH=arm64 ./create_ar_ami.sh`.
+
+3. **Spot ARs — ~60–70% off running hours.** Set `-var ar_use_spot=true`. Uses
+   *persistent* spot with `stop` interruption behavior, so a reclaim stops (not
+   terminates) the AR — EBS + addresses survive, AWS restarts it when capacity
+   returns, and `cluster_power.sh` can still pause/resume it. The 3-way quorum
+   tolerates losing one AR; best for long runs where mid-run reclaim is OK.
+
+For a ~25% duty cycle these take the ARs from ~$182/mo to roughly $15–40/mo.
 
 The AMIs are config-free: systemd units (`xdn-rc`, `xdn-dns`, `xdn-ar`) stay
 inert until launch-time `user_data` writes `/opt/xdn/conf/gigapaxos.properties`
