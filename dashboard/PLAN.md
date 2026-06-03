@@ -125,8 +125,13 @@ xdn-cli, and trace_bw use; the security group now allows both.
 - [ ] Browser-verify the rendering end-to-end (now self-serviceable via the RC URL).
 
 ### Phase 2 — geo-demand
-- [ ] `HttpReconfigurator`: `GET /api/v2/services/<svc>/demand` (decode sparse grid).
-- [ ] Dashboard: Leaflet heatmap layer over the demand cells.
+- [x] Enable geo-demand profiling (`DEMAND_PROFILE_TYPE=…XdnGeoDemandProfiler`) in the AWS config.
+- [x] `GET /api/v2/services/<svc>/demand` → `[{lat,lon,count}]`. Read-only:
+      `AbstractDemandProfile.getDemandGeoCells()` (default empty; overridden by
+      `XdnGeoDemandProfiler`, no reset) ← aggregate profiler ← a `ReconfiguratorFunctions`
+      method ← `HttpReconfigurator` route. No xdn import in core (clean layering).
+- [x] Dashboard: `leaflet.heat` heatmap layer + 5s polling + toggle, over the placement map.
+- [ ] Deploy (RC AMI rebuild + apply) + generate demand (`X-Client-Location`) + verify.
 
 ### Phase 3 — inter-replica edges (analytic latency)
 - [ ] Dashboard: polylines between replica markers, labeled with Haversine+fiber

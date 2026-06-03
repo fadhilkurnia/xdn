@@ -11,7 +11,7 @@ const params = new URLSearchParams(location.search);
 
 let controlPlane = params.get("cp") || DEFAULT_CP;
 let currentSvc = params.get("svc") || null;
-let map, markerLayer;
+let map, markerLayer, heatLayer, demandTimer;
 
 // ---- URL state -------------------------------------------------------------
 function syncUrl() {
@@ -145,6 +145,7 @@ async function inspect(name) {
       (meta ? ` · <span class="mono">${esc(meta)}</span>` : "");
     renderReplicas(nodes);
     drawMarkers(nodes);
+    startDemandPolling(name);
   } catch (e) {
     note.textContent = `Error loading placement: ${e.message}`;
   }
@@ -153,8 +154,10 @@ async function inspect(name) {
 function clearPlacement() {
   $("#placement-svc").textContent = "";
   $("#placement-note").textContent = "";
+  $("#demand-note").textContent = "";
   $("#svc-name").value = "";
   $("#destroy-btn").disabled = true;
+  stopDemandPolling();
   renderReplicas([]); drawMarkers([]);
 }
 
@@ -213,6 +216,42 @@ function drawMarkers(nodes) {
   }
 }
 
+// ---- Demand heatmap --------------------------------------------------------
+async function fetchDemand(name) {
+  try {
+    const r = await api(`/api/v2/services/${encodeURIComponent(name)}/demand`);
+    const cells = r.ok && Array.isArray(r.body) ? r.body : [];
+    drawHeatmap(cells);
+    const total = cells.reduce((s, c) => s + (c.count || 0), 0);
+    $("#demand-note").textContent = cells.length
+      ? `demand: ${total} request(s) across ${cells.length} cell(s)`
+      : "no demand yet — send requests with an X-Client-Location header";
+  } catch (e) {
+    $("#demand-note").textContent = `demand unavailable: ${e.message}`;
+  }
+}
+
+function drawHeatmap(cells) {
+  if (!map || typeof L.heatLayer !== "function") return;
+  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+  if (!cells.length) return;
+  const maxCount = Math.max(...cells.map((c) => c.count || 1));
+  const points = cells.map((c) => [c.lat, c.lon, c.count || 1]);
+  heatLayer = L.heatLayer(points, { radius: 28, blur: 18, max: maxCount, minOpacity: 0.3 });
+  if ($("#heat-toggle").checked) heatLayer.addTo(map);
+}
+
+function startDemandPolling(name) {
+  stopDemandPolling();
+  fetchDemand(name);
+  demandTimer = setInterval(() => fetchDemand(name), 5000);
+}
+
+function stopDemandPolling() {
+  if (demandTimer) { clearInterval(demandTimer); demandTimer = null; }
+  if (heatLayer && map) { map.removeLayer(heatLayer); heatLayer = null; }
+}
+
 // ---- utils -----------------------------------------------------------------
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"]/g, (c) =>
@@ -233,6 +272,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#inspect-btn").onclick = doInspect;
   $("#svc-name").addEventListener("keydown", (e) => { if (e.key === "Enter") doInspect(); });
   $("#destroy-btn").onclick = () => { if (currentSvc) destroy(currentSvc); };
+  $("#heat-toggle").onchange = () => {
+    if (!heatLayer || !map) return;
+    if ($("#heat-toggle").checked) heatLayer.addTo(map); else map.removeLayer(heatLayer);
+  };
   $("#deploy-form").addEventListener("submit", (e) => { e.preventDefault(); deploy(e.target); });
   connect();
 });

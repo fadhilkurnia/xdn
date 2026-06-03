@@ -361,6 +361,13 @@ locals {
     "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
+    # Geo-demand profiling: with this set, each request's client location (the
+    # X-Client-Location header, parsed into XdnHttpRequest) is accumulated per grid
+    # cell by XdnGeoDemandProfiler on the ARs and aggregated at the RC. It drives
+    # demand-aware re-placement AND is surfaced read-only by
+    # GET /api/v2/services/<svc>/demand for the dashboard heatmap. (Matches the
+    # geo-demand smoke config; the only flag needed to turn the pipeline on.)
+    "DEMAND_PROFILE_TYPE=edu.umass.cs.xdn.XdnGeoDemandProfiler",
     # AR data-plane HTTP frontend (the RC ignores these flags; gated off for
     # reconfigurators in ActiveReplica.java). The frontend terminates TLS itself
     # (Netty + BoringSSL) directly on :443 -- no reverse-proxy hop. The HTTPS

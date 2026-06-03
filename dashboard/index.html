@@ -67,7 +67,11 @@
 
     <!-- Placement view: replica table + map for the selected service -->
     <section class="card">
-      <h2>Placement <span id="placement-svc" class="muted"></span></h2>
+      <h2>Placement &amp; demand <span id="placement-svc" class="muted"></span></h2>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="heat-toggle" checked /> Demand heatmap</label>
+        <span id="demand-note" class="hint"></span>
+      </div>
       <div id="map"></div>
       <table id="replicas">
         <thead>
@@ -86,6 +90,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>

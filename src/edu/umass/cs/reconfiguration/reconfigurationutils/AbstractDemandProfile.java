@@ -116,6 +116,19 @@ public abstract class AbstractDemandProfile {
 	public abstract JSONObject getDemandStats();
 
 	/**
+	 * Read-only snapshot of this profile's demand as geographic cells, for
+	 * visualization (e.g. a dashboard heatmap). Unlike {@link #getDemandStats()},
+	 * this MUST NOT mutate or reset the profile. Default is empty -- profiles with
+	 * no geographic notion of demand return no cells. Each element is a JSON object
+	 * {@code {"lat":<deg>, "lon":<deg>, "count":<int>}}.
+	 *
+	 * @return demand as a JSON array of {lat, lon, count} cells (possibly empty).
+	 */
+	public org.json.JSONArray getDemandGeoCells() {
+		return new org.json.JSONArray();
+	}
+
+	/**
 	 * Combine the new information in {@code update} into {@code this}. This
 	 * method is used at reconfigurators to combine a newly received demand
 	 * report with an existing demand report.

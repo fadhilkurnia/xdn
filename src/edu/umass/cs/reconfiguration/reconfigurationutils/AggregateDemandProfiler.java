@@ -76,6 +76,19 @@ public class AggregateDemandProfiler {
 	}
 
 	/**
+	 * Read-only geo-demand cells for {@code name}, for visualization (e.g. the
+	 * dashboard heatmap). Empty if there is no profile for the service or the
+	 * profiler has no geographic notion of demand. Does NOT mutate the profile.
+	 *
+	 * @param name service name
+	 * @return JSON array of {@code {lat, lon, count}} cells (possibly empty).
+	 */
+	public synchronized org.json.JSONArray getDemandGeoCells(String name) {
+		AbstractDemandProfile demand = this.map.get(name);
+		return demand == null ? new org.json.JSONArray() : demand.getDemandGeoCells();
+	}
+
+	/**
 	 * @param name
 	 * @return True if map contains name.
 	 */

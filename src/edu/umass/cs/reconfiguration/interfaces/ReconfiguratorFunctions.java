@@ -33,4 +33,16 @@ public interface ReconfiguratorFunctions {
 	 */
 	public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request);
 
+	/**
+	 * Read-only geo-demand for a service, as a JSON array string of
+	 * {@code {"lat":<deg>,"lon":<deg>,"count":<int>}} cells, for visualization
+	 * (e.g. the dashboard heatmap). Empty array if no demand has been collected or
+	 * the active demand profiler has no geographic notion of demand. Must NOT
+	 * mutate/reset the profile.
+	 *
+	 * @param serviceName service name
+	 * @return JSON array string of demand cells (e.g. {@code "[]"}).
+	 */
+	public String getServiceDemandJson(String serviceName);
+
 }

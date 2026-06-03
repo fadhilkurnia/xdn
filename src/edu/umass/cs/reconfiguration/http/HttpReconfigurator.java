@@ -606,6 +606,17 @@ public class HttpReconfigurator {
                 return;
             }
 
+            // Geo-demand for the dashboard heatmap (read-only; synchronous, no
+            // coordination). Returns a JSON array of {lat, lon, count} grid cells.
+            //  GET /api/v2/services/{serviceName}/demand
+            Pattern demandPattern = Pattern.compile("^/api/v2/services/([a-zA-Z0-9_-]+)/demand$");
+            Matcher demandMatcher = demandPattern.matcher(httpRequest.uri());
+            if (httpRequest.method().equals(HttpMethod.GET) && demandMatcher.matches()) {
+                this.writeJsonResponse(
+                        this.rcFunctions.getServiceDemandJson(demandMatcher.group(1)), ctx);
+                return;
+            }
+
             // Parses and handles SetCoordinatorNodeRequest (for Paxos and PrimaryBackup)
             //  PUT /api/v2/services/{serviceName}/coordinator
             Pattern scnrPattern = Pattern.compile("^/api/v2/services/[a-zA-Z0-9_-]+/coordinator$");
@@ -770,6 +781,18 @@ public class HttpReconfigurator {
                     Unpooled.copiedBuffer(errMessage.getBytes(StandardCharsets.UTF_8)));
             httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
             httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, errMessage.length());
+            ctx.write(httpResponse);
+            ctx.flush();
+        }
+
+        // Write a raw JSON string as a 200 application/json response (CORS headers
+        // are added by the pipeline's CorsHandler). Used by the geo-demand route.
+        private void writeJsonResponse(String json, ChannelHandlerContext ctx) {
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+            FullHttpResponse httpResponse = new DefaultFullHttpResponse(
+                    HTTP_1_1, OK, Unpooled.copiedBuffer(body));
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.APPLICATION_JSON);
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
             ctx.write(httpResponse);
             ctx.flush();
         }

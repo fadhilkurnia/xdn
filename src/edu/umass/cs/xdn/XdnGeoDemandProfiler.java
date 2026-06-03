@@ -248,6 +248,32 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     return stats;
   }
 
+  /**
+   * Read-only snapshot of the demand grid as {@code {lat, lon, count}} cells, WITHOUT resetting
+   * (unlike {@link #getDemandStats()}). Used by the dashboard geo-demand heatmap; each populated
+   * grid cell becomes one point at its center.
+   */
+  @Override
+  public org.json.JSONArray getDemandGeoCells() {
+    org.json.JSONArray cells = new org.json.JSONArray();
+    mapLock.lock();
+    try {
+      for (Map.Entry<Integer, Integer> e : sparseGrid.entrySet()) {
+        int idx = e.getKey();
+        JSONObject cell = new JSONObject();
+        cell.put("lat", rowCenterToLat(idx / NUM_GRID_COLUMNS));
+        cell.put("lon", colCenterToLon(idx % NUM_GRID_COLUMNS));
+        cell.put("count", e.getValue());
+        cells.put(cell);
+      }
+    } catch (JSONException ex) {
+      throw new RuntimeException(ex);
+    } finally {
+      mapLock.unlock();
+    }
+    return cells;
+  }
+
   @Override
   public void combine(AbstractDemandProfile update) {
     assert update instanceof XdnGeoDemandProfiler : "Invalid profiler type";

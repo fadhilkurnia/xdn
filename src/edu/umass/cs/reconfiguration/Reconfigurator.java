@@ -4091,6 +4091,14 @@ public class Reconfigurator<NodeIDType> implements
     }
 
     @Override
+    public String getServiceDemandJson(String serviceName) {
+        // Read-only; delegates to the profiler, which returns [] for non-geographic
+        // demand profilers or services with no collected demand. Used by the
+        // dashboard geo-demand heatmap (HttpReconfigurator).
+        return this.demandProfiler.getDemandGeoCells(serviceName).toString();
+    }
+
+    @Override
     public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request) {
         RequestCallbackFuture<ReconfiguratorRequest> callbackFuture;
         BasicReconfigurationPacket<?> packet = request instanceof ClientReconfigurationPacket ? (ClientReconfigurationPacket) request
