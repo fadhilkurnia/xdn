@@ -131,7 +131,10 @@ xdn-cli, and trace_bw use; the security group now allows both.
       `XdnGeoDemandProfiler`, no reset) ← aggregate profiler ← a `ReconfiguratorFunctions`
       method ← `HttpReconfigurator` route. No xdn import in core (clean layering).
 - [x] Dashboard: `leaflet.heat` heatmap layer + 5s polling + toggle, over the placement map.
-- [ ] Deploy (RC AMI rebuild + apply) + generate demand (`X-Client-Location`) + verify.
+- [x] Deployed (RC AMI `ami-013338ed93b6d7521` + apply; ARs reuse their AMI with
+      the new config) + generated biased demand + **verified live (2026-06-03):**
+      `/demand` returns cells with CORS (SF 111 / NY 46 / Chicago 21 from biased
+      traffic); RC stayed 0 OOM / 0 restarts.
 
 ### Phase 3 — inter-replica edges (analytic latency)
 - [ ] Dashboard: polylines between replica markers, labeled with Haversine+fiber

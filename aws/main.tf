@@ -257,7 +257,7 @@ resource "aws_key_pair" "deployer" {
 variable "rc_ami" {
   description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation). ARM64/Graviton image (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-05421989023a115de" # arm64, + control-plane HTTPS/CORS jar (dashboard phase 0)
+  default     = "ami-013338ed93b6d7521" # arm64, + geo-demand /demand endpoint (dashboard phase 2)
 }
 
 variable "ar_ami" {
