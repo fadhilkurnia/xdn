@@ -39,7 +39,8 @@ Existing (used as-is by the Go CLI — confirmed call shapes):
 
 - **Deploy:** `GET /?type=CREATE&name=<svc>&initial_state=xdn:init:<json>`
   where `<json>` = `{name,image,port,state,consistency,deterministic,...}`.
-- **Destroy:** `GET /?type=DELETE&name=<svc>`.
+  *(Legacy GET-with-query-params; v1 will use it, but see the RESTful follow-up.)*
+- **Destroy:** `GET /?type=DELETE&name=<svc>`. *(Same legacy GET shape.)*
 - **Placement + geolocation:** `GET /api/v2/services/<svc>/placement` →
   `DATA.NODES[]` of `{ID, ROLE, HTTP_ADDRESS, METADATA, GEOLOCATION{LATITUDE,LONGITUDE}}`,
   plus `EPOCH`, `SERVICE_METADATA`. (`GEOLOCATION` is null if unconfigured.)
@@ -121,6 +122,20 @@ xdn-cli, and trace_bw use; the security group now allows both.
 - [ ] Implement `XdnBandwidthProfiler` (analog of `XdnGeoDemandProfiler`) +
       `GET /api/v2/services/<svc>/bandwidth`. Replaces the analytic edges with
       measured inter-replica bandwidth. Large; tracked separately.
+
+## Later / follow-ups (not blocking v1)
+
+- [ ] **RESTful `/api/v2/services`.** Today deploy/destroy go through the legacy
+      `GET /?type=CREATE` / `GET /?type=DELETE` query-param API, and only GET
+      endpoints exist under `/api/v2/services`. Add the proper verbs the code
+      already TODOs in `HttpReconfigurator`:
+      - `POST   /api/v2/services` (or `/api/v2/services/{name}`) — create/deploy
+        (JSON body instead of `initial_state` query param),
+      - `DELETE /api/v2/services/{name}` — destroy,
+      - `GET    /api/v2/services/{name}` — single-service info.
+      Then point both the dashboard and `xdn-cli` at these. Naturally pairs with
+      the Phase 1 `GET /api/v2/services` list endpoint (same router); keep the
+      legacy GET shapes working for back-compat during migration.
 
 ## Notes / risks
 
