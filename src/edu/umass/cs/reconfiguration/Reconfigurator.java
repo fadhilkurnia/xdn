@@ -4126,6 +4126,23 @@ public class Reconfigurator<NodeIDType> implements
     }
 
     @Override
+    public boolean submitServerReconfiguration(ReconfiguratorRequest request) {
+        if (!(request instanceof ServerReconfigurationPacket)) {
+            return false;
+        }
+        @SuppressWarnings("unchecked")
+        ServerReconfigurationPacket<NodeIDType> pkt =
+                (ServerReconfigurationPacket<NodeIDType>) request;
+        // Inject into our own pipeline: ProtocolExecutor.handleEvent dispatches via
+        // the 2-arg protocol-task path (e.g. handleReconfigureActiveNodeConfig) AND
+        // sends the resulting coordination (StartEpoch / state transfer). Note:
+        // sendRequest() instead uses the callback/3-arg handler path, which server
+        // reconfiguration packets don't have. Fire-and-forget; the change proceeds
+        // asynchronously (poll /api/v2/nodes or a service's /placement).
+        return this.protocolExecutor.handleEvent(pkt);
+    }
+
+    @Override
     public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request) {
         RequestCallbackFuture<ReconfiguratorRequest> callbackFuture;
         BasicReconfigurationPacket<?> packet = request instanceof ClientReconfigurationPacket ? (ClientReconfigurationPacket) request

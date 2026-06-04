@@ -57,4 +57,20 @@ public interface ReconfiguratorFunctions {
 	 */
 	public String getNodeLocationsJson();
 
+	/**
+	 * Fire-and-forget submit of a server reconfiguration (e.g. an active-node-config
+	 * change that adds/removes an ActiveReplica) into the reconfigurator's own
+	 * processing pipeline -- the protocol-task path that dispatches the handler AND
+	 * sends the resulting coordination (StartEpoch, state transfer). Returns
+	 * immediately; the change proceeds asynchronously (poll {@code /api/v2/nodes} or
+	 * a service's {@code /placement} for the result). Unlike
+	 * {@link #sendRequest(ReconfiguratorRequest)} (which dispatches via the
+	 * callback/3-arg handler path), server reconfiguration packets only have the
+	 * 2-arg protocol-task handler, which this path uses.
+	 *
+	 * @param request a {@code ServerReconfigurationPacket}.
+	 * @return true if the event was accepted by the pipeline.
+	 */
+	public boolean submitServerReconfiguration(ReconfiguratorRequest request);
+
 }

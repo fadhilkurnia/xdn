@@ -540,10 +540,23 @@ public class HttpReconfigurator {
                     crp = toReconfiguratorRequest(json, ctx.channel());
 
                     if (rcFunctions != null) {
-                        crp = (ReconfiguratorRequest) this.rcFunctions
-                                .sendRequest(crp);
+                        if (crp instanceof ServerReconfigurationPacket) {
+                            // Active-node-config changes (CHANGE_ACTIVES) only have
+                            // the 2-arg protocol-task handler, so go through the
+                            // fire-and-forget pipeline (dispatch + send coordination)
+                            // rather than sendRequest's callback path. Poll
+                            // /api/v2/nodes for the result.
+                            boolean accepted =
+                                    this.rcFunctions.submitServerReconfiguration(crp);
+                            buf.append("{\"accepted\":").append(accepted).append("}");
+                        } else {
+                            crp = (ReconfiguratorRequest) this.rcFunctions
+                                    .sendRequest(crp);
+                            buf.append(crp.toString());
+                        }
+                    } else {
+                        buf.append(crp.toString());
                     }
-                    buf.append(crp.toString());
 
                 } catch (JSONException | HTTPException e) {
                     //e.printStackTrace();
