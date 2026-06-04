@@ -58,6 +58,7 @@ nav:
   - Developer:
       - HTTP API: 'reference/HTTP-API.md'
       - Request flow: 'reference/request-flow.md'
+      - Geo-distributed demand: 'reference/geo-demand.md'
       - Developer guide: 'reference/developer.md'
       - 'GigaPaxos — reconfiguration': 'reference/paxos-reconfiguration.md'
       - 'GigaPaxos — log compaction': 'reference/paxos-compaction.md'
