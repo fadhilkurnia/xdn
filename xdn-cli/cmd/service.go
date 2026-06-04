@@ -489,7 +489,8 @@ var ServiceDestroyCmd = &cobra.Command{
 		}
 
 		controlPlaneHost := GetControlPlaneHostPort()
-		deleteEndpoint := fmt.Sprintf("http://%s/?type=DELETE&name=%s",
+		// RESTful destroy: DELETE /api/v2/services/{name}.
+		deleteEndpoint := fmt.Sprintf("http://%s/api/v2/services/%s",
 			controlPlaneHost, serviceName)
 		fmt.Printf("Removing service '")
 		_, _ = infoColorPrint.Printf("%s", serviceName)
@@ -497,7 +498,13 @@ var ServiceDestroyCmd = &cobra.Command{
 		client := http.Client{
 			Timeout: 60 * time.Second,
 		}
-		resp, err := client.Get(deleteEndpoint)
+		delReq, err := http.NewRequest(http.MethodDelete, deleteEndpoint, nil)
+		if err != nil {
+			_, _ = errorColorPrint.Printf("ERROR")
+			fmt.Printf(" failed to build destroy request: %s\n", err.Error())
+			return fmt.Errorf("failed to build destroy request: %s", err.Error())
+		}
+		resp, err := client.Do(delReq)
 		if err != nil {
 			fmt.Printf(" ")
 			_, _ = errorColorPrint.Printf("ERROR")
@@ -510,7 +517,7 @@ var ServiceDestroyCmd = &cobra.Command{
 			fmt.Printf("Failed to destroy the service, error: %s", err.Error())
 			return fmt.Errorf("failed to destroy the service, error: %s", err.Error())
 		}
-		if resp.StatusCode != 200 {
+		if resp.StatusCode/100 != 2 {
 			fmt.Printf(" ")
 			_, _ = errorColorPrint.Printf("ERROR")
 			fmt.Printf(" ")

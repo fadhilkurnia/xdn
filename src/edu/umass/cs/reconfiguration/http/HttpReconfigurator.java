@@ -61,16 +61,18 @@ import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
  * Loosely based on the HTTP Snoop server example from netty
  * documentation pages.
  * <p>
- *         TODO: implement better API with prefix of /api/services
+ *         RESTful API under /api/v2 (the legacy GET /?type= API is deprecated):
  *          - GET 		/api/v2/services                        [Unimplemented] list all services.
- *          - POST 		/api/v2/services/{name}                 [Unimplemented] Create a new launched service
- *          - GET 		/api/v2/services/{name}                 [Unimplemented] Get a launched service
- *          - DELETE 	/api/v2/services/{name}                 [Unimplemented] Destroy a new launched service
+ *          - POST 		/api/v2/services/{name}                 Create a service (body: {"initial_state": ...})
+ *          - GET 		/api/v2/services/{name}                 Get a service (its active replicas)
+ *          - DELETE 	/api/v2/services/{name}                 Destroy a service
  *          - GET 		/api/v2/services/{name}/placement       Get the current placement
  *          - PUT 	    /api/v2/services/{name}/placement       Update the replica placement, including coordinator
- *          - GET 		/api/v2/services/{name}/coordinator     [Unimplemented] Get the current coordinator
- *          - PUT 		/api/v2/services/{name}/coordinator     [Unimplemented] Change the coordinator
- *          because currently everything is handled with GET request :(
+ *          - GET 		/api/v2/services/{name}/demand          Get the geo-demand heatmap cells
+ *          - PUT 		/api/v2/services/{name}/coordinator     Change the coordinator
+ *          - GET 		/api/v2/nodes                           List node locations (candidates + active)
+ *          - POST 		/api/v2/nodes                           Add an active replica (body: {"id","host","port"})
+ *          - DELETE 	/api/v2/nodes/{id}                      Remove an active replica
  */
 public class HttpReconfigurator {
 
@@ -459,6 +461,35 @@ public class HttpReconfigurator {
         return crp;
     }
 
+    // Build a ClientReconfigurationPacket (CREATE/DELETE/REQUEST_ACTIVE_REPLICAS) for
+    // a service from explicit fields, the way toReconfiguratorRequest builds it from
+    // query params. Used by the RESTful /api/v2/services/{name} routes.
+    private static ClientReconfigurationPacket buildClientReconfigurationPacket(
+            PacketType type, String name, String initialState, Channel channel)
+            throws JSONException, HTTPException {
+        JSONObject json = new JSONObject();
+        json.put(HTTPKeys.TYPE.label, type.getInt())
+                .put(HTTPKeys.NAME.label, name)
+                .put(BasicReconfigurationPacket.Keys.EPOCH.toString(), 0)
+                .put(ClientReconfigurationPacket.Keys.IS_QUERY.toString(), true)
+                .put(ClientReconfigurationPacket.Keys.CREATOR.toString(),
+                        channel.remoteAddress())
+                .put(ClientReconfigurationPacket.Keys.MY_RECEIVER.toString(),
+                        channel.localAddress())
+                .put(RequestActiveReplicas.Keys.QID.toString(), 0);
+        if (initialState != null && !initialState.isEmpty()) {
+            json.put(HTTPKeys.INITIAL_STATE.label, initialState);
+        }
+        try {
+            return (ClientReconfigurationPacket) ReconfigurationPacket
+                    .getReconfigurationPacket(json, ClientReconfigurationPacket.unstringer);
+        } catch (Exception e) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "Unable to build request: " + e.getMessage());
+        }
+    }
+
     // Build an active-node-config change (add/remove ActiveReplica) from query
     // params, for demand-driven node elasticity. Examples:
     //   add:    /?type=CHANGE_ACTIVES&name=AR_NODES&add_id=AR4&add_host=<ip>&add_port=2000
@@ -570,6 +601,16 @@ public class HttpReconfigurator {
                     return;
                 }
 
+                // DEPRECATED: the legacy GET /?type=CREATE|DELETE|CHANGE_ACTIVES control
+                // API. Superseded by the RESTful /api/v2 endpoints (POST/GET/DELETE
+                // /api/v2/services/{name}, POST /api/v2/nodes, DELETE /api/v2/nodes/{id}).
+                // Still served for backward compatibility; slated for removal.
+                log.log(Level.WARNING,
+                        "Deprecated GET control API used (uri={0}); migrate to the RESTful "
+                                + "/api/v2 endpoints. The legacy /?type= API will be removed in "
+                                + "a future release.",
+                        new Object[]{request.uri()});
+
                 ReconfiguratorRequest crp = null;
                 try {
                     JSONObject json = toJSONObject(new QueryStringDecoder(
@@ -671,6 +712,9 @@ public class HttpReconfigurator {
                     "Invalid request sender";
             InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
 
+            // Path without the query string, for the RESTful path matchers below.
+            String path = new QueryStringDecoder(httpRequest.uri()).path();
+
             // All configured node locations (the candidate placement pool) + which
             // are currently running as active replicas. Drives the dashboard map's
             // "potential locations vs. running replicas" view. Read-only, synchronous.
@@ -722,14 +766,42 @@ public class HttpReconfigurator {
                 return;
             }
 
-            // TODO: Parses and handles CreateServiceRequest
-            //  POST /api/v2/services/{serviceName}
+            // RESTful service lifecycle (supersedes the deprecated GET /?type=CREATE|DELETE).
+            //  POST   /api/v2/services/{name}   create a service (body: {"initial_state": "..."})
+            //  GET    /api/v2/services/{name}   get a service (its active replicas)
+            //  DELETE /api/v2/services/{name}   destroy a service
+            Pattern svcPattern = Pattern.compile("^/api/v2/services/([a-zA-Z0-9_-]+)$");
+            Matcher svcMatcher = svcPattern.matcher(path);
+            if (svcMatcher.matches()) {
+                String name = svcMatcher.group(1);
+                if (httpRequest.method().equals(HttpMethod.POST)) {
+                    handleHttpCreateService(ctx, name, httpContent);
+                } else if (httpRequest.method().equals(HttpMethod.DELETE)) {
+                    handleHttpDestroyService(ctx, name);
+                } else if (httpRequest.method().equals(HttpMethod.GET)) {
+                    handleHttpGetService(ctx, name);
+                } else {
+                    this.writeBadRequestResponse(
+                            ctx, "Unsupported method for /api/v2/services/{name}.");
+                }
+                return;
+            }
 
-            // TODO: Parses and handles GetServiceInfoRequest
-            //  GET /api/v2/services/{serviceName}
+            // RESTful active-replica elasticity (supersedes GET /?type=CHANGE_ACTIVES).
+            //  POST   /api/v2/nodes        add an active replica (body: {"id","host","port"})
+            //  DELETE /api/v2/nodes/{id}   remove an active replica
+            if (httpRequest.method().equals(HttpMethod.POST) && path.equals("/api/v2/nodes")) {
+                handleHttpAddNode(ctx, httpContent);
+                return;
+            }
+            Pattern nodePattern = Pattern.compile("^/api/v2/nodes/([a-zA-Z0-9_.-]+)$");
+            Matcher nodeMatcher = nodePattern.matcher(path);
+            if (httpRequest.method().equals(HttpMethod.DELETE) && nodeMatcher.matches()) {
+                handleHttpRemoveNode(ctx, nodeMatcher.group(1));
+                return;
+            }
 
-            // TODO: Parses and handles DestroyServiceRequest
-            //  DELETE /api/v2/services/{serviceName}
+            // TODO: list all services -- GET /api/v2/services
 
             // TODO: handle other kind of reconfigurator requests
 
@@ -869,6 +941,128 @@ public class HttpReconfigurator {
             });
         }
 
+        // POST /api/v2/services/{name} -- create a service. Optional JSON body
+        // {"initial_state": "..."}. Mirrors the legacy GET /?type=CREATE.
+        private void handleHttpCreateService(ChannelHandlerContext ctx, String name,
+                                             HttpContent httpContent) {
+            String initialState = null;
+            String body = httpContent.content().toString(StandardCharsets.UTF_8);
+            if (body != null && !body.trim().isEmpty()) {
+                try {
+                    JSONObject j = new JSONObject(body);
+                    initialState = j.has(HTTPKeys.INITIAL_STATE.label)
+                            ? j.getString(HTTPKeys.INITIAL_STATE.label)
+                            : (j.has("initial_state") ? j.getString("initial_state") : null);
+                } catch (JSONException e) {
+                    this.writeBadRequestResponse(ctx, "Invalid JSON body: " + e.getMessage());
+                    return;
+                }
+            }
+            try {
+                ClientReconfigurationPacket req = buildClientReconfigurationPacket(
+                        PacketType.CREATE_SERVICE_NAME, name, initialState, ctx.channel());
+                ClientReconfigurationPacket resp =
+                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(req);
+                this.writeCrpResponse(resp, ctx,
+                        HttpResponseStatus.CREATED, HttpResponseStatus.CONFLICT);
+            } catch (HTTPException | JSONException e) {
+                this.writeBadRequestResponse(ctx, e.getMessage());
+            }
+        }
+
+        // DELETE /api/v2/services/{name} -- destroy a service. Mirrors GET /?type=DELETE.
+        private void handleHttpDestroyService(ChannelHandlerContext ctx, String name) {
+            try {
+                ClientReconfigurationPacket req = buildClientReconfigurationPacket(
+                        PacketType.DELETE_SERVICE_NAME, name, null, ctx.channel());
+                ClientReconfigurationPacket resp =
+                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(req);
+                this.writeCrpResponse(resp, ctx,
+                        HttpResponseStatus.OK, HttpResponseStatus.NOT_FOUND);
+            } catch (HTTPException | JSONException e) {
+                this.writeBadRequestResponse(ctx, e.getMessage());
+            }
+        }
+
+        // GET /api/v2/services/{name} -- service info (its active replicas). For the
+        // richer per-node view use GET /api/v2/services/{name}/placement.
+        private void handleHttpGetService(ChannelHandlerContext ctx, String name) {
+            try {
+                ClientReconfigurationPacket req = buildClientReconfigurationPacket(
+                        PacketType.REQUEST_ACTIVE_REPLICAS, name, null, ctx.channel());
+                ClientReconfigurationPacket resp =
+                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(req);
+                this.writeCrpResponse(resp, ctx,
+                        HttpResponseStatus.OK, HttpResponseStatus.NOT_FOUND);
+            } catch (HTTPException | JSONException e) {
+                this.writeBadRequestResponse(ctx, e.getMessage());
+            }
+        }
+
+        // POST /api/v2/nodes -- add an active replica. Body: {"id","host","port"}.
+        // Mirrors the legacy GET /?type=CHANGE_ACTIVES add.
+        private void handleHttpAddNode(ChannelHandlerContext ctx, HttpContent httpContent) {
+            String id;
+            String host;
+            int port;
+            try {
+                String body = httpContent.content().toString(StandardCharsets.UTF_8);
+                JSONObject in = new JSONObject(body == null ? "{}" : body);
+                id = in.getString("id");
+                host = in.getString("host");
+                port = in.getInt("port");
+            } catch (JSONException e) {
+                this.writeBadRequestResponse(
+                        ctx, "POST /api/v2/nodes expects JSON {\"id\",\"host\",\"port\"}.");
+                return;
+            }
+            try {
+                JSONObject q = new JSONObject()
+                        .put("add_id", id).put("add_host", host).put("add_port", port);
+                ReconfiguratorRequest req = toServerReconfigurationRequest(
+                        q, ctx.channel(),
+                        PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG, id, this.rcNodeId);
+                boolean accepted = this.rcFunctions.submitServerReconfiguration(req);
+                this.writeJsonResponse("{\"accepted\":" + accepted + "}",
+                        accepted ? HttpResponseStatus.ACCEPTED
+                                : HttpResponseStatus.INTERNAL_SERVER_ERROR, ctx);
+            } catch (HTTPException | JSONException e) {
+                this.writeBadRequestResponse(ctx, e.getMessage());
+            }
+        }
+
+        // DELETE /api/v2/nodes/{id} -- remove an active replica. Mirrors the legacy
+        // GET /?type=CHANGE_ACTIVES remove.
+        private void handleHttpRemoveNode(ChannelHandlerContext ctx, String id) {
+            try {
+                JSONObject q = new JSONObject().put("del_id", id);
+                ReconfiguratorRequest req = toServerReconfigurationRequest(
+                        q, ctx.channel(),
+                        PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG, id, this.rcNodeId);
+                boolean accepted = this.rcFunctions.submitServerReconfiguration(req);
+                this.writeJsonResponse("{\"accepted\":" + accepted + "}",
+                        accepted ? HttpResponseStatus.ACCEPTED
+                                : HttpResponseStatus.INTERNAL_SERVER_ERROR, ctx);
+            } catch (HTTPException | JSONException e) {
+                this.writeBadRequestResponse(ctx, e.getMessage());
+            }
+        }
+
+        // Write a ClientReconfigurationPacket response as JSON, mapping success to
+        // successStatus and a failed packet to failureStatus.
+        private void writeCrpResponse(ClientReconfigurationPacket crp,
+                                      ChannelHandlerContext ctx,
+                                      HttpResponseStatus successStatus,
+                                      HttpResponseStatus failureStatus) {
+            if (crp == null) {
+                this.writeJsonResponse(
+                        "{\"FAILED\":true}", HttpResponseStatus.INTERNAL_SERVER_ERROR, ctx);
+                return;
+            }
+            this.writeJsonResponse(
+                    crp.toString(), crp.isFailed() ? failureStatus : successStatus, ctx);
+        }
+
         private void writeBadRequestResponse(ChannelHandlerContext ctx, String errMessage) {
             HttpResponse httpResponse = new DefaultFullHttpResponse(
                     HTTP_1_1,
@@ -883,9 +1077,15 @@ public class HttpReconfigurator {
         // Write a raw JSON string as a 200 application/json response (CORS headers
         // are added by the pipeline's CorsHandler). Used by the geo-demand route.
         private void writeJsonResponse(String json, ChannelHandlerContext ctx) {
+            this.writeJsonResponse(json, OK, ctx);
+        }
+
+        // Same, with an explicit status (201/202/404/409/... for the RESTful routes).
+        private void writeJsonResponse(String json, HttpResponseStatus status,
+                                       ChannelHandlerContext ctx) {
             byte[] body = json.getBytes(StandardCharsets.UTF_8);
             FullHttpResponse httpResponse = new DefaultFullHttpResponse(
-                    HTTP_1_1, OK, Unpooled.copiedBuffer(body));
+                    HTTP_1_1, status, Unpooled.copiedBuffer(body));
             httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.APPLICATION_JSON);
             httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
             ctx.write(httpResponse);
