@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XDN Dashboard</title>
+  <!-- Embedded mode (?embed=1): drop our own header/footer so a host page (e.g.
+       the MkDocs site at /dashboard/) can wrap us in its own chrome. Set before
+       CSS so there is no flash of the standalone header. -->
+  <script>if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("dash-embed");</script>
+  <!-- Leaflet (map) via CDN — no build step, GitHub-Pages friendly -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>XDN Dashboard</h1>
+    <div id="banner" class="banner" hidden></div>
+  </header>
+
+  <main>
+    <!-- Left column: control plane + the replicated-service panel. -->
+    <div class="col">
+      <!-- Control-plane endpoint config. Kept in the URL (?cp=) so the page stays
+           stateless: the address bar is the only state. -->
+      <section class="card">
+        <div class="row">
+          <label for="cp">Control plane</label>
+          <input id="cp" type="text" spellcheck="false" placeholder="cp.xdnapp.com" />
+          <button id="connect">Connect</button>
+          <span id="cp-status" class="status"></span>
+        </div>
+        <p class="hint">
+          The dashboard runs entirely in your browser, talking directly to the XDN
+          control-plane API. Point it at a different control plane with
+          <code>?cp=&lt;host&gt;</code> or the field above.
+        </p>
+      </section>
+
+      <!-- Inspect a service by name + deploy/destroy -->
+      <section class="card">
+        <h2>Replicated Stateful Service</h2>
+      <div class="row">
+        <input id="svc-name" type="text" placeholder="service name" spellcheck="false" />
+        <button id="inspect-btn">Inspect</button>
+        <button id="destroy-btn" class="danger" disabled>Destroy</button>
+      </div>
+      <p class="hint">Enter a known service name to view its placement, or launch a new one below.</p>
+
+      <details id="deploy-box">
+        <summary>Launch a service</summary>
+        <form id="deploy-form" class="grid">
+          <label>Name <input name="name" required pattern="[a-zA-Z0-9_-]{1,64}" /></label>
+          <label>Docker image
+            <input name="image" list="xdn-images" required placeholder="fadhilkurnia/xdn-bookcatalog" />
+          </label>
+          <datalist id="xdn-images">
+            <option value="fadhilkurnia/xdn-bookcatalog">Book catalog — deterministic</option>
+            <option value="fadhilkurnia/xdn-bookcatalog-nd">Book catalog — non-deterministic</option>
+            <option value="fadhilkurnia/xdn-todo">Todo app</option>
+            <option value="fadhilkurnia/xdn-webkv">Web key-value store</option>
+            <option value="fadhilkurnia/xdn-tpcc">TPC-C benchmark</option>
+          </datalist>
+          <label>Port <input name="port" type="number" value="80" min="1" max="65535" /></label>
+          <label>State dir <input name="state" value="/app/data/" /></label>
+          <label>Consistency
+            <select name="consistency">
+              <option value="linearizable">Linearizable</option>
+              <option value="sequential" selected>Sequential</option>
+              <option value="causal">Causal</option>
+              <option value="pram">PRAM</option>
+              <option value="eventual">Eventual</option>
+              <optgroup label="Client-centric">
+                <option value="read_your_writes">Read-your-writes</option>
+                <option value="writes_follow_reads">Writes-follow-reads</option>
+                <option value="monotonic_reads">Monotonic reads</option>
+                <option value="monotonic_writes">Monotonic writes</option>
+              </optgroup>
+            </select>
+          </label>
+          <label class="check">Deterministic <input name="deterministic" type="checkbox" /></label>
+          <button type="submit">Launch</button>
+        </form>
+      </details>
+      <pre id="action-log" class="log" hidden></pre>
+      </section>
+    </div>
+
+    <!-- Right column: the cluster map. -->
+    <div class="col">
+      <!-- Placement view: replica table + map for the selected service -->
+      <section class="card">
+        <h2>Cluster map <span id="placement-svc" class="muted"></span></h2>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="topo-toggle" checked /> All locations</label>
+        <label class="check"><input type="checkbox" id="heat-toggle" checked /> Demand heatmap</label>
+        <span id="demand-note" class="hint"></span>
+      </div>
+      <p class="hint" id="topo-legend">
+        <span class="legend-dot candidate"></span> edge location
+        &nbsp;&nbsp;<span class="legend-dot active"></span> service replica
+        <span id="topo-count" class="muted"></span>
+      </p>
+      <div id="map"></div>
+      <table id="replicas">
+        <thead>
+          <tr><th>Node</th><th>Role</th><th>HTTP address</th><th>Geolocation</th><th>Metadata</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="placement-note" class="hint"></p>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <span id="conn-dot" class="dot"></span>
+    <span id="footer-text">not connected</span>
+  </footer>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

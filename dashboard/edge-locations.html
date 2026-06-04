@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XDN edge locations</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #map { position: absolute; inset: 0; background: #e8eef3; }
+    .badge {
+      background: rgba(255,255,255,0.94);
+      border: 1px solid #e3e6ea; border-radius: 8px; padding: 6px 11px;
+      font-size: 12.5px; color: #1c2230; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    }
+    /* Both overlays stacked in the bottom-left, clear of the zoom control
+       (top-left) and the Leaflet attribution (bottom-right). */
+    #overlays {
+      position: absolute; left: 10px; bottom: 12px; z-index: 500;
+      display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+    }
+    #count { color: #6b7280; }
+    #count:empty { display: none; }
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #cbd5e1; vertical-align: 0; margin-right: 6px; }
+    .dot.ok { background: #16a34a; } .dot.bad { background: #dc2626; }
+    /* Offline overlay */
+    #offline {
+      position: absolute; inset: 0; z-index: 1000; display: none;
+      align-items: center; justify-content: center; background: rgba(244,246,249,0.85);
+    }
+    #offline.show { display: flex; }
+    #offline .panel {
+      background: #fff; border: 1px solid #e3e6ea; border-radius: 12px;
+      padding: 22px 24px; max-width: 420px; box-shadow: 0 6px 24px rgba(0,0,0,0.14); text-align: center;
+    }
+    #offline .warn { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: #9a3412; }
+    #offline .sub { margin: 0 0 14px; font-size: 13px; color: #6b7280; }
+    #offline .row { display: flex; gap: 8px; }
+    #offline input {
+      flex: 1; font: inherit; padding: 7px 10px; border: 1px solid #e3e6ea; border-radius: 7px;
+      font-family: ui-monospace, Menlo, Consolas, monospace; min-width: 0;
+    }
+    #offline button {
+      font: inherit; font-weight: 600; padding: 7px 14px; border: 0; border-radius: 7px;
+      background: #2563eb; color: #fff; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="overlays">
+    <div id="conn" class="badge"><span class="dot"></span><span id="conn-text">connecting…</span></div>
+    <div id="count" class="badge"></div>
+  </div>
+
+  <div id="offline">
+    <div class="panel">
+      <p class="warn" id="warn-text">Unfortunately, our XDN control plane deployment at cp.xdnapp.com is currently offline 😢</p>
+      <p class="sub">You can still point at another XDN control plane host:</p>
+      <div class="row">
+        <input id="cp-input" type="text" placeholder="e.g., cp.xdnapp.com" spellcheck="false" />
+        <button id="cp-go">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="config.js"></script>
+  <script>
+    "use strict";
+    // The XDN control-plane API port is an internal detail; only the host is ever
+    // shown or entered. Strip any host:port/scheme/path down to a bare host.
+    const PORT = 3400;
+    const bareHost = (s) =>
+      String(s || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "").trim();
+
+    let host = bareHost(
+      new URLSearchParams(location.search).get("cp")
+      || (window.XDN_DASHBOARD_CONFIG && window.XDN_DASHBOARD_CONFIG.defaultControlPlane)
+      || "cp.xdnapp.com"
+    );
+
+    // Continental US only (rough bounding box; excludes AK/HI and non-US).
+    const inContinentalUS = (n) =>
+      n.lat >= 24 && n.lat <= 50 && n.lon >= -125 && n.lon <= -66.5;
+
+    const map = L.map("map", { worldCopyJump: true, scrollWheelZoom: false }).setView([39.5, -98], 4);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(map);
+    const markers = L.layerGroup().addTo(map);
+
+    function setConn(state) { // "connecting" | "ok" | "bad"
+      document.querySelector("#conn .dot").className = "dot" + (state === "ok" ? " ok" : state === "bad" ? " bad" : "");
+      document.getElementById("conn-text").textContent =
+        state === "ok" ? "connected to " + host
+        : state === "bad" ? host + " offline"
+        : "connecting to " + host + "…";
+    }
+
+    function draw(nodes) {
+      markers.clearLayers();
+      const pts = [];
+      let n = 0;
+      for (const node of nodes) {
+        if (typeof node.lat !== "number" || typeof node.lon !== "number" || !inContinentalUS(node)) continue;
+        n++; pts.push([node.lat, node.lon]);
+        L.circleMarker([node.lat, node.lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 0.9 })
+          .bindTooltip(node.id).addTo(markers);
+      }
+      if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 });
+      document.getElementById("count").textContent = n + " edge location" + (n === 1 ? "" : "s");
+    }
+
+    function load() {
+      document.getElementById("offline").classList.remove("show");
+      document.getElementById("count").textContent = "";
+      setConn("connecting");
+      fetch(`https://${host}:${PORT}/api/v2/nodes`, { mode: "cors" })
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((nodes) => {
+          if (!Array.isArray(nodes)) throw new Error("bad response");
+          setConn("ok");
+          draw(nodes);
+        })
+        .catch(() => {
+          setConn("bad");
+          markers.clearLayers();
+          document.getElementById("count").textContent = "";
+          document.getElementById("warn-text").textContent =
+            `Unfortunately, our XDN control plane deployment at ${host} is currently offline 😢`;
+          document.getElementById("offline").classList.add("show");
+        });
+    }
+
+    document.getElementById("cp-go").onclick = () => {
+      const v = bareHost(document.getElementById("cp-input").value);
+      if (v) { host = v; load(); }
+    };
+    document.getElementById("cp-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("cp-go").click();
+    });
+
+    load();
+  </script>
+</body>
+</html>

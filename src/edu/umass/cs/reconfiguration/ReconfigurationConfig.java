@@ -394,6 +394,29 @@ public class ReconfigurationConfig {
         ENABLE_RECONFIGURATOR_HTTP(true),
 
         /**
+         * If true, the Reconfigurator HTTP server terminates TLS itself (in
+         * Netty) on its existing HTTP port, so an HTTPS client -- e.g. a
+         * browser-based dashboard served from GitHub Pages -- can reach the
+         * control plane without mixed-content blocking. Uses the PEM cert chain +
+         * key at {@link #RECONFIGURATOR_TLS_CERT_CHAIN} /
+         * {@link #RECONFIGURATOR_TLS_PRIVATE_KEY} when set, otherwise an ephemeral
+         * self-signed cert (untrusted by browsers).
+         */
+        ENABLE_RECONFIGURATOR_HTTPS(false),
+
+        /**
+         * Filesystem path to the PEM certificate chain (fullchain) used for TLS
+         * when {@link #ENABLE_RECONFIGURATOR_HTTPS} is true. Empty -> self-signed.
+         */
+        RECONFIGURATOR_TLS_CERT_CHAIN(""),
+
+        /**
+         * Filesystem path to the PEM private key used for TLS when
+         * {@link #ENABLE_RECONFIGURATOR_HTTPS} is true.
+         */
+        RECONFIGURATOR_TLS_PRIVATE_KEY(""),
+
+        /**
          * Enable the HTTP server for active replicas
          */
         ENABLE_ACTIVE_REPLICA_HTTP(false),

@@ -19,11 +19,30 @@ set -euo pipefail
   fi
 ) || true
 
-install -d -m 0755 /opt/xdn/conf
+install -d -m 0755 /opt/xdn/conf /opt/xdn/conf/tls /opt/xdn/bin
 
 cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
 ${gigapaxos_properties}
 PROPS
+
+# Control-plane TLS (for the browser dashboard): HttpReconfigurator terminates
+# HTTPS on its control-plane HTTP port using the wildcard *.<domain> cert pulled
+# from S3 below. Appended here (not in the shared cluster properties) so the AR
+# config is untouched. Until the real cert is pulled, HttpReconfigurator serves a
+# temporary self-signed cert; the cert-pull timer then restarts xdn-rc to load it.
+cat >> /opt/xdn/conf/gigapaxos.properties <<'TLSPROPS'
+ENABLE_RECONFIGURATOR_HTTPS=true
+RECONFIGURATOR_TLS_CERT_CHAIN=/opt/xdn/conf/tls/fullchain.pem
+RECONFIGURATOR_TLS_PRIVATE_KEY=/opt/xdn/conf/tls/privkey.pem
+TLSPROPS
+
+# Candidate placement locations: geolocations ONLY (no running instance), so the
+# RC knows where they are for the dashboard's "potential locations" view and for
+# demand-driven node elasticity, while costing nothing until a node is actually
+# launched there and added as an active replica. RC-only (the ARs don't need them).
+cat >> /opt/xdn/conf/gigapaxos.properties <<'CANDGEO'
+${candidate_geo_props}
+CANDGEO
 
 # node id + JVM opts (RC = node 0). The gigapaxos wire format is now IPv6-capable
 # (16-byte addresses, see AddressCodec), so we NO LONGER force the IPv4 stack --
@@ -73,5 +92,73 @@ done
   echo "}"
 } > /opt/xdn/conf/Corefile
 
+# --- Control-plane TLS cert pull. The RC is created BEFORE the wildcard cert is
+#     issued (Let's Encrypt validates DNS-01 through THIS node's coredns), so we
+#     start the services first to bring coredns up, then pull the cert. ---
+
+# AWS CLI v2 (Ubuntu 24.04 dropped the apt awscli); arch-aware bundle name so this
+# works on both x86 and Graviton RCs.
+if ! command -v aws >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y unzip curl
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+  ( cd /tmp && unzip -oq awscliv2.zip && ./aws/install )
+  rm -rf /tmp/awscliv2.zip /tmp/aws
+fi
+
+# Pull helper: download the wildcard PEM, PKCS#8-convert the key (Netty/JDK can't
+# parse PKCS#1/SEC1), and restart xdn-rc on change so the new cert is loaded.
+cat > /opt/xdn/bin/xdn-tls-pull.sh <<'PULL'
+#!/usr/bin/env bash
+set -euo pipefail
+export AWS_REGION="${aws_region}"
+b="${tls_bucket}"
+dst=/opt/xdn/conf/tls
+install -d -m 0755 "$dst"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+aws s3 cp "s3://$b/${fullchain_key}" "$tmp/fullchain.pem" --quiet
+aws s3 cp "s3://$b/${privkey_key}"  "$tmp/src.key"      --quiet
+openssl pkcs8 -topk8 -nocrypt -in "$tmp/src.key" -out "$tmp/privkey.pem"
+changed=0
+cmp -s "$tmp/fullchain.pem" "$dst/fullchain.pem" || changed=1
+cmp -s "$tmp/privkey.pem"  "$dst/privkey.pem"   || changed=1
+if [ "$changed" = 1 ]; then
+  install -m 0644 "$tmp/fullchain.pem" "$dst/fullchain.pem"
+  install -m 0600 "$tmp/privkey.pem"  "$dst/privkey.pem"
+  echo "xdn-tls-pull: updated control-plane cert from s3://$b"
+  systemctl try-restart xdn-rc 2>/dev/null || true
+fi
+PULL
+chmod +x /opt/xdn/bin/xdn-tls-pull.sh
+
+cat > /etc/systemd/system/xdn-tls-pull.service <<'UNIT'
+[Unit]
+Description=Pull the wildcard cert from S3 for the XDN control-plane TLS
+[Service]
+Type=oneshot
+ExecStart=/opt/xdn/bin/xdn-tls-pull.sh
+UNIT
+cat > /etc/systemd/system/xdn-tls-pull.timer <<'UNIT'
+[Unit]
+Description=Periodically pull the wildcard cert from S3 (first issuance + renewals)
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
 systemctl start xdn-rc xdn-dns
+systemctl enable --now xdn-tls-pull.timer
+
+# Best-effort: grab the cert as soon as Terraform issues it (shortly after coredns
+# comes up). The timer is the long-term backstop; never fail the boot over this.
+( set +e
+  for _ in $(seq 1 60); do
+    /opt/xdn/bin/xdn-tls-pull.sh && break
+    sleep 5
+  done
+) || true

@@ -1,0 +1,65 @@
+# Project information
+site_name: XDN
+repo_url: https://github.com/fadhilkurnia/xdn
+repo_name: fadhilkurnia/xdn
+site_url: https://xdn.cs.umass.edu/
+site_description: XDN - replicating service at the edge
+site_author: Fadhil I. Kurnia
+copyright: Copyright &copy; 2026 Fadhil I. Kurnia - University of Massachusetts Amherst
+
+# Theme configuration
+theme:
+  name: material
+  logo: 'images/icons8-octopus-100.png'
+  favicon: 'images/icons8-octopus-100.png'
+  palette:
+    primary: light blue
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.footer
+    - content.code.copy # copy button on code blocks
+extra:
+  homepage: https://xdn.cs.umass.edu/
+
+# Extensions
+markdown_extensions:
+  - attr_list
+  - admonition
+  - pymdownx.details # collapsible admonitions (??? / ???+)
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+
+# Bundle the standalone dashboard SPA into the built site at /dashboard/
+# (it is not a MkDocs page; the hook copies ../dashboard/ on each build).
+hooks:
+  - bundle_dashboard.py
+
+# Pages and main contents
+nav:
+  - Home: 'index.md'
+  - Quick Start:
+      - Getting started: 'getting-started.md'
+      - Multi-container services: 'multi-container.md'
+  - Consistency: 'flexible-consistency.md'
+  - Service Properties: 'service-properties.md'
+  - Deployment: 'become-operator.md'
+  - Architecture: 'how-xdn-work.md'
+  # The repo's docs/*.md are staged into docs/reference/ by bin/build_site.sh.
+  # Mostly internal docs intended for XDN developers.
+  - Developer:
+      - HTTP API: 'reference/HTTP-API.md'
+      - Request flow: 'reference/request-flow.md'
+      - Developer guide: 'reference/developer.md'
+      - 'GigaPaxos — reconfiguration': 'reference/paxos-reconfiguration.md'
+      - 'GigaPaxos — log compaction': 'reference/paxos-compaction.md'
+      - 'WordPress primary-backup investigation': 'reference/wordpress-pb-investigation.md'
+  - Dashboard: 'dashboard.md'

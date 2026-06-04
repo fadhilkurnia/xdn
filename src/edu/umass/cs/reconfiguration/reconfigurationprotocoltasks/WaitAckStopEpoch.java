@@ -84,6 +84,21 @@ public class WaitAckStopEpoch<NodeIDType>
 
 	private static final int WARN_NUM_RESTARTS = 5;
 
+	/*
+	 * After this many fruitless STOP_EPOCH resends (~SEVERE_NUM_RESTARTS *
+	 * RESTART_PERIOD ms, ~120s by default), the reconfiguration is almost
+	 * certainly wedged rather than merely slow, e.g. waiting forever for an
+	 * AckStopEpoch that will never come. We log a one-shot SEVERE with full
+	 * diagnostics so that this (rare) hang is visible/alertable and investigable
+	 * instead of hiding in a stream of identical WARNING "resending" lines at the
+	 * default log level. The task deliberately keeps retrying afterwards
+	 * (retry-forever is the intended liveness behavior under transient faults);
+	 * this only raises an alarm, it does not give up.
+	 */
+	private static final int SEVERE_NUM_RESTARTS = 60;
+
+	private boolean severeLogged = false;
+
 	/**
 	 * @param startEpoch
 	 * @param DB
@@ -131,6 +146,35 @@ public class WaitAckStopEpoch<NodeIDType>
 			log.log(Level.WARNING, MyLogger.FORMAT[2],
 					new Object[] { this.refreshKey(), " resending ",
 							this.stopEpoch.getSummary() });
+		// Escalate a persistent (likely wedged) STOP_EPOCH retry loop to a
+		// one-shot SEVERE with the full reconfiguration context, so the rare hang
+		// is diagnosable from the logs alone (which group, which prev-epoch group
+		// we are awaiting an AckStopEpoch from, the request endpoints, and the
+		// current DB record state).
+		if (restartCount >= SEVERE_NUM_RESTARTS && !this.severeLogged) {
+			this.severeLogged = true;
+			try {
+				ReconfigurationRecord<NodeIDType> record = this.DB
+						.getReconfigurationRecord(this.stopEpoch.getServiceName());
+				log.log(Level.SEVERE,
+						"{0} reconfiguration appears WEDGED: {1} STOP_EPOCH resends over ~{2}s "
+								+ "with no progress (still awaiting AckStopEpoch). "
+								+ "stopEpoch={3}, prevEpochGroup(awaited)={4}, curEpochGroup={5}, "
+								+ "initiator={6}, sender={7}, receiver={8}, dbRecord={9}",
+						new Object[] { this.refreshKey(), restartCount,
+								(System.currentTimeMillis() - this.initTime) / 1000,
+								this.stopEpoch.getSummary(),
+								this.startEpoch.getPrevEpochGroup(),
+								this.startEpoch.getCurEpochGroup(),
+								this.startEpoch.getInitiator(),
+								this.startEpoch.getSender(),
+								this.startEpoch.getMyReceiver(),
+								record != null ? record.getSummary() : "null" });
+			} catch (Throwable t) {
+				log.log(Level.SEVERE, "{0} WEDGED (diagnostics threw {1})",
+						new Object[] { this.refreshKey(), t });
+			}
+		}
 		return start();
 	}
 

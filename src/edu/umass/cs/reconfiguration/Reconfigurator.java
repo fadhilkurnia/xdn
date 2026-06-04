@@ -180,12 +180,26 @@ public class Reconfigurator<NodeIDType> implements
                         this.consistentNodeConfig.getReconfigurators()});
 
         // we don't keep a handle to http servers here.
+        // Plaintext control-plane HTTP server on the clear port (3300): coredns
+        // geo-DNS, xdn-cli, and trace_bw all call this, so it stays plaintext.
         this.protocolExecutor.submit(new Runnable() {
             @Override
             public void run() {
                 initHTTPServer(false);
             }
         });
+        // Optionally ALSO expose the control-plane API over TLS on the separate SSL
+        // port (3400), so an HTTPS browser dashboard (e.g. GitHub Pages) can reach
+        // it without mixed-content blocking. Additive: the plaintext port above is
+        // untouched, so existing HTTP clients keep working.
+        if (Config.getGlobalBoolean(RC.ENABLE_RECONFIGURATOR_HTTPS)) {
+            this.protocolExecutor.submit(new Runnable() {
+                @Override
+                public void run() {
+                    initHTTPServer(true);
+                }
+            });
+        }
 
         this.protocolExecutor.submit(new Runnable() {
             @Override
@@ -221,14 +235,15 @@ public class Reconfigurator<NodeIDType> implements
         if (!Config.getGlobalBoolean(RC.ENABLE_RECONFIGURATOR_HTTP))
             return;
         InetSocketAddress me = this.messenger.getListeningSocketAddress();
+        // Plaintext binds the clear HTTP port (3300); TLS binds the distinct SSL
+        // HTTP port (3400), so the two listeners can run side by side.
+        int port = ssl ? ReconfigurationConfig.getHTTPSPort(me.getPort())
+                : ReconfigurationConfig.getHTTPPort(me.getPort());
         try {
             /* We don't really need to hold a pointer to the HTTP server except
              * maybe for instrumentation purposes. */
-            new HttpReconfigurator(this, new InetSocketAddress(me.getAddress(),
-                    ReconfigurationConfig.getHTTPPort(me.getPort())), ssl);
-
-            // FIXME: start HTTPS server here as well
-
+            new HttpReconfigurator(this,
+                    new InetSocketAddress(me.getAddress(), port), ssl);
         } catch (CertificateException | InterruptedException | SSLException e) {
             if (!(e instanceof InterruptedException)) // close
                 e.printStackTrace();
@@ -4073,6 +4088,58 @@ public class Reconfigurator<NodeIDType> implements
             return false;
         }
         return true;
+    }
+
+    @Override
+    public String getServiceDemandJson(String serviceName) {
+        // Read-only; delegates to the profiler, which returns [] for non-geographic
+        // demand profilers or services with no collected demand. Used by the
+        // dashboard geo-demand heatmap (HttpReconfigurator).
+        return this.demandProfiler.getDemandGeoCells(serviceName).toString();
+    }
+
+    @Override
+    public String getNodeLocationsJson() {
+        // The candidate pool is every node with a CONFIGURED geolocation (cheap
+        // static config; no running instance needed). A node is "active" if it is
+        // currently in the active-replica set. This lets the dashboard show all
+        // potential locations vs. the few running replicas. Read-only.
+        java.util.Set<String> active = new java.util.HashSet<String>();
+        for (NodeIDType n : this.consistentNodeConfig.getActiveReplicas()) {
+            active.add(n.toString());
+        }
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (java.util.Map.Entry<String, edu.umass.cs.nio.interfaces.Geolocation> e :
+                edu.umass.cs.gigapaxos.PaxosConfig.getActiveGeolocations().entrySet()) {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("id", e.getKey());
+                o.put("lat", e.getValue().latitude());
+                o.put("lon", e.getValue().longitude());
+                o.put("active", active.contains(e.getKey()));
+                arr.put(o);
+            } catch (org.json.JSONException ex) {
+                throw new RuntimeException(ex);
+            }
+        }
+        return arr.toString();
+    }
+
+    @Override
+    public boolean submitServerReconfiguration(ReconfiguratorRequest request) {
+        if (!(request instanceof ServerReconfigurationPacket)) {
+            return false;
+        }
+        @SuppressWarnings("unchecked")
+        ServerReconfigurationPacket<NodeIDType> pkt =
+                (ServerReconfigurationPacket<NodeIDType>) request;
+        // Inject into our own pipeline: ProtocolExecutor.handleEvent dispatches via
+        // the 2-arg protocol-task path (e.g. handleReconfigureActiveNodeConfig) AND
+        // sends the resulting coordination (StartEpoch / state transfer). Note:
+        // sendRequest() instead uses the callback/3-arg handler path, which server
+        // reconfiguration packets don't have. Fire-and-forget; the change proceeds
+        // asynchronously (poll /api/v2/nodes or a service's /placement).
+        return this.protocolExecutor.handleEvent(pkt);
     }
 
     @Override

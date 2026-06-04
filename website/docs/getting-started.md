@@ -1,26 +1,44 @@
 # Getting started with XDN
 
-!!! info
-    This page explains how to deploy a blackbox stateful service on an existing XDN provider.
+This page explains how to deploy a blackbox stateful service on an existing XDN provider.
 
-## Deploy a blackbox service
+## Install the CLI
 
-First, get the client binary, `xdn`, by cloning our Github repository.
+Install the `xdn` CLI with a single command — it downloads the right binary for
+your OS and architecture, verifies its SHA-256 checksum, and installs it to
+`~/.local/bin`:
 
 ``` sh
-git clone https://github.com/fadhilkurnia/xdn
-cd xdn/bin/
-export PATH=$(pwd):$PATH
+curl -fsSL https://xdn.cs.umass.edu/install | sh
 ```
 
-Then check that you can successfully run the client binary.
+Check that it runs:
+
 ``` sh
 xdn --help
 ```
-   
-!!! tip
-    We use x86 Linux machine by default. 
-    For ARM64 machine, such as MacBook with Apple Silicon, go to `xdn/bin/arm64` directory instead.
+
+??? quote "Other ways to get it"
+    Inspect the script first with `curl -fsSL https://xdn.cs.umass.edu/install | less`,
+    grab a binary directly from the [releases page](https://github.com/fadhilkurnia/xdn/releases),
+    or build from source:
+    `git clone https://github.com/fadhilkurnia/xdn && cd xdn && ./bin/build_xdn_cli.sh`.
+
+## Deploy a blackbox service
+
+XDN places your service's replicas at edge locations close to your users —
+across AWS Regions and Local Zones worldwide. Here are the available edge
+locations:
+
+<iframe class="xdn-edge-map" src="/dashboard/app/edge-locations.html"
+        title="XDN edge locations" loading="lazy"></iframe>
+
+<style>
+  .xdn-edge-map {
+    width: 100%; height: 420px; margin: 4px 0 8px;
+    border: 1px solid var(--md-default-fg-color--lightest); border-radius: 6px;
+  }
+</style>
 
 Finally, launch a blackbox stateful service on XDN. Let's use `bookcatalog` as the service name.
 ``` sh
@@ -63,18 +81,49 @@ Let's dechiper what just happened when we deploy a stateful service with the com
   than determinism, XDN allows developer to specify other properties of the service and its requests so XDN can use an
   optimized replication protocol, depending on the service's properties.
 - **Consistency Model.** The `--consistency` option specifies the consistency model the developer wants for the
-  replicated service. The default value is `linearizable`. Check out [this page](3-flexible-consistency.md) to see how
+  replicated service. The default value is `linearizable`. Check out [this page](flexible-consistency.md) to see how
   to use different consistency model.
 - **State Directory.** The `--state` option specifies the directory where the web service stores its state. For example,
   it is commonly `/var/lib/mysql` in MySQL and `/var/lib/pgsql/data` in PostgreSQL. When not specified, XDN will 
   snapshot the entire data in the container `/`. 
 - **XDN Provider.** Here, we are using an existing XDN provider, accessible at `xdnapp.com`. You can use another XDN
   Provider using `--control-plane=<control_plane_url>` option. Alternatively, you can be your own XDN Provider! check
-  out [this page](2-become-operator.md).
+  out [this page](become-operator.md).
+
+## Deploy using a service declaration file
+
+Instead of passing each property as a separate CLI flag, you can declare the whole
+service in a YAML file and launch it with `--file`, which keeps the service
+definition versionable. Here is the `bookcatalog` service from above, written as
+`bookcatalog.yaml`:
+
+```yaml
+# bookcatalog.yaml
+---
+name: bookcatalog
+image: fadhilkurnia/xdn-bookcatalog
+port: 80
+consistency: linearizability
+deterministic: true
+state: /app/data/
+```
+
+Then launch it with:
+``` bash
+xdn launch bookcatalog --file=bookcatalog.yaml
+```
+
+This is equivalent to the `xdn launch bookcatalog --image=… --state=…` command shown earlier.
+
+A declaration file really shines when a service is made of several containers — a
+frontend, a backend, and a database, for example. See
+[Deploy a multi-container service](multi-container.md) for how to declare and launch one.
 
 ## Other example services
 
-Other than the `fadhilkurnia/xdn-bookcatalog` Docker image that we use previously, we have prepared Docker images for
+XDN can replicate _any_ stateful service, as long as it exposes a request-response
+HTTP interface and keeps its safety-critical state on disk. Other than the
+`fadhilkurnia/xdn-bookcatalog` Docker image that we use previously, we have prepared Docker images for
 other stateful services, as can be seen below.
 
 <table>
@@ -170,65 +219,3 @@ other stateful services, as can be seen below.
 </tr>
 
 </table>
-
-## Deploy a multi-container service
-Some stateful service have multiple containers, typically having frontend, backend, and database in their own container.
-
-XDN supports deployment of stateful service with multiple containers. Developers need to specify the properties of
-the service, including the containers of that service. 
-An example of that service properties declaration is shown below, in `wordpress.yaml` file.
-```yaml
-# wordpress.yaml
----
-name: myblog
-components:
-   - wordpress:
-        image: wordpress:6.5.4-fpm-alpine
-        port: 80
-        entry: true
-        environments:
-           - WORDPRESS_CONFIG_EXTRA:
-                define('FORCE_SSL_ADMIN', false);
-                define('FORCE_SSL_LOGIN', false);
-   - database:
-        image: mysql:8.4.0
-        expose: 3306
-        stateful: true
-        environments:
-           - MYSQL_ROOT_PASSWORD: supersecret
-deterministic: false
-state: database:/var/lib/mysql/
-consistency: linearizability
-```
-
-Then, to deploy that multi-container service, use the following command:
-``` bash
-xdn launch myblog --file=wordpress.yaml
-```
-If successful, you wil see the following output.
-```
-Launching bookcatalog service with the following configuration:
-  docker image  : wordpress:6.5.4-fpm-alpine,mysql:8.4.0
-  http port     : 80
-  consistency   : linearizable
-  deterministic : false
-  state dir     : database:/var/lib/mysql/
-
-The service is successfully launched 🎉🚀
-Access your service at the following permanent URL:
-  > http://myblog.xdnapp.com/
-
-
-Retrieve the service's replica locations with this command:
-  xdn service info myblog
-Destroy the replicated service with this command:
-  xdn service destroy myblog
-```
-
-Limitations:
-
-- XDN only supports at most one stateful container. Multiple stateful container requires snapshot transaction support,
-  currently unimplemented.
-- XDN only supports at most one entry container. Supporting multiple entry containers require developer to declare the
-  ports of all those entry containers, making the specification more complex. Currently, this feature is not a priority
-  for XDN.

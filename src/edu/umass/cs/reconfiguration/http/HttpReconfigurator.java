@@ -1,11 +1,14 @@
 package edu.umass.cs.reconfiguration.http;
 
 import edu.umass.cs.nio.JSONPacket;
+import edu.umass.cs.nio.MessageNIOTransport;
+import edu.umass.cs.nio.nioutils.StringifiableDefault;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorFunctions;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket.PacketType;
+import edu.umass.cs.utils.Config;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -18,8 +21,13 @@ import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.Cookie;
 import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
 import io.netty.handler.codec.http.cookie.ServerCookieEncoder;
+import io.netty.handler.codec.http.cors.CorsConfig;
+import io.netty.handler.codec.http.cors.CorsConfigBuilder;
+import io.netty.handler.codec.http.cors.CorsHandler;
+import io.netty.handler.ssl.OpenSsl;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.CharsetUtil;
 import org.json.JSONArray;
@@ -27,6 +35,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
+import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -174,12 +183,45 @@ public class HttpReconfigurator {
         this.rcf = rcf == null ? "" : rcf.toString();
         this.rcNodeId = this.rcf.substring(3);
 
-        // Configure SSL.
+        // Configure SSL. When enabled, terminate TLS in Netty using the configured
+        // PEM cert chain + key (e.g. the wildcard *.xdnapp.com cert the RC pulls
+        // from S3) so an HTTPS client like the browser dashboard can reach the
+        // control plane without mixed-content blocking; fall back to an (untrusted)
+        // self-signed cert if none is configured. Mirrors HttpActiveReplica.
         final SslContext sslCtx;
         if (ssl) {
-            SelfSignedCertificate ssc = new SelfSignedCertificate();
-            sslCtx = SslContextBuilder.forServer(ssc.certificate(),
-                    ssc.privateKey()).build();
+            String certChainPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.RECONFIGURATOR_TLS_CERT_CHAIN);
+            String privateKeyPath = Config.getGlobalString(
+                    ReconfigurationConfig.RC.RECONFIGURATOR_TLS_PRIVATE_KEY);
+            SslContextBuilder sslBuilder;
+            // Require the PEM files to actually exist: the RC boots before the
+            // cert is issued (issuance needs the RC's coredns), so on a cold start
+            // the configured paths may not be on disk yet. Fall back to self-signed
+            // rather than crash; the cert-pull timer restarts the RC once the real
+            // cert lands, and this branch then picks it up.
+            if (certChainPath != null && !certChainPath.isEmpty()
+                    && privateKeyPath != null && !privateKeyPath.isEmpty()
+                    && new File(certChainPath).exists()
+                    && new File(privateKeyPath).exists()) {
+                sslBuilder = SslContextBuilder.forServer(
+                        new File(certChainPath), new File(privateKeyPath));
+                log.log(Level.INFO,
+                        "HttpReconfigurator terminating TLS with cert chain {0}",
+                        new Object[]{certChainPath});
+            } else {
+                SelfSignedCertificate ssc = new SelfSignedCertificate();
+                sslBuilder = SslContextBuilder.forServer(
+                        ssc.certificate(), ssc.privateKey());
+                log.log(Level.WARNING,
+                        "HttpReconfigurator TLS enabled but cert not present yet; "
+                                + "using a temporary untrusted self-signed certificate");
+            }
+            // Prefer native OpenSSL/BoringSSL (netty-tcnative) when available.
+            if (OpenSsl.isAvailable()) {
+                sslBuilder.sslProvider(SslProvider.OPENSSL);
+            }
+            sslCtx = sslBuilder.build();
         } else {
             sslCtx = null;
         }
@@ -290,6 +332,12 @@ public class HttpReconfigurator {
 
             p.addLast(new HttpResponseEncoder());
 
+            // CORS: allow any origin so the browser dashboard (served from a
+            // different origin, e.g. GitHub Pages) can call the control-plane API.
+            // Handles preflight (OPTIONS) automatically. Mirrors HttpActiveReplica.
+            CorsConfig corsConfig = CorsConfigBuilder.forAnyOrigin().build();
+            p.addLast(new CorsHandler(corsConfig));
+
             p.addLast(new HttpReconfiguratorHandler(rcFunctions, rcNodeId));
 
         }
@@ -360,7 +408,7 @@ public class HttpReconfigurator {
     }
 
     private static final ReconfiguratorRequest toReconfiguratorRequest(
-            JSONObject json, Channel channel) throws JSONException,
+            JSONObject json, Channel channel, String rcNodeId) throws JSONException,
             HTTPException {
 
         ReconfigurationPacket.PacketType type = getRequestType(json.get(
@@ -373,7 +421,7 @@ public class HttpReconfigurator {
 
         if (type == ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG
                 || type == ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG)
-            return toServerReconfigurationRequest(json, channel, type, name);
+            return toServerReconfigurationRequest(json, channel, type, name, rcNodeId);
 
         long requestID = (type == ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS ? json
                 .optLong(RequestActiveReplicas.Keys.QID.toString(), 0) : 0);
@@ -411,9 +459,79 @@ public class HttpReconfigurator {
         return crp;
     }
 
+    // Build an active-node-config change (add/remove ActiveReplica) from query
+    // params, for demand-driven node elasticity. Examples:
+    //   add:    /?type=CHANGE_ACTIVES&name=AR_NODES&add_id=AR4&add_host=<ip>&add_port=2000
+    //   remove: /?type=CHANGE_ACTIVES&name=AR_NODES&del_id=AR4
+    // The reconfigurator integrates/drains the node and reconfigures affected
+    // services with state transfer (Reconfigurator.handleReconfigureActiveNodeConfig).
     private static final ReconfiguratorRequest toServerReconfigurationRequest(
-            JSONObject json, Channel channel, PacketType type, String name) {
-        throw new RuntimeException("Unimplemented");
+            JSONObject json, Channel channel, PacketType type, String name,
+            String rcNodeId)
+            throws HTTPException, JSONException {
+        if (type != ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "Only active-replica node config changes are supported over HTTP");
+        }
+        Map<String, InetSocketAddress> added = new HashMap<>();
+        Set<String> deleted = new HashSet<>();
+        String addId = json.optString("add_id", "");
+        if (!addId.isEmpty()) {
+            String host = json.optString("add_host", "");
+            int port = json.optInt("add_port", 0);
+            if (host.isEmpty() || port <= 0) {
+                throw new HTTPException(
+                        ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                        "CHANGE_ACTIVES add requires add_host and add_port");
+            }
+            added.put(addId, new InetSocketAddress(host, port));
+        }
+        String delId = json.optString("del_id", "");
+        if (!delId.isEmpty()) {
+            deleted.add(delId);
+        }
+        if (added.isEmpty() && deleted.isEmpty()) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "CHANGE_ACTIVES requires add_id (+add_host,add_port) or del_id");
+        }
+        // DEBUG/TEST ONLY: -DHTTP_DEBUG_NULL_ISSUER=true builds the packet with a
+        // null initiator/issuer/receiver, the way the original code did. Retained
+        // for soak-testing the (rare, timing-sensitive) reconfiguration wedge that
+        // was observed on a single reconfigurator; it is NOT a confirmed trigger.
+        if (Boolean.getBoolean("HTTP_DEBUG_NULL_ISSUER")) {
+            return new ReconfigureActiveNodeConfig<String>(null, added, deleted);
+        }
+        // Build the packet with a real (non-null) initiator, then round-trip through
+        // JSON with the NIO sender/receiver fields populated (the channel's local
+        // address) so that creator (getIssuer) and myReceiver (getMyReceiver) are
+        // non-null -- exactly as a network-received CHANGE_ACTIVES would be. This is
+        // a correctness/hygiene fix: it lets the reconfigurator route the response
+        // back to the caller (otherwise it logs "sending response to null") and keeps
+        // an HTTP-constructed packet indistinguishable from a wire-received one.
+        ReconfigureActiveNodeConfig<String> pkt =
+                new ReconfigureActiveNodeConfig<String>(rcNodeId, added, deleted);
+        JSONObject j = pkt.toJSONObject();
+        InetSocketAddress local = (InetSocketAddress) channel.localAddress();
+        String localAddr = local.getAddress().getHostAddress() + ":" + local.getPort();
+        j.put(MessageNIOTransport.SNDR_ADDRESS_FIELD, localAddr);
+        j.put(MessageNIOTransport.RCVR_ADDRESS_FIELD, localAddr);
+        ReconfigureActiveNodeConfig<String> built =
+                new ReconfigureActiveNodeConfig<String>(
+                        j, new StringifiableDefault<String>(""));
+        // Boundary invariant: an externally-submitted server-reconfiguration request
+        // should carry a non-null issuer/receiver (needed to route the response to
+        // the caller). Asserted under -ea (CI + gpServer) and hard-checked otherwise.
+        assert built.getIssuer() != null && built.getMyReceiver() != null
+                : "CHANGE_ACTIVES dispatched with null issuer/receiver";
+        if (built.getIssuer() == null || built.getMyReceiver() == null) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "CHANGE_ACTIVES requires a non-null issuer/receiver "
+                            + "(could not resolve the local channel address)");
+        }
+        return built;
     }
 
     static class HttpReconfiguratorHandler extends
@@ -457,13 +575,26 @@ public class HttpReconfigurator {
                     JSONObject json = toJSONObject(new QueryStringDecoder(
                             request.uri()).parameters());
                     log.log(Level.INFO, "JSON converted from uri is {0}", new Object[]{json});
-                    crp = toReconfiguratorRequest(json, ctx.channel());
+                    crp = toReconfiguratorRequest(json, ctx.channel(), this.rcNodeId);
 
                     if (rcFunctions != null) {
-                        crp = (ReconfiguratorRequest) this.rcFunctions
-                                .sendRequest(crp);
+                        if (crp instanceof ServerReconfigurationPacket) {
+                            // Active-node-config changes (CHANGE_ACTIVES) only have
+                            // the 2-arg protocol-task handler, so go through the
+                            // fire-and-forget pipeline (dispatch + send coordination)
+                            // rather than sendRequest's callback path. Poll
+                            // /api/v2/nodes for the result.
+                            boolean accepted =
+                                    this.rcFunctions.submitServerReconfiguration(crp);
+                            buf.append("{\"accepted\":").append(accepted).append("}");
+                        } else {
+                            crp = (ReconfiguratorRequest) this.rcFunctions
+                                    .sendRequest(crp);
+                            buf.append(crp.toString());
+                        }
+                    } else {
+                        buf.append(crp.toString());
                     }
-                    buf.append(crp.toString());
 
                 } catch (JSONException | HTTPException e) {
                     //e.printStackTrace();
@@ -523,7 +654,7 @@ public class HttpReconfigurator {
         }
 
         private boolean isV2ApiRequest(HttpRequest request) {
-            return request.uri().startsWith("/api/v2/services");
+            return request.uri().startsWith("/api/v2/");
         }
 
         private void handleReconfigurationV2Request(ChannelHandlerContext ctx, Object msg) {
@@ -539,6 +670,16 @@ public class HttpReconfigurator {
             assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
                     "Invalid request sender";
             InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+
+            // All configured node locations (the candidate placement pool) + which
+            // are currently running as active replicas. Drives the dashboard map's
+            // "potential locations vs. running replicas" view. Read-only, synchronous.
+            //  GET /api/v2/nodes
+            if (httpRequest.method().equals(HttpMethod.GET)
+                    && httpRequest.uri().equals("/api/v2/nodes")) {
+                this.writeJsonResponse(this.rcFunctions.getNodeLocationsJson(), ctx);
+                return;
+            }
 
             // Parses and handles SetReplicaPlacementRequest
             //  PUT /api/v2/services/{serviceName}/placement
@@ -557,6 +698,17 @@ public class HttpReconfigurator {
             if (httpRequest.method().equals(HttpMethod.GET) && matcher.matches()) {
                 parseAndHandleHttpGetReplicaPlacementRequest(
                         ctx, senderAddress, httpRequest, httpContent);
+                return;
+            }
+
+            // Geo-demand for the dashboard heatmap (read-only; synchronous, no
+            // coordination). Returns a JSON array of {lat, lon, count} grid cells.
+            //  GET /api/v2/services/{serviceName}/demand
+            Pattern demandPattern = Pattern.compile("^/api/v2/services/([a-zA-Z0-9_-]+)/demand$");
+            Matcher demandMatcher = demandPattern.matcher(httpRequest.uri());
+            if (httpRequest.method().equals(HttpMethod.GET) && demandMatcher.matches()) {
+                this.writeJsonResponse(
+                        this.rcFunctions.getServiceDemandJson(demandMatcher.group(1)), ctx);
                 return;
             }
 
@@ -724,6 +876,18 @@ public class HttpReconfigurator {
                     Unpooled.copiedBuffer(errMessage.getBytes(StandardCharsets.UTF_8)));
             httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.TEXT_PLAIN);
             httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, errMessage.length());
+            ctx.write(httpResponse);
+            ctx.flush();
+        }
+
+        // Write a raw JSON string as a 200 application/json response (CORS headers
+        // are added by the pipeline's CorsHandler). Used by the geo-demand route.
+        private void writeJsonResponse(String json, ChannelHandlerContext ctx) {
+            byte[] body = json.getBytes(StandardCharsets.UTF_8);
+            FullHttpResponse httpResponse = new DefaultFullHttpResponse(
+                    HTTP_1_1, OK, Unpooled.copiedBuffer(body));
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpHeaderValues.APPLICATION_JSON);
+            httpResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, body.length);
             ctx.write(httpResponse);
             ctx.flush();
         }

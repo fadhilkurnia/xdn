@@ -25,14 +25,18 @@ function main() {
   local LINUX_AMD64_BIN="${BIN_DIR}/xdn-linux-amd64"
   local LINUX_ARM64_BIN="${BIN_DIR}/xdn-linux-arm64"
   local DARWIN_ARM64_BIN="${BIN_DIR}/xdn-darwin-arm64"
+  local DARWIN_AMD64_BIN="${BIN_DIR}/xdn-darwin-amd64"
   local HOST_OS
   local HOST_ARCH
 
-  # build the xdn cli for linux/{amd64,arm64} and darwin/arm64. linux/arm64 is
-  # needed so the AR AMI builds natively on Graviton (t4g) builders.
+  # build the xdn cli for linux/{amd64,arm64} and darwin/{arm64,amd64}. linux/arm64
+  # is needed so the AR AMI builds natively on Graviton (t4g) builders; darwin/amd64
+  # covers Intel Macs. These are the assets published by .github/workflows/release.yml
+  # and downloaded by the installer at https://xdn.cs.umass.edu/install.
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${LINUX_AMD64_BIN}" .
   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o "${LINUX_ARM64_BIN}" .
   CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o "${DARWIN_ARM64_BIN}" .
+  CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o "${DARWIN_AMD64_BIN}" .
 
   HOST_OS="$(uname -s)"
   HOST_ARCH="$(uname -m)"
@@ -47,6 +51,9 @@ function main() {
       ;;
     Darwin-arm64)
       HOST_BIN="${DARWIN_ARM64_BIN}"
+      ;;
+    Darwin-x86_64)
+      HOST_BIN="${DARWIN_AMD64_BIN}"
       ;;
     *)
       echo "Warning: Unsupported host (${HOST_OS}/${HOST_ARCH})."
@@ -78,6 +85,7 @@ function main() {
   echo "  ${LINUX_AMD64_BIN}"
   echo "  ${LINUX_ARM64_BIN}"
   echo "  ${DARWIN_ARM64_BIN}"
+  echo "  ${DARWIN_AMD64_BIN}"
   echo "Alias (if supported) at ${BIN_DIR}/xdn and ${SYSTEM_LINK}"
 }
 

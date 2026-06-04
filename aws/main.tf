@@ -177,11 +177,26 @@ resource "aws_security_group" "allow_ssh_ipv6" {
     ipv6_cidr_blocks = ["::/0"]
   }
 
-  # Rule B4: RC control-plane API (xdn-cli contacts cp.xdnapp.com:3300)
+  # Rule B4: RC control-plane API, plaintext (xdn-cli, coredns geo-DNS, and
+  #          trace_bw contact cp.xdnapp.com:3300 over HTTP).
   ingress {
-    description      = "XDN control-plane API on the RC"
+    description      = "XDN control-plane API on the RC (HTTP)"
     from_port        = 3300
     to_port          = 3300
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
+  }
+
+  # Rule B4b: RC control-plane API over TLS on the SSL port (HTTP_PORT_SSL_OFFSET
+  #           => 3400). HttpReconfigurator terminates TLS here with the wildcard
+  #           cert so the browser dashboard (HTTPS) can reach the control plane
+  #           without mixed-content blocking. The plaintext :3300 above stays for
+  #           the existing HTTP clients.
+  ingress {
+    description      = "XDN control-plane API on the RC (HTTPS, for the dashboard)"
+    from_port        = 3400
+    to_port          = 3400
     protocol         = "tcp"
     cidr_blocks      = ["0.0.0.0/0"]
     ipv6_cidr_blocks = ["::/0"]
@@ -242,13 +257,13 @@ resource "aws_key_pair" "deployer" {
 variable "rc_ami" {
   description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation). ARM64/Graviton image (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-0b430939d4943fcbb" # arm64, IPv6 (coredns AAAA + IPv6-consensus jar), 16GB root
+  default     = "ami-08be7b8fc654ea07c" # arm64, xdn-dashboard: issuer/receiver fix + wedge SEVERE alarm
 }
 
 variable "ar_ami" {
   description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from the xdn-ar-arm64 branch by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-0c22f54b43a823533" # arm64, IPv6 + TLS jar + paxos node-0 fixes
+  default     = "ami-0a8706506aedccede" # arm64, xdn-dashboard: phantom meta-group STOP ack fix
 }
 
 variable "ar_count" {
@@ -308,11 +323,33 @@ variable "acme_ca" {
   default     = "https://acme-v02.api.letsencrypt.org/directory"
 }
 
+variable "issue_cert" {
+  description = <<-EOT
+    Whether THIS apply should issue the wildcard cert via ACME. Default false: the
+    cert is read from the PERSISTENT bucket (local.persist_tls_bucket) that survives
+    `terraform destroy`, so normal destroy/redeploy cycles reuse it and never touch
+    the Let's Encrypt rate limit. Set true ONLY to (re)issue -- e.g. renewal every
+    ~60 days: `terraform apply -var issue_cert=true`, then copy the fresh PEM from
+    the cluster bucket into the persistent bucket (bin/persist-cert.sh).
+  EOT
+  type        = bool
+  default     = false
+}
+
+data "aws_caller_identity" "current" {}
+
 # Static private IPs make the full cluster view known at plan time, so the
 # user_data templates can reference every node without resource cycles.
 locals {
   rc_private_ip  = "10.0.1.10" # in subnet[0] = 10.0.1.0/24
   ar_private_ips = [for i in range(var.ar_count) : "10.0.${i + 2}.10"]
+
+  # Persistent TLS cert store -- a bucket created OUTSIDE this config (bin/persist-cert.sh)
+  # so it survives `terraform destroy`. The RC + ARs always pull the wildcard cert
+  # from here; cert issuance (var.issue_cert) writes to the transient cluster bucket
+  # and bin/persist-cert.sh copies it here once.
+  persist_tls_bucket     = "xdn-tls-persist-${data.aws_caller_identity.current.account_id}"
+  persist_tls_bucket_arn = "arn:aws:s3:::xdn-tls-persist-${data.aws_caller_identity.current.account_id}"
 
   # Static GLOBAL IPv6 per node, derived from each subnet's /64 (host ::10).
   # Unlike the IPv4 EIP (NAT'd, not locally bindable), an instance's IPv6 is on
@@ -323,6 +360,72 @@ locals {
   # block), which is fine -- these resolve at apply time.
   rc_ipv6  = cidrhost(aws_subnet.ipv6_subnets[0].ipv6_cidr_block, 10)
   ar_ipv6s = [for i in range(var.ar_count) : cidrhost(aws_subnet.ipv6_subnets[i + 1].ipv6_cidr_block, 10)]
+
+  # Per-AR coordinates surfaced as active.<id>.geolocation (parsed by PaxosConfig,
+  # returned in the /placement API, plotted on the dashboard map). NOTE: this
+  # cluster physically runs in a single region (us-east-1); these are ILLUSTRATIVE
+  # coordinates spread across the US (East / Central / West) so the placement map
+  # demonstrates XDN's geo-distribution. Replace with real per-region coordinates
+  # for a true multi-region deployment. element() wraps if ar_count > 3.
+  ar_geolocations = ["38.95,-77.45", "41.88,-87.63", "37.36,-121.92"]
+
+  # Candidate placement locations -- the "potential locations" pool the dashboard
+  # shows alongside the running replicas. These are GEOLOCATIONS ONLY (no running
+  # instance), so they cost nothing: registered on the RC as active.<id>.geolocation
+  # so the RC knows where they are without any node being up. A demand-driven
+  # elasticity controller (future) launches an EC2 in one of these and adds it as an
+  # active replica when demand concentrates there; until then they're just
+  # candidates on the map. Spread across the continental US (AZ/Local-Zone metros).
+  # Continental-US edge locations advertised to the dashboard map (GET
+  # /api/v2/nodes) as candidate placement sites -- config only ($0, no running
+  # node). The 4 continental-US AWS regions' Availability Zones (slightly offset
+  # so co-located AZs render as distinct points) plus AWS Local Zone metros.
+  candidate_geolocations = {
+    # us-east-1 (N. Virginia) AZs
+    "us-east-1a" = "39.02,-77.47"
+    "us-east-1b" = "38.94,-77.44"
+    "us-east-1c" = "38.87,-77.40"
+    "us-east-1d" = "39.10,-77.54"
+    "us-east-1e" = "38.82,-77.61"
+    "us-east-1f" = "39.17,-77.37"
+    # us-east-2 (Ohio) AZs
+    "us-east-2a" = "39.99,-82.99"
+    "us-east-2b" = "40.08,-83.09"
+    "us-east-2c" = "39.90,-82.89"
+    # us-west-1 (N. California) AZs
+    "us-west-1a" = "37.44,-122.00"
+    "us-west-1b" = "37.31,-121.85"
+    "us-west-1c" = "37.50,-121.93"
+    # us-west-2 (Oregon) AZs
+    "us-west-2a" = "45.84,-119.70"
+    "us-west-2b" = "45.77,-119.59"
+    "us-west-2c" = "45.91,-119.81"
+    "us-west-2d" = "45.70,-119.51"
+    # AWS Local Zones (continental US metros)
+    "lz-atlanta"      = "33.75,-84.39"
+    "lz-boston"       = "42.36,-71.06"
+    "lz-charlotte"    = "35.23,-80.84"
+    "lz-chicago"      = "41.85,-87.65"
+    "lz-dallas"       = "32.78,-96.80"
+    "lz-denver"       = "39.74,-104.99"
+    "lz-detroit"      = "42.33,-83.05"
+    "lz-houston"      = "29.76,-95.37"
+    "lz-kansas-city"  = "39.10,-94.58"
+    "lz-las-vegas"    = "36.17,-115.14"
+    "lz-los-angeles"  = "34.05,-118.24"
+    "lz-miami"        = "25.76,-80.19"
+    "lz-minneapolis"  = "44.98,-93.27"
+    "lz-nashville"    = "36.16,-86.78"
+    "lz-new-orleans"  = "29.95,-90.07"
+    "lz-new-york"     = "40.71,-74.01"
+    "lz-philadelphia" = "39.95,-75.17"
+    "lz-phoenix"      = "33.45,-112.07"
+    "lz-portland"     = "45.52,-122.68"
+    "lz-seattle"      = "47.61,-122.33"
+  }
+  candidate_geo_props = join("\n", [
+    for id, ll in local.candidate_geolocations : "active.${id}.geolocation=\"${ll}\""
+  ])
 
   # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
   # Nodes advertise their GLOBAL IPv6 addresses for consensus (reconfigurator/
@@ -338,6 +441,13 @@ locals {
     "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
+    # Geo-demand profiling: with this set, each request's client location (the
+    # X-Client-Location header, parsed into XdnHttpRequest) is accumulated per grid
+    # cell by XdnGeoDemandProfiler on the ARs and aggregated at the RC. It drives
+    # demand-aware re-placement AND is surfaced read-only by
+    # GET /api/v2/services/<svc>/demand for the dashboard heatmap. (Matches the
+    # geo-demand smoke config; the only flag needed to turn the pipeline on.)
+    "DEMAND_PROFILE_TYPE=edu.umass.cs.xdn.XdnGeoDemandProfiler",
     # AR data-plane HTTP frontend (the RC ignores these flags; gated off for
     # reconfigurators in ActiveReplica.java). The frontend terminates TLS itself
     # (Netty + BoringSSL) directly on :443 -- no reverse-proxy hop. The HTTPS
@@ -351,6 +461,9 @@ locals {
     "reconfigurator.0=[${local.rc_ipv6}]:3000",
     ], [
     for i in range(var.ar_count) : "active.${i + 1}=[${local.ar_ipv6s[i]}]:2000"
+    ], [
+    # Per-AR geolocation for the dashboard placement map (illustrative; see above).
+    for i in range(var.ar_count) : "active.${i + 1}.geolocation=\"${element(local.ar_geolocations, i)}\""
   ]))
 }
 
@@ -364,6 +477,10 @@ resource "aws_instance" "rc" {
   vpc_security_group_ids = [aws_security_group.allow_ssh_ipv6.id]
   key_name               = aws_key_pair.deployer.key_name
 
+  # Read-only access to the wildcard cert in S3, so the control-plane API can
+  # terminate TLS for the dashboard (the RC pulls the same PEM the ARs do).
+  iam_instance_profile = aws_iam_instance_profile.rc_tls.name
+
   # Bootstrap: drop the gated config so the baked xdn-rc + xdn-dns units start.
   # Replace the instance when the config changes, so cloud-init re-runs with the
   # new gigapaxos.properties (an in-place user_data update would NOT re-run it).
@@ -375,6 +492,18 @@ resource "aws_instance" "rc" {
     # NS records of the delegated _acme-challenge zone; coredns refers ACME
     # resolvers here so Caddy's DNS-01 TXT (written in Route53) is reachable.
     acme_ns = aws_route53_zone.acme.name_servers
+    # Cert store for the control-plane TLS. Use the bucket id + LITERAL object keys
+    # (NOT aws_s3_object.*.key): the wildcard cert is issued AFTER the RC (issuance
+    # needs the RC's coredns), so referencing the cert objects here would create a
+    # dependency cycle. The RC pulls them once present (boot retry loop + timer);
+    # until then HttpReconfigurator serves a temporary self-signed cert.
+    aws_region    = "us-east-1"
+    tls_bucket    = local.persist_tls_bucket
+    fullchain_key = "wildcard/fullchain.pem"
+    privkey_key   = "wildcard/privkey.pem"
+    # Candidate placement locations (RC-only geolocations; no running instances) so
+    # GET /api/v2/nodes can surface them as the dashboard's "potential locations".
+    candidate_geo_props = local.candidate_geo_props
   })
 
   root_block_device {
@@ -425,9 +554,9 @@ resource "aws_instance" "ar" {
     aws_region           = "us-east-1"
     # Cert is issued once by Terraform (acme_certificate) and stashed in S3; the
     # AR pulls it on boot/renewal. No per-AR issuance -> no rate-limit burn.
-    tls_bucket    = aws_s3_bucket.tls.id
-    fullchain_key = aws_s3_object.fullchain.key
-    privkey_key   = aws_s3_object.privkey.key
+    tls_bucket    = local.persist_tls_bucket
+    fullchain_key = "wildcard/fullchain.pem"
+    privkey_key   = "wildcard/privkey.pem"
   })
 
   root_block_device {
@@ -511,7 +640,7 @@ data "aws_iam_policy_document" "ar_acme" {
   # Pull the Terraform-issued wildcard cert (PEM) from the cert store on boot.
   statement {
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.tls.arn}/*"]
+    resources = ["${local.persist_tls_bucket_arn}/*"]
   }
 }
 
@@ -526,6 +655,34 @@ resource "aws_iam_instance_profile" "ar_acme" {
   role = aws_iam_role.ar_acme.name
 }
 
+# 10g. RC instance role: read-only pull of the Terraform-issued wildcard cert
+#      from S3, so the control-plane HTTP API (HttpReconfigurator) can terminate
+#      TLS for the browser dashboard. Unlike the ARs, the RC needs NO Route53
+#      access (coredns is baked) -- only s3:GetObject on the cert store. Reuses the
+#      ar_assume policy doc (same ec2.amazonaws.com principal).
+resource "aws_iam_role" "rc_tls" {
+  name               = "xdn-rc-tls-s3"
+  assume_role_policy = data.aws_iam_policy_document.ar_assume.json
+}
+
+data "aws_iam_policy_document" "rc_tls" {
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["${local.persist_tls_bucket_arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "rc_tls" {
+  name   = "xdn-rc-tls-s3"
+  role   = aws_iam_role.rc_tls.id
+  policy = data.aws_iam_policy_document.rc_tls.json
+}
+
+resource "aws_iam_instance_profile" "rc_tls" {
+  name = "xdn-rc-tls-s3"
+  role = aws_iam_role.rc_tls.name
+}
+
 # 10e. Wildcard certificate, issued ONCE by Terraform via ACME DNS-01 and kept
 #      in state, so AR replacements reuse it instead of re-issuing (which would
 #      burn the Let's Encrypt rate limit). Terraform renews only on apply when
@@ -533,17 +690,20 @@ resource "aws_iam_instance_profile" "ar_acme" {
 #      delegated Route53 zone (10c) using Terraform's own AWS creds; LE validates
 #      it through the coredns delegation, exactly like before.
 resource "tls_private_key" "acme_account" {
+  count     = var.issue_cert ? 1 : 0
   algorithm = "RSA"
   rsa_bits  = 4096
 }
 
 resource "acme_registration" "reg" {
-  account_key_pem = tls_private_key.acme_account.private_key_pem
+  count           = var.issue_cert ? 1 : 0
+  account_key_pem = tls_private_key.acme_account[0].private_key_pem
   email_address   = var.acme_email
 }
 
 resource "acme_certificate" "wildcard" {
-  account_key_pem    = acme_registration.reg.account_key_pem
+  count              = var.issue_cert ? 1 : 0
+  account_key_pem    = acme_registration.reg[0].account_key_pem
   common_name        = "*.${var.base_domain}"
   min_days_remaining = 30
 
@@ -582,13 +742,15 @@ resource "acme_certificate" "wildcard" {
 #      boot (and hourly, to pick up renewals). This is what makes the cert
 #      survive instance replacement without re-issuing.
 resource "aws_s3_bucket" "tls" {
+  count         = var.issue_cert ? 1 : 0
   bucket_prefix = "xdn-tls-"
   force_destroy = true
   tags          = { Name = "xdn-tls-store" }
 }
 
 resource "aws_s3_bucket_public_access_block" "tls" {
-  bucket                  = aws_s3_bucket.tls.id
+  count                   = var.issue_cert ? 1 : 0
+  bucket                  = aws_s3_bucket.tls[0].id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -596,7 +758,8 @@ resource "aws_s3_bucket_public_access_block" "tls" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "tls" {
-  bucket = aws_s3_bucket.tls.id
+  count  = var.issue_cert ? 1 : 0
+  bucket = aws_s3_bucket.tls[0].id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -606,19 +769,21 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "tls" {
 
 # fullchain = leaf + issuer chain (what Netty's SslContextBuilder wants).
 resource "aws_s3_object" "fullchain" {
-  bucket       = aws_s3_bucket.tls.id
+  count        = var.issue_cert ? 1 : 0
+  bucket       = aws_s3_bucket.tls[0].id
   key          = "wildcard/fullchain.pem"
-  content      = "${acme_certificate.wildcard.certificate_pem}${acme_certificate.wildcard.issuer_pem}"
+  content      = "${acme_certificate.wildcard[0].certificate_pem}${acme_certificate.wildcard[0].issuer_pem}"
   content_type = "application/x-pem-file"
-  etag         = md5("${acme_certificate.wildcard.certificate_pem}${acme_certificate.wildcard.issuer_pem}")
+  etag         = md5("${acme_certificate.wildcard[0].certificate_pem}${acme_certificate.wildcard[0].issuer_pem}")
 }
 
 resource "aws_s3_object" "privkey" {
-  bucket       = aws_s3_bucket.tls.id
+  count        = var.issue_cert ? 1 : 0
+  bucket       = aws_s3_bucket.tls[0].id
   key          = "wildcard/privkey.pem"
-  content      = acme_certificate.wildcard.private_key_pem
+  content      = acme_certificate.wildcard[0].private_key_pem
   content_type = "application/x-pem-file"
-  etag         = md5(acme_certificate.wildcard.private_key_pem)
+  etag         = md5(acme_certificate.wildcard[0].private_key_pem)
 }
 
 # 11. Delegate the xdnapp.com zone to coredns on the RC.
