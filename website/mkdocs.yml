@@ -44,11 +44,11 @@ hooks:
 # Pages and main contents
 nav:
   - Home: 'index.md'
-  - Getting Started: '1-getting-started.md'
-  - Consistency: '3-flexible-consistency.md'
-  - Service Properties: '5-service-properties.md'
-  - Deployment: '2-become-operator.md'
-  - Architecture: '4-how-xdn-work.md'
+  - Getting Started: 'getting-started.md'
+  - Consistency: 'flexible-consistency.md'
+  - Service Properties: 'service-properties.md'
+  - Deployment: 'become-operator.md'
+  - Architecture: 'how-xdn-work.md'
   # The repo's docs/*.md are staged into docs/reference/ by bin/build_site.sh.
   - Documentation:
       - HTTP API: 'reference/HTTP-API.md'

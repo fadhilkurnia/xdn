@@ -31,13 +31,13 @@ There are four main design goals to make XDN as effective as, or better than, ex
 
 ![XDN Overview](images/xdn_overview.png){: style="height:400px;"}
 
-Check out [our getting started page](1-getting-started.md) to know how to deploy a blackbox stateful service on XDN.
+Check out [our getting started page](getting-started.md) to know how to deploy a blackbox stateful service on XDN.
 
 ## Getting started
 
-- Start by replicating a service: [deploying a bookcatalog service](1-getting-started.md).
-- Consider other consistency models: [predifined models](3-flexible-consistency.md#predefined-consistency-models) or create [custom protocols](3-flexible-consistency.md#custom-replication-protocol).
-- Specifying _what_ you have and want, _not how_ to achieve it: [declarative replication](5-service-properties.md).
+- Start by replicating a service: [deploying a bookcatalog service](getting-started.md).
+- Consider other consistency models: [predifined models](flexible-consistency.md#predefined-consistency-models) or create [custom protocols](flexible-consistency.md#custom-replication-protocol).
+- Specifying _what_ you have and want, _not how_ to achieve it: [declarative replication](service-properties.md).
 
 ## Research summary
 **Problem.** 

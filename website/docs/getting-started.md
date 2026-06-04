@@ -63,14 +63,14 @@ Let's dechiper what just happened when we deploy a stateful service with the com
   than determinism, XDN allows developer to specify other properties of the service and its requests so XDN can use an
   optimized replication protocol, depending on the service's properties.
 - **Consistency Model.** The `--consistency` option specifies the consistency model the developer wants for the
-  replicated service. The default value is `linearizable`. Check out [this page](3-flexible-consistency.md) to see how
+  replicated service. The default value is `linearizable`. Check out [this page](flexible-consistency.md) to see how
   to use different consistency model.
 - **State Directory.** The `--state` option specifies the directory where the web service stores its state. For example,
   it is commonly `/var/lib/mysql` in MySQL and `/var/lib/pgsql/data` in PostgreSQL. When not specified, XDN will 
   snapshot the entire data in the container `/`. 
 - **XDN Provider.** Here, we are using an existing XDN provider, accessible at `xdnapp.com`. You can use another XDN
   Provider using `--control-plane=<control_plane_url>` option. Alternatively, you can be your own XDN Provider! check
-  out [this page](2-become-operator.md).
+  out [this page](become-operator.md).
 
 ## Other example services
 
