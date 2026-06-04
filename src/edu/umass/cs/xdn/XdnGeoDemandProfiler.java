@@ -92,7 +92,8 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
   private volatile ExecutorService worker;
 
   // Shared GeoIP resolver for the IP-based demand fallback; null when no GeoLite2 db is configured
-  // (then only the X-Client-Location header contributes demand). Volatile + injectable so a test can
+  // (then only the X-Client-Location header contributes demand). Volatile + injectable so a test
+  // can
   // supply a resolver bound to a known .mmdb without depending on the JVM-wide lazy singleton.
   private volatile GeoIpResolver geoIpResolver = GeoIpResolver.getDefaultOrNull();
 

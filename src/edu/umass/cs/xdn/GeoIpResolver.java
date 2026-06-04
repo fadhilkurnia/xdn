@@ -1,5 +1,10 @@
 package edu.umass.cs.xdn;
 
+import com.maxmind.db.CHMCache;
+import com.maxmind.geoip2.DatabaseReader;
+import com.maxmind.geoip2.model.CityResponse;
+import com.maxmind.geoip2.record.Location;
+import edu.umass.cs.nio.interfaces.Geolocation;
 import java.io.File;
 import java.net.InetAddress;
 import java.util.LinkedHashMap;
@@ -7,13 +12,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import com.maxmind.db.CHMCache;
-import com.maxmind.geoip2.DatabaseReader;
-import com.maxmind.geoip2.model.CityResponse;
-import com.maxmind.geoip2.record.Location;
-
-import edu.umass.cs.nio.interfaces.Geolocation;
 
 /**
  * Resolves a client {@link InetAddress} (IPv4 or IPv6) to an approximate {@link Geolocation} using
@@ -82,7 +80,9 @@ public class GeoIpResolver {
               LOGGER.log(Level.INFO, "GeoIP demand fallback enabled from {0}", path);
             } catch (Exception e) {
               LOGGER.log(
-                  Level.WARNING, "GeoIP db load failed (" + path + "); IP-based demand disabled", e);
+                  Level.WARNING,
+                  "GeoIP db load failed (" + path + "); IP-based demand disabled",
+                  e);
             }
           }
         }
@@ -154,10 +154,15 @@ public class GeoIpResolver {
     System.out.println("opening " + mmdb + "\n");
     GeoIpResolver r = new GeoIpResolver(mmdb);
     String[] tests = {
-      "8.8.8.8", "128.119.240.84", // public IPv4 (incl. UMass)
+      "8.8.8.8",
+      "128.119.240.84", // public IPv4 (incl. UMass)
       "2001:4860:4860::8888", // public IPv6
-      "127.0.0.1", "::1", "192.168.1.5", "10.0.1.10", // loopback / private -> skip
-      "fd12:3456::1", "100.64.0.1" // ULA / CGNAT -> skip
+      "127.0.0.1",
+      "::1",
+      "192.168.1.5",
+      "10.0.1.10", // loopback / private -> skip
+      "fd12:3456::1",
+      "100.64.0.1" // ULA / CGNAT -> skip
     };
     for (String t : tests) {
       InetAddress ip = InetAddress.getByName(t);
