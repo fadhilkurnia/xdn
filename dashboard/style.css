@@ -25,6 +25,13 @@ body {
   line-height: 1.45;
 }
 
+/* Embedded mode: hide our own chrome and go transparent so the host page's
+   header/footer (e.g. the MkDocs site) shows through seamlessly. */
+html.dash-embed body { background: transparent; }
+html.dash-embed body > header,
+html.dash-embed body > footer { display: none; }
+html.dash-embed body > section.card:first-of-type { margin-top: 12px; }
+
 header {
   padding: 16px 24px 0;
 }

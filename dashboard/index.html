@@ -4,6 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>XDN Dashboard</title>
+  <!-- Embedded mode (?embed=1): drop our own header/footer so a host page (e.g.
+       the MkDocs site at /dashboard/) can wrap us in its own chrome. Set before
+       CSS so there is no flash of the standalone header. -->
+  <script>if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("dash-embed");</script>
   <!-- Leaflet (map) via CDN — no build step, GitHub-Pages friendly -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />

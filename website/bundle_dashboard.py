@@ -1,6 +1,7 @@
 """MkDocs hook: copy the standalone dashboard SPA into the built site at
-/dashboard/. The dashboard is a separate static app (dashboard/ at the repo
-root), not a MkDocs-rendered page, so we drop it in verbatim after the build."""
+/dashboard/app/. The MkDocs page docs/dashboard.md (-> /dashboard/) embeds it in
+chrome-less mode (?embed=1) so the site's header/footer/nav wrap it; the SPA
+itself (dashboard/ at the repo root) is dropped in verbatim under app/."""
 
 import os
 import shutil
@@ -12,7 +13,7 @@ _DASHBOARD_SRC = os.path.normpath(
 
 
 def on_post_build(config, **kwargs):
-    dst = os.path.join(config["site_dir"], "dashboard")
+    dst = os.path.join(config["site_dir"], "dashboard", "app")
     if not os.path.isdir(_DASHBOARD_SRC):
         print(f"[bundle_dashboard] WARNING: {_DASHBOARD_SRC} not found; skipping")
         return
