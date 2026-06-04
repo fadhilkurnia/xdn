@@ -4,10 +4,10 @@
   --ink: #1c2230;
   --muted: #6b7280;
   --line: #e3e6ea;
-  --accent: #2563eb;
+  --accent: #02a6f2; /* matches the MkDocs Material "light blue" header bar */
   --accent-ink: #fff;
   --leader: #16a34a;
-  --replica: #2563eb;
+  --replica: #02a6f2;
   --warn-bg: #fff7ed;
   --warn-ink: #9a3412;
   --bad: #dc2626;
@@ -44,11 +44,15 @@ header h1::before { content: "▦ "; color: var(--accent); }
 
 main {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.3fr);
+  /* minmax(0, …) lets both columns shrink below their content's intrinsic width,
+     so they never force horizontal overflow on a phone. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
   gap: 16px;
   padding: 16px 24px;
   align-items: start;
 }
+/* Left column stacks the control-plane + service cards; right column is the map. */
+main .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 
 .card {
@@ -58,7 +62,7 @@ main {
   padding: 16px;
   margin: 16px 24px 0;
 }
-main .card { margin: 0; }
+main .card { margin: 0; min-width: 0; }
 .card h2 { margin: 0 0 12px; font-size: 15px; }
 
 .banner {
@@ -83,7 +87,7 @@ input, select, button {
   color: var(--ink);
 }
 input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
-#cp { flex: 1; min-width: 220px; font-family: var(--mono); }
+#cp { flex: 1; min-width: 140px; font-family: var(--mono); }
 
 button {
   background: var(--accent);
@@ -101,7 +105,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .muted { color: var(--muted); font-weight: 400; font-size: 13px; }
 .legend-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: -1px; }
 .legend-dot.active { background: var(--replica); box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--replica); }
-.legend-dot.candidate { background: transparent; border: 2px dashed var(--muted); width: 9px; height: 9px; }
+.legend-dot.candidate { background: #fff; border: 1.5px solid var(--muted); width: 9px; height: 9px; }
 code { font-family: var(--mono); background: #eef1f5; padding: 1px 4px; border-radius: 4px; }
 
 .status { font-size: 12.5px; font-weight: 600; }
@@ -109,7 +113,7 @@ code { font-family: var(--mono); background: #eef1f5; padding: 1px 4px; border-r
 .status.bad { color: var(--bad); }
 
 table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
 td.mono, .mono { font-family: var(--mono); font-size: 12.5px; }
 tbody tr.clickable { cursor: pointer; }
@@ -123,6 +127,7 @@ tbody tr.selected { background: #eaf0ff; }
 details#deploy-box { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+@media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
 .grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; }
 .grid label.check { flex-direction: row; align-items: center; gap: 8px; }
 .grid button { grid-column: 1 / -1; }

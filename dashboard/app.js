@@ -2,14 +2,21 @@
  * TLS control-plane API. The address bar (?cp=, ?svc=) is the only state. */
 "use strict";
 
-const DEFAULT_CP =
+// The XDN control-plane TLS API port is an internal detail; the UI only ever
+// shows/accepts the host, and the dashboard assumes :3400 when building requests.
+const PORT = 3400;
+const bareHost = (s) =>
+  String(s || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, "").trim();
+
+const DEFAULT_CP = bareHost(
   (window.XDN_DASHBOARD_CONFIG && window.XDN_DASHBOARD_CONFIG.defaultControlPlane) ||
-  "cp.xdnapp.com:3400";
+  "cp.xdnapp.com"
+);
 
 const $ = (sel) => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
 
-let controlPlane = params.get("cp") || DEFAULT_CP;
+let controlPlane = bareHost(params.get("cp")) || DEFAULT_CP;
 let currentSvc = params.get("svc") || null;
 let map, markerLayer, heatLayer, demandTimer, topologyLayer;
 
@@ -23,7 +30,7 @@ function syncUrl() {
 }
 
 // ---- HTTP helpers ----------------------------------------------------------
-const base = () => `https://${controlPlane}`;
+const base = () => `https://${controlPlane}:${PORT}`;
 
 async function api(path, opts = {}) {
   const resp = await fetch(base() + path, { mode: "cors", ...opts });
@@ -56,7 +63,7 @@ function setConn(ok, text) {
 }
 
 async function connect() {
-  controlPlane = $("#cp").value.trim() || DEFAULT_CP;
+  controlPlane = bareHost($("#cp").value) || DEFAULT_CP;
   syncUrl();
   setConn(false, "connecting…");
   try {
@@ -220,35 +227,29 @@ function drawMarkers(nodes) {
   }
 }
 
-// ---- Cluster topology (all candidate locations + active replicas) ----------
-// GET /api/v2/nodes -> [{id, lat, lon, active}] (fetched in connect()). Active
-// replicas render as solid markers; configured-but-idle candidate locations render
-// as hollow/dashed markers, so the map shows every potential AR site alongside
-// where replicas actually run.
+// ---- Cluster topology (all potential edge locations) -----------------------
+// GET /api/v2/nodes -> [{id, lat, lon, active}] (fetched in connect()). Every node
+// renders as a uniform small hollow marker; the active-vs-candidate state is not
+// distinguished here. Solid markers are reserved for a deployed service's actual
+// replica placement (drawMarkers).
 function drawTopology(nodes) {
   if (!topologyLayer) return;
   topologyLayer.clearLayers();
   const pts = [];
-  let active = 0, candidate = 0;
-  for (const n of nodes) {
-    if (typeof n.lat !== "number" || typeof n.lon !== "number") continue;
-    pts.push([n.lat, n.lon]);
-    if (n.active) {
-      active++;
-      L.circleMarker([n.lat, n.lon], {
-        radius: 8, color: "#fff", weight: 2,
-        fillColor: getCSS("--replica"), fillOpacity: 0.9,
-      }).bindTooltip(`AR ${esc(n.id)} — active replica`).addTo(topologyLayer);
-    } else {
-      candidate++;
-      L.circleMarker([n.lat, n.lon], {
-        radius: 6, color: getCSS("--muted"), weight: 2, dashArray: "3",
-        fillColor: "#fff", fillOpacity: 0.15,
-      }).bindTooltip(`${esc(n.id)} — candidate location`).addTo(topologyLayer);
-    }
+  let n = 0;
+  for (const node of nodes) {
+    if (typeof node.lat !== "number" || typeof node.lon !== "number") continue;
+    n++; pts.push([node.lat, node.lon]);
+    // Every potential edge location renders as a small hollow marker, with no
+    // active-vs-candidate distinction. Solid markers are reserved for a deployed
+    // service's actual replica placement (drawMarkers).
+    L.circleMarker([node.lat, node.lon], {
+      radius: 4, color: getCSS("--muted"), weight: 1.5,
+      fillColor: "#fff", fillOpacity: 0.25,
+    }).bindTooltip(esc(node.id)).addTo(topologyLayer);
   }
   const count = $("#topo-count");
-  if (count) count.textContent = ` · ${active} active, ${candidate} candidate`;
+  if (count) count.textContent = ` · ${n} location${n === 1 ? "" : "s"}`;
   // Don't override the per-service fit when a service is being inspected.
   if (pts.length && !currentSvc) map.fitBounds(pts, { padding: [40, 40], maxZoom: 5 });
 }

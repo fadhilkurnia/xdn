@@ -3,6 +3,7 @@
 // default — the ?cp= URL param and the on-page input override it, so the page
 // itself stays stateless.
 window.XDN_DASHBOARD_CONFIG = {
-  // Control-plane endpoint (host:port) of the XDN Reconfigurator's TLS API.
-  defaultControlPlane: "cp.xdnapp.com:3400",
+  // Control-plane host of the XDN Reconfigurator. The TLS API port (:3400) is an
+  // internal detail the dashboard assumes, so only the host is configured/shown.
+  defaultControlPlane: "cp.xdnapp.com",
 };

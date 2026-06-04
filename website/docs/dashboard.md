@@ -7,10 +7,10 @@ hide:
 
 # Dashboard
 
-Operate and observe an XDN control plane from the browser — deploy/destroy
-services, see replica placement, the geo-demand heatmap, and the full cluster
-topology. Point it at your control plane with the in-frame **Connect** field (or
-[open it full-screen](app/)).
+Use an existing XDN deployment from your browser. You can launch or destroy
+services, see client geodistribution, and observe the inter-replica communication.
+Alternatively, point this dashboard at your own XDN control plane host with the
+Connect field below.
 
 <style>
   /* Embed the dashboard SPA full-width under the site's header/footer/tabs. */
