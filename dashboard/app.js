@@ -169,24 +169,146 @@ function clearPlacement() {
   renderReplicas([]); drawMarkers([]);
 }
 
+function roleIsLeader(role) {
+  const r = String(role || "").toLowerCase();
+  return r.includes("leader") || r.includes("coordinator") || r.includes("primary");
+}
+
+function rolePill(role) {
+  return `<span class="pill ${roleIsLeader(role) ? "leader" : "replica"}">${esc(role || "replica")}</span>`;
+}
+
+// The placement (/placement) gives each replica's role + address; its live
+// status (container health, epoch, consistency) comes from the replica itself.
+// Like `xdn service info`, the client queries each replica's own /replica/info
+// endpoint directly — the control plane stays out of it.
 function renderReplicas(nodes) {
   const tbody = $("#replicas tbody");
   tbody.innerHTML = "";
+  const name = currentSvc;
   for (const n of nodes) {
-    const role = (n.ROLE || "").toLowerCase();
-    const isLeader = role.includes("leader") || role.includes("coordinator");
     const geo = n.GEOLOCATION
       ? `${n.GEOLOCATION.LATITUDE.toFixed(2)}, ${n.GEOLOCATION.LONGITUDE.toFixed(2)}`
       : "—";
     const tr = document.createElement("tr");
     tr.innerHTML =
       `<td class="mono">${esc(n.ID)}</td>` +
-      `<td><span class="pill ${isLeader ? "leader" : "replica"}">${esc(n.ROLE || "replica")}</span></td>` +
+      `<td class="role-cell">${rolePill(n.ROLE)}</td>` +
+      `<td class="status-cell"><span class="muted">…</span></td>` +
       `<td class="mono">${esc(n.HTTP_ADDRESS || n.ADDRESS || "")}</td>` +
-      `<td class="mono">${geo}</td>` +
-      `<td class="muted">${esc(n.METADATA || "")}</td>`;
+      `<td class="mono">${geo}</td>`;
     tbody.appendChild(tr);
+    if (name) updateReplicaDetail(tr, n, name);
+    else tr.querySelector(".status-cell").innerHTML = `<span class="muted">—</span>`;
   }
+}
+
+// Fetch one replica's live detail and fill in its Role/Status cells. Failures
+// (offline, mixed-content block, CORS) degrade to "unreachable" — same as the CLI.
+async function updateReplicaDetail(tr, node, name) {
+  const statusCell = tr.querySelector(".status-cell");
+  const roleCell = tr.querySelector(".role-cell");
+  const bases = replicaInfoBases(node);
+  if (!bases.length) { statusCell.innerHTML = `<span class="muted">no address</span>`; return; }
+  try {
+    const info = await fetchReplicaInfo(bases, name);
+    if (info.role) roleCell.innerHTML = rolePill(info.role); // live role wins
+    const c = pickStatefulContainer(info);
+    const status = (c && c.status) || "—";
+    const tip = [
+      info.protocol ? `protocol: ${info.protocol}` : "",
+      info.epoch != null && info.epoch !== "?" ? `epoch: ${info.epoch}` : "",
+      info.consistency && info.consistency !== "?" ? `consistency: ${info.consistency}` : "",
+      c && c.image ? `image: ${c.image}` : "",
+      c && c.createdAt && c.createdAt !== "?" ? `created: ${c.createdAt}` : "",
+    ].filter(Boolean).join("\n");
+    statusCell.innerHTML = `<span class="status ${statusClass(status)}">${esc(status)}</span>`;
+    if (tip) statusCell.firstChild.setAttribute("title", tip);
+  } catch (e) {
+    statusCell.innerHTML =
+      `<span class="status bad" title="${esc(e.message || e)}">unreachable</span>`;
+  }
+}
+
+// Parse Java InetSocketAddress.toString() ("host/ip:port"; host may be empty,
+// ip may be IPv6) into a browser base URL for the replica's clear HTTP frontend.
+function parseSockAddr(s) {
+  s = String(s || "");
+  const lastColon = s.lastIndexOf(":");
+  if (lastColon < 0) return null;
+  const port = parseInt(s.slice(lastColon + 1), 10);
+  if (!Number.isFinite(port)) return null;
+  const hostPart = s.slice(0, lastColon);
+  const slash = hostPart.indexOf("/");
+  const host = slash >= 0 ? hostPart.slice(0, slash) : "";
+  const ip = slash >= 0 ? hostPart.slice(slash + 1) : hostPart;
+  if (!ip) return null;
+  return { host: host.trim(), ip, port };
+}
+
+// Ordered base URLs to reach a replica's HTTP frontend, most-preferred first.
+// The AR terminates TLS on :443 (wildcard *.<domain> cert, :80 redirects), so we
+// try HTTPS first and fall back to HTTP. A DNS hostname (when the placement
+// carries one) is preferred over the raw IP since it can match the TLS cert;
+// the internal clear-HTTP port is the last resort.
+function replicaInfoBases(node) {
+  const addr = parseSockAddr(node.HTTP_ADDRESS || node.ADDRESS);
+  if (!addr) return [];
+  const ipH = addr.ip.includes(":") ? `[${addr.ip}]` : addr.ip; // bracket IPv6
+  const authority = addr.host || ipH; // hostname preferred (matches the cert)
+  const bases = [`https://${authority}`, `http://${authority}`];
+  if (addr.port && addr.port !== 80 && addr.port !== 443) {
+    bases.push(`http://${ipH}:${addr.port}`); // internal clear HTTP frontend port
+  }
+  return bases;
+}
+
+// Try each base URL in order; return the first replica/info JSON that succeeds.
+async function fetchReplicaInfo(bases, name) {
+  let lastErr = new Error("no address");
+  for (const base of bases) {
+    try {
+      return await fetchReplicaInfoOnce(base, name);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchReplicaInfoOnce(base, name) {
+  // Header-less GET so it stays a CORS "simple" request (no preflight); the AR
+  // allows any origin. The service name rides _xdnsvc instead of the XDN header.
+  const url =
+    `${base}/api/v2/services/${encodeURIComponent(name)}/replica/info` +
+    `?_xdnsvc=${encodeURIComponent(name)}`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const resp = await fetch(url, { mode: "cors", redirect: "follow", signal: ctrl.signal });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// The containers[] entry whose name == statefulComponent, else the first one.
+function pickStatefulContainer(info) {
+  const cs = Array.isArray(info.containers) ? info.containers : [];
+  if (!cs.length) return null;
+  if (info.statefulComponent) {
+    const m = cs.find((c) => c && c.name === info.statefulComponent);
+    if (m) return m;
+  }
+  return cs[0];
+}
+
+function statusClass(s) {
+  const v = String(s || "").toLowerCase();
+  if (/up|running|healthy/.test(v)) return "ok";
+  if (/exit|dead|stop|unhealthy|restart|created/.test(v)) return "bad";
+  return "";
 }
 
 // ---- Map -------------------------------------------------------------------
