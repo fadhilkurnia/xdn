@@ -36,6 +36,14 @@ RECONFIGURATOR_TLS_CERT_CHAIN=/opt/xdn/conf/tls/fullchain.pem
 RECONFIGURATOR_TLS_PRIVATE_KEY=/opt/xdn/conf/tls/privkey.pem
 TLSPROPS
 
+# Candidate placement locations: geolocations ONLY (no running instance), so the
+# RC knows where they are for the dashboard's "potential locations" view and for
+# demand-driven node elasticity, while costing nothing until a node is actually
+# launched there and added as an active replica. RC-only (the ARs don't need them).
+cat >> /opt/xdn/conf/gigapaxos.properties <<'CANDGEO'
+${candidate_geo_props}
+CANDGEO
+
 # node id + JVM opts (RC = node 0). The gigapaxos wire format is now IPv6-capable
 # (16-byte addresses, see AddressCodec), so we NO LONGER force the IPv4 stack --
 # the RC advertises and binds its GLOBAL IPv6 for consensus. preferIPv6Addresses

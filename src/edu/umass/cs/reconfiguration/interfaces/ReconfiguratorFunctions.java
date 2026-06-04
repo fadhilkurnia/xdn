@@ -45,4 +45,16 @@ public interface ReconfiguratorFunctions {
 	 */
 	public String getServiceDemandJson(String serviceName);
 
+	/**
+	 * All configured node locations (the candidate placement pool) and which are
+	 * currently running as active replicas, as a JSON array string of
+	 * {@code {"id":<name>,"lat":<deg>,"lon":<deg>,"active":<bool>}}. Candidates are
+	 * nodes with a configured geolocation that are not (yet) in the active set,
+	 * which is how the dashboard distinguishes potential locations from running
+	 * replicas without paying for idle ones.
+	 *
+	 * @return JSON array string of node locations.
+	 */
+	public String getNodeLocationsJson();
+
 }

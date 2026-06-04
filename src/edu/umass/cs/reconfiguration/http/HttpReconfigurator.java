@@ -457,9 +457,43 @@ public class HttpReconfigurator {
         return crp;
     }
 
+    // Build an active-node-config change (add/remove ActiveReplica) from query
+    // params, for demand-driven node elasticity. Examples:
+    //   add:    /?type=CHANGE_ACTIVES&name=AR_NODES&add_id=AR4&add_host=<ip>&add_port=2000
+    //   remove: /?type=CHANGE_ACTIVES&name=AR_NODES&del_id=AR4
+    // The reconfigurator integrates/drains the node and reconfigures affected
+    // services with state transfer (Reconfigurator.handleReconfigureActiveNodeConfig).
     private static final ReconfiguratorRequest toServerReconfigurationRequest(
-            JSONObject json, Channel channel, PacketType type, String name) {
-        throw new RuntimeException("Unimplemented");
+            JSONObject json, Channel channel, PacketType type, String name)
+            throws HTTPException {
+        if (type != ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "Only active-replica node config changes are supported over HTTP");
+        }
+        Map<String, InetSocketAddress> added = new HashMap<>();
+        Set<String> deleted = new HashSet<>();
+        String addId = json.optString("add_id", "");
+        if (!addId.isEmpty()) {
+            String host = json.optString("add_host", "");
+            int port = json.optInt("add_port", 0);
+            if (host.isEmpty() || port <= 0) {
+                throw new HTTPException(
+                        ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                        "CHANGE_ACTIVES add requires add_host and add_port");
+            }
+            added.put(addId, new InetSocketAddress(host, port));
+        }
+        String delId = json.optString("del_id", "");
+        if (!delId.isEmpty()) {
+            deleted.add(delId);
+        }
+        if (added.isEmpty() && deleted.isEmpty()) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "CHANGE_ACTIVES requires add_id (+add_host,add_port) or del_id");
+        }
+        return new ReconfigureActiveNodeConfig<String>(null, added, deleted);
     }
 
     static class HttpReconfiguratorHandler extends
@@ -569,7 +603,7 @@ public class HttpReconfigurator {
         }
 
         private boolean isV2ApiRequest(HttpRequest request) {
-            return request.uri().startsWith("/api/v2/services");
+            return request.uri().startsWith("/api/v2/");
         }
 
         private void handleReconfigurationV2Request(ChannelHandlerContext ctx, Object msg) {
@@ -585,6 +619,16 @@ public class HttpReconfigurator {
             assert ctx.channel().remoteAddress() instanceof InetSocketAddress :
                     "Invalid request sender";
             InetSocketAddress senderAddress = (InetSocketAddress) ctx.channel().remoteAddress();
+
+            // All configured node locations (the candidate placement pool) + which
+            // are currently running as active replicas. Drives the dashboard map's
+            // "potential locations vs. running replicas" view. Read-only, synchronous.
+            //  GET /api/v2/nodes
+            if (httpRequest.method().equals(HttpMethod.GET)
+                    && httpRequest.uri().equals("/api/v2/nodes")) {
+                this.writeJsonResponse(this.rcFunctions.getNodeLocationsJson(), ctx);
+                return;
+            }
 
             // Parses and handles SetReplicaPlacementRequest
             //  PUT /api/v2/services/{serviceName}/placement

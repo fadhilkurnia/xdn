@@ -347,6 +347,27 @@ locals {
   # for a true multi-region deployment. element() wraps if ar_count > 3.
   ar_geolocations = ["38.95,-77.45", "41.88,-87.63", "37.36,-121.92"]
 
+  # Candidate placement locations -- the "potential locations" pool the dashboard
+  # shows alongside the running replicas. These are GEOLOCATIONS ONLY (no running
+  # instance), so they cost nothing: registered on the RC as active.<id>.geolocation
+  # so the RC knows where they are without any node being up. A demand-driven
+  # elasticity controller (future) launches an EC2 in one of these and adds it as an
+  # active replica when demand concentrates there; until then they're just
+  # candidates on the map. Spread across the continental US (AZ/Local-Zone metros).
+  candidate_geolocations = {
+    "us-seattle" = "47.61,-122.33"
+    "us-la"      = "34.05,-118.24"
+    "us-denver"  = "39.74,-104.99"
+    "us-dallas"  = "32.78,-96.80"
+    "us-atlanta" = "33.75,-84.39"
+    "us-miami"   = "25.76,-80.19"
+    "us-nyc"     = "40.71,-74.01"
+    "us-boston"  = "42.36,-71.06"
+  }
+  candidate_geo_props = join("\n", [
+    for id, ll in local.candidate_geolocations : "active.${id}.geolocation=\"${ll}\""
+  ])
+
   # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
   # Nodes advertise their GLOBAL IPv6 addresses for consensus (reconfigurator/
   # active) -- the gigapaxos wire format is now IPv6-capable (16-byte addresses,
@@ -421,6 +442,9 @@ resource "aws_instance" "rc" {
     tls_bucket    = aws_s3_bucket.tls.id
     fullchain_key = "wildcard/fullchain.pem"
     privkey_key   = "wildcard/privkey.pem"
+    # Candidate placement locations (RC-only geolocations; no running instances) so
+    # GET /api/v2/nodes can surface them as the dashboard's "potential locations".
+    candidate_geo_props = local.candidate_geo_props
   })
 
   root_block_device {

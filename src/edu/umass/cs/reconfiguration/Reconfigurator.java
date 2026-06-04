@@ -4099,6 +4099,33 @@ public class Reconfigurator<NodeIDType> implements
     }
 
     @Override
+    public String getNodeLocationsJson() {
+        // The candidate pool is every node with a CONFIGURED geolocation (cheap
+        // static config; no running instance needed). A node is "active" if it is
+        // currently in the active-replica set. This lets the dashboard show all
+        // potential locations vs. the few running replicas. Read-only.
+        java.util.Set<String> active = new java.util.HashSet<String>();
+        for (NodeIDType n : this.consistentNodeConfig.getActiveReplicas()) {
+            active.add(n.toString());
+        }
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (java.util.Map.Entry<String, edu.umass.cs.nio.interfaces.Geolocation> e :
+                edu.umass.cs.gigapaxos.PaxosConfig.getActiveGeolocations().entrySet()) {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("id", e.getKey());
+                o.put("lat", e.getValue().latitude());
+                o.put("lon", e.getValue().longitude());
+                o.put("active", active.contains(e.getKey()));
+                arr.put(o);
+            } catch (org.json.JSONException ex) {
+                throw new RuntimeException(ex);
+            }
+        }
+        return arr.toString();
+    }
+
+    @Override
     public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request) {
         RequestCallbackFuture<ReconfiguratorRequest> callbackFuture;
         BasicReconfigurationPacket<?> packet = request instanceof ClientReconfigurationPacket ? (ClientReconfigurationPacket) request
