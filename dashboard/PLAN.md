@@ -136,6 +136,17 @@ xdn-cli, and trace_bw use; the security group now allows both.
       `/demand` returns cells with CORS (SF 111 / NY 46 / Chicago 21 from biased
       traffic); RC stayed 0 OOM / 0 restarts.
 
+### Phase 2.5 — cluster topology (all candidate locations + active replicas)
+- [x] Backend: `GET /api/v2/nodes` → `[{id,lat,lon,active}]` (active replicas +
+      configured-but-idle candidate locations), via static `candidate_geolocations`
+      in `aws/main.tf` (cost $0 — config only, no running node).
+- [x] Backend: runtime add/remove of ActiveReplicas (`CHANGE_ACTIVES`) +
+      `XdnReplicaCoordinator` phantom-meta-group STOP-ack fix + `WaitAckStopEpoch`
+      wedge alarm; verified add/remove on AWS (no wedge).
+- [x] Dashboard: `topologyLayer` fetches `/api/v2/nodes` on connect; solid markers
+      for active replicas, hollow/dashed for candidate locations, legend + toggle.
+- [ ] Browser-verify the topology rendering end-to-end.
+
 ### Phase 3 — inter-replica edges (analytic latency)
 - [ ] Dashboard: polylines between replica markers, labeled with Haversine+fiber
       latency (port `xdn-bw-trace/plot_lat_graph.py` math to JS). No backend.

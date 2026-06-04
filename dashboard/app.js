@@ -11,7 +11,7 @@ const params = new URLSearchParams(location.search);
 
 let controlPlane = params.get("cp") || DEFAULT_CP;
 let currentSvc = params.get("svc") || null;
-let map, markerLayer, heatLayer, demandTimer;
+let map, markerLayer, heatLayer, demandTimer, topologyLayer;
 
 // ---- URL state -------------------------------------------------------------
 function syncUrl() {
@@ -65,6 +65,7 @@ async function connect() {
     // not used — customers inspect a service by its known name.)
     await api("/api/v2/services/__probe__/placement");
     setConn(true, `connected to ${controlPlane}`);
+    fetchTopology();
     if (currentSvc) { $("#svc-name").value = currentSvc; inspect(currentSvc); }
   } catch (e) {
     setConn(false, `cannot reach ${controlPlane}`);
@@ -187,6 +188,9 @@ function initMap() {
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "© OpenStreetMap", maxZoom: 18,
   }).addTo(map);
+  // Cluster-topology layer (all candidate locations + active replicas) sits below
+  // the per-service placement markers.
+  topologyLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
 }
 
@@ -214,6 +218,48 @@ function drawMarkers(nodes) {
   } else if (pts.length) {
     map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 });
   }
+}
+
+// ---- Cluster topology (all candidate locations + active replicas) ----------
+// GET /api/v2/nodes -> [{id, lat, lon, active}]. Active replicas render as solid
+// markers; configured-but-idle candidate locations render as hollow/dashed markers,
+// so the map shows every potential AR site alongside where replicas actually run.
+async function fetchTopology() {
+  try {
+    const r = await api("/api/v2/nodes");
+    if (r.ok && Array.isArray(r.body)) drawTopology(r.body);
+    else log(`Could not load cluster topology (HTTP ${r.status}).`, true);
+  } catch (e) {
+    log(`Could not load cluster topology: ${e.message}`, true);
+  }
+}
+
+function drawTopology(nodes) {
+  if (!topologyLayer) return;
+  topologyLayer.clearLayers();
+  const pts = [];
+  let active = 0, candidate = 0;
+  for (const n of nodes) {
+    if (typeof n.lat !== "number" || typeof n.lon !== "number") continue;
+    pts.push([n.lat, n.lon]);
+    if (n.active) {
+      active++;
+      L.circleMarker([n.lat, n.lon], {
+        radius: 8, color: "#fff", weight: 2,
+        fillColor: getCSS("--replica"), fillOpacity: 0.9,
+      }).bindTooltip(`AR ${esc(n.id)} — active replica`).addTo(topologyLayer);
+    } else {
+      candidate++;
+      L.circleMarker([n.lat, n.lon], {
+        radius: 6, color: getCSS("--muted"), weight: 2, dashArray: "3",
+        fillColor: "#fff", fillOpacity: 0.15,
+      }).bindTooltip(`${esc(n.id)} — candidate location`).addTo(topologyLayer);
+    }
+  }
+  const count = $("#topo-count");
+  if (count) count.textContent = ` · ${active} active, ${candidate} candidate`;
+  // Don't override the per-service fit when a service is being inspected.
+  if (pts.length && !currentSvc) map.fitBounds(pts, { padding: [40, 40], maxZoom: 5 });
 }
 
 // ---- Demand heatmap --------------------------------------------------------
@@ -275,6 +321,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#heat-toggle").onchange = () => {
     if (!heatLayer || !map) return;
     if ($("#heat-toggle").checked) heatLayer.addTo(map); else map.removeLayer(heatLayer);
+  };
+  $("#topo-toggle").onchange = () => {
+    if (!topologyLayer || !map) return;
+    if ($("#topo-toggle").checked) topologyLayer.addTo(map); else map.removeLayer(topologyLayer);
   };
   $("#deploy-form").addEventListener("submit", (e) => { e.preventDefault(); deploy(e.target); });
   connect();
