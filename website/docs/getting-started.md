@@ -26,6 +26,21 @@ xdn --help
 ```
 
 ## Deploy a blackbox service
+
+XDN places your service's replicas at edge locations close to your users. These
+are the edge locations currently available on the public cluster — solid markers
+are **active replicas**, hollow markers are **candidate locations** a replica can
+move to as demand shifts:
+
+<iframe class="xdn-edge-map" src="/dashboard/app/edge-locations.html"
+        title="XDN edge locations" loading="lazy"></iframe>
+
+<style>
+  .xdn-edge-map {
+    width: 100%; height: 420px; margin: 4px 0 8px;
+    border: 1px solid var(--md-default-fg-color--lightest); border-radius: 6px;
+  }
+</style>
    
 !!! tip
     We use x86 Linux machine by default. 

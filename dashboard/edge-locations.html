@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XDN edge locations</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #map { position: absolute; inset: 0; background: #e8eef3; }
+    .legend {
+      position: absolute; right: 10px; bottom: 16px; z-index: 500;
+      background: rgba(255,255,255,0.93); border: 1px solid #e3e6ea; border-radius: 8px;
+      padding: 8px 11px; font-size: 12.5px; color: #1c2230; line-height: 1.7;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    }
+    .legend .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; }
+    .legend .active { background: #2563eb; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #2563eb; }
+    .legend .candidate { background: transparent; border: 2px dashed #6b7280; width: 9px; height: 9px; }
+    .note {
+      position: absolute; left: 10px; top: 10px; z-index: 500;
+      background: rgba(255,255,255,0.93); border: 1px solid #e3e6ea; border-radius: 6px;
+      padding: 4px 9px; font-size: 12px; color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="legend">
+    <span class="dot active"></span> active replica<br>
+    <span class="dot candidate"></span> candidate edge location
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="config.js"></script>
+  <script>
+    "use strict";
+    // Snapshot shown if the live control plane can't be reached (e.g. a browser
+    // that hasn't accepted a staging TLS cert). Updated from GET /api/v2/nodes.
+    const FALLBACK = [{"id":"1","lat":38.95,"lon":-77.45,"active":true},{"id":"2","lat":41.88,"lon":-87.63,"active":true},{"id":"3","lat":37.36,"lon":-121.92,"active":true},{"id":"us-atlanta","lat":33.75,"lon":-84.39,"active":false},{"id":"us-boston","lat":42.36,"lon":-71.06,"active":false},{"id":"us-dallas","lat":32.78,"lon":-96.8,"active":false},{"id":"us-denver","lat":39.74,"lon":-104.99,"active":false},{"id":"us-la","lat":34.05,"lon":-118.24,"active":false},{"id":"us-miami","lat":25.76,"lon":-80.19,"active":false},{"id":"us-nyc","lat":40.71,"lon":-74.01,"active":false},{"id":"us-seattle","lat":47.61,"lon":-122.33,"active":false}];
+
+    const params = new URLSearchParams(location.search);
+    const cp = params.get("cp")
+      || (window.XDN_DASHBOARD_CONFIG && window.XDN_DASHBOARD_CONFIG.defaultControlPlane)
+      || "cp.xdnapp.com:3400";
+
+    const map = L.map("map", { worldCopyJump: true, scrollWheelZoom: false }).setView([39, -97], 4);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(map);
+
+    function draw(nodes, live) {
+      const pts = [];
+      for (const n of nodes) {
+        if (typeof n.lat !== "number" || typeof n.lon !== "number") continue;
+        pts.push([n.lat, n.lon]);
+        const opts = n.active
+          ? { radius: 8, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 0.9 }
+          : { radius: 6, color: "#6b7280", weight: 2, dashArray: "3", fillColor: "#fff", fillOpacity: 0.2 };
+        L.circleMarker([n.lat, n.lon], opts)
+          .bindTooltip(`${n.active ? "AR " + n.id + " — active replica" : n.id + " — candidate edge location"}`)
+          .addTo(map);
+      }
+      if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 5 });
+      if (!live) {
+        const el = document.createElement("div");
+        el.className = "note";
+        el.textContent = "snapshot — live control plane unreachable";
+        document.body.appendChild(el);
+      }
+    }
+
+    fetch(`https://${cp}/api/v2/nodes`, { mode: "cors" })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((nodes) => (Array.isArray(nodes) && nodes.length ? draw(nodes, true) : draw(FALLBACK, false)))
+      .catch(() => draw(FALLBACK, false));
+  </script>
+</body>
+</html>
