@@ -32,6 +32,7 @@ resource "aws_key_pair" "usw2" {
 resource "aws_ami_copy" "ar_use2" {
   provider          = aws.use2
   name              = "xdn-ar-arm64-mr-us-east-2"
+  description       = "xdn-ar arm64 (multi-region copy from us-east-1)"
   source_ami_id     = var.ar_ami
   source_ami_region = "us-east-1"
   tags              = { Name = "xdn-ar-arm64-mr-us-east-2" }
@@ -40,6 +41,7 @@ resource "aws_ami_copy" "ar_use2" {
 resource "aws_ami_copy" "ar_usw2" {
   provider          = aws.usw2
   name              = "xdn-ar-arm64-mr-us-west-2"
+  description       = "xdn-ar arm64 (multi-region copy from us-east-1)"
   source_ami_id     = var.ar_ami
   source_ami_region = "us-east-1"
   tags              = { Name = "xdn-ar-arm64-mr-us-west-2" }
