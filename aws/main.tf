@@ -368,11 +368,13 @@ locals {
   # DECLARE the intended geography (East x2 / Central / West); making them physically
   # multi-region is the follow-on terraform change. Index i maps to subnet[i+1] /
   # ar_ipv6s[i]; the list length MUST equal var.ar_count.
+  # Node ids are dash-free (a '-' breaks the embedded Derby paxos log and is now
+  # rejected by ReconfigurableNode); the geolocation still encodes the real metro.
   active_replicas = [
-    { id = "us-east-1a", geo = "39.04,-77.49" },  # N. Virginia        -- East
-    { id = "us-east-1b", geo = "38.90,-77.43" },  # N. Virginia (AZ b) -- East
-    { id = "us-east-2a", geo = "40.10,-82.99" },  # Columbus, Ohio     -- Central
-    { id = "us-west-2a", geo = "45.84,-119.69" }, # Boardman, Oregon   -- West
+    { id = "useast1a", geo = "39.04,-77.49" },  # N. Virginia        -- East
+    { id = "useast1b", geo = "38.90,-77.43" },  # N. Virginia (AZ b) -- East
+    { id = "useast2a", geo = "40.10,-82.99" },  # Columbus, Ohio     -- Central
+    { id = "uswest2a", geo = "45.84,-119.69" }, # Boardman, Oregon   -- West
   ]
 
   # Candidate placement locations -- the "potential locations" pool the dashboard
