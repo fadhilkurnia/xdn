@@ -226,6 +226,10 @@ sudo cp "\$HOME"/xdn/jars/*.jar /opt/xdn/jars/
 sudo cp "\$HOME"/xdn/conf/keyStore.jks "\$HOME"/xdn/conf/trustStore.jks \\
         "\$HOME"/xdn/conf/logging.properties "\$HOME"/xdn/conf/log4j.properties \\
         /opt/xdn/conf/
+# GeoLite2-City db: xdn-dns uses it for geo-routing (staged to /tmp/geo at boot by
+# xdn-prestage.sh); the AR's XdnGeoDemandProfiler reads it directly here for the
+# IP-based demand fallback (GeoIpResolver.DEFAULT_MMDB_PATH). Shared, so both roles get it.
+sudo cp "\$HOME"/xdn/xdn-dns/geolocation_city_data.mmdb /opt/xdn/geo/
 EOF
 }
 

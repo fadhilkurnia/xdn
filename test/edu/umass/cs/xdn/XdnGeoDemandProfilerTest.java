@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.Geolocation;
@@ -15,11 +16,14 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpVersion;
+import java.io.File;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +66,51 @@ public class XdnGeoDemandProfilerTest {
 
     JSONObject stats = profiler.getDemandStats();
     assertEquals(0L, stats.getLong("num_reqs"));
+  }
+
+  // Relative path to the GeoLite2-City db shipped in the repo (also used by xdn-dns).
+  private static final String MMDB_PATH = "xdn-dns/geolocation_city_data.mmdb";
+
+  @Test
+  public void testIpFallbackProducesDemandCell() throws Exception {
+    File mmdb = new File(MMDB_PATH);
+    assumeTrue(mmdb.isFile(), "GeoLite2-City db not present at " + MMDB_PATH + "; skipping");
+
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.setGeoIpResolverForTesting(new GeoIpResolver(mmdb));
+
+    // A header-less request from a public client IP (UMass Amherst, ~42.37,-72.47). With no
+    // X-Client-Location header, the profiler must geolocate the source IP off the hot path.
+    InetAddress umass = InetAddress.getByName("128.119.240.84");
+    profiler.shouldReportDemandStats(makeRequestNoGeo(), umass, null);
+    awaitWorkerDrain(profiler, 1);
+
+    // getDemandGeoCells() is the non-destructive read; query it before any getDemandStats() call
+    // (which would snapshot-and-reset the grid). The single demand cell should sit on Amherst's
+    // grid cell (quantized, so allow a wide margin).
+    JSONArray cells = profiler.getDemandGeoCells();
+    assertEquals(1, cells.length(), "expected exactly one demand cell");
+    JSONObject cell = cells.getJSONObject(0);
+    assertEquals(1, cell.getInt("count"));
+    assertTrue(Math.abs(cell.getDouble("lat") - 42.37) < 1.0, "lat near Amherst: " + cell);
+    assertTrue(Math.abs(cell.getDouble("lon") - (-72.47)) < 1.0, "lon near Amherst: " + cell);
+  }
+
+  @Test
+  public void testLocalIpProducesNoDemand() throws Exception {
+    File mmdb = new File(MMDB_PATH);
+    assumeTrue(mmdb.isFile(), "GeoLite2-City db not present at " + MMDB_PATH + "; skipping");
+
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.setGeoIpResolverForTesting(new GeoIpResolver(mmdb));
+
+    // A loopback client is non-geolocatable: header-less + local IP contributes no demand.
+    Request req = makeRequestNoGeo();
+    assertFalse(profiler.shouldReportDemandStats(req, InetAddress.getByName("127.0.0.1"), null));
+
+    Thread.sleep(50); // give any (erroneously) enqueued worker item a chance to land
+    assertEquals(0L, profiler.getDemandStats().getLong("num_reqs"));
+    assertEquals(0, profiler.getDemandGeoCells().length());
   }
 
   @Test
