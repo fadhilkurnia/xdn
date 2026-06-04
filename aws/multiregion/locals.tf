@@ -15,11 +15,14 @@ locals {
   # lives in control_region. To move/add an AR, edit this map (and ensure its
   # region has a provider alias in providers.tf + a region block in network.tf
   # and compute.tf).
+  # Node ids are dash-free (us-east-1a -> useast1a): a '-' breaks the embedded
+  # Derby paxos log (and is now rejected by ReconfigurableNode). The real AWS AZ
+  # name (with dashes) is kept in `az`; the geolocation drives the dashboard map.
   replicas = {
-    "us-east-1a" = { region = "us-east-1", az = "us-east-1a", geo = "39.04,-77.49" }  # N. Virginia   -- East
-    "us-east-1b" = { region = "us-east-1", az = "us-east-1b", geo = "38.90,-77.43" }  # N. Virginia   -- East
-    "us-east-2a" = { region = "us-east-2", az = "us-east-2a", geo = "40.10,-82.99" }  # Columbus, OH  -- Central
-    "us-west-2a" = { region = "us-west-2", az = "us-west-2a", geo = "45.84,-119.69" } # Boardman, OR  -- West
+    "useast1a" = { region = "us-east-1", az = "us-east-1a", geo = "39.04,-77.49" }  # N. Virginia   -- East
+    "useast1b" = { region = "us-east-1", az = "us-east-1b", geo = "38.90,-77.43" }  # N. Virginia   -- East
+    "useast2a" = { region = "us-east-2", az = "us-east-2a", geo = "40.10,-82.99" }  # Columbus, OH  -- Central
+    "uswest2a" = { region = "us-west-2", az = "us-west-2a", geo = "45.84,-119.69" } # Boardman, OR  -- West
   }
 
   # AR ids grouped by region (drives the per-region subnet/instance for_each).
