@@ -90,27 +90,23 @@ Let's dechiper what just happened when we deploy a stateful service with the com
   Provider using `--control-plane=<control_plane_url>` option. Alternatively, you can be your own XDN Provider! check
   out [this page](become-operator.md).
 
-## Deploy using a service file
+## Deploy using a service declaration file
 
 Instead of passing each property as a separate CLI flag, you can declare the whole
-service in a YAML file and launch it with `--file`. This keeps the service
-definition versionable, and it is the same format used for
-[multi-container services](multi-container.md). Here is the `bookcatalog` service
+service in a YAML file and launch it with `--file`, which keeps the service
+definition versionable. A single-component service does not need the `components`
+section — its properties sit at the top level. Here is the `bookcatalog` service
 from above, written as `bookcatalog.yaml`:
 
 ```yaml
 # bookcatalog.yaml
 ---
 name: bookcatalog
-components:
-   - bookcatalog:
-        image: fadhilkurnia/xdn-bookcatalog
-        port: 80
-        entry: true
-        stateful: true
-deterministic: true
-state: bookcatalog:/app/data/
+image: fadhilkurnia/xdn-bookcatalog
+port: 80
 consistency: linearizability
+deterministic: true
+state: /app/data/
 ```
 
 Then launch it with:
@@ -119,6 +115,10 @@ xdn launch bookcatalog --file=bookcatalog.yaml
 ```
 
 This is equivalent to the `xdn launch bookcatalog --image=… --state=…` command shown earlier.
+
+A declaration file really shines when a service is made of several containers — a
+frontend, a backend, and a database, for example. See
+[Deploy a multi-container service](multi-container.md) for how to declare and launch one.
 
 ## Other example services
 
