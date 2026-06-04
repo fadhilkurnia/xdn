@@ -3,20 +3,29 @@
 !!! info
     This page explains how to deploy a blackbox stateful service on an existing XDN provider.
 
-## Deploy a blackbox service
+## Install the CLI
 
-First, get the client binary, `xdn`, by cloning our Github repository.
+Install the `xdn` CLI with a single command — it downloads the right binary for
+your OS and architecture, verifies its SHA-256 checksum, and installs it to
+`~/.local/bin`:
 
 ``` sh
-git clone https://github.com/fadhilkurnia/xdn
-cd xdn/bin/
-export PATH=$(pwd):$PATH
+curl -fsSL https://xdn.cs.umass.edu/install | sh
 ```
 
-Then check that you can successfully run the client binary.
+!!! tip "Other ways to get it"
+    Inspect the script first with `curl -fsSL https://xdn.cs.umass.edu/install | less`,
+    grab a binary directly from the [releases page](https://github.com/fadhilkurnia/xdn/releases),
+    or build from source:
+    `git clone https://github.com/fadhilkurnia/xdn && cd xdn && ./bin/build_xdn_cli.sh`.
+
+Check that it runs:
+
 ``` sh
 xdn --help
 ```
+
+## Deploy a blackbox service
    
 !!! tip
     We use x86 Linux machine by default. 

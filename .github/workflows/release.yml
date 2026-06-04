@@ -1,0 +1,46 @@
+name: Release XDN CLI
+
+# On a v* tag, build the xdn CLI for all supported OS/arch, generate SHA256SUMS,
+# and publish them as a GitHub Release. The installer at
+# https://xdn.cs.umass.edu/install downloads these assets (releases/latest/...).
+#
+# Cut a release by pushing a tag, e.g.:
+#   git tag -a v0.1.0 -m "XDN v0.1.0" && git push <remote> v0.1.0
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: xdn-cli/go.mod
+      - name: Build CLI binaries (linux/darwin × amd64/arm64)
+        run: bash bin/build_xdn_cli.sh
+      - name: Generate SHA256SUMS
+        working-directory: bin
+        run: sha256sum xdn-linux-amd64 xdn-linux-arm64 xdn-darwin-amd64 xdn-darwin-arm64 > SHA256SUMS
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            bin/xdn-linux-amd64
+            bin/xdn-linux-arm64
+            bin/xdn-darwin-amd64
+            bin/xdn-darwin-arm64
+            bin/SHA256SUMS
