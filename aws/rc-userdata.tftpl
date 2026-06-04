@@ -4,14 +4,14 @@
 # systemd units wait for, then starts them.
 set -euo pipefail
 
-# --- swap: the RC may run on a small instance (e.g. t4g.micro, 1GB RAM). The
-#     reconfigurator JVM (default max heap ~1/4 RAM) plus coredns and the OS can
-#     briefly spike past physical RAM at boot/GC; a modest swapfile turns an
-#     OOM-kill into a slow moment. Idempotent: skipped if /swapfile already
-#     exists, and a no-op (|| true) on instances with ample RAM. ---
+# --- swap: the RC runs on a small instance (default t4g.nano, 0.5GB RAM). The
+#     reconfigurator JVM (pinned to -Xmx256m, see below) plus coredns and the OS
+#     exceed physical RAM, so a 2GB swapfile backs the heap and absorbs GC/boot
+#     spikes -- turning an OOM-kill into a slow moment. Fine for dev/light usage;
+#     use a larger instance for heavy reconfiguration. Idempotent (skipped if present). ---
 ( set +e
   if [ ! -f /swapfile ]; then
-    fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
+    fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
@@ -44,13 +44,14 @@ cat >> /opt/xdn/conf/gigapaxos.properties <<'CANDGEO'
 ${candidate_geo_props}
 CANDGEO
 
-# node id + JVM opts (RC = node cp0). The gigapaxos wire format is now IPv6-capable
+# node id + JVM opts (RC = node cp0). -Xmx256m caps the heap for the small t4g.nano
+# RC (swap-backed; see swap block above). The gigapaxos wire format is now IPv6-capable
 # (16-byte addresses, see AddressCodec), so we NO LONGER force the IPv4 stack --
 # the RC advertises and binds its GLOBAL IPv6 for consensus. preferIPv6Addresses
 # nudges name resolution toward IPv6. The xdn-rc unit reads this via EnvironmentFile.
 cat > /opt/xdn/conf/node-id <<'NODEID'
 NODE_ID=cp0
-JAVA_TOOL_OPTIONS=-Djava.net.preferIPv6Addresses=true
+JAVA_TOOL_OPTIONS=-Xmx256m -Djava.net.preferIPv6Addresses=true
 NODEID
 
 # Resolve the Route53 nameservers of the delegated _acme-challenge zone to IPs.

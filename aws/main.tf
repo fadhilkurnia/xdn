@@ -280,9 +280,9 @@ variable "ar_count" {
 # The ARs run Docker + possibly heavy stateful apps (MySQL/Postgres), so they
 # keep the larger size.
 variable "rc_instance_type" {
-  description = "EC2 instance type for the Reconfigurator (control plane) node. Defaults to a Graviton t4g.micro -- REQUIRES an arm64 rc_ami (build with ARCH=arm64 ./create_rc_ami.sh). t4g.micro has only 1GB RAM, so the RC JVM runs with a small (~256MB) default heap; the userdata adds a swapfile to absorb GC/boot spikes."
+  description = "EC2 instance type for the Reconfigurator (control plane) node. Defaults to a Graviton t4g.nano -- REQUIRES an arm64 rc_ami (build with ARCH=arm64 ./create_rc_ami.sh). t4g.nano has only 0.5GB RAM (DEV / light-usage only): the userdata pins the RC JVM to -Xmx256m and provisions a 2GB swapfile to back the heap + absorb GC/boot spikes. Bump to t4g.micro (1GB) or larger for heavy reconfiguration / demand load."
   type        = string
-  default     = "t4g.micro" # Graviton, ~$6/mo in us-east-1 (needs arm64 rc_ami)
+  default     = "t4g.nano" # Graviton, ~$3/mo in us-east-1 (needs arm64 rc_ami; dev only)
 }
 
 variable "ar_instance_type" {
