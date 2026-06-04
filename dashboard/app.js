@@ -40,11 +40,6 @@ async function api(path, opts = {}) {
   return { ok: resp.ok, status: resp.status, body, text };
 }
 
-// Legacy GET-based create/delete (mirrors the Go CLI). REST verbs are a planned
-// follow-up; until then deploy/destroy ride the /?type= query API.
-function legacy(typeAndParams) {
-  return api(`/?${typeAndParams}`);
-}
 
 function log(msg, isError) {
   const el = $("#action-log");
@@ -97,12 +92,14 @@ async function deploy(form) {
     deterministic: f.get("deterministic") === "on",
   };
   const initial = "xdn:init:" + JSON.stringify(cfg);
-  const q =
-    `type=CREATE&name=${encodeURIComponent(cfg.name)}` +
-    `&initial_state=${encodeURIComponent(initial)}`;
   log(`Deploying "${cfg.name}" (${cfg.image})…`);
   try {
-    const r = await legacy(q);
+    // RESTful create: POST /api/v2/services/{name} with the initial state in the body.
+    const r = await api(`/api/v2/services/${encodeURIComponent(cfg.name)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initial_state: initial }),
+    });
     if (r.ok && !(r.body && r.body.FAILED)) {
       log(`Deployed "${cfg.name}". Reconfiguring replicas…`);
       setTimeout(() => inspect(cfg.name), 1500);
@@ -118,7 +115,8 @@ async function destroy(name) {
   if (!confirm(`Destroy service "${name}"? This removes it from the cluster.`)) return;
   log(`Destroying "${name}"…`);
   try {
-    const r = await legacy(`type=DELETE&name=${encodeURIComponent(name)}`);
+    // RESTful destroy: DELETE /api/v2/services/{name}.
+    const r = await api(`/api/v2/services/${encodeURIComponent(name)}`, { method: "DELETE" });
     if (r.ok && !(r.body && r.body.FAILED)) {
       log(`Destroyed "${name}".`);
       if (currentSvc === name) { currentSvc = null; syncUrl(); clearPlacement(); }

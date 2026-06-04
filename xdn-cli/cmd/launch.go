@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"net/http"
-	"net/url"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -478,13 +478,30 @@ func runLaunchCommand(prop CommonProperties) error {
 		return fmt.Errorf("cannot reach XDN control plane at `%s`", controlPlane)
 	}
 
-	// contact the control plane to actually deploy the service
+	// contact the control plane to actually deploy the service (RESTful create:
+	// POST /api/v2/services/{name} with the initial state in the JSON body).
 	encodedInitialState := fmt.Sprintf("xdn:init:%s", prop.rawJsonProperties)
-	gigapaxosEndpoint := fmt.Sprintf(
-		"http://%s/?type=CREATE&name=%s&initial_state=%s",
-		controlPlaneHost, prop.serviceName,
-		url.PathEscape(encodedInitialState))
-	resp, err := http.Get(gigapaxosEndpoint)
+	createBody, err := json.Marshal(struct {
+		InitialState string `json:"initial_state"`
+	}{InitialState: encodedInitialState})
+	if err != nil {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to encode launch request: %s\n", err.Error())
+		return fmt.Errorf("failed to encode launch request: %s", err.Error())
+	}
+	createEndpoint := fmt.Sprintf("http://%s/api/v2/services/%s",
+		controlPlaneHost, prop.serviceName)
+	httpReq, err := http.NewRequest(http.MethodPost, createEndpoint, bytes.NewReader(createBody))
+	if err != nil {
+		fmt.Printf(" ")
+		_, _ = errColorPrint.Printf("ERROR")
+		fmt.Printf(": Failed to build launch request: %s\n", err.Error())
+		return fmt.Errorf("failed to build launch request: %s", err.Error())
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			fmt.Printf(" ")
@@ -499,7 +516,8 @@ func runLaunchCommand(prop CommonProperties) error {
 		fmt.Printf(": Failed to launch the service: \n%s\n", err.Error())
 		return fmt.Errorf("cannot send launch request to XDN control plane at `%s`", controlPlane)
 	}
-	if resp.StatusCode != 200 {
+	// RESTful create returns 201 Created on success (202/200 also tolerated).
+	if resp.StatusCode/100 != 2 {
 		fmt.Printf(" ")
 		_, _ = errColorPrint.Printf("ERROR")
 		fmt.Printf(": Failed to launch the service, received non success code.\n")
