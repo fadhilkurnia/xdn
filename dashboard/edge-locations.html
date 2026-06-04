@@ -48,10 +48,10 @@
 
   <div id="offline">
     <div class="panel">
-      <p class="warn">Unfortunately, our current deployment is currently offline.</p>
-      <p class="sub">You can point the map at another XDN control plane:</p>
+      <p class="warn" id="warn-text">Unfortunately, our XDN control plane deployment at cp.xdnapp.com is currently offline 😢</p>
+      <p class="sub">You can still point at another XDN control plane host:</p>
       <div class="row">
-        <input id="cp-input" type="text" placeholder="control-plane host (e.g. cp.xdnapp.com)" spellcheck="false" />
+        <input id="cp-input" type="text" placeholder="e.g., cp.xdnapp.com" spellcheck="false" />
         <button id="cp-go">Connect</button>
       </div>
     </div>
@@ -120,6 +120,8 @@
           setConn("bad");
           markers.clearLayers();
           document.getElementById("count").textContent = "";
+          document.getElementById("warn-text").textContent =
+            `Unfortunately, our XDN control plane deployment at ${host} is currently offline 😢`;
           document.getElementById("offline").classList.add("show");
         });
     }
