@@ -291,6 +291,18 @@ public abstract class ReconfigurableNode<NodeIDType> {
         this.myID = id;
         this.nodeConfig = nodeConfig;
 
+        // Guard: node ids must not contain '-'. The embedded paxos log (SQLPaxosLogger)
+        // seeds its Derby DB name AND per-node DB "user" from the node id, and Derby
+        // rejects a '-' in an identifier (ERROR 28502: "The user name 'userus-east-1a'
+        // is not valid"). PaxosManager init then throws but the NIO listener keeps the
+        // JVM alive, so the node SILENTLY zombies (never forms paxos / acks epochs).
+        // Fail fast here with an actionable message instead. Use e.g. useast1a.
+        if (id.toString().contains("-")) {
+            throw new IllegalArgumentException("Invalid node id \"" + id
+                    + "\": node ids must not contain '-' (it breaks the embedded Derby "
+                    + "paxos log; e.g. rename us-east-1a to useast1a).");
+        }
+
         AbstractPaxosLogger.fileLock(id);
 
         ReconfigurationPacketDemultiplexer pd;
