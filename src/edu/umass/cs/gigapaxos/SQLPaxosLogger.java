@@ -4370,13 +4370,9 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		if (!f.exists())
 			f.mkdirs();
 	}
-	// The (string) node id seeds the embedded-Derby DB name AND the per-node DB
-	// "user" (see connectDB). Derby auth ids / identifiers reject non-alphanumeric
-	// characters: a "." or "-" yields e.g. ERROR 28502 ("The user name
-	// 'userus-east-1a' is not valid"), which fails PaxosManager init. Map every
-	// char outside [A-Za-z0-9_] to "_" so AWS-zone-style ids (us-east-1a) work.
+	// having "." in db or table name is bad
 	private static String sanitizeID(Object id) {
-		return id.toString().replaceAll("[^A-Za-z0-9_]", "_");
+		return id.toString().replace(".", "_");
 	}
 
 	// having "." in db or table name is bad
