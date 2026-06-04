@@ -13,7 +13,7 @@ your OS and architecture, verifies its SHA-256 checksum, and installs it to
 curl -fsSL https://xdn.cs.umass.edu/install | sh
 ```
 
-!!! tip "Other ways to get it"
+??? tip "Other ways to get it"
     Inspect the script first with `curl -fsSL https://xdn.cs.umass.edu/install | less`,
     grab a binary directly from the [releases page](https://github.com/fadhilkurnia/xdn/releases),
     or build from source:
@@ -40,10 +40,6 @@ locations:
     border: 1px solid var(--md-default-fg-color--lightest); border-radius: 6px;
   }
 </style>
-   
-!!! tip
-    We use x86 Linux machine by default. 
-    For ARM64 machine, such as MacBook with Apple Silicon, go to `xdn/bin/arm64` directory instead.
 
 Finally, launch a blackbox stateful service on XDN. Let's use `bookcatalog` as the service name.
 ``` sh
