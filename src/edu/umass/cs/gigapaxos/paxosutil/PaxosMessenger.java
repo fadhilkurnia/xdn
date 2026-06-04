@@ -124,7 +124,7 @@ public class PaxosMessenger<NodeIDType> extends JSONMessenger<NodeIDType> {
 
 		// FIXME: to test byteable
 		if (BYTEIFICATION
-				&& IntegerMap.allInt()
+				&& IntegerMap.byteifiable()
 				&& (msg.getType() == PaxosPacket.PaxosPacketType.REQUEST || (msg
 						.getType() == PaxosPacket.PaxosPacketType.ACCEPT))
 				|| msg.getType() == PaxosPacketType.BATCHED_COMMIT

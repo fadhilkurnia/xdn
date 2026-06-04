@@ -1094,7 +1094,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 
 	private byte[] toBytes(PaxosPacket packet)
 			throws UnsupportedEncodingException {
-		if (BYTEIFICATION && IntegerMap.allInt()
+		if (BYTEIFICATION && IntegerMap.byteifiable()
 				&& packet.getType() == PaxosPacketType.ACCEPT) {
 			byte[] bytes = ((AcceptPacket) packet).toBytes(); // no
 																// stringification

@@ -119,7 +119,7 @@ public class BatchedAcceptReply extends AcceptReplyPacket implements Byteable {
 	@Override
 	public byte[] toBytes() {
 		long t = System.nanoTime();
-		if (!(PaxosPacket.BYTEIFICATION && IntegerMap.allInt()))
+		if (!(PaxosPacket.BYTEIFICATION && IntegerMap.byteifiable()))
 			try {
 				return this.toString().getBytes(CHARSET);
 			} catch (UnsupportedEncodingException e1) {

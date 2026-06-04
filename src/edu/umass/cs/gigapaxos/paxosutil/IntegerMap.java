@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.logging.Logger;
 
 import edu.umass.cs.gigapaxos.PaxosConfig;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.utils.Util;
 
 /**
@@ -71,13 +72,24 @@ public class IntegerMap<NodeIDType> {
 			return id;
 			
 		// address hashcode collisions
-		if (collision)
+		if (collision) {
+			// Byteifying non-integer node IDs requires a globally consistent,
+			// reversible int<->node map; the insertion-order-dependent probing below
+			// would diverge across nodes, so fail fast on a genuine collision.
+			if (!this.nodeMap.get(id).equals(node)
+					&& !(("" + id).equals(this.nodeMap.get(id).toString()))
+					&& Config.getGlobalBoolean(PaxosConfig.PC.BYTEIFY_NON_INT_NODE_IDS))
+				throw new RuntimeException(
+						"BYTEIFY_NON_INT_NODE_IDS requires collision-free node-id ids, but "
+								+ node + " (id " + id + ") collides with "
+								+ this.nodeMap.get(id) + " -- rename one of them.");
 			while (this.nodeMap.containsKey(id)
 					&& !this.nodeMap.get(id).equals(node) && !((""+id).equals(this.nodeMap.get(id).toString()))) {
 				log.warning("Hash collision: " + node + " != "
 						+ this.nodeMap.get(id));
 				id++;
 			}
+		}
 
 		/*
 		 * When this works: the hash function maps integers to integers, and
@@ -108,6 +120,19 @@ public class IntegerMap<NodeIDType> {
 	 */
 	public static final boolean allInt() {
 		return allInteger;
+	}
+
+	/**
+	 * @return True if paxos packets may use the efficient byte serialization:
+	 *         either all node IDs are integers ({@link #allInt()}), or
+	 *         {@link PaxosConfig.PC#BYTEIFY_NON_INT_NODE_IDS} is set. String IDs are
+	 *         byteifiable because their hash-derived ids are globally consistent
+	 *         (String.hashCode is spec-deterministic) and {@link #put} fails fast on
+	 *         any id collision.
+	 */
+	public static final boolean byteifiable() {
+		return allInteger
+				|| Config.getGlobalBoolean(PaxosConfig.PC.BYTEIFY_NON_INT_NODE_IDS);
 	}
 
 	private static String message = ": Unable to translate integer ID "
