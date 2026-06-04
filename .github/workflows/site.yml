@@ -1,0 +1,50 @@
+name: Deploy XDN site (homepage + docs + dashboard) to GitHub Pages
+
+# Builds the unified MkDocs site from this repo — homepage (website/), the dev
+# docs (docs/*.md, staged into a Documentation section), and the dashboard SPA
+# bundled at /dashboard/ — and publishes it to GitHub Pages.
+#
+# NOTE: this serves at this repo's Pages URL. To serve it at xdn.cs.umass.edu,
+# either move that custom domain onto this repo's Pages and add a CNAME file to
+# website/docs/, or swap the deploy step to push the built ./site to the repo
+# that owns the domain (EdgeXDN.github.io). Requires Pages enabled
+# (Settings -> Pages -> Source: GitHub Actions).
+on:
+  push:
+    branches: [main, xdn-dashboard]
+    paths:
+      - "website/**"
+      - "docs/**"
+      - "dashboard/**"
+      - "bin/build_site.sh"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install mkdocs-material
+      - run: bash bin/build_site.sh
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -36,6 +36,11 @@ markdown_extensions:
   - pymdownx.snippets
   - pymdownx.superfences
 
+# Bundle the standalone dashboard SPA into the built site at /dashboard/
+# (it is not a MkDocs page; the hook copies ../dashboard/ on each build).
+hooks:
+  - bundle_dashboard.py
+
 # Pages and main contents
 nav:
   - Home: 'index.md'
@@ -44,3 +49,12 @@ nav:
   - Service Properties: '5-service-properties.md'
   - Deployment: '2-become-operator.md'
   - Architecture: '4-how-xdn-work.md'
+  # The repo's docs/*.md are staged into docs/reference/ by bin/build_site.sh.
+  - Documentation:
+      - HTTP API: 'reference/HTTP-API.md'
+      - Request flow: 'reference/request-flow.md'
+      - Developer guide: 'reference/developer.md'
+      - 'GigaPaxos — reconfiguration': 'reference/paxos-reconfiguration.md'
+      - 'GigaPaxos — log compaction': 'reference/paxos-compaction.md'
+      - 'WordPress primary-backup investigation': 'reference/wordpress-pb-investigation.md'
+  - Dashboard: 'dashboard.md'
