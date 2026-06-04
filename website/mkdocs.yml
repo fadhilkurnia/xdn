@@ -44,13 +44,14 @@ hooks:
 # Pages and main contents
 nav:
   - Home: 'index.md'
-  - Getting Started: 'getting-started.md'
+  - Quick Start: 'getting-started.md'
   - Consistency: 'flexible-consistency.md'
   - Service Properties: 'service-properties.md'
   - Deployment: 'become-operator.md'
   - Architecture: 'how-xdn-work.md'
   # The repo's docs/*.md are staged into docs/reference/ by bin/build_site.sh.
-  - Documentation:
+  # Mostly internal docs intended for XDN developers.
+  - Developer:
       - HTTP API: 'reference/HTTP-API.md'
       - Request flow: 'reference/request-flow.md'
       - Developer guide: 'reference/developer.md'
