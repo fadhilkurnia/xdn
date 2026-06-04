@@ -205,6 +205,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     return sp != null ? sp.getRequestMatchers() : null;
   }
 
+  // True for gigapaxos' default service group and the reconfigurator's node-config
+  // record groups replicated at ActiveReplicas (AR_AR_NODES, AR_RC_NODES). These are
+  // coordinated by plain paxos in vanilla gigapaxos but have no per-service coordinator
+  // in XDN; XDN keeps them as phantoms (see createReplicaGroup()).
+  private boolean isInternalReconfigurationGroup(String serviceName) {
+    return serviceName.equals(PaxosConfig.getDefaultServiceName())
+        || serviceName.equals(AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString())
+        || serviceName.equals(AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString());
+  }
+
   @Override
   public boolean coordinateRequest(Request request, ExecutedCallback callback)
       throws IOException, RequestParseException {
@@ -214,6 +224,21 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     var serviceName = request.getServiceName();
     var coordinator = this.serviceCoordinator.get(serviceName);
     if (coordinator == null) {
+      // Gigapaxos' default group and the reconfigurator's node-config meta-records
+      // (AR_AR_NODES, AR_RC_NODES) have no per-service XDN coordinator -- XDN keeps
+      // them as phantoms (createReplicaGroup() no-ops them). Symmetrically, ACK their
+      // requests here -- notably the STOP_EPOCH issued whenever an ActiveReplica is
+      // added/removed -- instead of returning 404. A 404 throws and never fires the
+      // callback, so the reconfigurator's WaitAckStopEpoch resends STOP forever and
+      // the whole add/remove wedges (see WaitAckStopEpoch's "appears WEDGED" alarm).
+      if (isInternalReconfigurationGroup(serviceName)) {
+        Request inner =
+            (request instanceof ReplicableClientRequest rcr) ? rcr.getRequest() : request;
+        if (callback != null) {
+          callback.executed(inner, true);
+        }
+        return true;
+      }
       // returns 404 not found back to client
       return createNotFoundResponse(request, callback);
     }
