@@ -46,7 +46,9 @@ hooks:
 # Pages and main contents
 nav:
   - Home: 'index.md'
-  - Quick Start: 'getting-started.md'
+  - Quick Start:
+      - Getting started: 'getting-started.md'
+      - Multi-container services: 'multi-container.md'
   - Consistency: 'flexible-consistency.md'
   - Service Properties: 'service-properties.md'
   - Deployment: 'become-operator.md'
