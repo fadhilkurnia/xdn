@@ -110,7 +110,7 @@
           .bindTooltip(node.id).addTo(markers);
       }
       if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 });
-      document.getElementById("count").textContent = n + " edge location" + (n === 1 ? "" : "s") + " (continental US)";
+      document.getElementById("count").textContent = n + " edge location" + (n === 1 ? "" : "s");
     }
 
     function load() {
