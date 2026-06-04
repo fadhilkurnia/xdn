@@ -29,10 +29,9 @@
       <span id="cp-status" class="status"></span>
     </div>
     <p class="hint">
-      The dashboard talks directly to the XDN Reconfigurator over HTTPS
-      (<code>:3400</code>). On a research cluster using a Let's Encrypt
-      <em>staging</em> cert, your browser will warn it's untrusted — open
-      <code>https://&lt;control-plane&gt;/api/v2/services</code> once and accept it.
+      The dashboard runs entirely in your browser, talking directly to the XDN
+      Reconfigurator's HTTPS control-plane API. Point it at a different cluster with
+      <code>?cp=&lt;host&gt;</code> or the field above.
     </p>
   </section>
 

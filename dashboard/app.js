@@ -60,19 +60,19 @@ async function connect() {
   syncUrl();
   setConn(false, "connecting…");
   try {
-    // Any HTTP response means the TLS control plane is reachable. (We probe the
-    // placement route for a throwaway name; the list endpoint is intentionally
-    // not used — customers inspect a service by its known name.)
-    await api("/api/v2/services/__probe__/placement");
+    // /api/v2/nodes doubles as the reachability probe and the topology source: a
+    // successful response means the TLS control plane is reachable, and its body is
+    // the cluster node list we draw on the map.
+    const r = await api("/api/v2/nodes");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     setConn(true, `connected to ${controlPlane}`);
-    fetchTopology();
+    if (Array.isArray(r.body)) drawTopology(r.body);
     if (currentSvc) { $("#svc-name").value = currentSvc; inspect(currentSvc); }
   } catch (e) {
     setConn(false, `cannot reach ${controlPlane}`);
     log(
-      `Connection failed: ${e.message}. If using a Let's Encrypt staging cert, ` +
-      `open https://${controlPlane}/api/v2/services in a new tab and accept the ` +
-      `certificate, then Connect again.`,
+      `Connection failed: ${e.message}. Check the control-plane host is correct and ` +
+      `reachable — the XDN Reconfigurator serves its HTTPS API on :3400.`,
       true
     );
   }
@@ -221,19 +221,10 @@ function drawMarkers(nodes) {
 }
 
 // ---- Cluster topology (all candidate locations + active replicas) ----------
-// GET /api/v2/nodes -> [{id, lat, lon, active}]. Active replicas render as solid
-// markers; configured-but-idle candidate locations render as hollow/dashed markers,
-// so the map shows every potential AR site alongside where replicas actually run.
-async function fetchTopology() {
-  try {
-    const r = await api("/api/v2/nodes");
-    if (r.ok && Array.isArray(r.body)) drawTopology(r.body);
-    else log(`Could not load cluster topology (HTTP ${r.status}).`, true);
-  } catch (e) {
-    log(`Could not load cluster topology: ${e.message}`, true);
-  }
-}
-
+// GET /api/v2/nodes -> [{id, lat, lon, active}] (fetched in connect()). Active
+// replicas render as solid markers; configured-but-idle candidate locations render
+// as hollow/dashed markers, so the map shows every potential AR site alongside
+// where replicas actually run.
 function drawTopology(nodes) {
   if (!topologyLayer) return;
   topologyLayer.clearLayers();
