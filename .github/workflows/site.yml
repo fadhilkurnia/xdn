@@ -1,14 +1,19 @@
-name: Deploy XDN site (homepage + docs + dashboard) to GitHub Pages
+name: Deploy XDN site (homepage + docs + dashboard)
 
-# Builds the unified MkDocs site from this repo — homepage (website/), the dev
+# Builds the unified MkDocs site from THIS repo — homepage (website/), the dev
 # docs (docs/*.md, staged into a Documentation section), and the dashboard SPA
-# bundled at /dashboard/ — and publishes it to GitHub Pages.
+# bundled at /dashboard/ — then publishes the built ./site into
+# EdgeXDN/EdgeXDN.github.io (main branch, /docs folder), which is what serves
+# https://xdn.cs.umass.edu/. The source of truth stays here; EdgeXDN.github.io is
+# just the publish target (its own main-root mkdocs source is now unused).
 #
-# NOTE: this serves at this repo's Pages URL. To serve it at xdn.cs.umass.edu,
-# either move that custom domain onto this repo's Pages and add a CNAME file to
-# website/docs/, or swap the deploy step to push the built ./site to the repo
-# that owns the domain (EdgeXDN.github.io). Requires Pages enabled
-# (Settings -> Pages -> Source: GitHub Actions).
+# ONE-TIME SETUP (needed for the cross-repo push):
+#   1. ssh-keygen -t ed25519 -C "xdn-site-deploy" -f edgexdn_deploy -N ""
+#   2. EdgeXDN/EdgeXDN.github.io -> Settings -> Deploy keys -> add edgexdn_deploy.pub
+#      (CHECK "Allow write access").
+#   3. fadhilkurnia/xdn -> Settings -> Secrets and variables -> Actions ->
+#      new secret EDGEXDN_DEPLOY_KEY = contents of the private key edgexdn_deploy
+#      (or: gh secret set EDGEXDN_DEPLOY_KEY < edgexdn_deploy).
 on:
   push:
     branches: [main, xdn-dashboard]
@@ -22,19 +27,14 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: xdn-site
   cancel-in-progress: true
 
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,9 +42,15 @@ jobs:
           python-version: "3.x"
       - run: pip install mkdocs-material
       - run: bash bin/build_site.sh
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Publish ./site to EdgeXDN.github.io (serves xdn.cs.umass.edu)
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: site
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          deploy_key: ${{ secrets.EDGEXDN_DEPLOY_KEY }}
+          external_repository: EdgeXDN/EdgeXDN.github.io
+          publish_branch: main
+          publish_dir: ./site
+          destination_dir: docs
+          keep_files: false
+          user_name: "github-actions[bot]"
+          user_email: "41898282+github-actions[bot]@users.noreply.github.com"
+          commit_message: "site: deploy from fadhilkurnia/xdn@${{ github.sha }}"
