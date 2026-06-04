@@ -108,6 +108,8 @@ jobs:
           - XdnPerReplicaRequestTest
           - XdnSetCoordinatorNodeTest
           - XdnTaggedImageLaunchTest
+          - XdnClusterLaunchTest
+          - XdnWordPressClusterTest
 
     steps:
     - uses: actions/checkout@v4
@@ -128,6 +130,15 @@ jobs:
         docker version
         docker run --rm hello-world
         docker pull fadhilkurnia/xdn-bookcatalog
+
+    - name: 🐝 Initialize Docker swarm (for cluster overlay networking)
+      # Required by the cluster tests (XdnClusterLaunchTest, XdnWordPressClusterTest), harmless
+      # for the others. Single-node swarm; we don't run anything as a swarm service, only use the
+      # overlay network.
+      run: |
+        if ! docker info --format '{{.Swarm.LocalNodeState}}' | grep -q active; then
+          docker swarm init
+        fi
 
     - name: 🔄 Set up Rsync
       uses: GuillaumeFalourd/setup-rsync@v1.2

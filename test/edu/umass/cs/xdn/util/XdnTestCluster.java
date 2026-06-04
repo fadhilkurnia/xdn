@@ -7,6 +7,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.reconfigurationutils.DefaultNodeConfig;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.utils.Shell;
+import edu.umass.cs.xdn.utils.ShellOutput;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -51,6 +52,9 @@ public class XdnTestCluster implements AutoCloseable {
   public static final Duration PORT_WAIT_TIMEOUT = Duration.ofSeconds(30);
   public static final Duration SERVICE_READY_TIMEOUT = Duration.ofSeconds(90);
   public static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+  // Cluster creates are synchronous on container startup (and may pull large images on first
+  // use), so the CREATE response can take far longer than a normal request.
+  public static final Duration CLUSTER_CREATE_TIMEOUT = Duration.ofSeconds(120);
 
   private final HttpClient httpClient =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -144,6 +148,103 @@ public class XdnTestCluster implements AutoCloseable {
               + responseJson.optString("RESPONSE_MESSAGE", "unknown error"));
     }
     createdServices.add(serviceName);
+  }
+
+  /**
+   * Launches a self-clustering service via {@code xdn cluster launch}'s wire format. Distinct from
+   * {@link #launchService}: this one omits consistency/deterministic, sets {@code mode:cluster},
+   * and requires {@code peer_port} + {@code num_replicas}. Used by {@code XdnClusterLaunchTest}.
+   */
+  public void launchClusterService(
+      String serviceName,
+      String imageName,
+      String stateDirectory,
+      int httpPort,
+      int peerPort,
+      int numReplicas)
+      throws IOException, InterruptedException, JSONException {
+
+    JSONObject serviceJson = new JSONObject();
+    serviceJson.put("image", imageName);
+    serviceJson.put("port", httpPort);
+    serviceJson.put("state", stateDirectory.endsWith("/") ? stateDirectory : stateDirectory + "/");
+    serviceJson.put("mode", "cluster");
+    serviceJson.put("peer_port", peerPort);
+    serviceJson.put("num_replicas", numReplicas);
+    launchClusterService(serviceName, serviceJson);
+  }
+
+  /**
+   * Launches a cluster service from a fully-formed spec. The spec must already carry {@code
+   * mode:cluster}, {@code peer_port}, {@code num_replicas}, and either an {@code image}
+   * (single-image cluster) or a {@code components} array (multi-component cluster, e.g. a stateful
+   * DB member plus an entry sidecar). Used by {@code XdnWordPressClusterTest}.
+   */
+  public void launchClusterService(String serviceName, JSONObject serviceJson)
+      throws IOException, InterruptedException, JSONException {
+    serviceJson.put("name", serviceName);
+
+    String initialState = "xdn:init:" + serviceJson;
+    String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
+    String endpoint =
+        "http://%s:%d/?type=CREATE&name=%s&initial_state=%s"
+            .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName, encodedInitialState);
+    HttpRequest request =
+        HttpRequest.newBuilder()
+            .uri(URI.create(endpoint))
+            .timeout(CLUSTER_CREATE_TIMEOUT)
+            .GET()
+            .build();
+    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    if (response.statusCode() != 200) {
+      throw new IllegalStateException(
+          "Cluster service creation failed with status " + response.statusCode());
+    }
+    JSONObject responseJson = new JSONObject(response.body());
+    if (responseJson.optBoolean("FAILED", false)) {
+      throw new IllegalStateException(
+          "Cluster service creation failed: "
+              + responseJson.optString("RESPONSE_MESSAGE", "unknown error"));
+    }
+    createdServices.add(serviceName);
+  }
+
+  /**
+   * Idempotent: ensures the local Docker daemon is part of a swarm (single-node is fine). The
+   * attachable overlay networks that cluster services use require this. Tests should call it before
+   * {@link #launchClusterService} when running on a CI runner that may have a fresh Docker daemon.
+   */
+  public static boolean ensureDockerSwarm() {
+    // Detect an existing swarm by capturing the node state directly. We must NOT use a shell
+    // pipeline here ("docker info ... | grep ...") because Shell.runCommand splits the command
+    // on whitespace and runs it without a shell, so the quotes/pipe would be mangled and the
+    // check would always (wrongly) report "not a swarm". The Go-template has no spaces, so it
+    // survives the split as a single argument.
+    ShellOutput info =
+        Shell.runCommandWithOutput("docker info --format {{.Swarm.LocalNodeState}}", true);
+    if (info.exitCode == 0 && info.stdout.trim().equals("active")) {
+      return true;
+    }
+    if (Shell.runCommand("docker swarm init", true) == 0) {
+      return true;
+    }
+    // On hosts with multiple network interfaces, `docker swarm init` refuses to choose an
+    // advertise address ("could not choose an IP address ... use --advertise-addr"). Loopback
+    // is fine here: this single-node swarm exists only to enable attachable overlay networks.
+    return Shell.runCommand("docker swarm init --advertise-addr 127.0.0.1", true) == 0;
+  }
+
+  /**
+   * Issues {@code docker build} for the etcd cluster reference image. Used by {@code
+   * XdnClusterLaunchTest}; idempotent enough that calling it twice is harmless.
+   */
+  public static boolean buildEtcdClusterImage() {
+    return buildImage("xdn-etcd-cluster:test", "services/etcd-cluster/");
+  }
+
+  /** Issues {@code docker build -t <tag> <contextDir>}; idempotent enough to call repeatedly. */
+  public static boolean buildImage(String tag, String contextDir) {
+    return Shell.runCommand("docker build -t " + tag + " " + contextDir, true) == 0;
   }
 
   /**
