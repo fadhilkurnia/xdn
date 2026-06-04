@@ -94,9 +94,8 @@ Let's dechiper what just happened when we deploy a stateful service with the com
 
 Instead of passing each property as a separate CLI flag, you can declare the whole
 service in a YAML file and launch it with `--file`, which keeps the service
-definition versionable. A single-component service does not need the `components`
-section — its properties sit at the top level. Here is the `bookcatalog` service
-from above, written as `bookcatalog.yaml`:
+definition versionable. Here is the `bookcatalog` service from above, written as
+`bookcatalog.yaml`:
 
 ```yaml
 # bookcatalog.yaml
@@ -122,7 +121,9 @@ frontend, a backend, and a database, for example. See
 
 ## Other example services
 
-Other than the `fadhilkurnia/xdn-bookcatalog` Docker image that we use previously, we have prepared Docker images for
+XDN can replicate _any_ stateful service, as long as it exposes a request-response
+HTTP interface and keeps its safety-critical state on disk. Other than the
+`fadhilkurnia/xdn-bookcatalog` Docker image that we use previously, we have prepared Docker images for
 other stateful services, as can be seen below.
 
 <table>
