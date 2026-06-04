@@ -257,13 +257,13 @@ resource "aws_key_pair" "deployer" {
 variable "rc_ami" {
   description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation). ARM64/Graviton image (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-013338ed93b6d7521" # arm64, + geo-demand /demand endpoint (dashboard phase 2)
+  default     = "ami-08be7b8fc654ea07c" # arm64, xdn-dashboard: issuer/receiver fix + wedge SEVERE alarm
 }
 
 variable "ar_ami" {
   description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from the xdn-ar-arm64 branch by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-0c22f54b43a823533" # arm64, IPv6 + TLS jar + paxos node-0 fixes
+  default     = "ami-0a8706506aedccede" # arm64, xdn-dashboard: phantom meta-group STOP ack fix
 }
 
 variable "ar_count" {
