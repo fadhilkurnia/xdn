@@ -1,6 +1,8 @@
 package edu.umass.cs.reconfiguration.http;
 
 import edu.umass.cs.nio.JSONPacket;
+import edu.umass.cs.nio.MessageNIOTransport;
+import edu.umass.cs.nio.nioutils.StringifiableDefault;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorFunctions;
 import edu.umass.cs.reconfiguration.interfaces.ReconfiguratorRequest;
@@ -406,7 +408,7 @@ public class HttpReconfigurator {
     }
 
     private static final ReconfiguratorRequest toReconfiguratorRequest(
-            JSONObject json, Channel channel) throws JSONException,
+            JSONObject json, Channel channel, String rcNodeId) throws JSONException,
             HTTPException {
 
         ReconfigurationPacket.PacketType type = getRequestType(json.get(
@@ -419,7 +421,7 @@ public class HttpReconfigurator {
 
         if (type == ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG
                 || type == ReconfigurationPacket.PacketType.RECONFIGURE_RC_NODE_CONFIG)
-            return toServerReconfigurationRequest(json, channel, type, name);
+            return toServerReconfigurationRequest(json, channel, type, name, rcNodeId);
 
         long requestID = (type == ReconfigurationPacket.PacketType.REQUEST_ACTIVE_REPLICAS ? json
                 .optLong(RequestActiveReplicas.Keys.QID.toString(), 0) : 0);
@@ -464,8 +466,9 @@ public class HttpReconfigurator {
     // The reconfigurator integrates/drains the node and reconfigures affected
     // services with state transfer (Reconfigurator.handleReconfigureActiveNodeConfig).
     private static final ReconfiguratorRequest toServerReconfigurationRequest(
-            JSONObject json, Channel channel, PacketType type, String name)
-            throws HTTPException {
+            JSONObject json, Channel channel, PacketType type, String name,
+            String rcNodeId)
+            throws HTTPException, JSONException {
         if (type != ReconfigurationPacket.PacketType.RECONFIGURE_ACTIVE_NODE_CONFIG) {
             throw new HTTPException(
                     ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
@@ -493,7 +496,42 @@ public class HttpReconfigurator {
                     ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
                     "CHANGE_ACTIVES requires add_id (+add_host,add_port) or del_id");
         }
-        return new ReconfigureActiveNodeConfig<String>(null, added, deleted);
+        // DEBUG/TEST ONLY: -DHTTP_DEBUG_NULL_ISSUER=true builds the packet with a
+        // null initiator/issuer/receiver, the way the original code did. Retained
+        // for soak-testing the (rare, timing-sensitive) reconfiguration wedge that
+        // was observed on a single reconfigurator; it is NOT a confirmed trigger.
+        if (Boolean.getBoolean("HTTP_DEBUG_NULL_ISSUER")) {
+            return new ReconfigureActiveNodeConfig<String>(null, added, deleted);
+        }
+        // Build the packet with a real (non-null) initiator, then round-trip through
+        // JSON with the NIO sender/receiver fields populated (the channel's local
+        // address) so that creator (getIssuer) and myReceiver (getMyReceiver) are
+        // non-null -- exactly as a network-received CHANGE_ACTIVES would be. This is
+        // a correctness/hygiene fix: it lets the reconfigurator route the response
+        // back to the caller (otherwise it logs "sending response to null") and keeps
+        // an HTTP-constructed packet indistinguishable from a wire-received one.
+        ReconfigureActiveNodeConfig<String> pkt =
+                new ReconfigureActiveNodeConfig<String>(rcNodeId, added, deleted);
+        JSONObject j = pkt.toJSONObject();
+        InetSocketAddress local = (InetSocketAddress) channel.localAddress();
+        String localAddr = local.getAddress().getHostAddress() + ":" + local.getPort();
+        j.put(MessageNIOTransport.SNDR_ADDRESS_FIELD, localAddr);
+        j.put(MessageNIOTransport.RCVR_ADDRESS_FIELD, localAddr);
+        ReconfigureActiveNodeConfig<String> built =
+                new ReconfigureActiveNodeConfig<String>(
+                        j, new StringifiableDefault<String>(""));
+        // Boundary invariant: an externally-submitted server-reconfiguration request
+        // should carry a non-null issuer/receiver (needed to route the response to
+        // the caller). Asserted under -ea (CI + gpServer) and hard-checked otherwise.
+        assert built.getIssuer() != null && built.getMyReceiver() != null
+                : "CHANGE_ACTIVES dispatched with null issuer/receiver";
+        if (built.getIssuer() == null || built.getMyReceiver() == null) {
+            throw new HTTPException(
+                    ClientReconfigurationPacket.ResponseCodes.MALFORMED_REQUEST,
+                    "CHANGE_ACTIVES requires a non-null issuer/receiver "
+                            + "(could not resolve the local channel address)");
+        }
+        return built;
     }
 
     static class HttpReconfiguratorHandler extends
@@ -537,7 +575,7 @@ public class HttpReconfigurator {
                     JSONObject json = toJSONObject(new QueryStringDecoder(
                             request.uri()).parameters());
                     log.log(Level.INFO, "JSON converted from uri is {0}", new Object[]{json});
-                    crp = toReconfiguratorRequest(json, ctx.channel());
+                    crp = toReconfiguratorRequest(json, ctx.channel(), this.rcNodeId);
 
                     if (rcFunctions != null) {
                         if (crp instanceof ServerReconfigurationPacket) {
