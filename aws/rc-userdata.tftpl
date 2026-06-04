@@ -44,12 +44,12 @@ cat >> /opt/xdn/conf/gigapaxos.properties <<'CANDGEO'
 ${candidate_geo_props}
 CANDGEO
 
-# node id + JVM opts (RC = node 0). The gigapaxos wire format is now IPv6-capable
+# node id + JVM opts (RC = node cp0). The gigapaxos wire format is now IPv6-capable
 # (16-byte addresses, see AddressCodec), so we NO LONGER force the IPv4 stack --
 # the RC advertises and binds its GLOBAL IPv6 for consensus. preferIPv6Addresses
 # nudges name resolution toward IPv6. The xdn-rc unit reads this via EnvironmentFile.
 cat > /opt/xdn/conf/node-id <<'NODEID'
-NODE_ID=0
+NODE_ID=cp0
 JAVA_TOOL_OPTIONS=-Djava.net.preferIPv6Addresses=true
 NODEID
 
