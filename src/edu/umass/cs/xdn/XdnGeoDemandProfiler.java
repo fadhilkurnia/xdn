@@ -84,10 +84,22 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
 
   private final AtomicLong lastDemandReportTimestamp = new AtomicLong(0);
 
-  // Lazily started worker: one daemon thread per profiler instance.
-  private final LinkedBlockingQueue<Geolocation> eventQueue =
+  // Lazily started worker: one daemon thread per profiler instance. Items are either a
+  // Geolocation (from the X-Client-Location header) or an InetAddress (the client IP, resolved
+  // to a Geolocation in the worker via GeoIP -- off the request hot path).
+  private final LinkedBlockingQueue<Object> eventQueue =
       new LinkedBlockingQueue<>(EVENT_QUEUE_CAPACITY);
   private volatile ExecutorService worker;
+
+  // Shared GeoIP resolver for the IP-based demand fallback; null when no GeoLite2 db is configured
+  // (then only the X-Client-Location header contributes demand). Volatile + injectable so a test can
+  // supply a resolver bound to a known .mmdb without depending on the JVM-wide lazy singleton.
+  private volatile GeoIpResolver geoIpResolver = GeoIpResolver.getDefaultOrNull();
+
+  // Test-only: override the GeoIP resolver before the first request is enqueued.
+  void setGeoIpResolverForTesting(GeoIpResolver resolver) {
+    this.geoIpResolver = resolver;
+  }
 
   public XdnGeoDemandProfiler(String name) {
     super(name);
@@ -118,15 +130,17 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     if (request == null || !request.getServiceName().equals(this.name)) {
       return false;
     }
-    // Prototype: only clients that supply X-Client-Location contribute demand.
-    // When HTTP batching is enabled requests arrive as XdnHttpRequestBatch; iterate
-    // its entries so per-request client locations still flow through.
+    // A client contributes demand via its X-Client-Location header, or (when absent) via its
+    // source IP geolocated off the hot path. When HTTP batching is enabled requests arrive as
+    // XdnHttpRequestBatch; iterate its entries so per-request client locations still flow through.
     boolean enqueuedAny = false;
     if (request instanceof XdnHttpRequest xdnReq) {
-      enqueuedAny = enqueueIfGeo(xdnReq);
+      enqueuedAny = enqueueLocation(xdnReq, sender);
     } else if (request instanceof XdnHttpRequestBatch batch) {
+      // A batch may aggregate multiple clients, so the single 'sender' doesn't map to each
+      // sub-request; rely on per-sub X-Client-Location headers only (no IP fallback for batches).
       for (XdnHttpRequest sub : batch.getRequests()) {
-        enqueuedAny |= enqueueIfGeo(sub);
+        enqueuedAny |= enqueueLocation(sub, null);
       }
     } else {
       return false;
@@ -150,12 +164,21 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     return false;
   }
 
-  private boolean enqueueIfGeo(XdnHttpRequest req) {
-    Geolocation geo = req.getClientGeolocation();
-    if (geo == null) {
+  // Enqueue a demand sample for one request: the X-Client-Location header geolocation if present,
+  // else the client IP (resolved to a geolocation in the worker via GeoIP). 'sender' is null for
+  // batch sub-requests, which therefore only contribute via their header.
+  private boolean enqueueLocation(XdnHttpRequest req, InetAddress sender) {
+    Object item = req.getClientGeolocation();
+    if (item == null
+        && geoIpResolver != null
+        && sender != null
+        && !GeoIpResolver.isNonGeolocatable(sender)) {
+      item = sender; // resolved off the hot path in the worker
+    }
+    if (item == null) {
       return false;
     }
-    if (!eventQueue.offer(geo)) {
+    if (!eventQueue.offer(item)) {
       LOGGER.log(
           Level.FINE,
           "XdnGeoDemandProfiler event queue full, dropping demand sample for {0}",
@@ -188,7 +211,19 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
   private void workerLoop() {
     try {
       while (!Thread.currentThread().isInterrupted()) {
-        Geolocation geo = eventQueue.take();
+        Object item = eventQueue.take();
+        Geolocation geo;
+        if (item instanceof Geolocation g) {
+          geo = g;
+        } else if (item instanceof InetAddress ip) {
+          // GeoIP resolution (mmdb traversal + record decode) happens here, off the request path.
+          geo = geoIpResolver != null ? geoIpResolver.resolve(ip) : null;
+        } else {
+          continue;
+        }
+        if (geo == null) {
+          continue; // GeoIP miss -> no demand cell
+        }
         int row = latToRow(geo.latitude());
         int col = lonToCol(geo.longitude());
         int idx = row * NUM_GRID_COLUMNS + col;

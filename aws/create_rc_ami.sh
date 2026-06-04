@@ -66,7 +66,7 @@ cd "\$HOME/xdn/xdn-dns"
 echo "${GO_VERSION}" > .go-version
 make coredns
 sudo cp "\$HOME/xdn/xdn-dns/coredns" /opt/xdn/coredns
-sudo cp "\$HOME/xdn/xdn-dns/geolocation_city_data.mmdb" /opt/xdn/geo/
+# (the GeoLite2-City db is staged to /opt/xdn/geo by emit_common_provision)
 
 # Baked default node id (numeric; the RC is node 0). user_data may overwrite
 # /opt/xdn/conf/node-id at launch.
