@@ -27,10 +27,9 @@ xdn --help
 
 ## Deploy a blackbox service
 
-XDN places your service's replicas at edge locations close to your users. These
-are the edge locations currently available on the public cluster — solid markers
-are **active replicas**, hollow markers are **candidate locations** a replica can
-move to as demand shifts:
+XDN places your service's replicas at edge locations close to your users —
+across AWS Regions and Local Zones worldwide. Here are the available edge
+locations:
 
 <iframe class="xdn-edge-map" src="/dashboard/app/edge-locations.html"
         title="XDN edge locations" loading="lazy"></iframe>

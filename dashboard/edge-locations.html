@@ -9,72 +9,83 @@
   <style>
     html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     #map { position: absolute; inset: 0; background: #e8eef3; }
-    .legend {
-      position: absolute; right: 10px; bottom: 16px; z-index: 500;
-      background: rgba(255,255,255,0.93); border: 1px solid #e3e6ea; border-radius: 8px;
-      padding: 8px 11px; font-size: 12.5px; color: #1c2230; line-height: 1.7;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    .badge {
+      position: absolute; z-index: 500; background: rgba(255,255,255,0.94);
+      border: 1px solid #e3e6ea; border-radius: 8px; padding: 6px 11px;
+      font-size: 12.5px; color: #1c2230; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
     }
-    .legend .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; }
-    .legend .active { background: #2563eb; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #2563eb; }
-    .legend .candidate { background: transparent; border: 2px dashed #6b7280; width: 9px; height: 9px; }
-    .note {
-      position: absolute; left: 10px; top: 10px; z-index: 500;
-      background: rgba(255,255,255,0.93); border: 1px solid #e3e6ea; border-radius: 6px;
-      padding: 4px 9px; font-size: 12px; color: #6b7280;
-    }
+    #conn { left: 10px; top: 10px; }
+    #count { right: 10px; bottom: 16px; color: #6b7280; }
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #cbd5e1; vertical-align: 0; margin-right: 6px; }
+    .dot.ok { background: #16a34a; } .dot.bad { background: #9ca3af; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="legend">
-    <span class="dot active"></span> active replica<br>
-    <span class="dot candidate"></span> candidate edge location
-  </div>
+  <div id="conn" class="badge"><span class="dot"></span><span id="conn-text">connecting to cp.xdnapp.com…</span></div>
+  <div id="count" class="badge"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script src="config.js"></script>
   <script>
     "use strict";
-    // Snapshot shown if the live control plane can't be reached (e.g. a browser
-    // that hasn't accepted a staging TLS cert). Updated from GET /api/v2/nodes.
-    const FALLBACK = [{"id":"1","lat":38.95,"lon":-77.45,"active":true},{"id":"2","lat":41.88,"lon":-87.63,"active":true},{"id":"3","lat":37.36,"lon":-121.92,"active":true},{"id":"us-atlanta","lat":33.75,"lon":-84.39,"active":false},{"id":"us-boston","lat":42.36,"lon":-71.06,"active":false},{"id":"us-dallas","lat":32.78,"lon":-96.8,"active":false},{"id":"us-denver","lat":39.74,"lon":-104.99,"active":false},{"id":"us-la","lat":34.05,"lon":-118.24,"active":false},{"id":"us-miami","lat":25.76,"lon":-80.19,"active":false},{"id":"us-nyc","lat":40.71,"lon":-74.01,"active":false},{"id":"us-seattle","lat":47.61,"lon":-122.33,"active":false}];
+    // Available XDN edge locations = AWS Regions (each shown at the region city;
+    // its Availability Zones are co-located) plus AWS Local Zones. [name, lat, lon]
+    const LOCATIONS = [
+      // --- AWS Regions ---
+      ["N. Virginia", 38.95, -77.45], ["Ohio", 40.42, -82.91],
+      ["N. California", 37.36, -121.92], ["Oregon", 45.87, -119.69],
+      ["Montreal", 45.50, -73.57], ["Calgary", 51.04, -114.07],
+      ["São Paulo", -23.55, -46.63], ["Ireland", 53.35, -6.26],
+      ["London", 51.51, -0.13], ["Paris", 48.86, 2.35],
+      ["Frankfurt", 50.11, 8.68], ["Zurich", 47.37, 8.54],
+      ["Stockholm", 59.33, 18.06], ["Milan", 45.46, 9.19], ["Spain", 40.42, -3.70],
+      ["Bahrain", 26.07, 50.55], ["UAE", 24.47, 54.37], ["Tel Aviv", 32.08, 34.78],
+      ["Cape Town", -33.92, 18.42], ["Mumbai", 19.08, 72.88], ["Hyderabad", 17.38, 78.49],
+      ["Singapore", 1.35, 103.82], ["Sydney", -33.87, 151.21], ["Jakarta", -6.21, 106.85],
+      ["Melbourne", -37.81, 144.96], ["Hong Kong", 22.32, 114.17],
+      ["Tokyo", 35.69, 139.69], ["Seoul", 37.57, 126.98], ["Osaka", 34.69, 135.50],
+      // --- AWS Local Zones (US) ---
+      ["Atlanta", 33.75, -84.39], ["Boston", 42.36, -71.06], ["Chicago", 41.88, -87.63],
+      ["Dallas", 32.78, -96.80], ["Denver", 39.74, -104.99], ["Houston", 29.76, -95.37],
+      ["Kansas City", 39.10, -94.58], ["Las Vegas", 36.17, -115.14], ["Los Angeles", 34.05, -118.24],
+      ["Miami", 25.76, -80.19], ["Minneapolis", 44.98, -93.27], ["New York", 40.71, -74.01],
+      ["Philadelphia", 39.95, -75.17], ["Phoenix", 33.45, -112.07], ["Portland", 45.52, -122.68],
+      ["Seattle", 47.61, -122.33], ["Charlotte", 35.23, -80.84], ["Detroit", 42.33, -83.05],
+      ["Honolulu", 21.31, -157.86], ["New Orleans", 29.95, -90.07], ["Nashville", 36.16, -86.78],
+      // --- AWS Local Zones (international) ---
+      ["Buenos Aires", -34.60, -58.38], ["Lima", -12.05, -77.04], ["Santiago", -33.45, -70.67],
+      ["Querétaro", 20.59, -100.39], ["Copenhagen", 55.68, 12.57], ["Helsinki", 60.17, 24.94],
+      ["Hamburg", 53.55, 9.99], ["Warsaw", 52.23, 21.01], ["Lagos", 6.52, 3.38],
+      ["Muscat", 23.59, 58.41], ["Delhi", 28.61, 77.21], ["Kolkata", 22.57, 88.36],
+      ["Bangkok", 13.76, 100.50], ["Manila", 14.60, 120.98], ["Taipei", 25.03, 121.57],
+      ["Perth", -31.95, 115.86], ["Auckland", -36.85, 174.76],
+    ];
 
-    const params = new URLSearchParams(location.search);
-    const cp = params.get("cp")
+    const cp = new URLSearchParams(location.search).get("cp")
       || (window.XDN_DASHBOARD_CONFIG && window.XDN_DASHBOARD_CONFIG.defaultControlPlane)
       || "cp.xdnapp.com:3400";
 
-    const map = L.map("map", { worldCopyJump: true, scrollWheelZoom: false }).setView([39, -97], 4);
+    const map = L.map("map", { worldCopyJump: true, scrollWheelZoom: false }).setView([25, 0], 2);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
       { attribution: "© OpenStreetMap", maxZoom: 18 }).addTo(map);
 
-    function draw(nodes, live) {
-      const pts = [];
-      for (const n of nodes) {
-        if (typeof n.lat !== "number" || typeof n.lon !== "number") continue;
-        pts.push([n.lat, n.lon]);
-        const opts = n.active
-          ? { radius: 8, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 0.9 }
-          : { radius: 6, color: "#6b7280", weight: 2, dashArray: "3", fillColor: "#fff", fillOpacity: 0.2 };
-        L.circleMarker([n.lat, n.lon], opts)
-          .bindTooltip(`${n.active ? "AR " + n.id + " — active replica" : n.id + " — candidate edge location"}`)
-          .addTo(map);
-      }
-      if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 5 });
-      if (!live) {
-        const el = document.createElement("div");
-        el.className = "note";
-        el.textContent = "snapshot — live control plane unreachable";
-        document.body.appendChild(el);
-      }
+    for (const [name, lat, lon] of LOCATIONS) {
+      L.circleMarker([lat, lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 0.9 })
+        .bindTooltip(name).addTo(map);
     }
+    document.getElementById("count").textContent =
+      LOCATIONS.length + " edge locations (AWS Regions & Local Zones)";
 
+    // Connection status to the default control plane.
+    function setConn(ok, text) {
+      document.querySelector("#conn .dot").className = "dot " + (ok ? "ok" : "bad");
+      document.getElementById("conn-text").textContent = text;
+    }
     fetch(`https://${cp}/api/v2/nodes`, { mode: "cors" })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((nodes) => (Array.isArray(nodes) && nodes.length ? draw(nodes, true) : draw(FALLBACK, false)))
-      .catch(() => draw(FALLBACK, false));
+      .then((r) => (r.ok ? setConn(true, "connected to " + cp) : Promise.reject()))
+      .catch(() => setConn(false, cp + " unreachable"));
   </script>
 </body>
 </html>
