@@ -21,6 +21,7 @@ theme:
     - navigation.tabs.sticky
     - navigation.top
     - navigation.footer
+    - content.code.copy # copy button on code blocks
 extra:
   homepage: https://xdn.cs.umass.edu/
 
