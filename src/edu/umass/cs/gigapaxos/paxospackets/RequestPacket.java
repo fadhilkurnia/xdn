@@ -819,7 +819,7 @@ public class RequestPacket extends PaxosPacket implements Request,
 				&& this.byteifiedSelf != null && !instrument)
 			return this.byteifiedSelf;
 		// check if we can use byteification at all; if not, use toString()
-		if (!((BYTEIFICATION && IntegerMap.allInt()) || instrument)) {
+		if (!((BYTEIFICATION && IntegerMap.byteifiable()) || instrument)) {
 			try {
 				if (this.getType() == PaxosPacketType.REQUEST
 						|| this.getType() == PaxosPacketType.ACCEPT)

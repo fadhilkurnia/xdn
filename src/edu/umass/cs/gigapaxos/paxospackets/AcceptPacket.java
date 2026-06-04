@@ -94,7 +94,7 @@ public final class AcceptPacket extends PValuePacket {
 	@Override
 	public synchronized byte[] toBytes() {
 		long t = System.nanoTime();
-		if (!(PaxosPacket.BYTEIFICATION && IntegerMap.allInt()))
+		if (!(PaxosPacket.BYTEIFICATION && IntegerMap.byteifiable()))
 			return super.toBytes();
 
 		if (this.getByteifiedSelf() != null)
