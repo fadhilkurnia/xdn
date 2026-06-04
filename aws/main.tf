@@ -257,13 +257,13 @@ resource "aws_key_pair" "deployer" {
 variable "rc_ami" {
   description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation). ARM64/Graviton image (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-08be7b8fc654ea07c" # arm64, xdn-dashboard: issuer/receiver fix + wedge SEVERE alarm
+  default     = "ami-03b0ad52656bf6840" # arm64, main: RESTful control API + GeoIP demand (geolocation_city_data.mmdb baked)
 }
 
 variable "ar_ami" {
-  description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from the xdn-ar-arm64 branch by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
+  description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from fork/main by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-0a8706506aedccede" # arm64, xdn-dashboard: phantom meta-group STOP ack fix
+  default     = "ami-0872fc74ccf98b371" # arm64, main: RESTful control API + GeoIP demand (geolocation_city_data.mmdb baked)
 }
 
 variable "ar_count" {
