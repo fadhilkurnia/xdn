@@ -18,6 +18,33 @@ if [ ! -f /swapfile ]; then
   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
+# Inter-node SSH for primary-backup state sync: non-deterministic services ship
+# their container state to peer ARs via `rsync root@<peerIPv6>:...` at init /
+# primary-promotion (RsyncStateDiffRecorder.initContainerSync). Install the shared
+# Terraform-managed key so root can SSH to any peer AR non-interactively. The
+# cluster-IPv6 SG rule already permits :22 between ARs; deterministic (paxos)
+# services don't use this (their state transfer is in-band over NIO).
+install -d -m 0700 /root/.ssh
+cat > /root/.ssh/id_ed25519 <<'INTERNODE_KEY'
+${internode_ssh_key}
+INTERNODE_KEY
+chmod 600 /root/.ssh/id_ed25519
+echo '${internode_ssh_pub}' > /root/.ssh/id_ed25519.pub
+chmod 644 /root/.ssh/id_ed25519.pub
+# Authorize the same key for INCOMING peer connections (idempotent).
+touch /root/.ssh/authorized_keys
+grep -qxF '${internode_ssh_pub}' /root/.ssh/authorized_keys || echo '${internode_ssh_pub}' >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+# The recorder's rsync has no -oStrictHostKeyChecking flag, so default a
+# non-interactive host-key policy for root's outbound intra-cluster SSH.
+cat > /root/.ssh/config <<'SSHCFG'
+Host *
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+SSHCFG
+chmod 600 /root/.ssh/config
+
 cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
 ${gigapaxos_properties}
 PROPS

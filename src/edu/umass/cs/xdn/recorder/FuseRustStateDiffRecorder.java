@@ -485,7 +485,10 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
                   if (hostAddr.equals("127.0.0.1")) {
                     cmd.add(backupReplicas.get(key));
                   } else {
-                    cmd.add(username + "@" + hostAddr + ":" + backupReplicas.get(key));
+                    // rsync needs IPv6 literals bracketed in user@host:path, else it mis-parses
+                    // the colons as the host:path separator (IPv6-only clusters fail to sync).
+                    String sshHost = hostAddr.contains(":") ? "[" + hostAddr + "]" : hostAddr;
+                    cmd.add(username + "@" + sshHost + ":" + backupReplicas.get(key));
                   }
 
                   exitCode = Shell.runCommand(cmd, false);

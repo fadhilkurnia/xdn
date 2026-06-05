@@ -81,6 +81,20 @@ resource "aws_instance" "rc" {
   tags = { Name = "xdn-rc" }
 }
 
+# ---- Inter-node SSH key (primary-backup state sync) ----------------------
+# Non-deterministic (primary-backup) services ship their container state to the
+# new backups at init/promotion via `rsync root@<peerIPv6>:...` (see
+# RsyncStateDiffRecorder.initContainerSync). That needs passwordless root SSH
+# *between* ARs -- distinct from the operator key_pair (ubuntu, external access).
+# A single Terraform-managed ED25519 keypair (no key material in the repo) is
+# written to /root/.ssh on every AR by ar-userdata, so each AR can rsync to any
+# peer. Deterministic (paxos) services don't use this -- their state transfer is
+# in-band over NIO. SSH (:22) between ARs is already allowed by the cluster-IPv6
+# catch-all SG rule (locals.tf sg_ingress).
+resource "tls_private_key" "ar_internode" {
+  algorithm = "ED25519"
+}
+
 # ---- ActiveReplicas ------------------------------------------------------
 # One instance resource per region (provider is static per resource). Each uses
 # the region's subnet/SG/key/AMI; the shared gigapaxos.properties + per-node id
@@ -115,6 +129,8 @@ resource "aws_instance" "ar_use1" {
     tls_bucket           = local.persist_tls_bucket
     fullchain_key        = "wildcard/fullchain.pem"
     privkey_key          = "wildcard/privkey.pem"
+    internode_ssh_key    = tls_private_key.ar_internode.private_key_openssh
+    internode_ssh_pub    = tls_private_key.ar_internode.public_key_openssh
   })
 
   root_block_device {
@@ -154,6 +170,8 @@ resource "aws_instance" "ar_use2" {
     tls_bucket           = local.persist_tls_bucket
     fullchain_key        = "wildcard/fullchain.pem"
     privkey_key          = "wildcard/privkey.pem"
+    internode_ssh_key    = tls_private_key.ar_internode.private_key_openssh
+    internode_ssh_pub    = tls_private_key.ar_internode.public_key_openssh
   })
 
   root_block_device {
@@ -193,6 +211,8 @@ resource "aws_instance" "ar_usw2" {
     tls_bucket           = local.persist_tls_bucket
     fullchain_key        = "wildcard/fullchain.pem"
     privkey_key          = "wildcard/privkey.pem"
+    internode_ssh_key    = tls_private_key.ar_internode.private_key_openssh
+    internode_ssh_pub    = tls_private_key.ar_internode.public_key_openssh
   })
 
   root_block_device {

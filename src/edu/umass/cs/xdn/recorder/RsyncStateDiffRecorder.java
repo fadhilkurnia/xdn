@@ -115,13 +115,33 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetDiffFile =
         String.format("%s%s/e%d.diff", this.baseDiffDirPath, serviceName, placementEpoch);
 
+    // The mount source dir holds a PRIMARY's own container state, but for a BACKUP it is filled
+    // asynchronously by the primary's initContainerSync push, which may not have landed when the
+    // backup runs postInitialization (the two race). Ensure it exists so the snapshot rsync below
+    // cannot fail and abort backup init under -ea -- a backup's authoritative state is
+    // (re)established by the primary's push plus the in-band statediffs regardless.
+    Shell.runCommand("mkdir -p " + targetSourceDir);
+
     int removeTargetDirRetCode = Shell.runCommand("rm -rf " + targetDestDir);
     int removeDiffDirRetCode = Shell.runCommand("rm -rf " + targetDiffFile);
     // rsync (not `cp -a`): trailing-slash sources copy CONTENTS flat and portably;
     // `cp -a src/ dst/` nests under an extra dir when dst exists.
     int copySnapshotRetCode =
         Shell.runCommand(String.format("rsync -a %s %s", targetSourceDir, targetDestDir));
-    assert removeTargetDirRetCode == 0 && removeDiffDirRetCode == 0 && copySnapshotRetCode == 0;
+    // Soft-check (was an assert): a non-zero here must NOT abort backup init -- it just means the
+    // snapshot is momentarily empty/partial, which the push + in-band diffs reconcile.
+    if (removeTargetDirRetCode != 0 || removeDiffDirRetCode != 0 || copySnapshotRetCode != 0) {
+      System.out.printf(
+          "%s: postInitialization snapshot incomplete for %s e%d (rm=%d, rmDiff=%d, rsync=%d);"
+              + " continuing -- backup state is (re)established via the primary push + in-band"
+              + " statediffs%n",
+          this.getClass().getSimpleName(),
+          serviceName,
+          placementEpoch,
+          removeTargetDirRetCode,
+          removeDiffDirRetCode,
+          copySnapshotRetCode);
+    }
 
     return true;
   }
@@ -284,6 +304,9 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
       for (String key : backupReplicas.keySet()) {
         String hostAddr = ipAddresses.get(key).getHostAddress();
+        // rsync needs IPv6 literals bracketed in user@host:path, else it mis-parses the
+        // colons as the host:path separator (an IPv6-only cluster otherwise fails to sync).
+        String sshHost = hostAddr.contains(":") ? "[" + hostAddr + "]" : hostAddr;
 
         int exitCode = 0;
         if (hostAddr.equals("127.0.0.1")) {
@@ -312,7 +335,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
                       mntDir,
                       currentReplica,
                       username,
-                      hostAddr,
+                      sshHost,
                       backupReplicas.get(key)),
                   true);
         }
