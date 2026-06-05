@@ -58,6 +58,40 @@ public class XdnGeoDemandProfilerTest {
   }
 
   @Test
+  public void testWindowedFirstReportProfileExpires() throws Exception {
+    // Reproduces the "stuck residual" bug: the reconfigurator stores the FIRST demand report's
+    // profile (built via the JSON ctor) DIRECTLY as the aggregate (AggregateDemandProfiler.combine
+    // 'else existing = update'). With a window configured, that loaded grid must be expirable --
+    // before the fix the JSON ctor seeded no window delta, so the first report's demand never
+    // decayed (we observed exactly this live: one read cell frozen while all later cells expired).
+    XdnGeoDemandProfiler.setWindowMillisForTesting(1_000L); // 1s window
+    try {
+      // Build a report carrying some demand.
+      XdnGeoDemandProfiler src = new XdnGeoDemandProfiler(SERVICE_NAME);
+      for (int i = 0; i < 5; i++) {
+        src.shouldReportDemandStats(makeRequest(34.05, -118.24), null, null);
+      }
+      awaitWorkerDrain(src, 5);
+      JSONObject report = src.getDemandStats();
+
+      // The "first report becomes the stored profile" path: construct from the report JSON.
+      XdnGeoDemandProfiler stored = new XdnGeoDemandProfiler(report);
+      long t0 = System.currentTimeMillis();
+      assertEquals(
+          1, stored.getDemandGeoCells().length(), "demand present right after becoming the store");
+
+      // Past the window, the demand must expire -- before the fix this residual stayed forever.
+      stored.expireForTesting(t0 + 60_000);
+      assertEquals(
+          0,
+          stored.getDemandGeoCells().length(),
+          "windowed demand from the first report must expire (no stuck residual)");
+    } finally {
+      XdnGeoDemandProfiler.setWindowMillisForTesting(null);
+    }
+  }
+
+  @Test
   public void testNullClientGeoIsIgnored() throws Exception {
     XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
     // No X-Client-Location header.
