@@ -76,29 +76,32 @@ locals {
   ]
 
   # ---- Candidate placement locations (dashboard map; config-only, $0) ------
+  # Dash-free node ids (the no-dash rule covers these geolocation-only candidates
+  # too; one may later be promoted to a real node, where a dash breaks Derby). The
+  # real AWS AZ/Local-Zone name is in the trailing comment.
   candidate_geolocations = {
-    "us-east-1c"     = "38.87,-77.40"
-    "us-east-1d"     = "39.10,-77.54"
-    "us-east-2b"     = "40.08,-83.09"
-    "us-east-2c"     = "39.90,-82.89"
-    "us-west-1a"     = "37.44,-122.00"
-    "us-west-1b"     = "37.31,-121.85"
-    "us-west-2b"     = "45.77,-119.59"
-    "us-west-2c"     = "45.91,-119.81"
-    "lz-atlanta"     = "33.75,-84.39"
-    "lz-boston"      = "42.36,-71.06"
-    "lz-chicago"     = "41.85,-87.65"
-    "lz-dallas"      = "32.78,-96.80"
-    "lz-denver"      = "39.74,-104.99"
-    "lz-houston"     = "29.76,-95.37"
-    "lz-las-vegas"   = "36.17,-115.14"
-    "lz-los-angeles" = "34.05,-118.24"
-    "lz-miami"       = "25.76,-80.19"
-    "lz-minneapolis" = "44.98,-93.27"
-    "lz-new-york"    = "40.71,-74.01"
-    "lz-phoenix"     = "33.45,-112.07"
-    "lz-portland"    = "45.52,-122.68"
-    "lz-seattle"     = "47.61,-122.33"
+    "useast1c"      = "38.87,-77.40"  # us-east-1c
+    "useast1d"      = "39.10,-77.54"  # us-east-1d
+    "useast2b"      = "40.08,-83.09"  # us-east-2b
+    "useast2c"      = "39.90,-82.89"  # us-east-2c
+    "uswest1a"      = "37.44,-122.00" # us-west-1a
+    "uswest1b"      = "37.31,-121.85" # us-west-1b
+    "uswest2b"      = "45.77,-119.59" # us-west-2b
+    "uswest2c"      = "45.91,-119.81" # us-west-2c
+    "lzatlanta"     = "33.75,-84.39"  # lz-atlanta
+    "lzboston"      = "42.36,-71.06"  # lz-boston
+    "lzchicago"     = "41.85,-87.65"  # lz-chicago
+    "lzdallas"      = "32.78,-96.80"  # lz-dallas
+    "lzdenver"      = "39.74,-104.99" # lz-denver
+    "lzhouston"     = "29.76,-95.37"  # lz-houston
+    "lzlasvegas"    = "36.17,-115.14" # lz-las-vegas
+    "lzlosangeles"  = "34.05,-118.24" # lz-los-angeles
+    "lzmiami"       = "25.76,-80.19"  # lz-miami
+    "lzminneapolis" = "44.98,-93.27"  # lz-minneapolis
+    "lznewyork"     = "40.71,-74.01"  # lz-new-york
+    "lzphoenix"     = "33.45,-112.07" # lz-phoenix
+    "lzportland"    = "45.52,-122.68" # lz-portland
+    "lzseattle"     = "47.61,-122.33" # lz-seattle
   }
   candidate_geo_props = join("\n", [
     for id, ll in local.candidate_geolocations : "active.${id}.geolocation=\"${ll}\""
