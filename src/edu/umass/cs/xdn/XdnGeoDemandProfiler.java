@@ -328,6 +328,25 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     }
   }
 
+  // Stop the async worker (interrupting its blocking take()) so it isn't leaked when this profile is
+  // discarded after a report. Coordinated with ensureWorkerStarted() via 'this' so they don't race
+  // on the worker field; the shutdown itself runs outside that monitor.
+  private void stopWorker() {
+    ExecutorService es;
+    synchronized (this) {
+      es = worker;
+      worker = null;
+    }
+    if (es != null) {
+      es.shutdownNow();
+    }
+  }
+
+  // Test-only: whether the async worker is currently running.
+  boolean isWorkerActiveForTesting() {
+    return worker != null;
+  }
+
   private void workerLoop() {
     try {
       while (!Thread.currentThread().isInterrupted()) {
@@ -407,6 +426,12 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     } finally {
       mapLock.unlock();
     }
+
+    // A report means the reconfigurator is about to discard this profile and swap in a fresh one
+    // (AggregateDemandProfiler.pluckDemandProfile), which would otherwise orphan the worker -- a
+    // leaked daemon thread blocked on take() per report. Stop it here; ensureWorkerStarted()
+    // re-creates it on the next sample if this profile is reused instead.
+    stopWorker();
 
     // Top-K trim (by total demand per cell) to stay under MAX_DEMAND_PROFILE_SIZE.
     if (entries.size() > MAX_GRID_ENTRIES_PER_REPORT) {

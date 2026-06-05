@@ -107,6 +107,23 @@ public class XdnGeoDemandProfilerTest {
   }
 
   @Test
+  public void testReportStopsWorkerToAvoidLeak() throws Exception {
+    // On the ActiveReplica a report (getDemandStats) is immediately followed by the reconfigurator
+    // discarding this profile and swapping in a fresh one (AggregateDemandProfiler.pluckDemandProfile).
+    // The per-profile worker must be stopped on report, or it leaks (a blocked thread per report).
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null); // starts the worker
+    assertTrue(profiler.isWorkerActiveForTesting(), "worker runs while sampling");
+
+    profiler.getDemandStats(); // a report
+    assertFalse(profiler.isWorkerActiveForTesting(), "worker must be stopped after a report (no leak)");
+
+    // If the profile is reused, sampling resumes (worker re-created on the next sample).
+    profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null);
+    assertTrue(profiler.isWorkerActiveForTesting(), "worker restarts on the next sample");
+  }
+
+  @Test
   public void testNullClientGeoIsIgnored() throws Exception {
     XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
     // No X-Client-Location header.
