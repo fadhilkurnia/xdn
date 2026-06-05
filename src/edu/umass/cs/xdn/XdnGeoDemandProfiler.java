@@ -136,7 +136,19 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     }
   }
 
+  // Test-only override so unit tests can exercise windowing without depending on the global config
+  // (which is in whole minutes); null means "use the configured value".
+  private static volatile Long windowMillisOverrideForTesting = null;
+
+  static void setWindowMillisForTesting(Long ms) {
+    windowMillisOverrideForTesting = ms;
+  }
+
   private static long computeWindowMillis() {
+    Long override = windowMillisOverrideForTesting;
+    if (override != null) {
+      return override;
+    }
     int minutes = Config.getGlobalInt(RC.XDN_DEMAND_WINDOW_MINUTES);
     return minutes < 0 ? -1L : (long) minutes * 60_000L;
   }
@@ -173,19 +185,44 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
         int w = buf.getInt();
         sparseGrid.put(idx, new long[] {r, w});
       }
-      return;
+    } else {
+      // Legacy grid [idx, count]: attribute the count to reads.
+      String legacy = stats.optString(KEY_GRID_SPARSE_B64, null);
+      if (legacy != null && !legacy.isEmpty()) {
+        ByteBuffer buf = ByteBuffer.wrap(Base64.getDecoder().decode(legacy));
+        int n = buf.getInt();
+        for (int i = 0; i < n; i++) {
+          int idx = buf.getInt();
+          int count = buf.getInt();
+          sparseGrid.put(idx, new long[] {count, 0});
+        }
+      }
     }
 
-    // Legacy grid [idx, count]: attribute the count to reads.
-    String legacy = stats.optString(KEY_GRID_SPARSE_B64, null);
-    if (legacy != null && !legacy.isEmpty()) {
-      ByteBuffer buf = ByteBuffer.wrap(Base64.getDecoder().decode(legacy));
-      int n = buf.getInt();
-      for (int i = 0; i < n; i++) {
-        int idx = buf.getInt();
-        int count = buf.getInt();
-        sparseGrid.put(idx, new long[] {count, 0});
+    // CRITICAL for windowing: the reconfigurator uses the FIRST report's profile -- built via
+    // this constructor -- DIRECTLY as the stored aggregate (AggregateDemandProfiler.combine's
+    // "else existing = update" branch), and reloads DB-persisted stats the same way. The loaded
+    // grid must be backed by a window delta or it can never expire: that initial demand would sit
+    // in the running grid with nothing to subtract it, leaving a permanent residual. Harmless when
+    // this object is only a transient combine() argument, since combine() reads the argument's
+    // sparseGrid, not its windowDeltas.
+    if (windowMillis >= 0 && !sparseGrid.isEmpty()) {
+      Map<Integer, long[]> copy = new HashMap<>(sparseGrid.size());
+      for (Map.Entry<Integer, long[]> e : sparseGrid.entrySet()) {
+        copy.put(e.getKey(), new long[] {e.getValue()[READ], e.getValue()[WRITE]});
       }
+      windowDeltas.addLast(
+          new TimedDelta(System.currentTimeMillis(), copy, totalReads, totalWrites));
+    }
+  }
+
+  // Test-only: drive window expiry at a caller-supplied wall-clock so tests need not sleep.
+  void expireForTesting(long now) {
+    mapLock.lock();
+    try {
+      expireWindowLocked(now);
+    } finally {
+      mapLock.unlock();
     }
   }
 
