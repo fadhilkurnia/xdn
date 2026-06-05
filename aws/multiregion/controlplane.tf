@@ -143,6 +143,13 @@ resource "acme_certificate" "wildcard" {
 
   recursive_nameservers = ["8.8.8.8:53", "1.1.1.1:53"]
 
+  # Keep lego's propagation pre-check ENABLED (it waits until the TXT is visible
+  # before asking LE to validate, so LE never races propagation and burns a
+  # failed-validation). The earlier flakiness was the Route53 SOA's 24h negative
+  # cache, now lowered to 60s; with the un-pinned two-zone setup the pre-check is
+  # the safe path since a propagation timeout costs no LE quota. Give it room.
+  cert_timeout = 600
+
   depends_on = [
     aws_route53_zone.acme,
     aws_route53_zone.acme_edge,
