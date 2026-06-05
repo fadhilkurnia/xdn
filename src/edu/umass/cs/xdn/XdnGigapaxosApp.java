@@ -1961,9 +1961,15 @@ public class XdnGigapaxosApp
     code = Shell.runCommand(createDirCommand, true);
     assert code == 0;
 
-    // Copy the service state into the prepared directory.
+    // Copy the service state into the prepared directory. Use rsync (NOT `cp -a`):
+    // hostMountDir ends in a slash, and `cp -a <dir>/ <existingDir>/` nests the
+    // contents under an extra <dir> level (the dest already exists via mkdir -p
+    // above), so the restored state lands at /app/data/e<epoch>/... instead of
+    // /app/data/... and the app sees an empty state dir. rsync's trailing-slash
+    // semantics ("copy the directory's CONTENTS") are well-defined and identical
+    // across GNU/Linux and BSD/macOS, regardless of whether the dest exists.
     String hostMountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
-    String stateCopyCommand = String.format("cp -a %s %s", hostMountDir, finalStateDirPath);
+    String stateCopyCommand = String.format("rsync -a %s %s", hostMountDir, finalStateDirPath);
     int count = 0;
     while (true) {
       if (++count >= 10) {
