@@ -18,7 +18,7 @@ const params = new URLSearchParams(location.search);
 
 let controlPlane = bareHost(params.get("cp")) || DEFAULT_CP;
 let currentSvc = params.get("svc") || null;
-let map, markerLayer, heatLayer, demandTimer, topologyLayer;
+let map, markerLayer, heatLayers = [], lastDemandCells = [], demandTimer, topologyLayer;
 
 // ---- URL state -------------------------------------------------------------
 function syncUrl() {
@@ -413,24 +413,47 @@ async function fetchDemand(name) {
   try {
     const r = await api(`/api/v2/services/${encodeURIComponent(name)}/demand`);
     const cells = r.ok && Array.isArray(r.body) ? r.body : [];
+    lastDemandCells = cells;
     drawHeatmap(cells);
-    const total = cells.reduce((s, c) => s + (c.count || 0), 0);
+    const reads = cells.reduce((s, c) => s + (c.read || 0), 0);
+    const writes = cells.reduce((s, c) => s + (c.write || 0), 0);
     $("#demand-note").textContent = cells.length
-      ? `demand: ${total} request(s) across ${cells.length} cell(s)`
+      ? `demand: ${reads + writes} req (${reads} read / ${writes} write) across ${cells.length} cell(s)`
       : "no demand yet — send requests with an X-Client-Location header";
   } catch (e) {
     $("#demand-note").textContent = `demand unavailable: ${e.message}`;
   }
 }
 
+function clearHeatLayers() {
+  for (const l of heatLayers) if (map) map.removeLayer(l);
+  heatLayers = [];
+}
+
+// Render demand as one or two heat layers per the read/write selector: reads use a cool (blue)
+// gradient, writes a warm (red) gradient; "both" overlays them so hotspots of each kind show at a
+// glance. Backward-compatible: falls back to total `count` when read/write fields are absent.
 function drawHeatmap(cells) {
   if (!map || typeof L.heatLayer !== "function") return;
-  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
-  if (!cells.length) return;
-  const maxCount = Math.max(...cells.map((c) => c.count || 1));
-  const points = cells.map((c) => [c.lat, c.lon, c.count || 1]);
-  heatLayer = L.heatLayer(points, { radius: 28, blur: 18, max: maxCount, minOpacity: 0.3 });
-  if ($("#heat-toggle").checked) heatLayer.addTo(map);
+  clearHeatLayers();
+  if (!cells.length || !$("#heat-toggle").checked) return;
+  const kind = ($("#demand-kind") && $("#demand-kind").value) || "both";
+  const READ_GRAD = { 0.2: "#60a5fa", 0.5: "#2563eb", 1: "#1e3a8a" };
+  const WRITE_GRAD = { 0.2: "#f59e0b", 0.5: "#ef4444", 1: "#7f1d1d" };
+  const weightFor = (c, k) =>
+    k === "read" ? (c.read || 0)
+    : k === "write" ? (c.write || 0)
+    : (c.read != null || c.write != null) ? (c.read || 0) + (c.write || 0) : (c.count || 0);
+  const addLayer = (k, grad) => {
+    const pts = cells.map((c) => [c.lat, c.lon, weightFor(c, k)]).filter((p) => p[2] > 0);
+    if (!pts.length) return;
+    const max = Math.max(...pts.map((p) => p[2]));
+    const layer = L.heatLayer(pts, { radius: 28, blur: 18, max, minOpacity: 0.3, gradient: grad });
+    layer.addTo(map);
+    heatLayers.push(layer);
+  };
+  if (kind === "read" || kind === "both") addLayer("read", READ_GRAD);
+  if (kind === "write" || kind === "both") addLayer("write", WRITE_GRAD);
 }
 
 function startDemandPolling(name) {
@@ -441,7 +464,7 @@ function startDemandPolling(name) {
 
 function stopDemandPolling() {
   if (demandTimer) { clearInterval(demandTimer); demandTimer = null; }
-  if (heatLayer && map) { map.removeLayer(heatLayer); heatLayer = null; }
+  clearHeatLayers();
 }
 
 // ---- utils -----------------------------------------------------------------
@@ -464,10 +487,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#inspect-btn").onclick = doInspect;
   $("#svc-name").addEventListener("keydown", (e) => { if (e.key === "Enter") doInspect(); });
   $("#destroy-btn").onclick = () => { if (currentSvc) destroy(currentSvc); };
-  $("#heat-toggle").onchange = () => {
-    if (!heatLayer || !map) return;
-    if ($("#heat-toggle").checked) heatLayer.addTo(map); else map.removeLayer(heatLayer);
-  };
+  $("#heat-toggle").onchange = () => drawHeatmap(lastDemandCells);
+  if ($("#demand-kind")) $("#demand-kind").onchange = () => drawHeatmap(lastDemandCells);
   $("#topo-toggle").onchange = () => {
     if (!topologyLayer || !map) return;
     if ($("#topo-toggle").checked) topologyLayer.addTo(map); else map.removeLayer(topologyLayer);

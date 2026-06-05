@@ -49,8 +49,8 @@ public class XdnGeoDemandProfilerTest {
     XdnGeoDemandProfiler round = new XdnGeoDemandProfiler(first);
     JSONObject rehydrated = round.getDemandStats();
     assertEquals(5L, rehydrated.getLong("num_reqs"));
-    // The rehydrated profiler's sparse map matches the original.
-    assertEquals(first.getString("grid_sparse_b64"), rehydrated.getString("grid_sparse_b64"));
+    // The rehydrated profiler's sparse (read/write) map matches the original.
+    assertEquals(first.getString("grid_rw_b64"), rehydrated.getString("grid_rw_b64"));
 
     // Second call on the original should now be empty (reset-on-report).
     JSONObject second = profiler.getDemandStats();

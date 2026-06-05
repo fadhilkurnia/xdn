@@ -95,6 +95,13 @@
       <div class="row">
         <label class="check"><input type="checkbox" id="topo-toggle" checked /> All locations</label>
         <label class="check"><input type="checkbox" id="heat-toggle" checked /> Demand heatmap</label>
+        <label class="check">show
+          <select id="demand-kind">
+            <option value="both">read + write</option>
+            <option value="read">reads</option>
+            <option value="write">writes</option>
+          </select>
+        </label>
         <span id="demand-note" class="hint"></span>
       </div>
       <p class="hint" id="topo-legend">
