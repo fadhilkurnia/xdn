@@ -28,9 +28,17 @@ declare -A IMAGES=(
   ["xdn-bookcatalog"]="bookcatalog"
   ["xdn-bookcatalog-nd"]="bookcatalog-nd"
   ["xdn-bookcatalog-mongo"]="bookcatalog-mongo"
+  ["xdn-noop"]="noop"
+  ["xdn-smallbank"]="smallbank"
+  ["xdn-seats"]="seats"
+  ["xdn-ecommerce"]="ecommerce"
+  ["xdn-socialnetwork"]="socialnetwork"
+  ["xdn-moviereview"]="moviereview"
 )
 REPOS="xdn-rsmbench xdn-webkv xdn-tpcc xdn-tpcc-java xdn-todo \
-       xdn-bookcatalog xdn-bookcatalog-nd xdn-bookcatalog-mongo"
+       xdn-bookcatalog xdn-bookcatalog-nd xdn-bookcatalog-mongo \
+       xdn-noop xdn-smallbank xdn-seats xdn-ecommerce \
+       xdn-socialnetwork xdn-moviereview"
 
 cd "$(dirname "$0")"  # services/
 declare -A RESULT
