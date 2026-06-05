@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN · Movie Review</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; } .sub { opacity: .7; margin-top: -.5rem; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: .8rem 0; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  label { display: inline-flex; gap: .3rem; align-items: center; margin: .2rem .6rem .2rem 0; }
+  input { padding: .3rem; }
+  input[type=number] { width: 4rem; } input[type=text] { width: 11rem; }
+  button { font-size: .95rem; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+  pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; min-height: 2rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  @media (max-width: 620px){ .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>XDN · Movie Review</h1>
+  <p class="sub">A consolidated DeathStarBench-style movie-review service (Go + MongoDB) — movies, users, ratings, and reviews.</p>
+
+  <fieldset>
+    <legend>Setup</legend>
+    <label>movies <input id="nm" type="number" value="10" min="1"></label>
+    <label>users <input id="nu" type="number" value="20" min="1"></label>
+    <button onclick="call('/init_db', {num_movies:+nm.value, num_users:+nu.value})">Init DB</button>
+  </fieldset>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Register user</legend>
+      <label>username <input id="ru_name" type="text" value="alice"></label>
+      <label>password <input id="ru_pw" type="text" value="secret"></label>
+      <button onclick="call('/register_user', {username: ru_name.value, password: ru_pw.value})">Register</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Compose review</legend>
+      <label>user <input id="cr_uid" type="number" value="1"></label>
+      <label>movie <input id="cr_mid" type="number" value="1"></label>
+      <label>rating <input id="cr_rate" type="number" value="5" min="1" max="5"></label>
+      <label>text <input id="cr_text" type="text" value="great!"></label>
+      <button onclick="call('/compose_review', {user_id:+cr_uid.value, movie_id:+cr_mid.value, rating:+cr_rate.value, text: cr_text.value})">Review</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Movie reviews (read-only)</legend>
+      <label>movie <input id="mr_mid" type="number" value="1"></label>
+      <button onclick="call('/movie_reviews', {movie_id:+mr_mid.value})">Reviews</button>
+      <button onclick="call('/movie_info', {movie_id:+mr_mid.value})">Info + avg</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>User reviews (read-only)</legend>
+      <label>user <input id="ur_uid" type="number" value="1"></label>
+      <button onclick="call('/user_reviews', {user_id:+ur_uid.value})">Reviews</button>
+    </fieldset>
+  </div>
+
+  <h3>Response</h3>
+  <pre id="out">Ready.</pre>
+
+<script>
+const out = document.getElementById('out');
+async function call(path, body) {
+  out.textContent = 'POST ' + path + ' ' + JSON.stringify(body) + ' …';
+  try {
+    const r = await fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const text = await r.text();
+    let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    out.textContent = 'POST ' + path + '  →  HTTP ' + r.status + '\n' + pretty;
+  } catch (e) { out.textContent = 'error: ' + e; }
+}
+</script>
+</body>
+</html>

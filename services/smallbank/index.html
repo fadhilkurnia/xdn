@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN · SmallBank</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; } .sub { opacity: .7; margin-top: -.5rem; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: .8rem 0; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  label { display: inline-flex; gap: .3rem; align-items: center; margin: .2rem .6rem .2rem 0; }
+  input { padding: .3rem; }
+  input[type=text] { width: 6rem; } input[type=number] { width: 6rem; }
+  button { font-size: .95rem; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+  pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; min-height: 2rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  @media (max-width: 620px){ .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>XDN · SmallBank</h1>
+  <p class="sub">SmallBank OLTP benchmark — savings/checking accounts and money-moving transactions. Accounts are named <code>cust1</code>..<code>custN</code>.</p>
+
+  <fieldset>
+    <legend>Setup</legend>
+    <label>accounts <input id="nacc" type="number" value="100" min="1"></label>
+    <button onclick="call('/init_db', {num_accounts: +nacc.value})">Init DB</button>
+  </fieldset>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Balance (read-only)</legend>
+      <label>name <input id="b_name" type="text" value="cust1"></label>
+      <button onclick="call('/balance', {name: b_name.value})">Get balance</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Deposit checking</legend>
+      <label>name <input id="d_name" type="text" value="cust1"></label>
+      <label>amount <input id="d_amt" type="number" value="100"></label>
+      <button onclick="call('/deposit_checking', {name: d_name.value, amount: +d_amt.value})">Deposit</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Transact savings</legend>
+      <label>name <input id="t_name" type="text" value="cust1"></label>
+      <label>amount <input id="t_amt" type="number" value="-50"></label>
+      <button onclick="call('/transact_savings', {name: t_name.value, amount: +t_amt.value})">Transact</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Write check</legend>
+      <label>name <input id="w_name" type="text" value="cust1"></label>
+      <label>amount <input id="w_amt" type="number" value="50"></label>
+      <button onclick="call('/write_check', {name: w_name.value, amount: +w_amt.value})">Write check</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Amalgamate</legend>
+      <label>from <input id="a_n1" type="text" value="cust1"></label>
+      <label>to <input id="a_n2" type="text" value="cust2"></label>
+      <button onclick="call('/amalgamate', {name1: a_n1.value, name2: a_n2.value})">Amalgamate</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Send payment</legend>
+      <label>from <input id="s_from" type="text" value="cust1"></label>
+      <label>to <input id="s_to" type="text" value="cust2"></label>
+      <label>amount <input id="s_amt" type="number" value="25"></label>
+      <button onclick="call('/send_payment', {from: s_from.value, to: s_to.value, amount: +s_amt.value})">Send</button>
+    </fieldset>
+  </div>
+
+  <h3>Response</h3>
+  <pre id="out">Ready.</pre>
+
+<script>
+const out = document.getElementById('out');
+async function call(path, body) {
+  out.textContent = 'POST ' + path + ' ' + JSON.stringify(body) + ' …';
+  try {
+    const r = await fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const text = await r.text();
+    let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    out.textContent = 'POST ' + path + '  →  HTTP ' + r.status + '\n' + pretty;
+  } catch (e) { out.textContent = 'error: ' + e; }
+}
+</script>
+</body>
+</html>

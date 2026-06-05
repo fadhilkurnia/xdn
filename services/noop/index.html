@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN · NoOp</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; } .sub { opacity: .7; margin-top: -.5rem; }
+  button { font-size: 1rem; padding: .5rem 1rem; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+  label { display: inline-flex; gap: .4rem; align-items: center; }
+  input { width: 5rem; padding: .3rem; }
+  pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; }
+  .row { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; }
+</style>
+</head>
+<body>
+  <h1>XDN · NoOp service</h1>
+  <p class="sub">The minimal baseline service — each request returns <code>ok</code> immediately with no state or work. Use it to measure XDN's coordination/replication overhead.</p>
+
+  <div class="row">
+    <button id="send">Send</button>
+    <label>requests <input id="count" type="number" value="100" min="1"></label>
+    <span id="summary"></span>
+  </div>
+
+  <pre id="out">Ready. Each request hits <code>/ping</code>.</pre>
+
+<script>
+const out = document.getElementById('out');
+const summary = document.getElementById('summary');
+document.getElementById('send').addEventListener('click', async () => {
+  const n = Math.max(1, parseInt(document.getElementById('count').value) || 1);
+  out.textContent = 'sending ' + n + ' requests…';
+  let ok = 0, totalMs = 0, lastBody = '';
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) {
+    const s = performance.now();
+    try {
+      const r = await fetch('/ping');
+      lastBody = (await r.text()).trim();
+      if (r.ok) ok++;
+    } catch (e) { lastBody = 'error: ' + e; }
+    totalMs += performance.now() - s;
+  }
+  const wall = performance.now() - t0;
+  summary.textContent = ok + '/' + n + ' ok';
+  out.textContent =
+    'response body : ' + lastBody + '\n' +
+    'succeeded     : ' + ok + ' / ' + n + '\n' +
+    'avg latency   : ' + (totalMs / n).toFixed(2) + ' ms\n' +
+    'wall clock    : ' + wall.toFixed(1) + ' ms';
+});
+</script>
+</body>
+</html>

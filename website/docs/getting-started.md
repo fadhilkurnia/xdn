@@ -168,54 +168,105 @@ other stateful services, as can be seen below.
 </tr>
 <tr>
     <td>fadhilkurnia/xdn-todo</td>
-    <td>Todo application, enabling users to list and modify <br>their todo items. <br>Tech: NodeJS, SQLite.</td>
+    <td>Todo application, enabling users to list and modify <br>their todo items. <br>Tech: Go, SQLite.</td>
     <td>
       ``` bash
-      xdn launch charlie-tpcc \
+      xdn launch dave-todo \
           --image=fadhilkurnia/xdn-todo \
-          --state=/home/node/app/var/db
+          --state=/app/data/
       ```
     </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>movie review app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-webkv</td>
+    <td>Key-value store with a simple REST API <br>(YCSB-style <code>GET/PUT/POST/DELETE /api/kv/:key</code>). <br>Tech: Rust, RocksDB.</td>
+    <td>
+      ``` bash
+      xdn launch mykv \
+          --image=fadhilkurnia/xdn-webkv \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>smallbank app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-noop</td>
+    <td>No-op baseline service: returns <code>200 ok</code> <br>immediately with no state or work. Useful to <br>measure XDN's coordination overhead. <br>Tech: Go.</td>
+    <td>
+      ``` bash
+      xdn launch noop \
+          --image=fadhilkurnia/xdn-noop
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>e-commerce</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-hotel-reservation</td>
+    <td>Hotel reservation app — a consolidated port of <br>DeathStarBench's hotel reservation (frontend + MongoDB). <br>Tech: Go, MongoDB.</td>
+    <td>
+      Multi-container; launch from a declaration file <br>(see <a href="multi-container.md">Deploy a multi-container service</a>):
+      ``` bash
+      xdn launch hotel \
+          --file=hotel-reservation.yaml
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>social network app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-moviereview</td>
+    <td>Consolidated DeathStarBench movie-review service: <br>movies, users, ratings, and reviews. <br>Multi-container: frontend + MongoDB. <br>Tech: Go, MongoDB.</td>
+    <td>
+      Multi-container; launch from a declaration file <br>(see <a href="multi-container.md">Deploy a multi-container service</a>):
+      ``` bash
+      xdn launch moviereview \
+          --file=moviereview.yaml
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>hotel reservation app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-smallbank</td>
+    <td>SmallBank OLTP benchmark: savings/checking <br>accounts with money-moving transactions. <br>Tech: Go, SQLite.</td>
+    <td>
+      ``` bash
+      xdn launch bank \
+          --image=fadhilkurnia/xdn-smallbank \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: SEATS<br>Stonebreaker Electronic<br>Airline Ticketing System (SEATS)</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-ecommerce</td>
+    <td>Webshop OLTP service: products, customers, <br>carts, and orders (browse, add to cart, checkout). <br>Tech: Go, SQLite.</td>
+    <td>
+      ``` bash
+      xdn launch shop \
+          --image=fadhilkurnia/xdn-ecommerce \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>KV App (YCSB)</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-socialnetwork</td>
+    <td>Consolidated DeathStarBench social network: <br>users, posts, follows, and timelines. <br>Multi-container: frontend + MongoDB. <br>Tech: Go, MongoDB.</td>
+    <td>
+      Multi-container; launch from a declaration file <br>(see <a href="multi-container.md">Deploy a multi-container service</a>):
+      ``` bash
+      xdn launch socialnetwork \
+          --file=socialnetwork.yaml
+      ```
+    </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>NoOp</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-seats</td>
+    <td>SEATS airline-ticketing benchmark: airports, <br>flights, customers, and seat reservations. <br>Tech: Go, SQLite.</td>
+    <td>
+      ``` bash
+      xdn launch seats \
+          --image=fadhilkurnia/xdn-seats \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 
 </table>

@@ -4,11 +4,25 @@ name: "GigaPaxos correctness tests"
 # These tests are JDK-only (no Docker/FUSE/rsync), so they complete in well
 # under a minute and run in parallel via a matrix strategy.
 
+# Only run when the Java codebase, its build files, or the paxos test harness
+# change — not on services/, website/, docs/, etc. changes.
 on:
   push:
     branches: [ "master", "main" ]
+    paths: &paths
+      - "src/**"
+      - "test/**"
+      - "test-gigapaxos/**"
+      - "lib/**"
+      - "conf/**"
+      - "build.xml"
+      - "build.properties"
+      - "gigapaxos.properties"
+      - "testing.properties"
+      - ".github/workflows/gigapaxos-correctness.yml"
   pull_request:
     branches: [ "master", "main" ]
+    paths: *paths
 
 permissions:
   contents: read

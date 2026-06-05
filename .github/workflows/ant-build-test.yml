@@ -21,11 +21,29 @@ name: "XDN test workflow"
 # Reconfiguration tests (ant test), TESTPaxosMain, RequestPacketTest, and
 # E2ELatencyAwareRedirectorTest run in .github/workflows/gigapaxos-correctness.yml.
 
+# Only run when the Java codebase, its build/test harness, or the components the
+# integration job builds (the Go CLI and the Rust/C++ fuselog) actually change.
+# This keeps services/, website/, docs/, eval/, etc. changes from triggering the
+# JVM test suite.
 on:
   push:
     branches: [ "master", "main" ]
+    paths: &paths
+      - "src/**"
+      - "test/**"
+      - "test-gigapaxos/**"
+      - "lib/**"
+      - "conf/**"
+      - "build.xml"
+      - "build.properties"
+      - "testing.properties"
+      - "bin/**"
+      - "xdn-cli/**"
+      - "xdn-fs/**"
+      - ".github/workflows/ant-build-test.yml"
   pull_request:
     branches: [ "master", "main" ]
+    paths: *paths
 
 permissions:
   contents: read

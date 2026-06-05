@@ -1,0 +1,19 @@
+---
+name: moviereview
+components:
+   - moviereview-db:
+        image: mongo:8.0.5-rc2-noble
+        expose: 27017
+        stateful: true
+        environments:
+          - MONGO_INITDB_ROOT_USERNAME: root
+          - MONGO_INITDB_ROOT_PASSWORD: testing123
+   - frontend:
+        image: fadhilkurnia/xdn-moviereview
+        port: 80
+        entry: true
+        environments:
+          - MONGO_URI: mongodb://root:testing123@moviereview-db:27017
+state: moviereview-db:/data/
+deterministic: true
+consistency: linearizability

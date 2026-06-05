@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN · E-commerce</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; } .sub { opacity: .7; margin-top: -.5rem; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: .8rem 0; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  label { display: inline-flex; gap: .3rem; align-items: center; margin: .2rem .6rem .2rem 0; }
+  input { padding: .3rem; width: 5rem; }
+  button { font-size: .95rem; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+  pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; min-height: 2rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  @media (max-width: 620px){ .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>XDN · E-commerce</h1>
+  <p class="sub">A small webshop OLTP service — products <code>P1</code>..<code>Pp</code>, customers <code>cust1</code>..<code>custN</code>, carts, and orders.</p>
+
+  <fieldset>
+    <legend>Setup</legend>
+    <label>products <input id="np" type="number" value="20" min="1"></label>
+    <label>customers <input id="nc" type="number" value="100" min="1"></label>
+    <button onclick="call('/init_db', {num_products:+np.value, num_customers:+nc.value})">Init DB</button>
+  </fieldset>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Browse products (read-only)</legend>
+      <label>limit <input id="p_lim" type="number" value="10"></label>
+      <button onclick="call('/products', {limit:+p_lim.value})">List</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Add to cart</legend>
+      <label>cust <input id="a_cid" type="number" value="1"></label>
+      <label>product <input id="a_pid" type="number" value="1"></label>
+      <label>qty <input id="a_qty" type="number" value="2"></label>
+      <button onclick="call('/add_to_cart', {customer_id:+a_cid.value, product_id:+a_pid.value, qty:+a_qty.value})">Add</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>View cart (read-only)</legend>
+      <label>cust <input id="v_cid" type="number" value="1"></label>
+      <button onclick="call('/view_cart', {customer_id:+v_cid.value})">View</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Checkout</legend>
+      <label>cust <input id="ck_cid" type="number" value="1"></label>
+      <button onclick="call('/checkout', {customer_id:+ck_cid.value})">Checkout</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Order history (read-only)</legend>
+      <label>cust <input id="o_cid" type="number" value="1"></label>
+      <button onclick="call('/orders', {customer_id:+o_cid.value})">Orders</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Restock</legend>
+      <label>product <input id="r_pid" type="number" value="1"></label>
+      <label>qty <input id="r_qty" type="number" value="50"></label>
+      <button onclick="call('/restock', {product_id:+r_pid.value, qty:+r_qty.value})">Restock</button>
+    </fieldset>
+  </div>
+
+  <h3>Response</h3>
+  <pre id="out">Ready.</pre>
+
+<script>
+const out = document.getElementById('out');
+async function call(path, body) {
+  out.textContent = 'POST ' + path + ' ' + JSON.stringify(body) + ' …';
+  try {
+    const r = await fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const text = await r.text();
+    let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    out.textContent = 'POST ' + path + '  →  HTTP ' + r.status + '\n' + pretty;
+  } catch (e) { out.textContent = 'error: ' + e; }
+}
+</script>
+</body>
+</html>

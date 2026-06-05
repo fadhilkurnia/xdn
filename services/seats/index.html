@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN · SEATS</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; } .sub { opacity: .7; margin-top: -.5rem; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: .8rem 0; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  label { display: inline-flex; gap: .3rem; align-items: center; margin: .2rem .6rem .2rem 0; }
+  input { padding: .3rem; }
+  input[type=text] { width: 5rem; } input[type=number] { width: 5rem; }
+  button { font-size: .95rem; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+  pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; min-height: 2rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  @media (max-width: 620px){ .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>XDN · SEATS</h1>
+  <p class="sub">SEATS airline-ticketing benchmark — airports <code>AP1</code>..<code>APn</code>, a flight per ordered airport pair, customers <code>cust1</code>..<code>custN</code>.</p>
+
+  <fieldset>
+    <legend>Setup</legend>
+    <label>airports <input id="na" type="number" value="5" min="2"></label>
+    <label>customers <input id="nc" type="number" value="100" min="1"></label>
+    <label>seats/flight <input id="ns" type="number" value="100" min="1"></label>
+    <button onclick="call('/init_db', {num_airports:+na.value, num_customers:+nc.value, seats_per_flight:+ns.value})">Init DB</button>
+  </fieldset>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Find flights (read-only)</legend>
+      <label>from <input id="f_dep" type="text" value="AP1"></label>
+      <label>to <input id="f_arr" type="text" value="AP2"></label>
+      <button onclick="call('/find_flights', {depart: f_dep.value, arrive: f_arr.value})">Search</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Find open seats (read-only)</legend>
+      <label>flight <input id="o_fid" type="number" value="1"></label>
+      <button onclick="call('/find_open_seats', {flight_id: +o_fid.value})">Open seats</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>New reservation</legend>
+      <label>cust <input id="r_cid" type="number" value="1"></label>
+      <label>flight <input id="r_fid" type="number" value="1"></label>
+      <label>seat <input id="r_seat" type="number" value="5"></label>
+      <button onclick="call('/new_reservation', {customer_id:+r_cid.value, flight_id:+r_fid.value, seat:+r_seat.value})">Book</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Update reservation</legend>
+      <label>resv <input id="u_rid" type="number" value="1"></label>
+      <label>seat <input id="u_seat" type="number" value="10"></label>
+      <button onclick="call('/update_reservation', {reservation_id:+u_rid.value, seat:+u_seat.value})">Change seat</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Delete reservation</legend>
+      <label>resv <input id="d_rid" type="number" value="1"></label>
+      <button onclick="call('/delete_reservation', {reservation_id:+d_rid.value})">Cancel</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Update customer</legend>
+      <label>cust <input id="c_cid" type="number" value="1"></label>
+      <label>name <input id="c_name" type="text" value="Alice"></label>
+      <label>balance <input id="c_bal" type="number" value="555"></label>
+      <button onclick="call('/update_customer', {customer_id:+c_cid.value, name:c_name.value, balance:+c_bal.value})">Update</button>
+    </fieldset>
+  </div>
+
+  <h3>Response</h3>
+  <pre id="out">Ready.</pre>
+
+<script>
+const out = document.getElementById('out');
+async function call(path, body) {
+  out.textContent = 'POST ' + path + ' ' + JSON.stringify(body) + ' …';
+  try {
+    const r = await fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const text = await r.text();
+    let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    out.textContent = 'POST ' + path + '  →  HTTP ' + r.status + '\n' + pretty;
+  } catch (e) { out.textContent = 'error: ' + e; }
+}
+</script>
+</body>
+</html>
