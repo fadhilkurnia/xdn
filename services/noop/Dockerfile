@@ -18,7 +18,7 @@ ARG TARGETARCH
 
 WORKDIR /app
 COPY go.mod ./
-COPY main.go ./
+COPY main.go index.html ./
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -buildvcs=false -trimpath -ldflags '-w -s' -o noop .
 

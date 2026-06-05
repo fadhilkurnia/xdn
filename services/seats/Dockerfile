@@ -27,7 +27,7 @@ RUN apt-get update && \
 
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go ./
+COPY main.go index.html ./
 
 RUN if [ "$TARGETARCH" = "amd64" ]; then CC=x86_64-linux-gnu-gcc; else CC=aarch64-linux-gnu-gcc; fi && \
     CC=$CC \

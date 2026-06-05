@@ -13,6 +13,7 @@ package main
 
 import (
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -22,6 +23,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+//go:embed index.html
+var indexHTML []byte
 
 const (
 	defaultAirports  = 10
@@ -52,6 +56,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleIndex)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/init_db", handleInitDB)
 	mux.HandleFunc("/find_flights", handleFindFlights)
@@ -128,6 +133,12 @@ func runWrite(w http.ResponseWriter, fn func(tx *sql.Tx) (any, int, error)) {
 }
 
 // ----- handlers --------------------------------------------------------------
+
+// handleIndex serves the browser UI at "/" (and any unmatched path).
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(indexHTML)
+}
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
