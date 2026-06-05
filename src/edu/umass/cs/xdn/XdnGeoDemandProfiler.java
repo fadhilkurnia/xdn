@@ -40,20 +40,21 @@ import org.json.JSONObject;
  * XdnHttpRequest#getClientGeolocation()}), or via the client IP resolved with GeoIP.
  *
  * <p>Demand is split by request kind: each cell tracks separate READ and WRITE counts, where WRITE
- * folds in {@code READ_MODIFY_WRITE} (it mutates state). The split is surfaced for observability (the
- * {@code /demand} heatmap exposes {@code read}/{@code write}/{@code count} per cell).
+ * folds in {@code READ_MODIFY_WRITE} (it mutates state). The split is surfaced for observability
+ * (the {@code /demand} heatmap exposes {@code read}/{@code write}/{@code count} per cell).
  *
  * <p>Aggregation runs on a background worker per profiler instance: {@code shouldReportDemandStats}
- * only captures the client location + write flag and enqueues it, keeping the request hot path cheap.
- * {@code getDemandStats} snapshots the sparse counts, serializes them, then resets the local map so
- * each report covers demand since the previous report (the reconfigurator's {@link #combine}
+ * only captures the client location + write flag and enqueues it, keeping the request hot path
+ * cheap. {@code getDemandStats} snapshots the sparse counts, serializes them, then resets the local
+ * map so each report covers demand since the previous report (the reconfigurator's {@link #combine}
  * accumulates across reports).
  *
- * <p>On the reconfigurator side the accumulation is governed by {@link RC#XDN_DEMAND_WINDOW_MINUTES}:
- * {@code -1} keeps cumulative all-time demand, while a positive {@code N} keeps only the last {@code
- * N} minutes (a rolling window via {@link #expireWindowLocked}), so the heatmap and placement reflect
- * current load. {@link #getNewActivesPlacement} then computes the demand-weighted centroid and picks
- * the {@code curActives.size()} closest nodes, surfacing the closest as {@code PREFERRED_COORDINATOR}.
+ * <p>On the reconfigurator side the accumulation is governed by {@link
+ * RC#XDN_DEMAND_WINDOW_MINUTES}: {@code -1} keeps cumulative all-time demand, while a positive
+ * {@code N} keeps only the last {@code N} minutes (a rolling window via {@link
+ * #expireWindowLocked}), so the heatmap and placement reflect current load. {@link
+ * #getNewActivesPlacement} then computes the demand-weighted centroid and picks the {@code
+ * curActives.size()} closest nodes, surfacing the closest as {@code PREFERRED_COORDINATOR}.
  *
  * <p>Prototype limitations (future work): threading the service's configured {@code --num-replicas}
  * through {@link edu.umass.cs.xdn.service.ServiceProperty} (today the replica count is the current
@@ -67,15 +68,19 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
   // At most one demand report every 10 seconds per profiler instance.
   private static final long MIN_DEMAND_REPORT_PERIOD_MS = 10_000;
 
-  // ReconfigurationConfig.MAX_DEMAND_PROFILE_SIZE defaults to 4096 bytes. Each serialized cell is now
-  // 12 bytes (int32 index, int32 read, int32 write) plus a 4-byte header; base64 inflates the string
-  // 4:3. 200 entries (~2.4 KB raw, ~3.2 KB base64) is a safe conservative budget under the 4 KB cap.
+  // ReconfigurationConfig.MAX_DEMAND_PROFILE_SIZE defaults to 4096 bytes. Each serialized cell is
+  // now
+  // 12 bytes (int32 index, int32 read, int32 write) plus a 4-byte header; base64 inflates the
+  // string
+  // 4:3. 200 entries (~2.4 KB raw, ~3.2 KB base64) is a safe conservative budget under the 4 KB
+  // cap.
   private static final int MAX_GRID_ENTRIES_PER_REPORT = 200;
 
   // Bounded queue for the hot path; drops on overflow rather than back-pressuring request handling.
   private static final int EVENT_QUEUE_CAPACITY = 16_384;
 
-  // Per-cell demand vector slots: index 0 = READ, index 1 = WRITE (READ_MODIFY_WRITE folds in here).
+  // Per-cell demand vector slots: index 0 = READ, index 1 = WRITE (READ_MODIFY_WRITE folds in
+  // here).
   private static final int READ = 0;
   private static final int WRITE = 1;
 
@@ -113,7 +118,8 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
   private volatile ExecutorService worker;
 
   // Shared GeoIP resolver for the IP-based demand fallback; null when no GeoLite2 db is configured
-  // (then only the X-Client-Location header contributes demand). Volatile + injectable so a test can
+  // (then only the X-Client-Location header contributes demand). Volatile + injectable so a test
+  // can
   // supply a resolver bound to a known .mmdb without depending on the JVM-wide lazy singleton.
   private volatile GeoIpResolver geoIpResolver = GeoIpResolver.getDefaultOrNull();
 
@@ -297,9 +303,12 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     return true;
   }
 
-  // A request counts as a WRITE iff it carries a WRITE_ONLY or READ_MODIFY_WRITE behavior (RMW folds
-  // into write since it mutates state). Everything else -- including the default when no matcher was
-  // applied, which is READ_MODIFY_WRITE -> write -- is conservative for placement. getBehaviors() is
+  // A request counts as a WRITE iff it carries a WRITE_ONLY or READ_MODIFY_WRITE behavior (RMW
+  // folds
+  // into write since it mutates state). Everything else -- including the default when no matcher
+  // was
+  // applied, which is READ_MODIFY_WRITE -> write -- is conservative for placement. getBehaviors()
+  // is
   // memoized on the request, so this is a cached lookup on the hot path.
   private static boolean isWrite(XdnHttpRequest req) {
     Set<RequestBehaviorType> b = req.getBehaviors();
@@ -328,7 +337,8 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     }
   }
 
-  // Stop the async worker (interrupting its blocking take()) so it isn't leaked when this profile is
+  // Stop the async worker (interrupting its blocking take()) so it isn't leaked when this profile
+  // is
   // discarded after a report. Coordinated with ensureWorkerStarted() via 'this' so they don't race
   // on the worker field; the shutdown itself runs outside that monitor.
   private void stopWorker() {
@@ -389,11 +399,14 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     }
   }
 
-  // Synchronously process samples the async worker hasn't drained yet. Called by getDemandStats so a
+  // Synchronously process samples the async worker hasn't drained yet. Called by getDemandStats so
+  // a
   // report does not drop in-flight samples: on the ActiveReplica a report plucks-and-REPLACES this
   // profile (AggregateDemandProfiler.pluckDemandProfile), orphaning the worker and its queued
-  // samples -- which under-counts demand, most visibly for writes whose completion callbacks enqueue
-  // in a delayed burst. The worker may drain concurrently; each queued sample goes to exactly one of
+  // samples -- which under-counts demand, most visibly for writes whose completion callbacks
+  // enqueue
+  // in a delayed burst. The worker may drain concurrently; each queued sample goes to exactly one
+  // of
   // us, so at most the worker's single in-hand sample can still slip to the next report.
   private void drainPendingSamples() {
     Sample s;
@@ -463,9 +476,9 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
 
   /**
    * Read-only snapshot of the demand grid as {@code {lat, lon, read, write, count}} cells (where
-   * {@code count = read + write}), WITHOUT resetting (unlike {@link #getDemandStats()}). Applies the
-   * rolling window first so the dashboard sees current demand. Used by the geo-demand heatmap; each
-   * populated grid cell becomes one point at its center.
+   * {@code count = read + write}), WITHOUT resetting (unlike {@link #getDemandStats()}). Applies
+   * the rolling window first so the dashboard sees current demand. Used by the geo-demand heatmap;
+   * each populated grid cell becomes one point at its center.
    */
   @Override
   public org.json.JSONArray getDemandGeoCells() {
@@ -527,7 +540,8 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     }
   }
 
-  // Subtract demand deltas older than the rolling window from the running grid. Caller holds mapLock.
+  // Subtract demand deltas older than the rolling window from the running grid. Caller holds
+  // mapLock.
   // No-op when windowMillis < 0 (cumulative).
   private void expireWindowLocked(long now) {
     if (windowMillis < 0) {

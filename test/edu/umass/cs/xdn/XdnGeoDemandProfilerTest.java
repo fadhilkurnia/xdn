@@ -94,7 +94,8 @@ public class XdnGeoDemandProfilerTest {
   @Test
   public void testReportDrainsInFlightSamples() throws Exception {
     // Reproduces write-demand under-sampling: sampling is async (a worker drains the queue into the
-    // grid), but a report snapshots only the grid AND on the AR replaces the whole profile, dropping
+    // grid), but a report snapshots only the grid AND on the AR replaces the whole profile,
+    // dropping
     // any still-queued samples. Disable the worker so samples stay queued, then assert the report
     // drains them. Before the fix this returned 0 (queued samples lost); after, all are counted.
     XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
@@ -109,14 +110,16 @@ public class XdnGeoDemandProfilerTest {
   @Test
   public void testReportStopsWorkerToAvoidLeak() throws Exception {
     // On the ActiveReplica a report (getDemandStats) is immediately followed by the reconfigurator
-    // discarding this profile and swapping in a fresh one (AggregateDemandProfiler.pluckDemandProfile).
+    // discarding this profile and swapping in a fresh one
+    // (AggregateDemandProfiler.pluckDemandProfile).
     // The per-profile worker must be stopped on report, or it leaks (a blocked thread per report).
     XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
     profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null); // starts the worker
     assertTrue(profiler.isWorkerActiveForTesting(), "worker runs while sampling");
 
     profiler.getDemandStats(); // a report
-    assertFalse(profiler.isWorkerActiveForTesting(), "worker must be stopped after a report (no leak)");
+    assertFalse(
+        profiler.isWorkerActiveForTesting(), "worker must be stopped after a report (no leak)");
 
     // If the profile is reused, sampling resumes (worker re-created on the next sample).
     profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null);
