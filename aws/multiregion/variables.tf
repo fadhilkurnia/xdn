@@ -4,13 +4,13 @@
 variable "rc_ami" {
   description = "us-east-1 AMI for the Reconfigurator (RC) + coredns node. ARM64/Graviton (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-004a7d599deff3295" # arm64, main: RESTful control API + GeoIP demand
+  default     = "ami-076c0e5bb4575f041" # arm64, aws-geodemand: read/write demand split + XDN_DEMAND_WINDOW_MINUTES
 }
 
 variable "ar_ami" {
   description = "us-east-1 AMI for the ActiveReplica (AR) edge nodes; copied into the other AR regions. ARM64/Graviton (for t4g.* ar_instance_type), built from fork/main by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-0cddca20681779ede" # arm64, aws-geodemand: reconfig state-transfer rsync fix (was ami-0bb65e92559b91b3c)
+  default     = "ami-0c49831b4c38f5ead" # arm64, aws-geodemand: read/write demand split + rsync state-transfer fix
 }
 
 variable "rc_instance_type" {

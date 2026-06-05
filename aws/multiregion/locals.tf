@@ -124,6 +124,10 @@ locals {
     "REPLICATE_ALL=false",
     "DEFAULT_NUM_REPLICAS=3",
     "DEMAND_PROFILE_TYPE=edu.umass.cs.xdn.XdnGeoDemandProfiler",
+    # Rolling geo-demand window in MINUTES (-1 = cumulative all-time). 2 => the heatmap and
+    # demand-driven placement reflect only the last 2 minutes of load. Demonstrates the
+    # windowed aggregation in XdnGeoDemandProfiler (read/write demand split is always on).
+    "XDN_DEMAND_WINDOW_MINUTES=2",
     "ENABLE_ACTIVE_REPLICA_HTTP=true",
     "ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false",
     "ENABLE_RECONFIGURATOR_HTTP=true",
