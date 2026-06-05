@@ -1,5 +1,5 @@
 output "rc_elastic_ip" {
-  value       = aws_eip.rc.public_ip
+  value       = data.aws_eip.rc.public_ip
   description = "RC address for everything (SSH, XDN_CONTROL_PLANE :3300, and the xdnapp.com authoritative NS)."
 }
 
@@ -10,7 +10,7 @@ output "ar_ipv6_addresses" {
 
 output "cluster_node_addresses" {
   value = merge(
-    { "cp0" = "${aws_eip.rc.public_ip} (RC us-east-1, IPv4 mgmt) / [${local.rc_ipv6}] (consensus)" },
+    { "cp0" = "${data.aws_eip.rc.public_ip} (RC us-east-1, IPv4 mgmt) / [${local.rc_ipv6}] (consensus)" },
     { for id, r in local.replicas : id => "[${local.ar_ipv6s[id]}] (AR ${r.region}, IPv6-only)" },
   )
   description = "Node id -> advertised consensus address. ARs are spread across regions; the RC stays in us-east-1."

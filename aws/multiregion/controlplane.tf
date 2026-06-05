@@ -4,15 +4,21 @@
 # delegation. Identical to the single-region config -- the RC is single-homed.
 # ===========================================================================
 
-# Stable public IP for the RC (a nameserver must not change IP on stop/start).
-resource "aws_eip" "rc" {
-  domain = "vpc"
-  tags   = { Name = "xdn-rc-eip" }
+# PERSISTENT public IP for the RC, allocated OUTSIDE this config by ../../bin/persist-eip.sh
+# (tag Name=xdn-rc-persist-eip) so it survives `terraform destroy`. Referenced as a data source
+# -- never managed/released here -- so the RC keeps the SAME IP across redeploys and the domain's
+# nameserver glue (ns1/ns2 -> this IP) never changes (no DNS-propagation window for the dashboard).
+# A nameserver must not change IP on stop/start, and now it doesn't change on destroy/apply either.
+data "aws_eip" "rc" {
+  filter {
+    name   = "tag:Name"
+    values = ["xdn-rc-persist-eip"]
+  }
 }
 
 resource "aws_eip_association" "rc" {
   instance_id   = aws_instance.rc.id
-  allocation_id = aws_eip.rc.id
+  allocation_id = data.aws_eip.rc.id # data.aws_eip exposes the allocation id as .id (VPC EIP)
 }
 
 # ACME DNS-01 delegation zone: coredns is authoritative for the apex but can't
@@ -211,11 +217,11 @@ resource "aws_route53domains_registered_domain" "xdnapp" {
 
   name_server {
     name     = "ns1.${var.base_domain}"
-    glue_ips = [aws_eip.rc.public_ip]
+    glue_ips = [data.aws_eip.rc.public_ip]
   }
 
   name_server {
     name     = "ns2.${var.base_domain}"
-    glue_ips = [aws_eip.rc.public_ip]
+    glue_ips = [data.aws_eip.rc.public_ip]
   }
 }
