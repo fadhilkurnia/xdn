@@ -249,8 +249,14 @@ function parseSockAddr(s) {
 // <nodeid>.edge.<base-domain> (covered by the *.edge.<base-domain> cert), which
 // coredns resolves to that specific replica's IPv6. Returns null for a bare host.
 function edgeBaseDomain() {
-  const parts = String(controlPlane || "").split(".");
-  return parts.length >= 2 ? parts.slice(1).join(".") : null;
+  const cp = String(controlPlane || "");
+  // Edge names only make sense for a NAMED control plane like rc.<domain.tld>.
+  // Bail on IP literals and apex/2-label hosts, which would otherwise yield a
+  // bogus <id>.edge.<tld> (e.g. rc.xdnapp.com -> xdnapp.com, but 1.2.3.4 ->
+  // 2.3.4); callers then fall back to the raw advertised address.
+  if (cp.includes(":") || /^[0-9.]+$/.test(cp)) return null; // IPv6/IPv4 literal
+  const parts = cp.split(".");
+  return parts.length >= 3 ? parts.slice(1).join(".") : null;
 }
 function edgeHost(nodeId) {
   const base = edgeBaseDomain();
