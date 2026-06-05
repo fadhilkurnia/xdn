@@ -311,6 +311,16 @@ public class ReconfigurationConfig {
         REPLICATE_ALL(true),
 
         /**
+         * Demand aggregation window for the geo-demand profiler
+         * ({@code edu.umass.cs.xdn.XdnGeoDemandProfiler}), in MINUTES. {@code -1} means
+         * CUMULATIVE: demand never decays (all-time totals; the historical default). A
+         * positive value {@code N} keeps only demand observed in the last {@code N} minutes
+         * (a rolling window), so the heatmap and placement reflect CURRENT load rather than
+         * all-time totals. Evaluated on the reconfigurator side (where reports are combined).
+         */
+        XDN_DEMAND_WINDOW_MINUTES(-1),
+
+        /**
          *
          */
         MAX_BATCH_SIZE(10000),
