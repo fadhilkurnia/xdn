@@ -2139,6 +2139,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         }
         serviceBatchQueues.remove(groupName);
 
+        // Clear this node's role/primary bookkeeping for the dropped service so a query on a
+        // dropped replica no longer reports a stale PRIMARY role via replica/info (and so
+        // isCurrentPrimary2 stops re-triggering paxos coordinator election for a service this node
+        // no longer hosts). Guard against the reconfiguration race: a REMAINING node drops the old
+        // epoch AFTER the new epoch already set its role, so only clear when the service is fully
+        // gone from this node (no newer paxos group survives).
+        Set<NodeIDType> remainingGroup = this.paxosManager.getReplicaGroup(groupName);
+        if (remainingGroup == null || remainingGroup.isEmpty()) {
+            this.currentRole.remove(groupName);
+            this.currentPrimary.remove(groupName);
+            this.currentPrimaryEpoch.remove(groupName);
+        }
+
         return true;
     }
 
@@ -2176,14 +2189,22 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // paxos coordinator as well.
     public boolean isCurrentPrimary2(String groupName) {
         Role myCurrentRole = this.currentRole.get(groupName);
-        if (myCurrentRole == null) {
+        if (myCurrentRole == null || !myCurrentRole.equals(Role.PRIMARY)) {
             return false;
         }
-        boolean isPrimary = myCurrentRole.equals(Role.PRIMARY);
-        if (isPrimary) {
-            this.paxosManager.tryToBePaxosCoordinator(groupName);
+        // A node dropped from the placement keeps a stale currentRole=PRIMARY: the reconfiguration
+        // drop tears down the container + app service instance (deleteFinalState) but does not go
+        // through deleteReplicaGroup, so the PB role maps are not cleared. Verify this node still
+        // hosts the service before claiming PRIMARY, so a query (replica/info) on a dropped replica
+        // reports the truth and does not re-trigger coordinator election below. Race-free at query
+        // time: a REMAINING node keeps its new-epoch service instance.
+        if (this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp mw
+                && mw.getReplicableApp() instanceof XdnGigapaxosApp xdnApp
+                && !xdnApp.hostsService(groupName)) {
+            return false;
         }
-        return isPrimary;
+        this.paxosManager.tryToBePaxosCoordinator(groupName);
+        return true;
     }
 
     private void restartPaxosInstance(String groupName) {

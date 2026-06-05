@@ -2150,6 +2150,17 @@ public class XdnGigapaxosApp
     return currentPlacementEpoch;
   }
 
+  /**
+   * True iff this node currently hosts a service instance for the given service (any epoch). A
+   * reconfiguration drop removes the instance from {@code serviceInstances}
+   * (deleteContainerizedServiceInstance), so a node dropped from the placement returns false here
+   * even while its PB role bookkeeping is momentarily stale. Used to keep role queries honest.
+   */
+  public boolean hostsService(String serviceName) {
+    Map<Integer, ServiceInstance> instances = this.serviceInstances.get(serviceName);
+    return instances != null && !instances.isEmpty();
+  }
+
   /**********************************************************************************************
    *                   End implementation methods for Replicable interface                      *
    *********************************************************************************************/
