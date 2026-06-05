@@ -32,6 +32,10 @@ type XDN struct {
 	xdnControlPlaneHost      string // Example: xp.xdnapp.com
 	xdnControlPlaneIPAddress string // Assuming we are the Control Plane
 
+	// node id -> global IPv6, for the reserved `edge` sub-zone (per-replica
+	// direct addressing: <nodeid>.edge.<base_domain> -> that node's IPv6).
+	edgeNodes map[string]string
+
 	geoLocationDb *maxMindDB.Reader
 }
 
@@ -81,6 +85,42 @@ func (x XDN) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (in
 			return dns.RcodeServerFailure, err
 		}
 
+		return dns.RcodeSuccess, nil
+	}
+
+	// Reserved `edge` sub-zone: <nodeid>.edge.<base_domain> resolves DIRECTLY to
+	// that specific node's GLOBAL IPv6 (no geo-routing), so a browser can reach a
+	// chosen replica over a cert-valid name (the wildcard *.edge.<base_domain>
+	// cert). serviceName here is the label before the base domain == "edge".
+	if serviceName == "edge" && len(domainParts) >= 5 {
+		nodeID := domainParts[len(domainParts)-5]
+		// IPv6-only (like service names): answer AAAA; NODATA for other qtypes.
+		if state.QType() != dns.TypeAAAA {
+			if err := w.WriteMsg(a); err != nil {
+				return dns.RcodeServerFailure, err
+			}
+			return dns.RcodeSuccess, nil
+		}
+		ipv6, ok := x.edgeNodes[nodeID]
+		if !ok {
+			if err := w.WriteMsg(a); err != nil {
+				return dns.RcodeServerFailure, err
+			}
+			return dns.RcodeNameError, nil
+		}
+		rr := new(dns.AAAA)
+		rr.Hdr = dns.RR_Header{
+			Name:   state.QName(),
+			Rrtype: dns.TypeAAAA,
+			Class:  state.QClass(),
+			Ttl:    responseTTLSec,
+		}
+		rr.AAAA = net.ParseIP(ipv6).To16()
+		a.Answer = []dns.RR{rr}
+		if err := w.WriteMsg(a); err != nil {
+			return dns.RcodeServerFailure, err
+		}
+		fmt.Println(">> edge node", nodeID, "->", ipv6)
 		return dns.RcodeSuccess, nil
 	}
 
