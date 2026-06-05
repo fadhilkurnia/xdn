@@ -67,6 +67,7 @@ import edu.umass.cs.gigapaxos.SQLPaxosLogger;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.gigapaxos.paxosutil.LargeCheckpointer;
 import edu.umass.cs.gigapaxos.paxosutil.SQL;
+import edu.umass.cs.gigapaxos.paxosutil.SimpleDataSource;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.RC;
 import edu.umass.cs.reconfiguration.examples.AppRequest;
@@ -112,6 +113,13 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			RC.RECONFIGURATION_DB_DIR.getDefaultValue();
 	private static final boolean CONN_POOLING = true; // should just be true
 	private static final int MAX_POOL_SIZE = 100;
+	/**
+	 * Whether to use C3P0 pooling. Disabled automatically for the single-writer
+	 * EMBEDDED_SQLITE engine, or by setting CONNECTION_POOLING=false.
+	 */
+	private static final boolean USE_POOLING = Config
+			.getGlobalBoolean(RC.CONNECTION_POOLING)
+			&& !SQL_TYPE.equals(SQL.SQLType.EMBEDDED_SQLITE);
 	private static final int MAX_NAME_SIZE = SQLPaxosLogger.MAX_PAXOS_ID_SIZE;
 
 	/**
@@ -201,7 +209,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 
 	protected String logDirectory;
 
-	private ComboPooledDataSource dataSource = null;
+	private DataSource dataSource = null;
 
 	private ServerSocket serverSock = null;
 
@@ -323,8 +331,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 					rcGroupName = this.getRCGroupName(name);
 				pstmt.setString(1, rcGroupName);
 				if (RC_RECORD_CLOB_OPTION)
-					pstmt.setClob(2,
-							new StringReader((toCommit.get(name)).toString()));
+					setClobString(pstmt, 2, (toCommit.get(name)).toString());
 				else
 					pstmt.setString(2, (toCommit.get(name)).toString());
 				pstmt.setString(3, name);
@@ -489,7 +496,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			conn = this.getDefaultConn();
 			insertCP = conn.prepareStatement(cmd);
 			if (DEMAND_PROFILE_CLOB_OPTION)
-				insertCP.setClob(1, new StringReader(combined.toString()));
+				setClobString(insertCP, 1, combined.toString());
 			else
 				insertCP.setString(1, combined.toString());
 			insertCP.setString(2, report.getServiceName());
@@ -676,7 +683,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			insertCP = conn.prepareStatement(cmd);
 			insertCP.setString(1, rcGroupName);
 			if (RC_RECORD_CLOB_OPTION)
-				insertCP.setClob(2, new StringReader(rcRecord.toString()));
+				setClobString(insertCP, 2, rcRecord.toString());
 			else
 				insertCP.setString(2, rcRecord.toString());
 			insertCP.setString(3, rcRecord.getName());
@@ -1762,7 +1769,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			stmt.execute(cmd);
 			created = true;
 		} catch (SQLException sqle) {
-			if (SQL.DUPLICATE_TABLE.contains(sqle.getSQLState())) {
+			if (SQL.isDuplicateTableException(sqle)) {
 				log.log(Level.INFO, "{0}{1}{2}", new Object[] { "Table ",
 						table, " already exists" });
 				if(schema!=null) reconcileTable(stmt, cmd, table, schema);
@@ -1871,7 +1878,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			stmt.execute();
 			dropped = true;
 		} catch (SQLException sqle) {
-			if (!SQL.NONEXISTENT_TABLE.contains(sqle.getSQLState())) {
+			if (!SQL.isNonexistentTableException(sqle)) {
 				log.severe(this + " could not drop table " + table + ":"
 						+ sqle.getSQLState() + ":" + sqle.getErrorCode());
 				sqle.printStackTrace();
@@ -1888,7 +1895,25 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 	}
 
 	private static final boolean isEmbeddedDB() {
-		return SQL_TYPE.equals(SQL.SQLType.EMBEDDED_DERBY);
+		return SQL_TYPE.equals(SQL.SQLType.EMBEDDED_DERBY)
+				|| SQL_TYPE.equals(SQL.SQLType.EMBEDDED_SQLITE);
+	}
+
+	private static final boolean isSQLite() {
+		return SQL_TYPE.equals(SQL.SQLType.EMBEDDED_SQLITE);
+	}
+
+	/* Sets a CLOB parameter from a String. The xerial sqlite-jdbc driver does
+	 * not implement PreparedStatement.setClob (throws
+	 * SQLFeatureNotSupportedException), but a plain setString round-trips fine
+	 * through SQLite's dynamically-typed columns and reads back via getString,
+	 * exactly as the existing read sites already expect. */
+	private static void setClobString(PreparedStatement pstmt, int idx,
+			String value) throws SQLException {
+		if (isSQLite())
+			pstmt.setString(idx, value);
+		else
+			pstmt.setClob(idx, new StringReader(value));
 	}
 
 	private static final String getMyDBName(Object myID) {
@@ -1907,8 +1932,15 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 		// providing a user name and PASSWORD is optional in embedded derby
 		props.put("user", SQL.getUser() + (isEmbeddedDB() ? this.getMyIDSanitized() : ""));
 		props.put("password", SQL.getPassword());
+		if (isSQLite())
+			addSQLitePragmas(props);
+		ensureLogDirectoryExists(this.logDirectory);
 		String dbCreation = SQL.getProtocolOrURL(SQL_TYPE)
-				+ (isEmbeddedDB() ? this.logDirectory
+				+ (isSQLite() ?
+				// SQLite: the URL is just a file path; the file is created
+				// automatically on first connect (no ";create=true" flag).
+				this.logDirectory + getMyDBName()
+				: isEmbeddedDB() ? this.logDirectory
 						+ getMyDBName()
 						+ (!SQLPaxosLogger.existsDB(SQL_TYPE,
 								this.logDirectory, getMyDBName()) ? ";create=true"
@@ -1916,8 +1948,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 						: getMyDBName() + "?createDatabaseIfNotExist=true");
 
 		try {
-			dataSource = (ComboPooledDataSource) setupDataSourceC3P0(
-					dbCreation, props);
+			dataSource = setupDataSource(dbCreation, props);
 		} catch (SQLException e) {
 			log.severe("Could not create pooled data source to DB "
 					+ dbCreation);
@@ -1930,7 +1961,10 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			try {
 				connAttempts++;
 				log.info("Attempting getDefaultConn() to DB " + dbCreation);
-				getDefaultConn(); // open first connection
+				// capture so the finally block closes it and releases any
+				// bounded-pool permit; discarding it leaks a connection, which
+				// deadlocks under DB_MAX_CONNECTIONS=1.
+				conn = getDefaultConn(); // open first connection
 				log.info("Connected to and created database " + getMyDBName());
 				connected = true;
 				if (isEmbeddedDB())
@@ -1951,9 +1985,43 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 		return connected;
 	}
 
+	private void ensureLogDirectoryExists(String logDir) {
+		File f = new File(logDir);
+		if (!f.exists())
+			f.mkdirs();
+	}
+
+	/* See SQLPaxosLogger.addSQLitePragmas. transaction_mode is intentionally
+	 * left DEFERRED to avoid write-lock self-deadlock on re-entrant DB paths. */
+	private static void addSQLitePragmas(Properties props) {
+		props.put("journal_mode", "WAL");
+		props.put("synchronous",
+				Config.getGlobalString(PC.SQLITE_SYNCHRONOUS));
+		props.put("busy_timeout", "30000"); // ms
+	}
+
 	private void fixURI() {
-		this.dataSource.setJdbcUrl(SQL.getProtocolOrURL(SQL_TYPE)
+		setDataSourceJdbcUrl(this.dataSource, SQL.getProtocolOrURL(SQL_TYPE)
 				+ this.logDirectory + getMyDBName());
+	}
+
+	/* The dataSource field is the javax.sql.DataSource interface so that either
+	 * a pooled (C3P0) or non-pooled (SimpleDataSource) implementation can be
+	 * used. Neither exposes setJdbcUrl on the interface, so dispatch here. */
+	private static void setDataSourceJdbcUrl(DataSource ds, String url) {
+		if (ds instanceof ComboPooledDataSource)
+			((ComboPooledDataSource) ds).setJdbcUrl(url);
+		else if (ds instanceof SimpleDataSource)
+			((SimpleDataSource) ds).setJdbcUrl(url);
+	}
+
+	private static final DataSource setupDataSource(String connectURI,
+			Properties props) throws SQLException {
+		if (USE_POOLING)
+			return setupDataSourceC3P0(connectURI, props);
+		int maxTotal = Config.getGlobalInt(RC.DB_MAX_CONNECTIONS);
+		int maxIdle = maxTotal > 0 ? maxTotal : 8;
+		return new SimpleDataSource(connectURI, props, maxIdle, maxTotal);
 	}
 
 	private static final DataSource setupDataSourceC3P0(String connectURI,
@@ -2254,7 +2322,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 			// conn.commit();
 			added = true;
 		} catch (SQLException sqle) {
-			if (!SQL.DUPLICATE_KEY.contains(sqle.getSQLState())) {
+			if (!SQL.isDuplicateKeyException(sqle)) {
 				log.severe("SQLException while inserting RC record using "
 						+ cmd);
 				sqle.printStackTrace();
@@ -2648,7 +2716,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 				record.setState(name, -1, RCStates.WAIT_ACK_STOP);
 				insertRC.setString(1, rcGroupName);
 				if (RC_RECORD_CLOB_OPTION)
-					insertRC.setClob(2, new StringReader(record.toString()));
+					setClobString(insertRC, 2, record.toString());
 				else
 					insertRC.setString(2, record.toString());
 				insertRC.setString(3, name);
@@ -2748,7 +2816,7 @@ public class SQLReconfiguratorDB<NodeIDType> extends
 				;
 				updateRC.setString(1, rcGroupName);
 				if (RC_RECORD_CLOB_OPTION)
-					updateRC.setClob(2, new StringReader(record.toString()));
+					setClobString(updateRC, 2, record.toString());
 				else
 					updateRC.setString(2, record.toString());
 				updateRC.setString(3, name);

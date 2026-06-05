@@ -30,6 +30,7 @@ import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.sql.Blob;
 import java.sql.Clob;
+import java.sql.Types;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -92,6 +93,7 @@ import edu.umass.cs.gigapaxos.paxosutil.PaxosInstanceCreationException;
 import edu.umass.cs.gigapaxos.paxosutil.PaxosMessenger;
 import edu.umass.cs.gigapaxos.paxosutil.RecoveryInfo;
 import edu.umass.cs.gigapaxos.paxosutil.SQL;
+import edu.umass.cs.gigapaxos.paxosutil.SimpleDataSource;
 import edu.umass.cs.gigapaxos.paxosutil.SlotBallotState;
 import edu.umass.cs.gigapaxos.paxosutil.StringContainer;
 import edu.umass.cs.utils.Config;
@@ -141,6 +143,13 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			+ PC.PAXOS_LOGS_DIR.getDefaultValue();
 	private static final boolean CONN_POOLING = true; // should stay true
 	private static final int MAX_POOL_SIZE = 100; // no point fiddling
+	/**
+	 * Whether to use C3P0 pooling. Disabled automatically for the single-writer
+	 * EMBEDDED_SQLITE engine, or by setting CONNECTION_POOLING=false.
+	 */
+	private static final boolean USE_POOLING = Config
+			.getGlobalBoolean(PC.CONNECTION_POOLING)
+			&& !SQL_TYPE.equals(SQL.SQLType.EMBEDDED_SQLITE);
 
 	/**
 	 * Don't change any of the table names below, otherwise it will break
@@ -223,7 +232,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 
 	private static final ArrayList<SQLPaxosLogger> instances = new ArrayList<SQLPaxosLogger>();
 
-	private ComboPooledDataSource dataSource = null;
+	private DataSource dataSource = null;
 	private Connection defaultConn = null;
 	private Connection cursorConn = null;
 
@@ -569,7 +578,8 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				insertCP.setInt(4, cpRecord.getInt("ballotnum"));
 				insertCP.setInt(5, cpRecord.getInt("coordinator"));
 				if (getCheckpointBlobOption()) {
-					insertCP.setBlob(7, cpRecord.getBlob("state"));
+					setBlobBytes(insertCP, 7, conn,
+							getColumnBytes(cpRecord, "state"));
 				} else
 					insertCP.setString(6, cpRecord.getString("state"));
 				insertCP.setLong(7, cpRecord.getLong("create_time"));
@@ -1253,9 +1263,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 
 				if (getLogMessageBlobOption()) {
 					pstmt.setInt(9, packets[i].length);// msgBytes.length);
-					Blob blob = conn.createBlob();
-					blob.setBytes(1, msgBytes);
-					pstmt.setBlob(10, blob);
+					setBlobBytes(pstmt, 10, conn, msgBytes);
 				} else {
 					String packetString = packet.toString();
 					pstmt.setInt(9, packetString.length());
@@ -1416,9 +1424,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			insertCP.setInt(4, ballot.ballotNumber);
 			insertCP.setInt(5, ballot.coordinatorID);
 			if (getCheckpointBlobOption()) {
-				Blob blob = conn.createBlob();
-				blob.setBytes(1, state.getBytes(CHARSET));
-				insertCP.setBlob(6, blob);
+				setBlobBytes(insertCP, 6, conn, state.getBytes(CHARSET));
 			} else
 				insertCP.setString(6, state);
 			insertCP.setLong(7, createTime);
@@ -1618,9 +1624,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				insertCP.setInt(4, task.ballot.ballotNumber);
 				insertCP.setInt(5, task.ballot.coordinatorID);
 				if (getCheckpointBlobOption()) {
-					Blob blob = conn.createBlob();
-					blob.setBytes(1, task.state.getBytes(CHARSET));
-					insertCP.setBlob(6, blob);
+					setBlobBytes(insertCP, 6, conn, task.state.getBytes(CHARSET));
 				} else
 					insertCP.setString(6, task.state);
 				insertCP.setLong(7, task.createTime);
@@ -1875,9 +1879,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			localLogMsgStmt.setInt(6, type.getInt());
 			if (getLogMessageBlobOption()) {
 				// localLogMsgStmt.setBlob(7, new StringReader(message));
-				Blob blob = conn.createBlob();
-				blob.setBytes(1, message.getBytes(CHARSET));
-				localLogMsgStmt.setBlob(7, blob);
+				setBlobBytes(localLogMsgStmt, 7, conn, message.getBytes(CHARSET));
 			} else
 				localLogMsgStmt.setString(7, message);
 
@@ -1888,7 +1890,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 					new Object[] { this, paxosID, slot, ballotnum, coordinator,
 							message });
 		} catch (SQLException sqle) {
-			if (SQL.DUPLICATE_KEY.contains(sqle.getSQLState())) {
+			if (SQL.isDuplicateKeyException(sqle)) {
 				log.log(Level.FINE, "{0} log message {1} previously logged",
 						new Object[] { this, message });
 				logged = true;
@@ -2032,9 +2034,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 					// we pause logIndex as well with older MessageLogPausable
 					logIndexBytes = deflate(this.messageLog
 							.getLogIndex(paxosID).toString().getBytes(CHARSET));
-					blob = conn.createBlob();
-					blob.setBytes(1, logIndexBytes);
-					pstmt.setBlob(2, blob);
+					setBlobBytes(pstmt, 2, conn, logIndexBytes);
 					assert (new String(inflate(logIndexBytes), CHARSET)
 							.equals(this.messageLog.getLogIndex(paxosID)
 									.toString()));
@@ -2049,9 +2049,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 							: insertCmdNoLogIndex);
 					pstmt.setString(1, serializedState);
 					if (pauseLogIndex) {
-						blob = conn.createBlob();
-						blob.setBytes(1, logIndexBytes);
-						pstmt.setBlob(2, blob);
+						setBlobBytes(pstmt, 2, conn, logIndexBytes);
 					}
 					pstmt.setString(pauseLogIndex ? 3 : 2, paxosID);
 					pstmt.executeUpdate();
@@ -2098,9 +2096,8 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				if (serialized != null)
 					hri = new HotRestoreInfo(serialized);
 
-				Blob logIndexBlob = rset.getBlob(2);
-				logIndexString = lobToString(logIndexBlob);
-				if (logIndexBlob != null) {
+				logIndexString = lobToString(rset, 2);
+				if (logIndexString != null) {
 					this.messageLog.restore(new LogIndex(new JSONArray(
 							logIndexString)));
 				}
@@ -2172,9 +2169,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 
 				byte[] logIndexBytes = logIndex != null ? deflate(logIndex
 						.toString().getBytes(CHARSET)) : null;
-				Blob blob = conn.createBlob();
-				blob.setBytes(1, logIndexBytes);
-				pstmt.setBlob(1, blob);
+				setBlobBytes(pstmt, 1, conn, logIndexBytes);
 
 				pstmt.setString(2, paxosID);
 				try {
@@ -2184,9 +2179,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 					// try insert
 					pstmt = conn.prepareStatement(insertCmd);
 
-					blob = conn.createBlob();
-					blob.setBytes(1, logIndexBytes);
-					pstmt.setBlob(1, blob);
+					setBlobBytes(pstmt, 1, conn, logIndexBytes);
 
 					pstmt.setString(2, paxosID);
 					pstmt.executeUpdate();
@@ -2249,10 +2242,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 							&& Util.oneIn(Integer.MAX_VALUE))
 						DelayProfiler.updateMovAvg("logindex_size",
 								logIndexBytes.length);
-					Blob blob = conn.createBlob();
-					if (logIndexBytes != null)
-						blob.setBytes(1, logIndexBytes);
-					pstmt.setBlob(1, logIndexBytes != null ? blob : null);
+					setBlobBytes(pstmt, 1, conn, logIndexBytes);
 					pstmt.setString(2, paxosID);
 					pstmt.addBatch();
 					batch.add(paxosID);
@@ -2307,10 +2297,9 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 									: getPTable()), paxosID, "logindex");
 			rset = pstmt.executeQuery();
 			while (rset.next()) {
-				Blob logIndexBlob = rset.getBlob(1);
-				if (logIndexBlob == null)
+				logIndexString = lobToString(rset, 1);
+				if (logIndexString == null)
 					continue;
-				logIndexString = (lobToString(logIndexBlob));
 				logIndex = new LogIndex(new JSONArray(logIndexString));
 				this.messageLog.restore(logIndex);
 				log.log(Level.FINE, "{0} unpaused logIndex for {1}",
@@ -2356,7 +2345,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			while (stateRS.next()) {
 				assert (state == null); // single result
 				state = (!getCheckpointBlobOption() || !column.equals("state") ? stateRS
-						.getString(1) : lobToString(stateRS.getBlob(1)));
+						.getString(1) : lobToString(stateRS, 1));
 			}
 		} catch (IOException e) {
 			log.severe(this + ": IOException while getting state " + " : " + e);
@@ -2428,6 +2417,66 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		return bytes != null ? new String(lobToBytes(blob), CHARSET) : null;
 	}
 
+	/* ***************************************************************
+	 * Vendor-agnostic BLOB access. The xerial sqlite-jdbc driver does not
+	 * implement Connection.createBlob(), PreparedStatement.setBlob(Blob), or
+	 * ResultSet.getBlob(.) (all throw SQLFeatureNotSupportedException), but it
+	 * does support the byte[] accessors setBytes/getBytes against BLOB columns.
+	 * The helpers below route through byte[] for SQLite and through the JDBC
+	 * Blob API for everyone else, preserving the exact bytes on the wire so
+	 * behavior is identical to the Derby/H2/MySQL paths. */
+
+	private static byte[] getColumnBytes(ResultSet rs, int idx)
+			throws SQLException {
+		if (isSQLite())
+			return rs.getBytes(idx);
+		Blob blob = rs.getBlob(idx);
+		return blob != null ? blob.getBytes(1L, (int) blob.length()) : null;
+	}
+
+	private static byte[] getColumnBytes(ResultSet rs, String col)
+			throws SQLException {
+		if (isSQLite())
+			return rs.getBytes(col);
+		Blob blob = rs.getBlob(col);
+		return blob != null ? blob.getBytes(1L, (int) blob.length()) : null;
+	}
+
+	private static byte[] lobToBytes(ResultSet rs, int idx)
+			throws SQLException, IOException {
+		byte[] raw = getColumnBytes(rs, idx);
+		return raw != null ? inflate(raw) : null;
+	}
+
+	private static byte[] lobToBytes(ResultSet rs, String col)
+			throws SQLException, IOException {
+		byte[] raw = getColumnBytes(rs, col);
+		return raw != null ? inflate(raw) : null;
+	}
+
+	private static String lobToString(ResultSet rs, int idx)
+			throws SQLException, IOException {
+		byte[] bytes = lobToBytes(rs, idx);
+		return bytes != null ? new String(bytes, CHARSET) : null;
+	}
+
+	/* Sets a BLOB parameter from raw bytes, using setBytes for SQLite and the
+	 * Blob API otherwise. {@code conn} is only used for the non-SQLite path. */
+	private static void setBlobBytes(PreparedStatement pstmt, int idx,
+			Connection conn, byte[] bytes) throws SQLException {
+		if (bytes == null) {
+			pstmt.setNull(idx, Types.BLOB);
+			return;
+		}
+		if (isSQLite()) {
+			pstmt.setBytes(idx, bytes);
+			return;
+		}
+		Blob blob = conn.createBlob();
+		blob.setBytes(1, bytes);
+		pstmt.setBlob(idx, blob);
+	}
+
 	/**
 	 * Methods to get slot, ballotnum, coordinator, state, and version of
 	 * checkpoint
@@ -2474,7 +2523,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 					sb = new SlotBallotState(stateRS.getInt(1),
 							stateRS.getInt(2), stateRS.getInt(3),
 							(!getCheckpointBlobOption() ? stateRS.getString(4)
-									: lobToString(stateRS.getBlob(4))),
+									: lobToString(stateRS, 4)),
 							stateRS.getInt(5), stateRS.getLong(6),
 							Util.stringToStringSet(stateRS.getString(7)));
 			}
@@ -2593,7 +2642,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				String members = cursorRset.getString(3);
 				String[] pieces = Util.jsonToStringArray(members);
 				String state = (readState ? (!getCheckpointBlobOption() ? cursorRset
-						.getString(4) : lobToString(cursorRset.getBlob(4)))
+						.getString(4) : lobToString(cursorRset, 4))
 						: null);
 				pri = new RecoveryInfo(paxosID, version, pieces, state);
 				/* Whenever a checkpoint is found, we must try to restore the
@@ -2768,7 +2817,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 											: PaxosPacket
 													.getPaxosPacket(packetStr);
 							} else {
-								packetBytes = lobToBytes(cursorRset.getBlob(1));
+								packetBytes = lobToBytes(cursorRset, 1);
 								if (packetBytes != null)
 									pp = this.getPacketizer() != null ? this
 											.getPacketizer()
@@ -3012,7 +3061,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				try {
 					logMsgBytes = (!ENABLE_JOURNALING ? (!getLogMessageBlobOption() ? messagesRS
 							.getString("message").getBytes(CHARSET)
-							: lobToBytes(messagesRS.getBlob("message")))
+							: lobToBytes(messagesRS, "message"))
 
 							: this.getJournaledMessage(
 									messagesRS.getString("logfile"),
@@ -3898,7 +3947,12 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 
 	private static boolean isEmbeddedDB() {
 		return SQL_TYPE.equals(SQL.SQLType.EMBEDDED_DERBY)
-				|| SQL_TYPE.equals(SQL.SQLType.EMBEDDED_H2);
+				|| SQL_TYPE.equals(SQL.SQLType.EMBEDDED_H2)
+				|| SQL_TYPE.equals(SQL.SQLType.EMBEDDED_SQLITE);
+	}
+
+	private static boolean isSQLite() {
+		return SQL_TYPE.equals(SQL.SQLType.EMBEDDED_SQLITE);
 	}
 
 	/**
@@ -4201,7 +4255,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			stmt.execute(cmd);
 			created = true;
 		} catch (SQLException sqle) {
-			if (SQL.DUPLICATE_TABLE.contains(sqle.getSQLState())) {
+			if (SQL.isDuplicateTableException(sqle)) {
 				log.log(Level.INFO, "{0}{1}{2}", new Object[] { "Table ",
 						table, " already exists" });
 				created = true;
@@ -4232,7 +4286,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			log.log(Level.FINE, "{0}{1}{2}", new Object[] { this,
 					" dropped pause table ", table });
 		} catch (SQLException sqle) {
-			if (!SQL.NONEXISTENT_TABLE.contains(sqle.getSQLState())) {
+			if (!SQL.isNonexistentTableException(sqle)) {
 				log.severe(this + " could not drop table " + table + ":"
 						+ sqle.getSQLState() + ":" + sqle.getErrorCode());
 				sqle.printStackTrace();
@@ -4255,7 +4309,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			log.log(Level.FINE, "{0}{1}{2}", new Object[] { this,
 					" dropped pause table ", table });
 		} catch (SQLException sqle) {
-			if (!SQL.NONEXISTENT_TABLE.contains(sqle.getSQLState())) {
+			if (!SQL.isNonexistentTableException(sqle)) {
 				log.severe(this + " could not clear table " + table + ":"
 						+ sqle.getSQLState() + ":" + sqle.getErrorCode());
 				sqle.printStackTrace();
@@ -4351,9 +4405,15 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				SQL.getUser() + (isEmbeddedDB() ? this.getMyIDSanitized()/* this.myID */
 				: ""));
 		props.put("password", SQL.getPassword());
+		if (isSQLite())
+			addSQLitePragmas(props);
 		ensureLogDirectoryExists(this.logDirectory);
 		String dbCreation = SQL.getProtocolOrURL(SQL_TYPE)
-				+ (isEmbeddedDB() ?
+				+ (isSQLite() ?
+				// SQLite: the URL is just a file path; the file is created
+				// automatically on first connect (no ";create=true" flag).
+				this.logDirectory + this.getMyDBName()
+				: isEmbeddedDB() ?
 				// embedded DB pre-creates DB to avoid c3p0 stack traces
 				this.logDirectory
 						+ this.getMyDBName()
@@ -4364,8 +4424,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 						this.getMyDBName() + "?createDatabaseIfNotExist=true");
 
 		try {
-			dataSource = (ComboPooledDataSource) setupDataSourceC3P0(
-					dbCreation, props);
+			dataSource = setupDataSource(dbCreation, props);
 		} catch (SQLException e) {
 			log.severe(this + " could not create pooled data source to DB "
 					+ dbCreation);
@@ -4571,7 +4630,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			messagesRS = pstmt.executeQuery();
 			while (messagesRS.next() && !logged) {
 				String insertedMsg = (!getLogMessageBlobOption() ? messagesRS
-						.getString(2) : lobToString(messagesRS.getBlob(2)));
+						.getString(2) : lobToString(messagesRS, 2));
 				logged = msg.equals(insertedMsg);
 			}
 		} catch (SQLException | IOException e) {
@@ -4647,6 +4706,34 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		return (double) (t2 - t1) / size;
 	}
 
+	/* Adds SQLite pragmas (passed as connection properties, which the xerial
+	 * sqlite-jdbc driver applies on connect) that make multiple concurrent
+	 * connections to the same database file behave well: WAL allows a writer to
+	 * coexist with readers, and a busy timeout makes writers wait for the file
+	 * lock instead of immediately failing with SQLITE_BUSY. */
+	private static void addSQLitePragmas(Properties props) {
+		props.put("journal_mode", "WAL");
+		props.put("synchronous", Config.getGlobalString(PC.SQLITE_SYNCHRONOUS));
+		props.put("busy_timeout", "30000"); // ms
+		// NOTE: transaction_mode=IMMEDIATE would convert the rare
+		// SQLITE_BUSY_SNAPSHOT into a busy_timeout wait, but gigapaxos borrows
+		// a connection and re-enters the logger (e.g. putCheckpointState ->
+		// unpauseLogIndex) on the same thread; taking the write lock eagerly
+		// risks a write-lock self-deadlock on such nested paths, so we leave
+		// transactions DEFERRED and rely on upper-layer paxos retries for the
+		// occasional BUSY_SNAPSHOT.
+	}
+
+	private static DataSource setupDataSource(String connectURI,
+			Properties props) throws SQLException {
+		if (USE_POOLING)
+			return setupDataSourceC3P0(connectURI, props);
+		int maxTotal = Config.getGlobalInt(PC.DB_MAX_CONNECTIONS);
+		// keep at least the bounded number of connections warm in the idle pool
+		int maxIdle = maxTotal > 0 ? maxTotal : 8;
+		return new SimpleDataSource(connectURI, props, maxIdle, maxTotal);
+	}
+
 	private static DataSource setupDataSourceC3P0(String connectURI,
 			Properties props) throws SQLException {
 
@@ -4668,9 +4755,19 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 	}
 
 	private void fixURI() {
-		this.dataSource.setJdbcUrl(SQL.getProtocolOrURL(SQL_TYPE)
+		setDataSourceJdbcUrl(this.dataSource, SQL.getProtocolOrURL(SQL_TYPE)
 				+ this.logDirectory + this.getMyDBName()
 				+ (isEmbeddedDB() ? "" : "?rewriteBatchedStatements=true"));
+	}
+
+	/* The dataSource field is the javax.sql.DataSource interface so that either
+	 * a pooled (C3P0) or non-pooled (SimpleDataSource) implementation can be
+	 * used. Neither exposes setJdbcUrl on the interface, so dispatch here. */
+	static void setDataSourceJdbcUrl(DataSource ds, String url) {
+		if (ds instanceof ComboPooledDataSource)
+			((ComboPooledDataSource) ds).setJdbcUrl(url);
+		else if (ds instanceof SimpleDataSource)
+			((SimpleDataSource) ds).setJdbcUrl(url);
 	}
 
 	/**

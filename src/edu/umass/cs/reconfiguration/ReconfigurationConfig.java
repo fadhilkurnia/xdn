@@ -163,6 +163,31 @@ public class ReconfigurationConfig {
         SQL_TYPE("EMBEDDED_DERBY"),
 
         /**
+         * Selects the reconfigurator DB implementation. "SQL" (default) uses the
+         * JDBC-based {@link edu.umass.cs.reconfiguration.SQLReconfiguratorDB};
+         * "ROCKSDB" uses the embedded key-value RocksDBReconfiguratorDB.
+         */
+        RECONFIGURATOR_DB("SQL"),
+
+        /**
+         * Whether to use C3P0 connection pooling for the reconfigurator DB's
+         * SQL data source. When false, a lightweight non-pooling data source is
+         * used (a fresh connection per operation, no idle connections or pool
+         * helper threads), reducing the memory/thread footprint. Should
+         * generally be false for the single-writer EMBEDDED_SQLITE engine.
+         */
+        CONNECTION_POOLING(true),
+
+        /**
+         * Maximum number of concurrently outstanding DB connections when using
+         * the non-pooling (SimpleDataSource) path. 0 means unbounded; 1 means a
+         * single serialized connection ("single writer"), which avoids SQLite
+         * WAL SQLITE_BUSY_SNAPSHOT conflicts. Ignored when CONNECTION_POOLING is
+         * true.
+         */
+        DB_MAX_CONNECTIONS(0),
+
+        /**
          * Whether reconfigurations should be performed even though
          * AbstractDemandProfile returned a set of active replicas that are
          * identical to the current one. Useful for testing, but should be false
