@@ -92,6 +92,21 @@ public class XdnGeoDemandProfilerTest {
   }
 
   @Test
+  public void testReportDrainsInFlightSamples() throws Exception {
+    // Reproduces write-demand under-sampling: sampling is async (a worker drains the queue into the
+    // grid), but a report snapshots only the grid AND on the AR replaces the whole profile, dropping
+    // any still-queued samples. Disable the worker so samples stay queued, then assert the report
+    // drains them. Before the fix this returned 0 (queued samples lost); after, all are counted.
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.setWorkerDisabledForTesting(true);
+    for (int i = 0; i < 7; i++) {
+      profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null);
+    }
+    JSONObject stats = profiler.getDemandStats();
+    assertEquals(7L, stats.getLong("num_reqs"), "report must drain in-flight async samples");
+  }
+
+  @Test
   public void testNullClientGeoIsIgnored() throws Exception {
     XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
     // No X-Client-Location header.
