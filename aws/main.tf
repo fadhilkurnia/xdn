@@ -451,6 +451,13 @@ locals {
     # to verbose JSON packets (inflating inter-replica bandwidth). Safe here because
     # the IDs have collision-free hashCodes (IntegerMap.put fails fast otherwise).
     "BYTEIFY_NON_INT_NODE_IDS=true",
+    # Initial placement: replicate a new service at DEFAULT_NUM_REPLICAS actives
+    # (consistent-hash-chosen), NOT at every active. The gigapaxos library default
+    # is REPLICATE_ALL=true (place on the whole cluster); every conf/gigapaxos.xdn.*
+    # config sets it false, so match that here. After creation the geo-demand policy
+    # (DEMAND_PROFILE_TYPE below) re-places replicas where the load is.
+    "REPLICATE_ALL=false",
+    "DEFAULT_NUM_REPLICAS=3",
     # Geo-demand profiling: with this set, each request's client location (the
     # X-Client-Location header, parsed into XdnHttpRequest) is accumulated per grid
     # cell by XdnGeoDemandProfiler on the ARs and aggregated at the RC. It drives
