@@ -228,9 +228,16 @@ other stateful services, as can be seen below.
     </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>e-commerce</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-ecommerce</td>
+    <td>Webshop OLTP service: products, customers, <br>carts, and orders (browse, add to cart, checkout). <br>Tech: Go, SQLite.</td>
+    <td>
+      ``` bash
+      xdn launch shop \
+          --image=fadhilkurnia/xdn-ecommerce \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 <tr>
     <td></td>
