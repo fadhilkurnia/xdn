@@ -153,6 +153,32 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
     String socketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
+    // A backup being promoted to primary already holds the exact-byte replicated state at
+    // targetDir, presented via its apply-mode fuselog mount. The umount + rm below discards it (the
+    // new capture mount starts empty), so snapshot it first -- WHILE still mounted, since the bytes
+    // only exist through the FUSE mount -- and restore it into the fresh capture mount after
+    // remounting. That way the promoted container opens the previous primary's latest committed
+    // data (data.db + WAL) instead of an empty filesystem. For a fresh primary targetDir is empty,
+    // so this is a no-op. snapshotDir is a sibling of mnt/ so the umount/rm below cannot touch it.
+    String snapshotDir = targetDir.replaceFirst("/mnt/", "/promote-snapshot/");
+    String[] existingFiles = new File(targetDir).list();
+    boolean hadExistingState = existingFiles != null && existingFiles.length > 0;
+    if (hadExistingState) {
+      Shell.runCommand("rm -rf " + snapshotDir);
+      Shell.runCommand("mkdir -p " + snapshotDir);
+      int snapCode = Shell.runCommand(String.format("rsync -a %s %s", targetDir, snapshotDir));
+      hadExistingState = (snapCode == 0);
+      logger.log(
+          Level.INFO,
+          String.format(
+              "%s:%s - snapshotted existing state for %s:%d before remount (promotion); rsync=%d",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              serviceName,
+              placementEpoch,
+              snapCode));
+    }
+
     // Create target mnt dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/mnt/service1/
     Shell.runCommand("sudo umount " + targetDir);
@@ -207,22 +233,43 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       throw new RuntimeException(errMessage);
     }
 
-    // Initialize socket client for the filesystem.
-    SocketChannel socketChannel;
+    // Initialize socket client for the filesystem. The fuselog daemon was just launched
+    // asynchronously (it daemonizes) and creates its Unix socket only after it finishes mounting,
+    // so the first connect() routinely races ahead of the daemon and is refused. Retry with a
+    // short backoff until it is listening -- a single attempt produced intermittent
+    // "Connection refused" that aborted primary init.
     UnixDomainSocketAddress address = UnixDomainSocketAddress.of(Path.of(socketFile));
-    try {
-      socketChannel = SocketChannel.open(StandardProtocolFamily.UNIX);
-      boolean isConnEstablished = socketChannel.connect(address);
-      if (!isConnEstablished) {
-        logger.log(
-            Level.SEVERE,
-            String.format(
-                "%s:%s - failed to connect to the filesystem socket at %s",
-                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), socketFile));
-        return false;
+    SocketChannel socketChannel = null;
+    final int maxAttempts = 100; // ~10s at 100ms intervals
+    IOException lastError = null;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        socketChannel = SocketChannel.open(StandardProtocolFamily.UNIX);
+        if (socketChannel.connect(address)) {
+          lastError = null;
+          break;
+        }
+      } catch (IOException e) {
+        lastError = e;
+        try {
+          socketChannel.close();
+        } catch (IOException ignored) {
+        }
+        socketChannel = null;
       }
-    } catch (IOException e) {
-      throw new RuntimeException(e);
+      try {
+        Thread.sleep(100);
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        throw new RuntimeException(ie);
+      }
+    }
+    if (socketChannel == null) {
+      throw new RuntimeException(
+          String.format(
+              "%s:%s - failed to connect to the filesystem socket at %s after %d attempts",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), socketFile, maxAttempts),
+          lastError);
     }
 
     // Update the socket metadata.
@@ -230,6 +277,30 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       serviceFsSocket.put(serviceName, new ConcurrentHashMap<>());
     }
     serviceFsSocket.get(serviceName).put(placementEpoch, socketChannel);
+
+    // Restore the snapshotted state into the fresh capture mount (promotion). Restore the durable
+    // bytes (data.db + WAL) verbatim but skip the volatile *-shm, so the container's SQLite
+    // rebuilds
+    // its wal-index from the WAL on open (avoids trusting a stale shared-memory index that would
+    // hide the WAL frames). The WAL is preserved exactly, so the latest committed write from the
+    // previous primary is recovered. Writing through the just-mounted capture FS makes this
+    // restored
+    // state the new primary's initial captured state (propagated to the new backups).
+    if (hadExistingState) {
+      int restoreCode =
+          Shell.runCommand(String.format("rsync -a --exclude=*-shm %s %s", snapshotDir, targetDir));
+      Shell.runCommand("rm -rf " + snapshotDir);
+      logger.log(
+          Level.INFO,
+          String.format(
+              "%s:%s - restored snapshotted state into capture mount for %s:%d (promotion);"
+                  + " rsync=%d",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              serviceName,
+              placementEpoch,
+              restoreCode));
+    }
 
     return true;
   }
@@ -921,6 +992,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
           sshKey != null && !sshKey.trim().isEmpty()
               ? "ssh -i " + sshKey + " -o StrictHostKeyChecking=no"
               : "ssh -o StrictHostKeyChecking=no";
+      // rsync needs IPv6 literals bracketed in user@host:path, else it mis-parses the
+      // colons as the host:path separator (an IPv6-only cluster otherwise fails to sync).
+      String sshHost = hostAddr.contains(":") ? "[" + hostAddr + "]" : hostAddr;
       exitCode =
           Shell.runCommand(
               List.of(
@@ -937,7 +1011,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
                   "--include=" + mntDir + "***",
                   "--exclude=*",
                   currentReplica,
-                  username + "@" + hostAddr + ":" + targetReplica),
+                  username + "@" + sshHost + ":" + targetReplica),
               true);
     }
 
