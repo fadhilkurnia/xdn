@@ -238,9 +238,16 @@ other stateful services, as can be seen below.
     <td></td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: SEATS<br>Stonebreaker Electronic<br>Airline Ticketing System (SEATS)</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-seats</td>
+    <td>SEATS airline-ticketing benchmark: airports, <br>flights, customers, and seat reservations. <br>Tech: Go, SQLite.</td>
+    <td>
+      ``` bash
+      xdn launch seats \
+          --image=fadhilkurnia/xdn-seats \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 
 </table>
