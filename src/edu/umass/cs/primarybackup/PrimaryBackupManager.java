@@ -1248,17 +1248,27 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 + executedRequest.getClass().getSimpleName();
 
                 ClientRequest requestWithResponse = (ClientRequest) executedRequest;
-                // ResponsePacket is the one wire form that intentionally carries
-                // the locally-computed response back to the entry replica, so
-                // opt in to including it. The default toBytes() now strips it.
+                // executedRequest is a RequestPacket WRAPPING the executed app request; the actual
+                // XdnHttpRequest carrying the primary-computed HTTP response is its getResponse().
+                // Checking executedRequest's own type missed this -- a RequestPacket matches neither
+                // XdnHttpRequest nor XdnHttpRequestBatch, so it fell to the toString() else-branch,
+                // which serializes WITHOUT the HTTP response and silently dropped it on the wire
+                // (the entry replica then delivered a null response -> client saw a dropped conn).
+                ClientRequest appResponse = requestWithResponse.getResponse();
+                if (appResponse == null) {
+                    appResponse = requestWithResponse;
+                }
+                // ResponsePacket is the one wire form that intentionally carries the
+                // locally-computed response back to the entry replica, so opt in to including it
+                // (toBytes(true)). The default toBytes() strips it.
                 byte[] encodedWithResponse;
-                if (requestWithResponse instanceof XdnHttpRequest xhr) {
+                if (appResponse instanceof XdnHttpRequest xhr) {
                     encodedWithResponse = xhr.toBytes(true);
-                } else if (requestWithResponse instanceof XdnHttpRequestBatch batch) {
+                } else if (appResponse instanceof XdnHttpRequestBatch batch) {
                     encodedWithResponse = batch.toBytes(true);
                 } else {
-                    encodedWithResponse = requestWithResponse.getResponse().toString()
-                            .getBytes(StandardCharsets.ISO_8859_1);
+                    encodedWithResponse =
+                            appResponse.toString().getBytes(StandardCharsets.ISO_8859_1);
                 }
                 ResponsePacket resp = new ResponsePacket(
                         executedRequest.getServiceName(),
@@ -1318,6 +1328,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         //    - update the cache in getRequest() of XdnGigapaxosApp to consider the request.
         if (appRequest instanceof XdnHttpRequestBatch) {
             appRequest = XdnHttpRequestBatch.createFromBytes(encodedResponse);
+        } else if (appRequest instanceof XdnHttpRequest) {
+            // Same cache hazard as the batch case above: getRequest() returns the cached entry
+            // WITHOUT the primary-computed response, so a single forwarded request would deliver a
+            // null HTTP response to the client (entry replica logs "ignoring empty HTTP response"
+            // and the client sees a dropped connection). Force-deserialize the wire form, which
+            // does carry the response (XdnHttpRequest.createFromString parses hasResponse()).
+            appRequest = XdnHttpRequest.createFromString(encodedResponseStr);
         }
 
         if (appRequest instanceof ClientRequest appRequestWithResponse) {
@@ -1416,6 +1433,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         PrimaryEpoch<NodeIDType> newEpoch = new PrimaryEpoch<NodeIDType>(
                 myNodeID, curEpoch.counter + 1);
 
+        // Build the node->IP map needed to (re)start the container and re-sync backups on
+        // promotion. The move-primary path previously only flipped the role, leaving the newly
+        // promoted primary container-less (so it served nothing) and the backups un-initialized --
+        // unlike initializePrimaryEpoch, which starts the container + runs the init sync.
+        Set<NodeIDType> nodes = this.getReplicaGroup(groupName);
+        Map<String, InetAddress> ipAddresses = new HashMap<>();
+        if (nodes != null) {
+            NodeConfig<NodeIDType> changeNodeConfig = this.messenger.getNodeConfig();
+            nodes.forEach(node -> ipAddresses.put(
+                    String.valueOf(node).toLowerCase(),
+                    changeNodeConfig.getNodeAddress(node)));
+        }
+
         this.paxosManager.tryToBePaxosCoordinator(groupName); // could still be fail
         this.currentRole.put(groupName, Role.PRIMARY_CANDIDATE);
         this.currentPrimaryEpoch.put(groupName, newEpoch);
@@ -1429,6 +1459,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     currentRole.put(groupName, Role.PRIMARY);
                     currentPrimary.put(groupName, myNodeID);
                     processOutstandingRequests();
+
+                    // Start the container on the newly promoted primary and re-init the backups
+                    // (same lifecycle as initializePrimaryEpoch). Without this the role flips to
+                    // PRIMARY but no container runs, so the new primary returns nothing and the old
+                    // primary's stale container is never replaced -- the move-primary bug.
+                    if (nodes != null) {
+                        handleXdnPrimaryInitialization(
+                                groupName, nodes, ipAddresses, newEpoch.counter);
+                    }
 
                     logger.log(Level.INFO,
                             String.format(
@@ -1581,6 +1620,25 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 "%s:%s - stepping down svc=%s role=%s oldEpoch=%s newEpoch=%s",
                                 myNodeID, PrimaryBackupManager.class.getSimpleName(),
                                 groupName, myCurrentRole, currentEpoch, newPrimaryEpoch));
+
+                // This node was the PRIMARY and just learned (via StartEpoch) that another node
+                // took over. A backup runs no container, so terminate the now-stale container we
+                // were serving from -- previously it was left running, so the old primary kept a
+                // live container (and FUSE capture mount) after demotion. State is preserved on
+                // disk; the new primary's InitBackupPacket re-establishes this node in backup
+                // (apply) mode.
+                if (this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp demotionMw
+                        && demotionMw.getReplicableApp() instanceof XdnGigapaxosApp demotionApp) {
+                    try {
+                        demotionApp.stopServiceContainerOnDemotion(groupName);
+                    } catch (RuntimeException e) {
+                        logger.log(Level.WARNING, String.format(
+                                "%s:%s - failed to stop container on demotion for %s: %s",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                groupName, e.getMessage()));
+                    }
+                }
+
                 this.restartPaxosInstance(groupName);
                 return true;
             }

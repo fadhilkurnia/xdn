@@ -55,9 +55,12 @@ public class XdnGigapaxosApp
 
   private final boolean IS_RESTART_UPON_STATE_DIFF_APPLY = false;
 
-  // TODO: deprecate the variables below.
-  private final String FUSELOG_BIN_PATH = "/users/fadhil/fuse/fuselog";
-  private final String FUSELOG_APPLY_BIN_PATH = "/users/fadhil/fuse/apply";
+  // FUSE recorder binaries, installed by aws/create_ar_ami.sh into /usr/local/bin (symlinks to
+  // /opt/xdn/bin). These MUST match FuselogStateDiffRecorder's paths -- they were previously
+  // hardcoded to a CloudLab home dir (/users/fadhil/fuse/...) that does not exist on AWS, so the
+  // FUSELOG recorder's container mount silently failed off-CloudLab.
+  private final String FUSELOG_BIN_PATH = "/usr/local/bin/fuselog";
+  private final String FUSELOG_APPLY_BIN_PATH = "/usr/local/bin/fuselog-apply";
 
   private final String myNodeId;
   private final Set<IntegerPacketType> packetTypes;
@@ -1322,6 +1325,24 @@ public class XdnGigapaxosApp
         });
 
     return true;
+  }
+
+  /**
+   * Stop (WITHOUT deleting state) the running container for a service on this node, at its current
+   * placement epoch. Used when a PRIMARY steps down to BACKUP on a primary change: a backup runs no
+   * container, so the demoted node must stop serving / capturing. The state dir is preserved so the
+   * node can resume as a backup (apply mode) via the subsequent InitBackupPacket.
+   */
+  public boolean stopServiceContainerOnDemotion(String serviceName) {
+    Integer placementEpoch = this.servicePlacementEpoch.get(serviceName);
+    if (placementEpoch == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} - cannot stop container on demotion; unknown placement epoch for {2}",
+          new Object[] {this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName});
+      return false;
+    }
+    return this.stopContainerizedServiceInstance(serviceName, placementEpoch);
   }
 
   /** startContainer runs the bash command below to start running a docker container. */
