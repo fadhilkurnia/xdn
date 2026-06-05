@@ -7,6 +7,17 @@ set -euo pipefail
 
 install -d -m 0755 /opt/xdn/conf /opt/xdn/conf/tls
 
+# Swap cushion for the small t4g.micro (1GB) AR: a 1GB swapfile absorbs transient spikes (boot,
+# GC, docker image pulls) so a brief overshoot doesn't trip the OOM killer on a service container.
+# The resident JVM heap stays in RAM (it's pinned to -Xmx256m below); swap is only a safety margin.
+if [ ! -f /swapfile ]; then
+  fallocate -l 1G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=1024
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 cat > /opt/xdn/conf/gigapaxos.properties <<'PROPS'
 ${gigapaxos_properties}
 PROPS
@@ -25,9 +36,16 @@ TLSPROPS
 # addresses, see AddressCodec), so we NO LONGER force the IPv4 stack -- the AR
 # advertises and binds its GLOBAL IPv6 for consensus, and the TLS frontend binds
 # that IPv6 on :443. preferIPv6Addresses nudges name resolution toward IPv6.
+#
+# Small-footprint JVM so the AR fits t4g.micro (1GB): pin the heap (-Xmx256m; the default would be
+# 25% of RAM = ~480MB on a 2GB box), SerialGC (one GC thread, no G1 concurrent threads / native
+# remembered-set overhead -- right for a small heap on 2 vCPUs), cap metaspace / JIT code cache /
+# netty direct memory and thread stacks, shrink netty's pooled allocator arenas (default 2x cores),
+# and ExitOnOutOfMemoryError so a real OOM restarts cleanly (systemd) instead of GC-thrashing.
+# Bump -Xmx (and the instance size) for heavier service containers.
 cat > /opt/xdn/conf/node-id <<'NODEID'
 NODE_ID=${node_id}
-JAVA_TOOL_OPTIONS=-Djava.net.preferIPv6Addresses=true
+JAVA_TOOL_OPTIONS=-Xmx256m -XX:+UseSerialGC -Xss512k -XX:MaxMetaspaceSize=96m -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m -XX:+ExitOnOutOfMemoryError -Dio.netty.allocator.numHeapArenas=1 -Dio.netty.allocator.numDirectArenas=1 -Djava.net.preferIPv6Addresses=true
 NODEID
 
 # AWS CLI is needed to pull the cert from S3 (not baked into the current AMI).

@@ -20,9 +20,9 @@ variable "rc_instance_type" {
 }
 
 variable "ar_instance_type" {
-  description = "EC2 instance type for the ActiveReplica edge nodes. Graviton (needs the arm64 ar_ami + multi-arch service images). t4g.small (2GB) for light services; bump for heavy DB apps."
+  description = "EC2 instance type for the ActiveReplica edge nodes. Graviton (needs the arm64 ar_ami + multi-arch service images). t4g.micro (1GB) for a cheap DEV cluster running LIGHTWEIGHT services: the AR JVM is pinned to a small footprint (-Xmx256m + SerialGC + capped metaspace/codecache/netty, see ar-userdata.tftpl) and a 1GB swapfile cushions spikes. Bump to t4g.small/larger for heavier DB service containers (postgres/mongo/wordpress) or higher write throughput."
   type        = string
-  default     = "t4g.small"
+  default     = "t4g.micro"
 }
 
 variable "ar_use_spot" {
