@@ -24,7 +24,11 @@ CLI are both thin clients of this API; you can also call it directly.
 | `GET` | `/api/v2/services/{name}/placement` | Current placement: per-replica id, role, address, geolocation. |
 | `PUT` | `/api/v2/services/{name}/placement` | Set the replica set (and optionally coordinator). Body: `{"NODES":[…],"COORDINATOR":"…"}`. |
 | `PUT` | `/api/v2/services/{name}/coordinator` | Change the coordinator/leader. Body: `{"newCoordinatorNodeId":"…"}`. |
-| `GET` | `/api/v2/services/{name}/demand` | Geo-demand heatmap cells: `[{"lat","lon","count"}]` (see [Geo-distributed demand](geo-demand.md)). |
+| `GET` | `/api/v2/services/{name}/demand` | Geo-demand heatmap cells split by request kind: `[{"lat","lon","read","write","count"}]` where `count = read + write` and writes fold in read-modify-write (see [Geo-distributed demand](geo-demand.md)). |
+
+The demand a cell reflects is governed by the reconfigurator config `XDN_DEMAND_WINDOW_MINUTES`:
+`-1` (default) is cumulative all-time demand; a positive `N` keeps only the last `N` minutes (a
+rolling window), so both the heatmap and demand-driven placement track current load.
 
 ## Cluster nodes (elasticity)
 
