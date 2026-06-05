@@ -49,6 +49,13 @@ locals {
     aws_vpc.usw2.ipv6_cidr_block,
   ]
 
+  # Corefile `edge <nodeid> <ipv6>` lines (8-space indented to nest in the xdn
+  # directive block) so coredns answers <nodeid>.edge.<domain> with that replica's
+  # IPv6. Drives the per-replica browser-clickable links (cert: *.edge.<domain>).
+  edge_node_props = join("\n", [
+    for id, ip in local.ar_ipv6s : "        edge ${id} ${ip}"
+  ])
+
   # ---- Shared security-group ingress --------------------------------------
   # Identical in every region, so defined once and rendered via a dynamic block.
   # Data-plane / management ports are open to the internet (v4+v6); the catch-all

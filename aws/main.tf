@@ -514,6 +514,11 @@ resource "aws_instance" "rc" {
     # Candidate placement locations (RC-only geolocations; no running instances) so
     # GET /api/v2/nodes can surface them as the dashboard's "potential locations".
     candidate_geo_props = local.candidate_geo_props
+    # The per-replica `edge` sub-zone is a multi-region feature (see aws/multiregion);
+    # the single-region config doesn't use it, so pass empty (template renders a
+    # plain xdn directive + no _acme-challenge.edge delegation).
+    edge_node_props = ""
+    acme_edge_ns    = []
   })
 
   root_block_device {

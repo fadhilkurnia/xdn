@@ -68,6 +68,10 @@ resource "aws_instance" "rc" {
     fullchain_key        = "wildcard/fullchain.pem"
     privkey_key          = "wildcard/privkey.pem"
     candidate_geo_props  = local.candidate_geo_props
+    # Per-replica `edge` sub-zone: the node->IPv6 Corefile block + the
+    # _acme-challenge.edge.<domain> delegation NS (for the *.edge.<domain> SAN).
+    edge_node_props = local.edge_node_props
+    acme_edge_ns    = aws_route53_zone.acme_edge.name_servers
   })
 
   root_block_device {
