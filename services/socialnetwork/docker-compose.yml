@@ -1,0 +1,15 @@
+services:
+  socialnetwork-db:
+    image: "mongo:7"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=testing123
+  frontend:
+    image: "fadhilkurnia/xdn-socialnetwork"
+    build: .
+    ports:
+      - "8080:80"
+    environment:
+      - MONGO_URI=mongodb://root:testing123@socialnetwork-db:27017
+    depends_on:
+      - socialnetwork-db

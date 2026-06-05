@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN · Social Network</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; } .sub { opacity: .7; margin-top: -.5rem; }
+  fieldset { border: 1px solid #8884; border-radius: 8px; margin: .8rem 0; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  label { display: inline-flex; gap: .3rem; align-items: center; margin: .2rem .6rem .2rem 0; }
+  input { padding: .3rem; }
+  input[type=number] { width: 4rem; } input[type=text] { width: 11rem; }
+  button { font-size: .95rem; padding: .35rem .8rem; border-radius: 6px; border: 1px solid #8884; cursor: pointer; }
+  pre { background: #8881; padding: .8rem; border-radius: 6px; overflow: auto; min-height: 2rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  @media (max-width: 620px){ .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <h1>XDN · Social Network</h1>
+  <p class="sub">A consolidated DeathStarBench-style social network (Go + MongoDB) — users <code>user1</code>..<code>userN</code>, posts, follows, and timelines.</p>
+
+  <fieldset>
+    <legend>Setup</legend>
+    <label>users <input id="nu" type="number" value="20" min="1"></label>
+    <button onclick="call('/init_db', {num_users:+nu.value})">Init DB</button>
+  </fieldset>
+
+  <div class="grid">
+    <fieldset>
+      <legend>Register user</legend>
+      <label>username <input id="ru_name" type="text" value="alice"></label>
+      <label>password <input id="ru_pw" type="text" value="secret"></label>
+      <button onclick="call('/register_user', {username: ru_name.value, password: ru_pw.value})">Register</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Compose post</legend>
+      <label>user <input id="cp_uid" type="number" value="1"></label>
+      <label>text <input id="cp_text" type="text" value="hello xdn"></label>
+      <button onclick="call('/compose_post', {user_id:+cp_uid.value, text: cp_text.value})">Post</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Follow</legend>
+      <label>follower <input id="f_a" type="number" value="1"></label>
+      <label>followee <input id="f_b" type="number" value="2"></label>
+      <button onclick="call('/follow', {follower_id:+f_a.value, followee_id:+f_b.value})">Follow</button>
+      <button onclick="call('/unfollow', {follower_id:+f_a.value, followee_id:+f_b.value})">Unfollow</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Timelines (read-only)</legend>
+      <label>user <input id="t_uid" type="number" value="1"></label>
+      <button onclick="call('/user_timeline', {user_id:+t_uid.value})">User timeline</button>
+      <button onclick="call('/home_timeline', {user_id:+t_uid.value})">Home timeline</button>
+    </fieldset>
+  </div>
+
+  <h3>Response</h3>
+  <pre id="out">Ready.</pre>
+
+<script>
+const out = document.getElementById('out');
+async function call(path, body) {
+  out.textContent = 'POST ' + path + ' ' + JSON.stringify(body) + ' …';
+  try {
+    const r = await fetch(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const text = await r.text();
+    let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+    out.textContent = 'POST ' + path + '  →  HTTP ' + r.status + '\n' + pretty;
+  } catch (e) { out.textContent = 'error: ' + e; }
+}
+</script>
+</body>
+</html>
