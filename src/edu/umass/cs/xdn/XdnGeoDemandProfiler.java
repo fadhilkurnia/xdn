@@ -144,6 +144,14 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
     windowMillisOverrideForTesting = ms;
   }
 
+  // Test-only: keep the async worker from starting so samples stay queued, letting a test verify
+  // that a report synchronously drains pending samples instead of dropping them.
+  private volatile boolean workerDisabledForTesting = false;
+
+  void setWorkerDisabledForTesting(boolean disabled) {
+    this.workerDisabledForTesting = disabled;
+  }
+
   private static long computeWindowMillis() {
     Long override = windowMillisOverrideForTesting;
     if (override != null) {
@@ -301,7 +309,7 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
   }
 
   private void ensureWorkerStarted() {
-    if (worker != null) {
+    if (worker != null || workerDisabledForTesting) {
       return;
     }
     synchronized (this) {
@@ -323,44 +331,64 @@ public class XdnGeoDemandProfiler extends AbstractDemandProfile {
   private void workerLoop() {
     try {
       while (!Thread.currentThread().isInterrupted()) {
-        Sample s = eventQueue.take();
-        Object item = s.loc();
-        Geolocation geo;
-        if (item instanceof Geolocation g) {
-          geo = g;
-        } else if (item instanceof InetAddress ip) {
-          // GeoIP resolution (mmdb traversal + record decode) happens here, off the request path.
-          geo = geoIpResolver != null ? geoIpResolver.resolve(ip) : null;
-        } else {
-          continue;
-        }
-        if (geo == null) {
-          continue; // GeoIP miss -> no demand cell
-        }
-        int row = latToRow(geo.latitude());
-        int col = lonToCol(geo.longitude());
-        int idx = row * NUM_GRID_COLUMNS + col;
-        mapLock.lock();
-        try {
-          long[] cell = sparseGrid.computeIfAbsent(idx, k -> new long[2]);
-          if (s.write()) {
-            cell[WRITE]++;
-            totalWrites++;
-          } else {
-            cell[READ]++;
-            totalReads++;
-          }
-        } finally {
-          mapLock.unlock();
-        }
+        recordSample(eventQueue.take());
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
   }
 
+  // Resolve a sample's geolocation (GeoIP mmdb lookup for IP-based samples happens here, off the
+  // request hot path) and increment its read/write cell. Shared by the async worker and by
+  // drainPendingSamples().
+  private void recordSample(Sample s) {
+    Object item = s.loc();
+    Geolocation geo;
+    if (item instanceof Geolocation g) {
+      geo = g;
+    } else if (item instanceof InetAddress ip) {
+      geo = geoIpResolver != null ? geoIpResolver.resolve(ip) : null;
+    } else {
+      return;
+    }
+    if (geo == null) {
+      return; // GeoIP miss -> no demand cell
+    }
+    int idx = latToRow(geo.latitude()) * NUM_GRID_COLUMNS + lonToCol(geo.longitude());
+    mapLock.lock();
+    try {
+      long[] cell = sparseGrid.computeIfAbsent(idx, k -> new long[2]);
+      if (s.write()) {
+        cell[WRITE]++;
+        totalWrites++;
+      } else {
+        cell[READ]++;
+        totalReads++;
+      }
+    } finally {
+      mapLock.unlock();
+    }
+  }
+
+  // Synchronously process samples the async worker hasn't drained yet. Called by getDemandStats so a
+  // report does not drop in-flight samples: on the ActiveReplica a report plucks-and-REPLACES this
+  // profile (AggregateDemandProfiler.pluckDemandProfile), orphaning the worker and its queued
+  // samples -- which under-counts demand, most visibly for writes whose completion callbacks enqueue
+  // in a delayed burst. The worker may drain concurrently; each queued sample goes to exactly one of
+  // us, so at most the worker's single in-hand sample can still slip to the next report.
+  private void drainPendingSamples() {
+    Sample s;
+    while ((s = eventQueue.poll()) != null) {
+      recordSample(s);
+    }
+  }
+
   @Override
   public JSONObject getDemandStats() {
+    // Drain any samples still queued for the async worker so this report (which snapshots + resets,
+    // and on the AR replaces this whole profile) doesn't lose them -- the cause of under-counted
+    // (esp. write) demand.
+    drainPendingSamples();
     // Snapshot + reset under the lock so each report covers demand since the previous report.
     List<long[]> entries; // {idx, read, write}
     long numReads;
