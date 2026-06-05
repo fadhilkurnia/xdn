@@ -23,6 +23,14 @@ resource "aws_route53_zone" "acme" {
   comment = "ACME DNS-01 challenge records for the *.${var.base_domain} wildcard (delegated from coredns)."
 }
 
+# Same delegation pattern for the per-replica `edge` sub-zone, so the
+# *.edge.${var.base_domain} wildcard SAN can pass DNS-01 at
+# _acme-challenge.edge.${var.base_domain}. coredns forwards this subzone to here.
+resource "aws_route53_zone" "acme_edge" {
+  name    = "_acme-challenge.edge.${var.base_domain}"
+  comment = "ACME DNS-01 for the *.edge.${var.base_domain} wildcard (per-replica names; delegated from coredns)."
+}
+
 # Instance role assumed by EC2.
 data "aws_iam_policy_document" "ar_assume" {
   statement {
@@ -113,16 +121,23 @@ resource "acme_registration" "reg" {
 }
 
 resource "acme_certificate" "wildcard" {
-  count              = var.issue_cert ? 1 : 0
-  account_key_pem    = acme_registration.reg[0].account_key_pem
-  common_name        = "*.${var.base_domain}"
-  min_days_remaining = 30
+  count           = var.issue_cert ? 1 : 0
+  account_key_pem = acme_registration.reg[0].account_key_pem
+  common_name     = "*.${var.base_domain}"
+  # Per-replica wildcard for the reserved `edge` sub-zone (<nodeid>.edge.<domain>)
+  # so a browser can reach a chosen replica over a cert-valid HTTPS name.
+  subject_alternative_names = ["*.edge.${var.base_domain}"]
+  min_days_remaining        = 30
 
   dns_challenge {
     provider = "route53"
     config = {
-      AWS_REGION         = "us-east-1"
-      AWS_HOSTED_ZONE_ID = aws_route53_zone.acme.zone_id
+      AWS_REGION = "us-east-1"
+      # No AWS_HOSTED_ZONE_ID pin: there are now two challenge names in two
+      # delegated zones (_acme-challenge.<domain> and _acme-challenge.edge.<domain>),
+      # so lego must discover the right zone per challenge. Issue AFTER the cluster
+      # is up (coredns + both delegations serving) so discovery resolves via the
+      # recursive_nameservers below.
     }
   }
 
@@ -130,6 +145,7 @@ resource "acme_certificate" "wildcard" {
 
   depends_on = [
     aws_route53_zone.acme,
+    aws_route53_zone.acme_edge,
     aws_route53domains_registered_domain.xdnapp,
     aws_eip_association.rc,
   ]

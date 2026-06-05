@@ -69,12 +69,31 @@ for ns in ${join(" ", acme_ns)}; do
   [ -n "$ip" ] && ACME_FWD="$ACME_FWD $ip"
 done
 
+# Same delegation for the per-replica `edge` sub-zone's DNS-01 challenge
+# (_acme-challenge.edge.<domain>), needed by the *.edge.<domain> wildcard SAN.
+# Empty (no edge sub-zone) -> the block below is skipped.
+ACME_EDGE_FWD=""
+%{ for ns in acme_edge_ns ~}
+ip=$(getent ahostsv4 "${ns}" | awk '{print $1; exit}')
+[ -n "$ip" ] && ACME_EDGE_FWD="$ACME_EDGE_FWD $ip"
+%{ endfor ~}
+
 # Build the Corefile. The _acme-challenge block is included only if we resolved
 # at least one upstream IP -- otherwise coredns would fail to load and take down
 # ALL DNS (incl. geo-routing); failing open keeps the cluster resolvable.
 {
   echo "${base_domain} {"
+%{ if edge_node_props != "" ~}
+  # xdn directive with the per-replica `edge` node->IPv6 map, so coredns can
+  # answer <nodeid>.edge.${base_domain} with that specific replica's IPv6.
+  cat <<'XDNDIRECTIVE'
+    xdn cp.${base_domain} ${rc_eip} {
+${edge_node_props}
+    }
+XDNDIRECTIVE
+%{ else ~}
   echo "    xdn cp.${base_domain} ${rc_eip}"
+%{ endif ~}
   echo "    errors"
   echo "    log"
   echo "}"
@@ -87,6 +106,13 @@ done
   else
     echo "# WARNING: could not resolve _acme-challenge nameservers at boot;" >&2
     echo "# HTTPS issuance will fail until coredns can forward to Route53." >&2
+  fi
+  if [ -n "$ACME_EDGE_FWD" ]; then
+    echo "_acme-challenge.edge.${base_domain} {"
+    echo "    forward .$ACME_EDGE_FWD"
+    echo "    errors"
+    echo "    log"
+    echo "}"
   fi
   echo ". {"
   echo "    forward . 1.1.1.1"
