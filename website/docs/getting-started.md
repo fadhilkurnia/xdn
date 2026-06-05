@@ -240,9 +240,15 @@ other stateful services, as can be seen below.
     </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>social network app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-socialnetwork</td>
+    <td>Consolidated DeathStarBench social network: <br>users, posts, follows, and timelines. <br>Multi-container: frontend + MongoDB. <br>Tech: Go, MongoDB.</td>
+    <td>
+      Multi-container; launch from a declaration file <br>(see <a href="multi-container.md">Deploy a multi-container service</a>):
+      ``` bash
+      xdn launch socialnetwork \
+          --file=socialnetwork.yaml
+      ```
+    </td>
 </tr>
 <tr>
     <td>fadhilkurnia/xdn-seats</td>
