@@ -14,9 +14,9 @@ variable "ar_ami" {
 }
 
 variable "rc_instance_type" {
-  description = "EC2 instance type for the Reconfigurator (control plane). Graviton t4g.nano (0.5GB; the userdata pins -Xmx256m + a 2GB swapfile). Bump for heavy load."
+  description = "EC2 instance type for the Reconfigurator (control plane). Graviton t4g.small (2GB): the RC runs the reconfigurator JVM + embedded Derby (reconfiguration + paxos DBs) + coredns, which together OOM/thrash on t4g.nano's 0.5GB (Derby c3p0 'could not acquire' errors under reconfiguration load). t4g.nano is DEV/idle only."
   type        = string
-  default     = "t4g.nano"
+  default     = "t4g.small"
 }
 
 variable "ar_instance_type" {
