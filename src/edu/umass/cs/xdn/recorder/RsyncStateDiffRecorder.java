@@ -70,12 +70,36 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     // remove and then re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
     String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+
+    // Preserve any state already materialized at targetDirPath across the wipe below. This dir is
+    // the container's bind-mount source, and by the time preInitialization runs it may already hold
+    // the service state: a reconfiguration restored the previous epoch's final state here
+    // (reviveContainerizedService), or a promoted backup holds its applied state. Without this, the
+    // rm -rf discards it and the container starts empty -- the latest writes are lost. Snapshot the
+    // exact bytes, wipe, then restore them. Database-agnostic: no awareness of file internals.
+    // snapshotDir is a sibling of mnt/ so the rm -rf below cannot touch it.
+    String preinitSnapshotDir = targetDirPath.replaceFirst("/mnt/", "/preinit-snapshot/");
+    String[] existingState = new File(targetDirPath).list();
+    boolean hadState = existingState != null && existingState.length > 0;
+    if (hadState) {
+      Shell.runCommand("rm -rf " + preinitSnapshotDir);
+      Shell.runCommand("mkdir -p " + preinitSnapshotDir);
+      int snapCode =
+          Shell.runCommand(String.format("rsync -a %s %s", targetDirPath, preinitSnapshotDir));
+      hadState = (snapCode == 0);
+    }
+
     String removeDirCommand = String.format("rm -rf %s", targetDirPath);
     int code = Shell.runCommand(removeDirCommand);
     assert code == 0;
     String createDirCommand = String.format("mkdir -p %s", targetDirPath);
     code = Shell.runCommand(createDirCommand);
     assert code == 0;
+
+    if (hadState) {
+      Shell.runCommand(String.format("rsync -a %s %s", preinitSnapshotDir, targetDirPath));
+      Shell.runCommand("rm -rf " + preinitSnapshotDir);
+    }
 
     // remove and then re-create snapshot dir
     // e.g., /tmp/xdn/state/rsync/node1/snp/service1/e0/

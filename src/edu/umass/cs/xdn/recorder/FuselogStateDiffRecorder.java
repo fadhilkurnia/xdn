@@ -278,17 +278,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
     serviceFsSocket.get(serviceName).put(placementEpoch, socketChannel);
 
-    // Restore the snapshotted state into the fresh capture mount (promotion). Restore the durable
-    // bytes (data.db + WAL) verbatim but skip the volatile *-shm, so the container's SQLite
-    // rebuilds
-    // its wal-index from the WAL on open (avoids trusting a stale shared-memory index that would
-    // hide the WAL frames). The WAL is preserved exactly, so the latest committed write from the
-    // previous primary is recovered. Writing through the just-mounted capture FS makes this
-    // restored
-    // state the new primary's initial captured state (propagated to the new backups).
+    // Restore the snapshotted state into the fresh capture mount (promotion), exact bytes. The
+    // promoted container opens the previous primary's latest committed state (it recovers the WAL
+    // on open regardless of the carried-over -shm). Writing through the just-mounted capture FS
+    // makes this restored state the new primary's initial captured state (propagated to backups).
+    // Database-agnostic: no awareness of file internals.
     if (hadExistingState) {
-      int restoreCode =
-          Shell.runCommand(String.format("rsync -a --exclude=*-shm %s %s", snapshotDir, targetDir));
+      int restoreCode = Shell.runCommand(String.format("rsync -a %s %s", snapshotDir, targetDir));
       Shell.runCommand("rm -rf " + snapshotDir);
       logger.log(
           Level.INFO,
