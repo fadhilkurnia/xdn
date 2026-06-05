@@ -117,8 +117,10 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
     int removeTargetDirRetCode = Shell.runCommand("rm -rf " + targetDestDir);
     int removeDiffDirRetCode = Shell.runCommand("rm -rf " + targetDiffFile);
+    // rsync (not `cp -a`): trailing-slash sources copy CONTENTS flat and portably;
+    // `cp -a src/ dst/` nests under an extra dir when dst exists.
     int copySnapshotRetCode =
-        Shell.runCommand(String.format("cp -a %s %s", targetSourceDir, targetDestDir));
+        Shell.runCommand(String.format("rsync -a %s %s", targetSourceDir, targetDestDir));
     assert removeTargetDirRetCode == 0 && removeDiffDirRetCode == 0 && copySnapshotRetCode == 0;
 
     return true;

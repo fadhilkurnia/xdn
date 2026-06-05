@@ -125,8 +125,10 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     // remove previous snapshot zip file, if any
     Shell.runCommand("rm -rf " + targetZipFile);
 
-    // copy the whole state
-    int exitCode = Shell.runCommand(String.format("cp -a %s %s", targetMountDir, targetSnpDir));
+    // copy the whole state (rsync, not `cp -a`: trailing-slash sources copy
+    // CONTENTS flat and portably; `cp -a src/ dst/` nests under an extra dir when
+    // dst exists -- see XdnGigapaxosApp.captureContainerizedServiceFinalState).
+    int exitCode = Shell.runCommand(String.format("rsync -a %s %s", targetMountDir, targetSnpDir));
     if (exitCode != 0) {
       throw new RuntimeException("failed to copy the state");
     }
@@ -187,8 +189,10 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     // un-archive the .zip file
     ZipFiles.unzip(targetZipFile, targetSnpDir);
 
-    // copy back the un-archived state to the mount dir
-    int exitCode = Shell.runCommand(String.format("cp -a %s %s", targetSnpDir, targetMountDir));
+    // copy back the un-archived state to the mount dir (rsync, not `cp -a`: the
+    // mount dir already exists, so `cp -a snp/ mnt/` would nest the state under an
+    // extra dir and the container would never see it; rsync copies contents flat).
+    int exitCode = Shell.runCommand(String.format("rsync -a %s %s", targetSnpDir, targetMountDir));
     if (exitCode != 0) {
       throw new RuntimeException("failed to apply zip stateDiff");
     }
