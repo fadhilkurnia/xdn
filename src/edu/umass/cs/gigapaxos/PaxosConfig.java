@@ -1036,7 +1036,18 @@ public class PaxosConfig {
 		 */
 		ENABLE_RESPONSE_CACHING(true),
 
-		FORWARD_PREEMPTED_REQUESTS(true),
+		/**
+		 * Forwarding preempted requests to the new presumed coordinator can
+		 * result in double execution and there's no good way to prevent it
+		 * without dropping some preempted requests, so this option must be
+		 * false if double execution is undesirable, as would typically be
+		 * the case for non-idempotent requests.
+		 */
+		FORWARD_PREEMPTED_REQUESTS(false),
+
+		BOOTSTRAP_COORD_DETERMINISTIC (false),
+
+		RESEND_HIGHER_PREPARE(true),
 
 		/**
 		 * If true, an active replica will start leader election process (i.e.,
