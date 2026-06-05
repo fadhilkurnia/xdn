@@ -60,7 +60,7 @@ resource "aws_instance" "rc" {
   user_data_replace_on_change = true
   user_data = templatefile("${path.module}/../rc-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
-    rc_eip               = aws_eip.rc.public_ip
+    rc_eip               = data.aws_eip.rc.public_ip
     base_domain          = var.base_domain
     acme_ns              = aws_route53_zone.acme.name_servers
     aws_region           = local.control_region
