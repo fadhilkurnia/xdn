@@ -211,9 +211,15 @@ other stateful services, as can be seen below.
     </td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>movie review app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-moviereview</td>
+    <td>Consolidated DeathStarBench movie-review service: <br>movies, users, ratings, and reviews. <br>Multi-container: frontend + MongoDB. <br>Tech: Go, MongoDB.</td>
+    <td>
+      Multi-container; launch from a declaration file <br>(see <a href="multi-container.md">Deploy a multi-container service</a>):
+      ``` bash
+      xdn launch moviereview \
+          --file=moviereview.yaml
+      ```
+    </td>
 </tr>
 <tr>
     <td>fadhilkurnia/xdn-smallbank</td>
