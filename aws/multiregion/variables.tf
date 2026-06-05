@@ -4,19 +4,19 @@
 variable "rc_ami" {
   description = "us-east-1 AMI for the Reconfigurator (RC) + coredns node. ARM64/Graviton (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-076c0e5bb4575f041" # arm64, aws-geodemand: read/write demand split + XDN_DEMAND_WINDOW_MINUTES
+  default     = "ami-097a579a08bf37775" # arm64, aws-geodemand: SQLite backend + read/write demand + reconfig fixes
 }
 
 variable "ar_ami" {
   description = "us-east-1 AMI for the ActiveReplica (AR) edge nodes; copied into the other AR regions. ARM64/Graviton (for t4g.* ar_instance_type), built from fork/main by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-0c49831b4c38f5ead" # arm64, aws-geodemand: read/write demand split + rsync state-transfer fix
+  default     = "ami-09489712227d4bc8a" # arm64, aws-geodemand: SQLite backend + read/write demand + rsync state-transfer fix
 }
 
 variable "rc_instance_type" {
-  description = "EC2 instance type for the Reconfigurator (control plane). Graviton t4g.small (2GB): the RC runs the reconfigurator JVM + embedded Derby (reconfiguration + paxos DBs) + coredns, which together OOM/thrash on t4g.nano's 0.5GB (Derby c3p0 'could not acquire' errors under reconfiguration load). t4g.nano is DEV/idle only."
+  description = "EC2 instance type for the Reconfigurator (control plane). Graviton t4g.nano (0.5GB) with the SQLite backend (SQL_TYPE=EMBEDDED_SQLITE, CONNECTION_POOLING=false): the RC runs the reconfigurator JVM (-Xmx256m + 2GB swap from rc-userdata) + SQLite (paxos + reconfiguration DBs) + coredns. SQLite drops ~25% RSS and the 72 C3P0 helper threads vs Derby, which is what previously OOM'd nano ('could not acquire' under reconfiguration load) and forced t4g.small. Bump back to t4g.small if running Derby (SQL_TYPE=EMBEDDED_DERBY)."
   type        = string
-  default     = "t4g.small"
+  default     = "t4g.nano"
 }
 
 variable "ar_instance_type" {
