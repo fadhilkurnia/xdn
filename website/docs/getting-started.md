@@ -216,9 +216,16 @@ other stateful services, as can be seen below.
     <td></td>
 </tr>
 <tr>
-    <td></td>
-    <td>Coming soon: <br>smallbank app</td>
-    <td></td>
+    <td>fadhilkurnia/xdn-smallbank</td>
+    <td>SmallBank OLTP benchmark: savings/checking <br>accounts with money-moving transactions. <br>Tech: Go, SQLite.</td>
+    <td>
+      ``` bash
+      xdn launch bank \
+          --image=fadhilkurnia/xdn-smallbank \
+          --state=/app/data/ \
+          --deterministic
+      ```
+    </td>
 </tr>
 <tr>
     <td></td>
