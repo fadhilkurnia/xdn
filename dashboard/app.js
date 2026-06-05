@@ -193,7 +193,7 @@ function renderReplicas(nodes) {
       `<td class="mono">${esc(n.ID)}</td>` +
       `<td class="role-cell">${rolePill(n.ROLE)}</td>` +
       `<td class="status-cell"><span class="muted">…</span></td>` +
-      `<td class="mono">${esc(n.HTTP_ADDRESS || n.ADDRESS || "")}</td>` +
+      `<td class="mono">${replicaAddrCell(n, name)}</td>` +
       `<td class="mono">${geo}</td>`;
     tbody.appendChild(tr);
     if (name) updateReplicaDetail(tr, n, name);
@@ -244,19 +244,47 @@ function parseSockAddr(s) {
   return { host: host.trim(), ip, port };
 }
 
-// Ordered base URLs to reach a replica's HTTP frontend, most-preferred first.
-// The AR terminates TLS on :443 (wildcard *.<domain> cert, :80 redirects), so we
-// try HTTPS first and fall back to HTTP. A DNS hostname (when the placement
-// carries one) is preferred over the raw IP since it can match the TLS cert;
-// the internal clear-HTTP port is the last resort.
+// Per-replica edge name. The control plane is <label>.<base-domain> (e.g.
+// cp.xdnapp.com); each replica is reachable over a cert-valid name
+// <nodeid>.edge.<base-domain> (covered by the *.edge.<base-domain> cert), which
+// coredns resolves to that specific replica's IPv6. Returns null for a bare host.
+function edgeBaseDomain() {
+  const parts = String(controlPlane || "").split(".");
+  return parts.length >= 2 ? parts.slice(1).join(".") : null;
+}
+function edgeHost(nodeId) {
+  const base = edgeBaseDomain();
+  return base ? `${nodeId}.edge.${base}` : null;
+}
+
+// HTTP-address cell: a clickable link that opens the service served BY THIS
+// specific replica (https://<nodeid>.edge.<base>/?_xdnsvc=<svc>). Falls back to
+// the raw advertised address when there's no edge name (bare-host control plane).
+function replicaAddrCell(node, svc) {
+  const host = edgeHost(node.ID);
+  if (host && svc) {
+    const url = `https://${host}/?_xdnsvc=${encodeURIComponent(svc)}`;
+    return `<a href="${esc(url)}" target="_blank" rel="noopener" ` +
+      `title="open ${esc(svc)} served by ${esc(node.ID)}">${esc(host)}</a>`;
+  }
+  return esc(node.HTTP_ADDRESS || node.ADDRESS || "");
+}
+
+// Ordered base URLs to reach a replica's frontend, most-preferred first. The
+// cert-valid per-replica edge name (HTTPS) is tried first (works from a browser);
+// the raw advertised address is kept as a fallback for non-edge deployments.
 function replicaInfoBases(node) {
+  const bases = [];
+  const host = edgeHost(node.ID);
+  if (host) bases.push(`https://${host}`); // cert-valid per-replica name
   const addr = parseSockAddr(node.HTTP_ADDRESS || node.ADDRESS);
-  if (!addr) return [];
-  const ipH = addr.ip.includes(":") ? `[${addr.ip}]` : addr.ip; // bracket IPv6
-  const authority = addr.host || ipH; // hostname preferred (matches the cert)
-  const bases = [`https://${authority}`, `http://${authority}`];
-  if (addr.port && addr.port !== 80 && addr.port !== 443) {
-    bases.push(`http://${ipH}:${addr.port}`); // internal clear HTTP frontend port
+  if (addr) {
+    const ipH = addr.ip.includes(":") ? `[${addr.ip}]` : addr.ip; // bracket IPv6
+    const authority = addr.host || ipH;
+    bases.push(`https://${authority}`, `http://${authority}`);
+    if (addr.port && addr.port !== 80 && addr.port !== 443) {
+      bases.push(`http://${ipH}:${addr.port}`); // internal clear HTTP frontend port
+    }
   }
   return bases;
 }
