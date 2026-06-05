@@ -115,6 +115,11 @@ locals {
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
     "BYTEIFY_NON_INT_NODE_IDS=true",
+    # Place a new service at DEFAULT_NUM_REPLICAS actives (consistent-hash-chosen),
+    # not at every active (the gigapaxos library default REPLICATE_ALL=true). Matches
+    # conf/gigapaxos.xdn.*; the geo-demand policy re-places replicas after creation.
+    "REPLICATE_ALL=false",
+    "DEFAULT_NUM_REPLICAS=3",
     "DEMAND_PROFILE_TYPE=edu.umass.cs.xdn.XdnGeoDemandProfiler",
     "ENABLE_ACTIVE_REPLICA_HTTP=true",
     "ENABLE_ACTIVE_REPLICA_HTTP_PORT_80=false",
