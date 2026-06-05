@@ -118,6 +118,14 @@ locals {
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
     "BYTEIFY_NON_INT_NODE_IDS=true",
+    # Embedded SQLite backend (vs the default Embedded Derby + C3P0 pool) for the paxos logs
+    # (RC + AR) and the reconfigurator DB (RC). ~25% lower RSS and ~72 fewer JVM threads (no
+    # C3P0 helper threads) -> lets the RC run on a smaller machine (t4g.nano). SQL_TYPE is shared
+    # by paxos + reconfiguration. CONNECTION_POOLING=false uses the thread-free SimpleDataSource;
+    # DB_MAX_CONNECTIONS stays at its default 0 (a finite cap deadlocks gigapaxos -- see
+    # docs/sqlite-backend.md). The sqlite-jdbc driver is bundled into the gigapaxos fat jar.
+    "SQL_TYPE=EMBEDDED_SQLITE",
+    "CONNECTION_POOLING=false",
     # Place a new service at DEFAULT_NUM_REPLICAS actives (consistent-hash-chosen),
     # not at every active (the gigapaxos library default REPLICATE_ALL=true). Matches
     # conf/gigapaxos.xdn.*; the geo-demand policy re-places replicas after creation.
