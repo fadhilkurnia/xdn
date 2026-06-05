@@ -577,6 +577,47 @@ public class PaxosConfig {
 		SQL_TYPE("EMBEDDED_DERBY"),
 
 		/**
+		 * Selects the paxos logger implementation. "SQL" (default) uses the
+		 * JDBC-based {@link edu.umass.cs.gigapaxos.SQLPaxosLogger} (whose engine
+		 * is chosen by {@link #SQL_TYPE}); "ROCKSDB" uses the embedded key-value
+		 * {@code RocksDBPaxosLogger}. Unlike SQL_TYPE, RocksDB is not a JDBC
+		 * engine, so it is a distinct logger implementation rather than a
+		 * SQL.SQLType value.
+		 */
+		PAXOS_LOGGER("SQL"),
+
+		/**
+		 * For the ROCKSDB paxos logger: if true, every paxos log write is fsync'd
+		 * (RocksDB WriteOptions.setSync). Safer (Derby-equivalent durability),
+		 * slower. If false, writes go to RocksDB's WAL without per-write fsync
+		 * (lost only on OS/power crash), faster.
+		 */
+		ROCKSDB_SYNC_WRITES(true),
+
+		/**
+		 * Total RocksDB block-cache budget in MB, shared by ALL RocksDB
+		 * instances in the JVM (paxos logger + reconfigurator DB). Bounds the
+		 * native memory used to cache data/index/filter blocks. Small by default
+		 * for low-memory (0.5&ndash;1 GB) reconfigurator deployments.
+		 */
+		ROCKSDB_BLOCK_CACHE_MB(32),
+
+		/**
+		 * Total RocksDB memtable (write buffer) budget in MB, shared by all
+		 * RocksDB instances in the JVM via a WriteBufferManager. Bounds the
+		 * native memory used by in-memory write buffers regardless of write
+		 * load or the number of column families.
+		 */
+		ROCKSDB_MEMTABLE_BUDGET_MB(16),
+
+		/**
+		 * Per-column-family RocksDB write buffer (memtable) size in MB. Kept
+		 * small so a single column family cannot reserve a large memtable; the
+		 * aggregate is bounded by ROCKSDB_MEMTABLE_BUDGET_MB.
+		 */
+		ROCKSDB_WRITE_BUFFER_MB(4),
+
+		/**
 		 * SQLite WAL durability level (the {@code synchronous} pragma). "FULL"
 		 * fsyncs every commit (survives an OS/power crash); "NORMAL" fsyncs only
 		 * at WAL checkpoints (survives a process crash, small loss window on an

@@ -374,8 +374,9 @@ public class PaxosManager<NodeIDType> {
         this.corpses = new HashMap<String, PaxosInstanceStateMachine>();
         // this.activePaxii = new HashMap<String, ActivePaxosState>();
         this.messenger = (new PaxosMessenger<NodeIDType>(niot, this.integerMap));
-        this.paxosLogger = new SQLPaxosLogger(this.myID, id.toString(),
-                paxosLogFolder, this.wrapMessenger(this.messenger));
+        this.paxosLogger = AbstractPaxosLogger.createLogger(this.myID,
+                id.toString(), paxosLogFolder,
+                this.wrapMessenger(this.messenger));
         this.nullCheckpointsEnabled = enableNullCheckpoints;
         // periodically remove active state for idle paxii
         executor.scheduleWithFixedDelay(new Deactivator(), 0,

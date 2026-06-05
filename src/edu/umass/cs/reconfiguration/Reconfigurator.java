@@ -144,7 +144,7 @@ public class Reconfigurator<NodeIDType> implements
         this.messenger = m;
         this.consistentNodeConfig = new ConsistentReconfigurableNodeConfig<NodeIDType>(nc);
         this.DB = new RepliconfigurableReconfiguratorDB<NodeIDType>(
-                new SQLReconfiguratorDB<NodeIDType>(this.messenger.getMyID(),
+                AbstractReconfiguratorDB.createDB(this.messenger.getMyID(),
                         this.consistentNodeConfig), getMyID(),
                 this.consistentNodeConfig, this.messenger, startCleanSlate);
         // recovery complete at this point

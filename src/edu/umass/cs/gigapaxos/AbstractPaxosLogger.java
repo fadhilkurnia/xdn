@@ -113,6 +113,25 @@ public abstract class AbstractPaxosLogger {
 		addLogger(this);
 	}
 
+	/**
+	 * Factory that selects the paxos logger implementation based on the
+	 * {@link PC#PAXOS_LOGGER} config: "ROCKSDB" -&gt;
+	 * {@link RocksDBPaxosLogger}, anything else -&gt; {@link SQLPaxosLogger}
+	 * (the default; its SQL engine is in turn chosen by {@code SQL_TYPE}).
+	 *
+	 * @param id
+	 * @param strID
+	 * @param logDir
+	 * @param messenger
+	 * @return A paxos logger of the configured type.
+	 */
+	public static AbstractPaxosLogger createLogger(int id, String strID,
+			String logDir, PaxosMessenger<?> messenger) {
+		if ("ROCKSDB".equalsIgnoreCase(Config.getGlobalString(PC.PAXOS_LOGGER)))
+			return new RocksDBPaxosLogger(id, strID, logDir, messenger);
+		return new SQLPaxosLogger(id, strID, logDir, messenger);
+	}
+
 	protected static abstract class PaxosPacketizer {
 		abstract protected PaxosPacket stringToPaxosPacket(String str)
 				throws JSONException;

@@ -109,8 +109,9 @@ public class RepliconfigurableReconfiguratorDB<NodeIDType> extends
 				"{0} after recovery has node config records = {1}",
 				new Object[] {
 						this,
-						((SQLReconfiguratorDB<NodeIDType>) this.app)
-								.getNodeConfigRecords(this.consistentNodeConfig) });
+						this.app instanceof SQLReconfiguratorDB ? ((SQLReconfiguratorDB<NodeIDType>) this.app)
+								.getNodeConfigRecords(this.consistentNodeConfig)
+								: this.app });
 	}
 
 	// needed by Reconfigurator

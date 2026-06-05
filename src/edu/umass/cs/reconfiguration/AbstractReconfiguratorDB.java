@@ -131,6 +131,23 @@ public abstract class AbstractReconfiguratorDB<NodeIDType> implements
 	}
 
 	/**
+	 * Factory that selects the reconfigurator DB implementation based on the
+	 * {@link RC#RECONFIGURATOR_DB} config: "ROCKSDB" -&gt;
+	 * {@link RocksDBReconfiguratorDB}, anything else -&gt;
+	 * {@link SQLReconfiguratorDB} (default).
+	 *
+	 * @param myID
+	 * @param nc
+	 * @return A reconfigurator DB of the configured type.
+	 */
+	public static <NodeIDType> AbstractReconfiguratorDB<NodeIDType> createDB(
+			NodeIDType myID, ConsistentReconfigurableNodeConfig<NodeIDType> nc) {
+		if ("ROCKSDB".equalsIgnoreCase(Config.getGlobalString(RC.RECONFIGURATOR_DB)))
+			return new RocksDBReconfiguratorDB<NodeIDType>(myID, nc);
+		return new SQLReconfiguratorDB<NodeIDType>(myID, nc);
+	}
+
+	/**
 	 * @param name
 	 * @param epoch
 	 * @return ReconfigurationRecord for {@code name:epoch}.

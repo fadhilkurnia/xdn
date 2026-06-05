@@ -163,6 +163,13 @@ public class ReconfigurationConfig {
         SQL_TYPE("EMBEDDED_DERBY"),
 
         /**
+         * Selects the reconfigurator DB implementation. "SQL" (default) uses the
+         * JDBC-based {@link edu.umass.cs.reconfiguration.SQLReconfiguratorDB};
+         * "ROCKSDB" uses the embedded key-value RocksDBReconfiguratorDB.
+         */
+        RECONFIGURATOR_DB("SQL"),
+
+        /**
          * Whether to use C3P0 connection pooling for the reconfigurator DB's
          * SQL data source. When false, a lightweight non-pooling data source is
          * used (a fresh connection per operation, no idle connections or pool
