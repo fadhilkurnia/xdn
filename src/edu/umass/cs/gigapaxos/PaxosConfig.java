@@ -577,6 +577,34 @@ public class PaxosConfig {
 		SQL_TYPE("EMBEDDED_DERBY"),
 
 		/**
+		 * SQLite WAL durability level (the {@code synchronous} pragma). "FULL"
+		 * fsyncs every commit (survives an OS/power crash); "NORMAL" fsyncs only
+		 * at WAL checkpoints (survives a process crash, small loss window on an
+		 * OS/power crash). For strict paxos safety on power loss use FULL.
+		 */
+		SQLITE_SYNCHRONOUS("NORMAL"),
+
+		/**
+		 * Whether to use C3P0 connection pooling for the paxos logger's SQL
+		 * data source. When false, a lightweight non-pooling data source is
+		 * used (a fresh connection per operation, no idle connections or pool
+		 * helper threads), which reduces the memory/thread footprint at some
+		 * throughput cost. Should generally be false for the single-writer
+		 * EMBEDDED_SQLITE engine.
+		 */
+		CONNECTION_POOLING(true),
+
+		/**
+		 * Maximum number of concurrently outstanding DB connections when using
+		 * the non-pooling (SimpleDataSource) path. 0 means unbounded. Set to 1
+		 * to serialize all DB access through a single connection ("single
+		 * writer"), which avoids SQLite WAL SQLITE_BUSY_SNAPSHOT conflicts at
+		 * the cost of node-local DB concurrency. Ignored when CONNECTION_POOLING
+		 * is true (C3P0).
+		 */
+		DB_MAX_CONNECTIONS(0),
+
+		/**
 		 * Maximum size of a paxos replica group.
 		 */
 		MAX_GROUP_SIZE(16),
