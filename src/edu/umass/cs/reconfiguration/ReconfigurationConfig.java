@@ -566,6 +566,12 @@ public class ReconfigurationConfig {
          *              and ship it IN-BAND as the first ordered ApplyStateDiff (atomic capture -> no
          *              rsync seam, no inter-node SSH). Backups are set up via a paxos-ordered
          *              InitBackup so they apply the init diff after their apply mount is ready.
+         *              LIMITATION: the whole init state travels in-band through the JVM/paxos
+         *              pipeline (held several times over: packet byte[], ReplicableClientRequest,
+         *              protobuf ByteString, journal entry), so a LARGE initial state OOMs small-heap
+         *              ARs -- validated to OOM a 256MB (even 512MB) heap at ~64MB, while a few MB is
+         *              fine. RSYNC streams bytes filesystem-to-filesystem out-of-band with no such
+         *              limit; use RSYNC for services with large non-deterministic initial state.
          * Default RSYNC until RECORDER is proven out.
          */
         XDN_PB_INIT_SYNC_MODE("RSYNC"),

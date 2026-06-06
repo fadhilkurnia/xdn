@@ -36,6 +36,13 @@ import (
 // Env:
 //   STATE_DIR          state directory (default /app/data)
 //   BOOTSTRAP_ROWS     number of random rows written on first bootstrap (default 200)
+//   BOOTSTRAP_ROW_BYTES raw random bytes per row, hex-encoded on disk so ~2x (default 8). Bump it
+//                      for a LARGE initial state, e.g. ROWS=200 ROW_BYTES=262144 -> ~100MB. NOTE:
+//                      RECORDER init-sync ships the whole state in-band through the JVM/paxos and
+//                      OOMs the small-heap ARs well before ~64MB; large init state needs RSYNC.
+//   ALWAYS_BOOTSTRAP   "true" -> re-randomize on EVERY start (drop the skip-guard). A promoted
+//                      backup overwrites the synced state, so the boot_id CHANGES on every primary
+//                      change (vs the default, which preserves the original primary's state).
 //   BOOTSTRAP_WRITE_MS spread the bootstrap writes over this many ms (default 0 = one fast burst,
 //                      quiescent at capture). Set > the migrate-wait (~5s), e.g. 8000, to make rows
 //                      land DURING the init-sync window -- useful to stress the RSYNC seam.
@@ -57,11 +64,22 @@ func main() {
 		log.Fatalf("mkdir %s: %v", stateDir, err)
 	}
 
-	if existing, err := os.ReadFile(bootPath); err == nil && len(existing) > 0 {
+	// ALWAYS_BOOTSTRAP=true is the PATHOLOGICAL mode: re-generate random state on EVERY start,
+	// even when synced state already exists. This is the negative control -- it deliberately drops
+	// the skip-guard, so a promoted backup overwrites the primary's synced state with a fresh random
+	// boot_id. (Under RECORDER init-sync the new primary then re-syncs that fresh state to the
+	// backups, so they stay consistent but the boot_id CHANGES on every primary change.)
+	always := env("ALWAYS_BOOTSTRAP", "") == "true" || env("ALWAYS_BOOTSTRAP", "") == "1"
+	if existing, err := os.ReadFile(bootPath); !always && err == nil && len(existing) > 0 {
 		bootID = trimNL(string(existing))
 		atomic.StoreInt32(&bootDone, 1)
 		log.Printf("randstate: existing state (boot_id=%s) -- skipping bootstrap", bootID)
 	} else {
+		if always {
+			// wipe any synced state so each bootstrap is a clean random slate
+			_ = os.Remove(logPath)
+			log.Printf("randstate: ALWAYS_BOOTSTRAP=true -- re-randomizing (ignoring existing state)")
+		}
 		bootstrap()
 	}
 
@@ -90,12 +108,17 @@ func bootstrap() {
 
 	rows := atoiDefault(env("BOOTSTRAP_ROWS", "200"), 200)
 	spreadMs := atoiDefault(env("BOOTSTRAP_WRITE_MS", "0"), 0)
+	// raw random bytes per row (hex-encoded on disk, so each row is ~2x this). Bump it to make a
+	// LARGE initial state, e.g. BOOTSTRAP_ROWS=200 BOOTSTRAP_ROW_BYTES=262144 -> ~100MB, to test
+	// RECORDER shipping a big init diff in-band (rsync handles large state trivially; RECORDER's
+	// single in-band ApplyStateDiff is the untested path).
+	rowBytes := atoiDefault(env("BOOTSTRAP_ROW_BYTES", "8"), 8)
 
 	if spreadMs <= 0 {
 		// Fast synchronous burst: all random state is written before we start serving, so it is
 		// quiescent by the time the init-sync captures it.
 		for i := 0; i < rows; i++ {
-			appendLine(fmt.Sprintf("row %d %s", i, randHex(8)))
+			appendLine(fmt.Sprintf("row %d %s", i, randHex(rowBytes)))
 		}
 		atomic.StoreInt32(&bootDone, 1)
 		log.Printf("randstate: bootstrapped %d rows (burst)", rows)
@@ -112,7 +135,7 @@ func bootstrap() {
 		}
 		gap := time.Duration(spreadMs) * time.Millisecond / time.Duration(denom)
 		for i := 0; i < rows; i++ {
-			appendLine(fmt.Sprintf("row %d %s", i, randHex(8)))
+			appendLine(fmt.Sprintf("row %d %s", i, randHex(rowBytes)))
 			time.Sleep(gap)
 		}
 		atomic.StoreInt32(&bootDone, 1)

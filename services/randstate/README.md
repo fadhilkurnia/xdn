@@ -24,6 +24,13 @@ Pure Go (CGO disabled) → trivial multi-arch.
 
 ## Env
 - `BOOTSTRAP_ROWS` (default 200) — random rows written on first bootstrap.
+- `BOOTSTRAP_ROW_BYTES` (default 8) — raw random bytes per row (hex-encoded on disk, so ~2×). Bump
+  it for a **large initial state**, e.g. `ROWS=200 ROW_BYTES=262144` ≈ 100 MB. ⚠️ RECORDER ships the
+  whole init state in-band through the JVM/paxos pipeline and **OOMs the small-heap (256 MB) ARs**
+  well before ~64 MB; large initial state needs `RSYNC`. ~4 MB works fine under RECORDER.
+- `ALWAYS_BOOTSTRAP` (default unset) — `true` re-randomizes on **every** start (drops the skip-guard).
+  A promoted backup overwrites the synced state, so `boot_id` **changes** on every primary change —
+  the negative control showing why the skip-guard, not init-sync, preserves a service's identity.
 - `BOOTSTRAP_WRITE_MS` (default 0) — 0 = one fast burst (quiescent at capture). Set above the
   migrate-wait (~5s), e.g. `8000`, to make rows land *during* the init-sync window to stress the
   RSYNC seam.
