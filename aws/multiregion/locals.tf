@@ -131,6 +131,12 @@ locals {
     # conf/gigapaxos.xdn.*; the geo-demand policy re-places replicas after creation.
     "REPLICATE_ALL=false",
     "DEFAULT_NUM_REPLICAS=3",
+    # Primary-backup non-deterministic init-sync mode. RECORDER ships the primary's bootstrap
+    # state in-band as the first paxos-ordered ApplyStateDiff (atomic, no rsync seam / inter-node
+    # SSH). Validated end-to-end; recorder defaults to FUSELOG and non-det-init defaults on.
+    # NOTE: RECORDER funnels the whole init state through the JVM/paxos heap, so it OOMs the
+    # small-heap ARs for LARGE initial state (~64MB) -- such services must stay on RSYNC.
+    "XDN_PB_INIT_SYNC_MODE=RECORDER",
     "DEMAND_PROFILE_TYPE=edu.umass.cs.xdn.XdnGeoDemandProfiler",
     # Rolling geo-demand window in MINUTES (-1 = cumulative all-time). 2 => the heatmap and
     # demand-driven placement reflect only the last 2 minutes of load. Demonstrates the
