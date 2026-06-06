@@ -2762,10 +2762,24 @@ public class XdnGigapaxosApp
     // This allows the PB pipeline to function (captureStateDiff enabled) without waiting for
     // the full initial state transfer. Backups won't have the initial state but will receive
     // statediffs going forward. Use only for benchmarking.
-    boolean skipInitSync = Boolean.getBoolean("XDN_SKIP_INIT_SYNC");
+    //
+    // RECORDER init-sync mode ALSO skips the rsync here, but (unlike XDN_SKIP_INIT_SYNC) the
+    // PrimaryBackupManager then captures the bootstrap state via the configured recorder and ships
+    // it in-band as the first ApplyStateDiff -- so backups DO get the initial state, atomically and
+    // without the rsync seam. Marking init complete here is what lets that capture run (the
+    // captureStatediff guard requires initializationSucceed).
+    boolean recorderInitSync =
+        "RECORDER"
+            .equalsIgnoreCase(
+                Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE));
+    boolean skipInitSync = Boolean.getBoolean("XDN_SKIP_INIT_SYNC") || recorderInitSync;
     if (skipInitSync) {
       System.out.println(
-          "Skipping initContainerSync for " + serviceName + " (XDN_SKIP_INIT_SYNC=true)");
+          "Skipping rsync initContainerSync for "
+              + serviceName
+              + " (recorderInitSync="
+              + recorderInitSync
+              + ")");
       System.out.println("Completed initContainerSync for " + serviceName);
       service.initializationSucceed = true;
     } else {

@@ -310,8 +310,17 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // only capture incremental writes from user requests. Without this, the first
     // captureStateDiff after a service like MySQL initializes would try to transfer
     // all init writes (potentially hundreds of MB), blocking the PrimaryEpoch lock.
+    //
+    // EXCEPTION: in RECORDER init-sync mode the bootstrap (init) state is exactly what we ship
+    // in-band as the first ApplyStateDiff, so it must NOT be drained here -- the
+    // PrimaryBackupManager captures and proposes it right after init. Only RSYNC init-sync drains
+    // (it ships the init state out-of-band, making the buffered diffs redundant).
+    boolean recorderInitSync =
+        "RECORDER"
+            .equalsIgnoreCase(
+                Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE));
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
-    if (epochToChannelMap != null) {
+    if (!recorderInitSync && epochToChannelMap != null) {
       SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
       if (socketChannel != null) {
         drainStateDiff(socketChannel, serviceName, placementEpoch);

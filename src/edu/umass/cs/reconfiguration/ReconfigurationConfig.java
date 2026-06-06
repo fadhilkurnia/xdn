@@ -557,6 +557,20 @@ public class ReconfigurationConfig {
         XDN_PB_STATEDIFF_RECORDER_TYPE("FUSELOG"),
 
         /**
+         * How the primary seeds the backups with its non-deterministic INITIAL state.
+         *   RSYNC    : out-of-band rsync bulk-copy of the primary's container state to each backup,
+         *              then drain the recorder's diff buffer. Legacy; correct only if writes are
+         *              quiesced for the whole rsync (otherwise a write concurrent with the smeared
+         *              rsync is neither baselined nor shipped -> silently lost). Needs inter-node SSH.
+         *   RECORDER : capture the initial state with the configured XDN_PB_STATEDIFF_RECORDER_TYPE
+         *              and ship it IN-BAND as the first ordered ApplyStateDiff (atomic capture -> no
+         *              rsync seam, no inter-node SSH). Backups are set up via a paxos-ordered
+         *              InitBackup so they apply the init diff after their apply mount is ready.
+         * Default RSYNC until RECORDER is proven out.
+         */
+        XDN_PB_INIT_SYNC_MODE("RSYNC"),
+
+        /**
          * Enable mechanism to sync non-deterministic state in primary-backup during
          * initialization. This is generally needed for application that generates
          * non-deterministic safety-critical state, such as apps that use MongoDB, MySQL, etc.

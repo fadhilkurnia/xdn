@@ -75,6 +75,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private final boolean ENABLE_NON_DETERMINISTIC_INIT = Config.getGlobalBoolean(
             ReconfigurationConfig.RC.XDN_PB_ENABLE_NON_DETERMINISTIC_INIT);
 
+    // How the primary seeds backups with its non-deterministic initial state (see
+    // XDN_PB_INIT_SYNC_MODE). RSYNC = legacy out-of-band rsync; RECORDER = capture via the
+    // configured recorder and ship in-band as the first ordered ApplyStateDiff (atomic, no seam).
+    private enum InitSyncMode {RSYNC, RECORDER}
+    private final InitSyncMode INIT_SYNC_MODE =
+            "RECORDER".equalsIgnoreCase(
+                    Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE))
+                    ? InitSyncMode.RECORDER : InitSyncMode.RSYNC;
+
     // Retry configuration for StartEpochPacket proposal
     // This handles the race condition where other nodes may not have created their paxos instances yet
     private static final int START_EPOCH_PROPOSAL_MAX_RETRIES = 50;
@@ -1655,6 +1664,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // executeInitBackupPacket is being called by execute() in the PaxosMiddlewareApp
     private boolean executeInitBackupPacket(InitBackupPacket packet) {
         String serviceName = packet.getServiceName();
+        // In RECORDER init-sync the InitBackup is proposed through paxos, so EVERY replica executes
+        // it -- but the primary is in capture mode and must not re-init itself as a backup. (In the
+        // legacy RSYNC path this is messaged only to backups, so the guard is a no-op there.)
+        if (this.currentRole.get(serviceName) == Role.PRIMARY) {
+            return true;
+        }
         return this.replicableApp.restore(serviceName, "nondeter:start:backup");
     }
 
@@ -2096,6 +2111,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 .filter(node -> !node.equals(myNodeID))
                 .collect(Collectors.toSet());
 
+        // RECORDER init-sync: order everything through paxos -- an InitBackup (sets up each backup's
+        // apply mount) followed by the captured initial state diff (1.4a). RSYNC init-sync (and
+        // disabled init) just message InitBackup to start fuselog-apply on the backups; the initial
+        // state was already pushed out-of-band by nonDeterministicInitialization's rsync.
+        if (INIT_SYNC_MODE == InitSyncMode.RECORDER && ENABLE_NON_DETERMINISTIC_INIT) {
+            recorderModeInitSync(groupName);
+            return;
+        }
+
         InitBackupPacket initPacket = new InitBackupPacket(groupName);
         GenericMessagingTask<NodeIDType, InitBackupPacket> m = new GenericMessagingTask<>(backupNodes.toArray(), initPacket);
 
@@ -2107,6 +2131,48 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         } catch (IOException | JSONException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * RECORDER init-sync (1.4a). Seed the backups entirely in-band and strictly ordered via paxos:
+     *   (1) propose an InitBackup so every backup sets up its apply mount (executeInitBackupPacket),
+     *   (2) in its commit callback, atomically capture the primary's bootstrap state via the
+     *       configured recorder and propose it as the FIRST ApplyStateDiff.
+     * Because the capture is atomic (and the per-request capture thread continues from exactly that
+     * point) the backups see a totally-ordered, gap-free log: [init diff][req-1 diff]... -- no rsync
+     * seam, no write quiescence needed, and no inter-node SSH.
+     */
+    private void recorderModeInitSync(String groupName) {
+        // We just became PRIMARY (this runs inside the StartEpoch commit callback, after the
+        // line-2095 coordinator wait) so we should be the paxos coordinator already; be defensive
+        // before proposing. getPaxosCoordinator may return null transiently -> treat as not-us.
+        NodeIDType coordinator = this.paxosManager.getPaxosCoordinator(groupName);
+        if (coordinator == null || !coordinator.equals(this.myNodeID)) {
+            this.paxosManager.tryToBePaxosCoordinator(groupName);
+        }
+        PrimaryEpoch<NodeIDType> epoch = this.currentPrimaryEpoch.get(groupName);
+
+        InitBackupPacket initPacket = new InitBackupPacket(groupName);
+        ReplicableClientRequest initReq = ReplicableClientRequest.wrap(initPacket);
+        initReq.setClientAddress(messenger.getListeningSocketAddress());
+        this.paxosManager.propose(groupName, initReq, (ip, ih) -> {
+            // Backups have set up their apply mounts; capture + ship the bootstrap state in-band.
+            byte[] initDiff = backupableApp.captureStatediff(groupName);
+            if (initDiff == null || initDiff.length == 0) {
+                logger.log(Level.INFO, String.format(
+                        "%s:%s - RECORDER init-sync: empty initial state for %s (nothing to ship)",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(), groupName));
+                return;
+            }
+            ApplyStateDiffPacket diffPkt = new ApplyStateDiffPacket(groupName, epoch, initDiff);
+            ReplicableClientRequest diffReq = ReplicableClientRequest.wrap(diffPkt);
+            diffReq.setClientAddress(messenger.getListeningSocketAddress());
+            this.paxosManager.propose(groupName, diffReq, (dp, dh) ->
+                    logger.log(Level.INFO, String.format(
+                            "%s:%s - RECORDER init-sync: initial state diff committed for %s (size=%d)",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            groupName, initDiff.length)));
+        });
     }
 
     private void processOutstandingRequests() {
@@ -2375,6 +2441,14 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
             if (request instanceof ApplyStateDiffPacket stateDiffPacket) {
                 return this.primaryBackupManager.executeApplyStateDiffPacket(stateDiffPacket);
+            }
+
+            // RECORDER init-sync proposes InitBackup through paxos (so it is ordered before the
+            // init-state diff). Paxos unwraps the ReplicableClientRequest, so it arrives here as a
+            // raw InitBackupPacket -- dispatch it the same way as StartEpoch/ApplyStateDiff above.
+            // (In legacy RSYNC mode InitBackup never reaches this path; it is messaged directly.)
+            if (request instanceof InitBackupPacket initBackupPacket) {
+                return this.primaryBackupManager.executeInitBackupPacket(initBackupPacket);
             }
 
             // Unwrap ReplicableClientRequest to get the inner app request
