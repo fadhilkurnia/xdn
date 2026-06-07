@@ -55,7 +55,8 @@ public class XdnGigapaxosApp
 
   private final boolean IS_RESTART_UPON_STATE_DIFF_APPLY = false;
 
-  // FUSE recorder binaries, installed by deployment/aws/useast1/create_ar_ami.sh into /usr/local/bin (symlinks to
+  // FUSE recorder binaries, installed by deployment/aws/useast1/create_ar_ami.sh into
+  // /usr/local/bin (symlinks to
   // /opt/xdn/bin). These MUST match FuselogStateDiffRecorder's paths -- they were previously
   // hardcoded to a CloudLab home dir (/users/fadhil/fuse/...) that does not exist on AWS, so the
   // FUSELOG recorder's container mount silently failed off-CloudLab.
