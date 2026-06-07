@@ -1,0 +1,9 @@
+# geni-lib + its runtime deps. geni-lib's setup.py under-declares these, so we
+# list them explicitly (otherwise `import geni.util` fails with ModuleNotFound).
+# Verified to import on CPython 3.10 (the stock /usr/bin/python3 here).
+geni-lib==0.9.9.4
+six
+lxml
+requests
+cryptography
+wrapt
