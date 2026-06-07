@@ -581,6 +581,12 @@ public class HttpReconfigurator {
     static class HttpReconfiguratorHandler extends
             SimpleChannelInboundHandler<Object> {
 
+        // Upper bound for a control-plane request (create/destroy/info) so the HTTP
+        // call fails fast with 504 instead of blocking forever if the reconfigurator
+        // silently drops the request (e.g. re-creating a name still pending deletion).
+        // Generous enough for a normal create (placement + container start).
+        private static final long REQUEST_TIMEOUT_MS = 60_000;
+
         private final String rcNodeId;
 
         private HttpRequest request;
@@ -975,7 +981,8 @@ public class HttpReconfigurator {
                 ClientReconfigurationPacket req = buildClientReconfigurationPacket(
                         PacketType.CREATE_SERVICE_NAME, name, initialState, ctx.channel());
                 ClientReconfigurationPacket resp =
-                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(req);
+                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(
+                                req, REQUEST_TIMEOUT_MS);
                 this.writeCrpResponse(resp, ctx,
                         HttpResponseStatus.CREATED, HttpResponseStatus.CONFLICT);
             } catch (HTTPException | JSONException e) {
@@ -989,7 +996,8 @@ public class HttpReconfigurator {
                 ClientReconfigurationPacket req = buildClientReconfigurationPacket(
                         PacketType.DELETE_SERVICE_NAME, name, null, ctx.channel());
                 ClientReconfigurationPacket resp =
-                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(req);
+                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(
+                                req, REQUEST_TIMEOUT_MS);
                 this.writeCrpResponse(resp, ctx,
                         HttpResponseStatus.OK, HttpResponseStatus.NOT_FOUND);
             } catch (HTTPException | JSONException e) {
@@ -1004,7 +1012,8 @@ public class HttpReconfigurator {
                 ClientReconfigurationPacket req = buildClientReconfigurationPacket(
                         PacketType.REQUEST_ACTIVE_REPLICAS, name, null, ctx.channel());
                 ClientReconfigurationPacket resp =
-                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(req);
+                        (ClientReconfigurationPacket) this.rcFunctions.sendRequest(
+                                req, REQUEST_TIMEOUT_MS);
                 this.writeCrpResponse(resp, ctx,
                         HttpResponseStatus.OK, HttpResponseStatus.NOT_FOUND);
             } catch (HTTPException | JSONException e) {
@@ -1068,8 +1077,14 @@ public class HttpReconfigurator {
                                       HttpResponseStatus successStatus,
                                       HttpResponseStatus failureStatus) {
             if (crp == null) {
+                // sendRequest(.., REQUEST_TIMEOUT_MS) returned null: the reconfigurator did not
+                // respond in time (e.g. it silently dropped the request because the name is still
+                // pending deletion). Fail fast with 504 instead of leaving the client hanging.
                 this.writeJsonResponse(
-                        "{\"FAILED\":true}", HttpResponseStatus.INTERNAL_SERVER_ERROR, ctx);
+                        "{\"FAILED\":true,\"RESPONSE_MESSAGE\":\"the reconfigurator did not respond"
+                                + " in time; the name may still be pending deletion -- retry shortly"
+                                + " or use a different name\"}",
+                        HttpResponseStatus.GATEWAY_TIMEOUT, ctx);
                 return;
             }
             this.writeJsonResponse(

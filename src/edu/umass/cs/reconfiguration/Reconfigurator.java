@@ -24,6 +24,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 
 import javax.net.ssl.SSLException;
@@ -828,7 +829,25 @@ public class Reconfigurator<NodeIDType> implements
                     create.getReconfigureUponActivesChangePolicy()
             );
         } else if (!record.isReady()) {
-            // drop silently so sender can time out
+            // The name still has a record but isn't READY. If it is mid-deletion
+            // (WAIT_DELETE), a native client would time out and retry, but the
+            // synchronous HTTP/dashboard path has no retry and hangs indefinitely.
+            // Fail fast with a clear message instead of dropping silently. (The
+            // name stays reserved until MAX_FINAL_STATE_AGE elapses after delete.)
+            // For any other not-ready state (an in-progress reconfiguration) keep
+            // the silent drop-and-retry semantics native clients depend on.
+            if (record.isDeletePending())
+                callback.processResponse(create
+                        .setFailed(
+                                ClientReconfigurationPacket.ResponseCodes.DUPLICATE_ERROR)
+                        .setResponseMessage(
+                                "Cannot (re-)create "
+                                        + create.getServiceName()
+                                        + " while its deletion is still in progress; the name is"
+                                        + " reserved for up to "
+                                        + ReconfigurationConfig.getMaxFinalStateAge() / 1000
+                                        + "s after deletion -- retry later or use a different name."));
+            // else: in-progress reconfiguration -- drop silently so sender retries
         }
 
         // record already exists, so return error message
@@ -4166,6 +4185,39 @@ public class Reconfigurator<NodeIDType> implements
             return (ReconfiguratorRequest) callbackFuture.get();
         } catch (InterruptedException | ExecutionException e) {
             e.printStackTrace();
+        }
+        return null;
+    }
+
+    @Override
+    public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request, long timeoutMs) {
+        RequestCallbackFuture<ReconfiguratorRequest> callbackFuture;
+        BasicReconfigurationPacket<?> packet = request instanceof ClientReconfigurationPacket ? (ClientReconfigurationPacket) request
+                : request instanceof ServerReconfigurationPacket ? (ServerReconfigurationPacket<?>) request
+                : null;
+        if (packet == null)
+            throw new RuntimeException("The "
+                    + ReconfiguratorRequest.class.getSimpleName()
+                    + " argument must either be a "
+                    + ServerReconfigurationPacket.class.getSimpleName()
+                    + " or a "
+                    + ClientReconfigurationPacket.class.getSimpleName());
+
+        this.protocolTask
+                .handleEvent(
+                        packet,
+                        null,
+                        callbackFuture = new RequestCallbackFuture<ReconfiguratorRequest>(
+                                packet, null));
+        try {
+            return (ReconfiguratorRequest) callbackFuture.get(timeoutMs,
+                    TimeUnit.MILLISECONDS);
+        } catch (ExecutionException e) {
+            e.printStackTrace();
+        } catch (TimeoutException e) {
+            ReconfigurationConfig.log.log(Level.WARNING,
+                    "{0} sendRequest timed out after {1}ms waiting for a response to {2}",
+                    new Object[]{this, timeoutMs, request.getSummary()});
         }
         return null;
     }

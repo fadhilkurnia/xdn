@@ -34,6 +34,18 @@ public interface ReconfiguratorFunctions {
 	public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request);
 
 	/**
+	 * Like {@link #sendRequest(ReconfiguratorRequest)} but bounded: returns
+	 * {@code null} if no response arrives within {@code timeoutMs}. Lets the
+	 * synchronous HTTP control plane fail fast (e.g. 504) instead of blocking
+	 * forever when the reconfigurator silently drops a request.
+	 *
+	 * @param request
+	 * @param timeoutMs maximum time to wait for the response, in milliseconds.
+	 * @return The response, or {@code null} on timeout.
+	 */
+	public ReconfiguratorRequest sendRequest(ReconfiguratorRequest request, long timeoutMs);
+
+	/**
 	 * Read-only geo-demand for a service, as a JSON array string of
 	 * {@code {"lat":<deg>,"lon":<deg>,"count":<int>}} cells, for visualization
 	 * (e.g. the dashboard heatmap). Empty array if no demand has been collected or
