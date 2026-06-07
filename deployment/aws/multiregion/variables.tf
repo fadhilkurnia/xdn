@@ -1,5 +1,5 @@
 # AMIs are REGION-SCOPED. rc_ami / ar_ami are the us-east-1 images (built from
-# fork/main by ../create_rc_ami.sh / ../create_ar_ami.sh); the AR image is
+# fork/main by ../useast1/create_rc_ami.sh / ../useast1/create_ar_ami.sh); the AR image is
 # aws_ami_copy'd into the other regions at apply time (see compute.tf).
 variable "rc_ami" {
   description = "us-east-1 AMI for the Reconfigurator (RC) + coredns node. ARM64/Graviton (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
@@ -54,7 +54,7 @@ variable "issue_cert" {
     Whether THIS apply should issue the wildcard cert via ACME. Default false: the
     cert is read from the PERSISTENT bucket (xdn-tls-persist-<account>) that
     survives `terraform destroy`, so redeploys reuse it and never touch the Let's
-    Encrypt rate limit. Set true ONLY to (re)issue, then run ../bin/persist-cert.sh.
+    Encrypt rate limit. Set true ONLY to (re)issue, then run ../../../bin/persist-cert.sh.
   EOT
   type        = bool
   default     = false
