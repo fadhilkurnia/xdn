@@ -16,7 +16,7 @@ Its bundled `build-context` CLI is Python-2-only and crashes here, so
 `clcontext.py` reproduces it in Py3-safe code.
 
 ```bash
-cd cloudlab
+cd deployment/cloudlab
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 ```

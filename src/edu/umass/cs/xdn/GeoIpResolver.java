@@ -33,7 +33,7 @@ public class GeoIpResolver {
 
   /**
    * Default db path: the GeoLite2-City db baked into the node AMI at {@code /opt/xdn/geo/} (same
-   * file xdn-dns ships; see aws/ami_common.sh). Absent file -> IP-based demand fallback stays off.
+   * file xdn-dns ships; see deployment/aws/ami_common.sh). Absent file -> IP-based demand fallback stays off.
    */
   public static final String DEFAULT_MMDB_PATH = "/opt/xdn/geo/geolocation_city_data.mmdb";
 

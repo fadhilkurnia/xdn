@@ -6,7 +6,7 @@
 #
 # The persistent bucket (xdn-tls-persist-<account>) lives OUTSIDE the Terraform
 # config, so `terraform destroy` never touches it. The RC + ARs always pull the
-# cert from it (see local.persist_tls_bucket in aws/main.tf).
+# cert from it (see local.persist_tls_bucket in deployment/aws/main.tf).
 #
 # Renewal workflow (~every 60 days, before the cert's notAfter):
 #   1. cd aws && terraform apply -var issue_cert=true   # issues a fresh cert into
