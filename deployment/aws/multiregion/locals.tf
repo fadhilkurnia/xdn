@@ -118,6 +118,12 @@ locals {
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
     "BYTEIFY_NON_INT_NODE_IDS=true",
+    # How long a deleted service's final epoch state is retained (ms). The gigapaxos default is 1h,
+    # which also blocks reusing a deleted service NAME for that whole hour -- a re-create reuses
+    # epoch 0 and the AR refuses to start it while the old epoch-0 final checkpoint lingers, so the
+    # create hangs. 60s is ample for XDN's seconds-long reconfigurations and lets delete->recreate
+    # of the same name work almost immediately.
+    "MAX_FINAL_STATE_AGE=60000",
     # Embedded SQLite backend (vs the default Embedded Derby + C3P0 pool) for the paxos logs
     # (RC + AR) and the reconfigurator DB (RC). ~25% lower RSS and ~72 fewer JVM threads (no
     # C3P0 helper threads) -> lets the RC run on a smaller machine (t4g.nano). SQL_TYPE is shared
