@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.Geolocation;
@@ -15,11 +16,14 @@ import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpVersion;
+import java.io.File;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
@@ -45,12 +49,81 @@ public class XdnGeoDemandProfilerTest {
     XdnGeoDemandProfiler round = new XdnGeoDemandProfiler(first);
     JSONObject rehydrated = round.getDemandStats();
     assertEquals(5L, rehydrated.getLong("num_reqs"));
-    // The rehydrated profiler's sparse map matches the original.
-    assertEquals(first.getString("grid_sparse_b64"), rehydrated.getString("grid_sparse_b64"));
+    // The rehydrated profiler's sparse (read/write) map matches the original.
+    assertEquals(first.getString("grid_rw_b64"), rehydrated.getString("grid_rw_b64"));
 
     // Second call on the original should now be empty (reset-on-report).
     JSONObject second = profiler.getDemandStats();
     assertEquals(0L, second.getLong("num_reqs"));
+  }
+
+  @Test
+  public void testWindowedFirstReportProfileExpires() throws Exception {
+    // Reproduces the "stuck residual" bug: the reconfigurator stores the FIRST demand report's
+    // profile (built via the JSON ctor) DIRECTLY as the aggregate (AggregateDemandProfiler.combine
+    // 'else existing = update'). With a window configured, that loaded grid must be expirable --
+    // before the fix the JSON ctor seeded no window delta, so the first report's demand never
+    // decayed (we observed exactly this live: one read cell frozen while all later cells expired).
+    XdnGeoDemandProfiler.setWindowMillisForTesting(1_000L); // 1s window
+    try {
+      // Build a report carrying some demand.
+      XdnGeoDemandProfiler src = new XdnGeoDemandProfiler(SERVICE_NAME);
+      for (int i = 0; i < 5; i++) {
+        src.shouldReportDemandStats(makeRequest(34.05, -118.24), null, null);
+      }
+      awaitWorkerDrain(src, 5);
+      JSONObject report = src.getDemandStats();
+
+      // The "first report becomes the stored profile" path: construct from the report JSON.
+      XdnGeoDemandProfiler stored = new XdnGeoDemandProfiler(report);
+      long t0 = System.currentTimeMillis();
+      assertEquals(
+          1, stored.getDemandGeoCells().length(), "demand present right after becoming the store");
+
+      // Past the window, the demand must expire -- before the fix this residual stayed forever.
+      stored.expireForTesting(t0 + 60_000);
+      assertEquals(
+          0,
+          stored.getDemandGeoCells().length(),
+          "windowed demand from the first report must expire (no stuck residual)");
+    } finally {
+      XdnGeoDemandProfiler.setWindowMillisForTesting(null);
+    }
+  }
+
+  @Test
+  public void testReportDrainsInFlightSamples() throws Exception {
+    // Reproduces write-demand under-sampling: sampling is async (a worker drains the queue into the
+    // grid), but a report snapshots only the grid AND on the AR replaces the whole profile,
+    // dropping
+    // any still-queued samples. Disable the worker so samples stay queued, then assert the report
+    // drains them. Before the fix this returned 0 (queued samples lost); after, all are counted.
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.setWorkerDisabledForTesting(true);
+    for (int i = 0; i < 7; i++) {
+      profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null);
+    }
+    JSONObject stats = profiler.getDemandStats();
+    assertEquals(7L, stats.getLong("num_reqs"), "report must drain in-flight async samples");
+  }
+
+  @Test
+  public void testReportStopsWorkerToAvoidLeak() throws Exception {
+    // On the ActiveReplica a report (getDemandStats) is immediately followed by the reconfigurator
+    // discarding this profile and swapping in a fresh one
+    // (AggregateDemandProfiler.pluckDemandProfile).
+    // The per-profile worker must be stopped on report, or it leaks (a blocked thread per report).
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null); // starts the worker
+    assertTrue(profiler.isWorkerActiveForTesting(), "worker runs while sampling");
+
+    profiler.getDemandStats(); // a report
+    assertFalse(
+        profiler.isWorkerActiveForTesting(), "worker must be stopped after a report (no leak)");
+
+    // If the profile is reused, sampling resumes (worker re-created on the next sample).
+    profiler.shouldReportDemandStats(makeRequest(40.0, -75.0), null, null);
+    assertTrue(profiler.isWorkerActiveForTesting(), "worker restarts on the next sample");
   }
 
   @Test
@@ -62,6 +135,51 @@ public class XdnGeoDemandProfilerTest {
 
     JSONObject stats = profiler.getDemandStats();
     assertEquals(0L, stats.getLong("num_reqs"));
+  }
+
+  // Relative path to the GeoLite2-City db shipped in the repo (also used by xdn-dns).
+  private static final String MMDB_PATH = "xdn-dns/geolocation_city_data.mmdb";
+
+  @Test
+  public void testIpFallbackProducesDemandCell() throws Exception {
+    File mmdb = new File(MMDB_PATH);
+    assumeTrue(mmdb.isFile(), "GeoLite2-City db not present at " + MMDB_PATH + "; skipping");
+
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.setGeoIpResolverForTesting(new GeoIpResolver(mmdb));
+
+    // A header-less request from a public client IP (UMass Amherst, ~42.37,-72.47). With no
+    // X-Client-Location header, the profiler must geolocate the source IP off the hot path.
+    InetAddress umass = InetAddress.getByName("128.119.240.84");
+    profiler.shouldReportDemandStats(makeRequestNoGeo(), umass, null);
+    awaitWorkerDrain(profiler, 1);
+
+    // getDemandGeoCells() is the non-destructive read; query it before any getDemandStats() call
+    // (which would snapshot-and-reset the grid). The single demand cell should sit on Amherst's
+    // grid cell (quantized, so allow a wide margin).
+    JSONArray cells = profiler.getDemandGeoCells();
+    assertEquals(1, cells.length(), "expected exactly one demand cell");
+    JSONObject cell = cells.getJSONObject(0);
+    assertEquals(1, cell.getInt("count"));
+    assertTrue(Math.abs(cell.getDouble("lat") - 42.37) < 1.0, "lat near Amherst: " + cell);
+    assertTrue(Math.abs(cell.getDouble("lon") - (-72.47)) < 1.0, "lon near Amherst: " + cell);
+  }
+
+  @Test
+  public void testLocalIpProducesNoDemand() throws Exception {
+    File mmdb = new File(MMDB_PATH);
+    assumeTrue(mmdb.isFile(), "GeoLite2-City db not present at " + MMDB_PATH + "; skipping");
+
+    XdnGeoDemandProfiler profiler = new XdnGeoDemandProfiler(SERVICE_NAME);
+    profiler.setGeoIpResolverForTesting(new GeoIpResolver(mmdb));
+
+    // A loopback client is non-geolocatable: header-less + local IP contributes no demand.
+    Request req = makeRequestNoGeo();
+    assertFalse(profiler.shouldReportDemandStats(req, InetAddress.getByName("127.0.0.1"), null));
+
+    Thread.sleep(50); // give any (erroneously) enqueued worker item a chance to land
+    assertEquals(0L, profiler.getDemandStats().getLong("num_reqs"));
+    assertEquals(0, profiler.getDemandGeoCells().length());
   }
 
   @Test

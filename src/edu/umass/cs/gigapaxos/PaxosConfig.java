@@ -713,6 +713,20 @@ public class PaxosConfig {
 		BYTEIFICATION(true),
 
 		/**
+		 * Allow the efficient byte serialization (gated on {@link #BYTEIFICATION})
+		 * even when node IDs are non-integer strings (e.g. AWS AZ names like
+		 * "us-east-1a"). Byteification is otherwise disabled unless ALL node IDs are
+		 * integers ({@code IntegerMap.allInt()}), because the byte format encodes
+		 * each node ID as its IntegerMap int and the receiver decodes it back. That
+		 * is also safe for strings: {@code String.hashCode()} is spec-deterministic
+		 * across JVMs and all group members are pre-registered in every node's
+		 * IntegerMap -- PROVIDED no two node IDs share a (hash-derived) id, on which
+		 * {@code IntegerMap.put} fails fast when this flag is set. Default false (no
+		 * change for existing integer-id deployments).
+		 */
+		BYTEIFY_NON_INT_NODE_IDS(false),
+
+		/**
 		 * 
 		 */
 		INSTRUMENT_SERIALIZATION(false),

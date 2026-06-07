@@ -12,11 +12,9 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -125,15 +123,21 @@ public class XdnTestCluster implements AutoCloseable {
     }
 
     String initialState = "xdn:init:" + serviceJson;
-    String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
+    // RESTful create: POST /api/v2/services/{name} with the initial state in the body.
+    String body = new JSONObject().put("initial_state", initialState).toString();
     String endpoint =
-        "http://%s:%d/?type=CREATE&name=%s&initial_state=%s"
-            .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName, encodedInitialState);
+        "http://%s:%d/api/v2/services/%s"
+            .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName);
     HttpRequest request =
-        HttpRequest.newBuilder().uri(URI.create(endpoint)).timeout(REQUEST_TIMEOUT).GET().build();
+        HttpRequest.newBuilder()
+            .uri(URI.create(endpoint))
+            .timeout(REQUEST_TIMEOUT)
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .build();
 
     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    if (response.statusCode() != 200) {
+    if (response.statusCode() / 100 != 2) {
       throw new IllegalStateException(
           "Service creation failed with status " + response.statusCode());
     }
@@ -217,11 +221,16 @@ public class XdnTestCluster implements AutoCloseable {
 
   /** Deletes a service if it exists. */
   public void deleteService(String serviceName) throws IOException, InterruptedException {
+    // RESTful destroy: DELETE /api/v2/services/{name}.
     String endpoint =
-        "http://%s:%d/?type=DELETE&name=%s"
+        "http://%s:%d/api/v2/services/%s"
             .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName);
     HttpRequest request =
-        HttpRequest.newBuilder().uri(URI.create(endpoint)).timeout(REQUEST_TIMEOUT).GET().build();
+        HttpRequest.newBuilder()
+            .uri(URI.create(endpoint))
+            .timeout(REQUEST_TIMEOUT)
+            .DELETE()
+            .build();
     httpClient.send(request, HttpResponse.BodyHandlers.discarding());
   }
 

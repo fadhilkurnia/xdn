@@ -70,12 +70,36 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     // remove and then re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
     String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+
+    // Preserve any state already materialized at targetDirPath across the wipe below. This dir is
+    // the container's bind-mount source, and by the time preInitialization runs it may already hold
+    // the service state: a reconfiguration restored the previous epoch's final state here
+    // (reviveContainerizedService), or a promoted backup holds its applied state. Without this, the
+    // rm -rf discards it and the container starts empty -- the latest writes are lost. Snapshot the
+    // exact bytes, wipe, then restore them. Database-agnostic: no awareness of file internals.
+    // snapshotDir is a sibling of mnt/ so the rm -rf below cannot touch it.
+    String preinitSnapshotDir = targetDirPath.replaceFirst("/mnt/", "/preinit-snapshot/");
+    String[] existingState = new File(targetDirPath).list();
+    boolean hadState = existingState != null && existingState.length > 0;
+    if (hadState) {
+      Shell.runCommand("rm -rf " + preinitSnapshotDir);
+      Shell.runCommand("mkdir -p " + preinitSnapshotDir);
+      int snapCode =
+          Shell.runCommand(String.format("rsync -a %s %s", targetDirPath, preinitSnapshotDir));
+      hadState = (snapCode == 0);
+    }
+
     String removeDirCommand = String.format("rm -rf %s", targetDirPath);
     int code = Shell.runCommand(removeDirCommand);
     assert code == 0;
     String createDirCommand = String.format("mkdir -p %s", targetDirPath);
     code = Shell.runCommand(createDirCommand);
     assert code == 0;
+
+    if (hadState) {
+      Shell.runCommand(String.format("rsync -a %s %s", preinitSnapshotDir, targetDirPath));
+      Shell.runCommand("rm -rf " + preinitSnapshotDir);
+    }
 
     // remove and then re-create snapshot dir
     // e.g., /tmp/xdn/state/rsync/node1/snp/service1/e0/
@@ -115,11 +139,33 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetDiffFile =
         String.format("%s%s/e%d.diff", this.baseDiffDirPath, serviceName, placementEpoch);
 
+    // The mount source dir holds a PRIMARY's own container state, but for a BACKUP it is filled
+    // asynchronously by the primary's initContainerSync push, which may not have landed when the
+    // backup runs postInitialization (the two race). Ensure it exists so the snapshot rsync below
+    // cannot fail and abort backup init under -ea -- a backup's authoritative state is
+    // (re)established by the primary's push plus the in-band statediffs regardless.
+    Shell.runCommand("mkdir -p " + targetSourceDir);
+
     int removeTargetDirRetCode = Shell.runCommand("rm -rf " + targetDestDir);
     int removeDiffDirRetCode = Shell.runCommand("rm -rf " + targetDiffFile);
+    // rsync (not `cp -a`): trailing-slash sources copy CONTENTS flat and portably;
+    // `cp -a src/ dst/` nests under an extra dir when dst exists.
     int copySnapshotRetCode =
-        Shell.runCommand(String.format("cp -a %s %s", targetSourceDir, targetDestDir));
-    assert removeTargetDirRetCode == 0 && removeDiffDirRetCode == 0 && copySnapshotRetCode == 0;
+        Shell.runCommand(String.format("rsync -a %s %s", targetSourceDir, targetDestDir));
+    // Soft-check (was an assert): a non-zero here must NOT abort backup init -- it just means the
+    // snapshot is momentarily empty/partial, which the push + in-band diffs reconcile.
+    if (removeTargetDirRetCode != 0 || removeDiffDirRetCode != 0 || copySnapshotRetCode != 0) {
+      System.out.printf(
+          "%s: postInitialization snapshot incomplete for %s e%d (rm=%d, rmDiff=%d, rsync=%d);"
+              + " continuing -- backup state is (re)established via the primary push + in-band"
+              + " statediffs%n",
+          this.getClass().getSimpleName(),
+          serviceName,
+          placementEpoch,
+          removeTargetDirRetCode,
+          removeDiffDirRetCode,
+          copySnapshotRetCode);
+    }
 
     return true;
   }
@@ -282,6 +328,9 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
       for (String key : backupReplicas.keySet()) {
         String hostAddr = ipAddresses.get(key).getHostAddress();
+        // rsync needs IPv6 literals bracketed in user@host:path, else it mis-parses the
+        // colons as the host:path separator (an IPv6-only cluster otherwise fails to sync).
+        String sshHost = hostAddr.contains(":") ? "[" + hostAddr + "]" : hostAddr;
 
         int exitCode = 0;
         if (hostAddr.equals("127.0.0.1")) {
@@ -310,7 +359,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
                       mntDir,
                       currentReplica,
                       username,
-                      hostAddr,
+                      sshHost,
                       backupReplicas.get(key)),
                   true);
         }

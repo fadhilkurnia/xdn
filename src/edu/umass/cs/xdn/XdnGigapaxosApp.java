@@ -55,9 +55,12 @@ public class XdnGigapaxosApp
 
   private final boolean IS_RESTART_UPON_STATE_DIFF_APPLY = false;
 
-  // TODO: deprecate the variables below.
-  private final String FUSELOG_BIN_PATH = "/users/fadhil/fuse/fuselog";
-  private final String FUSELOG_APPLY_BIN_PATH = "/users/fadhil/fuse/apply";
+  // FUSE recorder binaries, installed by aws/create_ar_ami.sh into /usr/local/bin (symlinks to
+  // /opt/xdn/bin). These MUST match FuselogStateDiffRecorder's paths -- they were previously
+  // hardcoded to a CloudLab home dir (/users/fadhil/fuse/...) that does not exist on AWS, so the
+  // FUSELOG recorder's container mount silently failed off-CloudLab.
+  private final String FUSELOG_BIN_PATH = "/usr/local/bin/fuselog";
+  private final String FUSELOG_APPLY_BIN_PATH = "/usr/local/bin/fuselog-apply";
 
   private final String myNodeId;
   private final Set<IntegerPacketType> packetTypes;
@@ -1324,6 +1327,24 @@ public class XdnGigapaxosApp
     return true;
   }
 
+  /**
+   * Stop (WITHOUT deleting state) the running container for a service on this node, at its current
+   * placement epoch. Used when a PRIMARY steps down to BACKUP on a primary change: a backup runs no
+   * container, so the demoted node must stop serving / capturing. The state dir is preserved so the
+   * node can resume as a backup (apply mode) via the subsequent InitBackupPacket.
+   */
+  public boolean stopServiceContainerOnDemotion(String serviceName) {
+    Integer placementEpoch = this.servicePlacementEpoch.get(serviceName);
+    if (placementEpoch == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} - cannot stop container on demotion; unknown placement epoch for {2}",
+          new Object[] {this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName});
+      return false;
+    }
+    return this.stopContainerizedServiceInstance(serviceName, placementEpoch);
+  }
+
   /** startContainer runs the bash command below to start running a docker container. */
   private boolean startContainer(XdnServiceProperties properties, String networkName) {
     if (recorderType.equals(RecorderType.FUSELOG)) {
@@ -1961,9 +1982,15 @@ public class XdnGigapaxosApp
     code = Shell.runCommand(createDirCommand, true);
     assert code == 0;
 
-    // Copy the service state into the prepared directory.
+    // Copy the service state into the prepared directory. Use rsync (NOT `cp -a`):
+    // hostMountDir ends in a slash, and `cp -a <dir>/ <existingDir>/` nests the
+    // contents under an extra <dir> level (the dest already exists via mkdir -p
+    // above), so the restored state lands at /app/data/e<epoch>/... instead of
+    // /app/data/... and the app sees an empty state dir. rsync's trailing-slash
+    // semantics ("copy the directory's CONTENTS") are well-defined and identical
+    // across GNU/Linux and BSD/macOS, regardless of whether the dest exists.
     String hostMountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
-    String stateCopyCommand = String.format("cp -a %s %s", hostMountDir, finalStateDirPath);
+    String stateCopyCommand = String.format("rsync -a %s %s", hostMountDir, finalStateDirPath);
     int count = 0;
     while (true) {
       if (++count >= 10) {
@@ -2121,6 +2148,17 @@ public class XdnGigapaxosApp
     assert name != null && !name.isEmpty();
     Integer currentPlacementEpoch = this.servicePlacementEpoch.get(name);
     return currentPlacementEpoch;
+  }
+
+  /**
+   * True iff this node currently hosts a service instance for the given service (any epoch). A
+   * reconfiguration drop removes the instance from {@code serviceInstances}
+   * (deleteContainerizedServiceInstance), so a node dropped from the placement returns false here
+   * even while its PB role bookkeeping is momentarily stale. Used to keep role queries honest.
+   */
+  public boolean hostsService(String serviceName) {
+    Map<Integer, ServiceInstance> instances = this.serviceInstances.get(serviceName);
+    return instances != null && !instances.isEmpty();
   }
 
   /**********************************************************************************************
@@ -2724,10 +2762,24 @@ public class XdnGigapaxosApp
     // This allows the PB pipeline to function (captureStateDiff enabled) without waiting for
     // the full initial state transfer. Backups won't have the initial state but will receive
     // statediffs going forward. Use only for benchmarking.
-    boolean skipInitSync = Boolean.getBoolean("XDN_SKIP_INIT_SYNC");
+    //
+    // RECORDER init-sync mode ALSO skips the rsync here, but (unlike XDN_SKIP_INIT_SYNC) the
+    // PrimaryBackupManager then captures the bootstrap state via the configured recorder and ships
+    // it in-band as the first ApplyStateDiff -- so backups DO get the initial state, atomically and
+    // without the rsync seam. Marking init complete here is what lets that capture run (the
+    // captureStatediff guard requires initializationSucceed).
+    boolean recorderInitSync =
+        "RECORDER"
+            .equalsIgnoreCase(
+                Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE));
+    boolean skipInitSync = Boolean.getBoolean("XDN_SKIP_INIT_SYNC") || recorderInitSync;
     if (skipInitSync) {
       System.out.println(
-          "Skipping initContainerSync for " + serviceName + " (XDN_SKIP_INIT_SYNC=true)");
+          "Skipping rsync initContainerSync for "
+              + serviceName
+              + " (recorderInitSync="
+              + recorderInitSync
+              + ")");
       System.out.println("Completed initContainerSync for " + serviceName);
       service.initializationSucceed = true;
     } else {

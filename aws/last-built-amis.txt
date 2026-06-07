@@ -1,15 +1,2 @@
-xdn-ar-20260529-025247	ami-049eaacc453e1f0ae	us-east-1
-xdn-rc-20260529-044253	ami-0af90e71c86a6ac6b	us-east-1
-xdn-ar-20260601-163424	ami-02037dbf544575eef	us-east-1
-xdn-ar-20260601-225129	ami-0beb9798e469f1fc7	us-east-1
-xdn-ar-20260602-000227	ami-0895cd15a28b707aa	us-east-1
-xdn-ar-20260602-140003	ami-05ab6b5c1b45eb8dd	us-east-1
-xdn-rc-20260602-135957	ami-0281566cb7fdbd374	us-east-1
-xdn-rc-arm64-20260602-181006	ami-0b430939d4943fcbb	us-east-1	arm64
-xdn-ar-arm64-20260602-195718	ami-0c22f54b43a823533	us-east-1	arm64
-xdn-rc-arm64-20260603-210150	ami-05421989023a115de	us-east-1	arm64
-xdn-rc-arm64-20260603-225002	ami-013338ed93b6d7521	us-east-1	arm64
-xdn-rc-arm64-20260604-005714	ami-0bb647c3af4de6cdb	us-east-1	arm64
-xdn-rc-arm64-20260604-013111	ami-0326d31172640950a	us-east-1	arm64
-xdn-rc-arm64-20260604-125645	ami-08be7b8fc654ea07c	us-east-1	arm64
-xdn-ar-arm64-20260604-135246	ami-0a8706506aedccede	us-east-1	arm64
+xdn-ar-arm64-20260606-202552	ami-00cb4e59815f18847	us-east-1	arm64
+xdn-rc-arm64-20260606-202552	ami-010dbcf82852375bc	us-east-1	arm64

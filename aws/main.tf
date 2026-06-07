@@ -53,7 +53,7 @@ resource "aws_internet_gateway" "igw" {
 
 # 4. Create 4 separate subnets (one for each zone, enabling BOTH IPv4 and IPv6)
 resource "aws_subnet" "ipv6_subnets" {
-  count             = 4
+  count             = var.ar_count + 1 # subnet[0] = RC, subnet[1..N] = ARs
   vpc_id            = aws_vpc.ipv6_vpc.id
   cidr_block        = "10.0.${count.index + 1}.0/24"
   availability_zone = element(data.aws_availability_zones.available.names, count.index)
@@ -89,7 +89,7 @@ resource "aws_route_table" "routes" {
 
 # 6. Link the route table to all 4 subnets
 resource "aws_route_table_association" "a" {
-  count          = 4
+  count          = var.ar_count + 1
   subnet_id      = aws_subnet.ipv6_subnets[count.index].id
   route_table_id = aws_route_table.routes.id
 }
@@ -257,19 +257,19 @@ resource "aws_key_pair" "deployer" {
 variable "rc_ami" {
   description = "AMI for the Reconfigurator (RC) + coredns node (includes docker-ce-cli for CREATE-time image validation). ARM64/Graviton image (for t4g.* rc_instance_type), built from fork/main by `ARCH=arm64 ./create_rc_ami.sh`."
   type        = string
-  default     = "ami-08be7b8fc654ea07c" # arm64, xdn-dashboard: issuer/receiver fix + wedge SEVERE alarm
+  default     = "ami-004a7d599deff3295" # arm64, main: RESTful control API + GeoIP demand (geolocation_city_data.mmdb baked)
 }
 
 variable "ar_ami" {
-  description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from the xdn-ar-arm64 branch by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
+  description = "AMI for the ActiveReplica (AR) edge nodes. ARM64/Graviton image (for t4g.* ar_instance_type), built from fork/main by `ARCH=arm64 ./create_ar_ami.sh`. Requires multi-arch service images."
   type        = string
-  default     = "ami-0a8706506aedccede" # arm64, xdn-dashboard: phantom meta-group STOP ack fix
+  default     = "ami-0bb65e92559b91b3c" # arm64, main: RESTful control API + GeoIP demand (geolocation_city_data.mmdb baked)
 }
 
 variable "ar_count" {
-  description = "Number of ActiveReplica nodes (uses subnets 2..N)."
+  description = "Number of ActiveReplica nodes (uses subnets 2..N). Must equal length(local.active_replicas)."
   type        = number
-  default     = 3
+  default     = 4
 }
 
 # Per-role instance sizing. The RC is a lean control-plane node (reconfigurator
@@ -280,9 +280,9 @@ variable "ar_count" {
 # The ARs run Docker + possibly heavy stateful apps (MySQL/Postgres), so they
 # keep the larger size.
 variable "rc_instance_type" {
-  description = "EC2 instance type for the Reconfigurator (control plane) node. Defaults to a Graviton t4g.micro -- REQUIRES an arm64 rc_ami (build with ARCH=arm64 ./create_rc_ami.sh). t4g.micro has only 1GB RAM, so the RC JVM runs with a small (~256MB) default heap; the userdata adds a swapfile to absorb GC/boot spikes."
+  description = "EC2 instance type for the Reconfigurator (control plane) node. Defaults to a Graviton t4g.nano -- REQUIRES an arm64 rc_ami (build with ARCH=arm64 ./create_rc_ami.sh). t4g.nano has only 0.5GB RAM (DEV / light-usage only): the userdata pins the RC JVM to -Xmx256m and provisions a 2GB swapfile to back the heap + absorb GC/boot spikes. Bump to t4g.micro (1GB) or larger for heavy reconfiguration / demand load."
   type        = string
-  default     = "t4g.micro" # Graviton, ~$6/mo in us-east-1 (needs arm64 rc_ami)
+  default     = "t4g.nano" # Graviton, ~$3/mo in us-east-1 (needs arm64 rc_ami; dev only)
 }
 
 variable "ar_instance_type" {
@@ -361,13 +361,21 @@ locals {
   rc_ipv6  = cidrhost(aws_subnet.ipv6_subnets[0].ipv6_cidr_block, 10)
   ar_ipv6s = [for i in range(var.ar_count) : cidrhost(aws_subnet.ipv6_subnets[i + 1].ipv6_cidr_block, 10)]
 
-  # Per-AR coordinates surfaced as active.<id>.geolocation (parsed by PaxosConfig,
-  # returned in the /placement API, plotted on the dashboard map). NOTE: this
-  # cluster physically runs in a single region (us-east-1); these are ILLUSTRATIVE
-  # coordinates spread across the US (East / Central / West) so the placement map
-  # demonstrates XDN's geo-distribution. Replace with real per-region coordinates
-  # for a true multi-region deployment. element() wraps if ar_count > 3.
-  ar_geolocations = ["38.95,-77.45", "41.88,-87.63", "37.36,-121.92"]
+  # Active replicas: real AWS AZ ids + real region coordinates, surfaced as
+  # active.<id>=host:port and active.<id>.geolocation (parsed by PaxosConfig,
+  # returned in /placement, plotted on the dashboard map). NOTE: the cluster still
+  # physically launches every node in us-east-1 subnets today -- these names/coords
+  # DECLARE the intended geography (East x2 / Central / West); making them physically
+  # multi-region is the follow-on terraform change. Index i maps to subnet[i+1] /
+  # ar_ipv6s[i]; the list length MUST equal var.ar_count.
+  # Node ids are dash-free (a '-' breaks the embedded Derby paxos log and is now
+  # rejected by ReconfigurableNode); the geolocation still encodes the real metro.
+  active_replicas = [
+    { id = "useast1a", geo = "39.04,-77.49" },  # N. Virginia        -- East
+    { id = "useast1b", geo = "38.90,-77.43" },  # N. Virginia (AZ b) -- East
+    { id = "useast2a", geo = "40.10,-82.99" },  # Columbus, Ohio     -- Central
+    { id = "uswest2a", geo = "45.84,-119.69" }, # Boardman, Oregon   -- West
+  ]
 
   # Candidate placement locations -- the "potential locations" pool the dashboard
   # shows alongside the running replicas. These are GEOLOCATIONS ONLY (no running
@@ -380,54 +388,56 @@ locals {
   # /api/v2/nodes) as candidate placement sites -- config only ($0, no running
   # node). The 4 continental-US AWS regions' Availability Zones (slightly offset
   # so co-located AZs render as distinct points) plus AWS Local Zone metros.
+  # Keys are dash-free node ids (the no-dash rule applies to EVERY active-replica
+  # name the RC registers, including these geolocation-only candidates -- a future
+  # elasticity controller may promote one to a real node, at which point a dash
+  # would break its Derby paxos log). The real AWS AZ/Local-Zone name is in the
+  # trailing comment.
   candidate_geolocations = {
-    # us-east-1 (N. Virginia) AZs
-    "us-east-1a" = "39.02,-77.47"
-    "us-east-1b" = "38.94,-77.44"
-    "us-east-1c" = "38.87,-77.40"
-    "us-east-1d" = "39.10,-77.54"
-    "us-east-1e" = "38.82,-77.61"
-    "us-east-1f" = "39.17,-77.37"
-    # us-east-2 (Ohio) AZs
-    "us-east-2a" = "39.99,-82.99"
-    "us-east-2b" = "40.08,-83.09"
-    "us-east-2c" = "39.90,-82.89"
+    # us-east-1 (N. Virginia) AZs -- a/b are live ActiveReplicas (see active_replicas)
+    "useast1c" = "38.87,-77.40" # us-east-1c
+    "useast1d" = "39.10,-77.54" # us-east-1d
+    "useast1e" = "38.82,-77.61" # us-east-1e
+    "useast1f" = "39.17,-77.37" # us-east-1f
+    # us-east-2 (Ohio) AZs -- a is a live ActiveReplica
+    "useast2b" = "40.08,-83.09" # us-east-2b
+    "useast2c" = "39.90,-82.89" # us-east-2c
     # us-west-1 (N. California) AZs
-    "us-west-1a" = "37.44,-122.00"
-    "us-west-1b" = "37.31,-121.85"
-    "us-west-1c" = "37.50,-121.93"
-    # us-west-2 (Oregon) AZs
-    "us-west-2a" = "45.84,-119.70"
-    "us-west-2b" = "45.77,-119.59"
-    "us-west-2c" = "45.91,-119.81"
-    "us-west-2d" = "45.70,-119.51"
+    "uswest1a" = "37.44,-122.00" # us-west-1a
+    "uswest1b" = "37.31,-121.85" # us-west-1b
+    "uswest1c" = "37.50,-121.93" # us-west-1c
+    # us-west-2 (Oregon) AZs -- a is a live ActiveReplica
+    "uswest2b" = "45.77,-119.59" # us-west-2b
+    "uswest2c" = "45.91,-119.81" # us-west-2c
+    "uswest2d" = "45.70,-119.51" # us-west-2d
     # AWS Local Zones (continental US metros)
-    "lz-atlanta"      = "33.75,-84.39"
-    "lz-boston"       = "42.36,-71.06"
-    "lz-charlotte"    = "35.23,-80.84"
-    "lz-chicago"      = "41.85,-87.65"
-    "lz-dallas"       = "32.78,-96.80"
-    "lz-denver"       = "39.74,-104.99"
-    "lz-detroit"      = "42.33,-83.05"
-    "lz-houston"      = "29.76,-95.37"
-    "lz-kansas-city"  = "39.10,-94.58"
-    "lz-las-vegas"    = "36.17,-115.14"
-    "lz-los-angeles"  = "34.05,-118.24"
-    "lz-miami"        = "25.76,-80.19"
-    "lz-minneapolis"  = "44.98,-93.27"
-    "lz-nashville"    = "36.16,-86.78"
-    "lz-new-orleans"  = "29.95,-90.07"
-    "lz-new-york"     = "40.71,-74.01"
-    "lz-philadelphia" = "39.95,-75.17"
-    "lz-phoenix"      = "33.45,-112.07"
-    "lz-portland"     = "45.52,-122.68"
-    "lz-seattle"      = "47.61,-122.33"
+    "lzatlanta"      = "33.75,-84.39"  # lz-atlanta
+    "lzboston"       = "42.36,-71.06"  # lz-boston
+    "lzcharlotte"    = "35.23,-80.84"  # lz-charlotte
+    "lzchicago"      = "41.85,-87.65"  # lz-chicago
+    "lzdallas"       = "32.78,-96.80"  # lz-dallas
+    "lzdenver"       = "39.74,-104.99" # lz-denver
+    "lzdetroit"      = "42.33,-83.05"  # lz-detroit
+    "lzhouston"      = "29.76,-95.37"  # lz-houston
+    "lzkansascity"   = "39.10,-94.58"  # lz-kansas-city
+    "lzlasvegas"     = "36.17,-115.14" # lz-las-vegas
+    "lzlosangeles"   = "34.05,-118.24" # lz-los-angeles
+    "lzmiami"        = "25.76,-80.19"  # lz-miami
+    "lzminneapolis"  = "44.98,-93.27"  # lz-minneapolis
+    "lznashville"    = "36.16,-86.78"  # lz-nashville
+    "lzneworleans"   = "29.95,-90.07"  # lz-new-orleans
+    "lznewyork"      = "40.71,-74.01"  # lz-new-york
+    "lzphiladelphia" = "39.95,-75.17"  # lz-philadelphia
+    "lzphoenix"      = "33.45,-112.07" # lz-phoenix
+    "lzportland"     = "45.52,-122.68" # lz-portland
+    "lzseattle"      = "47.61,-122.33" # lz-seattle
   }
   candidate_geo_props = join("\n", [
     for id, ll in local.candidate_geolocations : "active.${id}.geolocation=\"${ll}\""
   ])
 
-  # gigapaxos cluster config shared by every node. Numeric node ids: RC=0, ARs=1..N.
+  # gigapaxos cluster config shared by every node. Node ids are AWS-zone strings:
+  # RC=cp0, ARs=local.active_replicas[*].id (BYTEIFY_NON_INT_NODE_IDS keeps byte packets).
   # Nodes advertise their GLOBAL IPv6 addresses for consensus (reconfigurator/
   # active) -- the gigapaxos wire format is now IPv6-capable (16-byte addresses,
   # see AddressCodec) and the JVM no longer forces the IPv4 stack. coredns returns
@@ -441,6 +451,18 @@ locals {
     "INITIAL_STATE_VALIDATOR_CLASS=edu.umass.cs.xdn.XdnServiceInitialStateValidator",
     "GIGAPAXOS_DATA_DIR=/tmp/gigapaxos",
     "NIO_MAX_PAYLOAD_SIZE=134217728",
+    # Node IDs are AWS-zone strings (cp0, us-east-1a, ...) rather than integers, so
+    # enable byte serialization for non-integer IDs -- otherwise gigapaxos falls back
+    # to verbose JSON packets (inflating inter-replica bandwidth). Safe here because
+    # the IDs have collision-free hashCodes (IntegerMap.put fails fast otherwise).
+    "BYTEIFY_NON_INT_NODE_IDS=true",
+    # Initial placement: replicate a new service at DEFAULT_NUM_REPLICAS actives
+    # (consistent-hash-chosen), NOT at every active. The gigapaxos library default
+    # is REPLICATE_ALL=true (place on the whole cluster); every conf/gigapaxos.xdn.*
+    # config sets it false, so match that here. After creation the geo-demand policy
+    # (DEMAND_PROFILE_TYPE below) re-places replicas where the load is.
+    "REPLICATE_ALL=false",
+    "DEFAULT_NUM_REPLICAS=3",
     # Geo-demand profiling: with this set, each request's client location (the
     # X-Client-Location header, parsed into XdnHttpRequest) is accumulated per grid
     # cell by XdnGeoDemandProfiler on the ARs and aggregated at the RC. It drives
@@ -458,12 +480,12 @@ locals {
     # RC control-plane API on :3300, which xdn-cli + coredns depend on
     # (default true; set explicitly for clarity).
     "ENABLE_RECONFIGURATOR_HTTP=true",
-    "reconfigurator.0=[${local.rc_ipv6}]:3000",
+    "reconfigurator.cp0=[${local.rc_ipv6}]:3000",
     ], [
-    for i in range(var.ar_count) : "active.${i + 1}=[${local.ar_ipv6s[i]}]:2000"
+    for i in range(var.ar_count) : "active.${local.active_replicas[i].id}=[${local.ar_ipv6s[i]}]:2000"
     ], [
     # Per-AR geolocation for the dashboard placement map (illustrative; see above).
-    for i in range(var.ar_count) : "active.${i + 1}.geolocation=\"${element(local.ar_geolocations, i)}\""
+    for i in range(var.ar_count) : "active.${local.active_replicas[i].id}.geolocation=\"${local.active_replicas[i].geo}\""
   ]))
 }
 
@@ -504,6 +526,11 @@ resource "aws_instance" "rc" {
     # Candidate placement locations (RC-only geolocations; no running instances) so
     # GET /api/v2/nodes can surface them as the dashboard's "potential locations".
     candidate_geo_props = local.candidate_geo_props
+    # The per-replica `edge` sub-zone is a multi-region feature (see aws/multiregion);
+    # the single-region config doesn't use it, so pass empty (template renders a
+    # plain xdn directive + no _acme-challenge.edge delegation).
+    edge_node_props = ""
+    acme_edge_ns    = []
   })
 
   root_block_device {
@@ -544,13 +571,13 @@ resource "aws_instance" "ar" {
     }
   }
 
-  # Bootstrap: drop config + a unique numeric node id (1..N) so the baked
+  # Bootstrap: drop config + the AR's node id (its AWS-zone name) so the baked
   # xdn-ar unit starts. The RC is node 0; ARs continue from 1.
   # Replace on config change so cloud-init re-runs with the new properties.
   user_data_replace_on_change = true
   user_data = templatefile("${path.module}/ar-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
-    node_id              = count.index + 1
+    node_id              = local.active_replicas[count.index].id
     aws_region           = "us-east-1"
     # Cert is issued once by Terraform (acme_certificate) and stashed in S3; the
     # AR pulls it on boot/renewal. No per-AR issuance -> no rate-limit burn.
@@ -818,10 +845,10 @@ output "ar_ipv6_addresses" {
 
 output "cluster_node_addresses" {
   value = merge(
-    { "0" = "${aws_eip.rc.public_ip} (RC, IPv4 mgmt) / [${local.rc_ipv6}] (consensus)" },
-    { for i in range(var.ar_count) : tostring(i + 1) => "[${local.ar_ipv6s[i]}] (AR, IPv6-only)" },
+    { "cp0" = "${aws_eip.rc.public_ip} (RC, IPv4 mgmt) / [${local.rc_ipv6}] (consensus)" },
+    { for i in range(var.ar_count) : local.active_replicas[i].id => "[${local.ar_ipv6s[i]}] (AR, IPv6-only)" },
   )
-  description = "Numeric node id -> advertised consensus address (IPv6). The RC also keeps an IPv4 EIP for management/DNS."
+  description = "Node id (AWS-zone name) -> advertised consensus address (IPv6). The RC also keeps an IPv4 EIP for management/DNS."
 }
 
 output "acme_delegation_ns" {

@@ -8,6 +8,7 @@ import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.Geolocation;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnGigapaxosApp;
 import edu.umass.cs.xdn.proto.XdnHttpRequestProto;
 import io.netty.buffer.Unpooled;
@@ -435,7 +436,11 @@ public class XdnHttpRequestTest {
     XdnHttpRequest httpRequest = new XdnHttpRequest(request, content);
     String encoded = httpRequest.toString();
 
-    // prepare the app request parser
+    // This test only uses XdnGigapaxosApp as an AppRequestParser, but its constructor eagerly
+    // builds the configured state-diff recorder. The default (FUSELOG) needs the native
+    // /usr/local/bin/fuselog binary, absent in CI; pin RSYNC so the parser-only construction works
+    // without it (rsync is present on the runners, and this test never uses the recorder).
+    Config.register(new String[] {"XDN_PB_STATEDIFF_RECORDER_TYPE=RSYNC"});
     String[] args = {"AR0"};
     Replicable app = new XdnGigapaxosApp(args);
     assertFalse(app.getRequestTypes().isEmpty());

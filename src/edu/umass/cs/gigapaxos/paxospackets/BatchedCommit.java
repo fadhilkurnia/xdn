@@ -186,7 +186,7 @@ public class BatchedCommit extends PaxosPacket implements Byteable {
 		if (this.byteifiedSelf != null)
 			return this.byteifiedSelf;
 
-		if (!(BYTEIFICATION && IntegerMap.allInt())) {
+		if (!(BYTEIFICATION && IntegerMap.byteifiable())) {
 			try {
 				return this.byteifiedSelf = this.toString().getBytes(CHARSET);
 			} catch (UnsupportedEncodingException e) {

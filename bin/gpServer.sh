@@ -176,6 +176,18 @@ for arg in "$@"; do
 done
 # args has "start|stop|restart all|server_names"
 
+# Guard: node ids (server names) must not contain '-'. The embedded paxos log
+# seeds its Derby DB name + "user" from the id, and Derby rejects ids with '-'
+# (ERROR 28502), which silently zombies the node at PaxosManager init. Reject
+# early with a clear message (use e.g. useast1a, not us-east-1a).
+for sname in "${args[@]:1}"; do
+  if [[ "$sname" != "all" && "$sname" == *-* ]]; then
+    (>&2 echo "Error: invalid node id '$sname': node ids must not contain '-' \
+(use e.g. useast1a, not us-east-1a).")
+    exit 1
+  fi
+done
+
 # gigapaxos properties file must exist at this point
 if [[ -z $GP_PROPERTIES || ! -e $GP_PROPERTIES ]]; then
   (>&2 echo "Error: Unable to find file \

@@ -127,40 +127,40 @@ jobs:
           XDN_CONTROL_PLANE: localhost
         run: |
           set -x
-          # Poll for the active set to advance past epoch=0 (max 60s).
-          for i in $(seq 1 30); do
+          # Demand-driven reconfiguration is eventually-consistent: epoch advancing past 0 only
+          # marks the new active set being CHOSEN. The new actives' containers still need to come up
+          # (a freshly placed node shows role/status "unreachable" for a few seconds) and the paxos
+          # coordinator then settles toward the demand centroid. So we must poll for the whole
+          # settled condition -- epoch>=1 AND >=2 us-east-1 actives AND an east leader -- rather than
+          # snapshotting right after epoch>=1 (which raced a still-"unreachable" east1a and a
+          # not-yet-migrated leader, intermittently flagging west1b as the leader).
+          #
+          # Biasing demand to us-east-1 puts the centroid near (38.5, -78). The 3 closest actives are
+          # east1a, east1b, and the nearer of {west1a, west1b}, so the post-reconfig group must hold
+          # both us-east-1 nodes, and the preferred coordinator (rendered as the role=leader row)
+          # must be one of them.
+          settled=0
+          for i in $(seq 1 45); do
             xdn service info bookcatalog > /tmp/final-placement.txt 2>&1 || true
-            if grep -qE "epoch=[1-9]" /tmp/final-placement.txt; then
-              echo "Reconfiguration observed after ${i} polls"
+            east_count=$(grep -cE "east1[ab]" /tmp/final-placement.txt || true)
+            leader_line=$(grep "leader" /tmp/final-placement.txt || true)
+            if grep -qE "epoch=[1-9]" /tmp/final-placement.txt \
+               && [ "${east_count}" -ge 2 ] \
+               && echo "${leader_line}" | grep -qE "east1[ab]"; then
+              echo "Reconfiguration settled toward us-east-1 after ${i} polls"
+              settled=1
               break
             fi
             sleep 2
           done
           cat /tmp/final-placement.txt
-          if ! grep -qE "epoch=[1-9]" /tmp/final-placement.txt; then
-            echo "FAIL: reconfiguration never fired"
-            exit 1
-          fi
-          # Biasing demand to us-east-1 puts the centroid near (38.5, -78).
-          # The 3 closest actives to that point are east1a, east1b, and the
-          # nearer of {west1a, west1b}, so the post-reconfig group must contain
-          # both us-east-1 nodes. Counting placement-table lines that mention an
-          # east1* node gives us a structural invariant that does not depend on
-          # which initial group the RC happened to pick.
-          east_count=$(grep -cE "east1[ab]" /tmp/final-placement.txt || true)
-          if [ "${east_count}" -lt 2 ]; then
-            echo "FAIL: expected >=2 us-east-1 nodes in active set, saw ${east_count}"
-            echo "--- placement ---"
-            cat /tmp/final-placement.txt
+          if [ "${settled}" -ne 1 ]; then
+            echo "FAIL: reconfiguration did not settle toward us-east-1 within ~90s"
+            echo "  epoch>=1  : $(grep -qE 'epoch=[1-9]' /tmp/final-placement.txt && echo yes || echo no)"
+            echo "  east_count: $(grep -cE 'east1[ab]' /tmp/final-placement.txt || true) (need >=2)"
+            echo "  leader    : $(grep 'leader' /tmp/final-placement.txt || true)"
             echo "--- relevant log lines ---"
             grep -E "shouldReport=true|getNewActivesPlacement|received DemandReport|shouldReconfigure2" /tmp/xdn-cluster.log | tail -30
-            exit 1
-          fi
-          # The preferred coordinator should be in us-east-1 too; the placement
-          # table renders the leader on its own row with role=leader.
-          leader_line=$(grep "leader" /tmp/final-placement.txt || true)
-          if ! echo "${leader_line}" | grep -qE "east1[ab]"; then
-            echo "FAIL: leader is not in us-east-1: ${leader_line}"
             exit 1
           fi
 

@@ -513,6 +513,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       callback.executed(request, true);
       return;
     }
+    // A node dropped from the placement keeps its serviceProperties/serviceCoordinator entries (the
+    // reconfiguration drop tears down the container + app service instance, but not these maps), so
+    // it would otherwise report a stale role. Report honestly that this replica no longer hosts the
+    // service. Active backups still host it -- they keep a service instance (just no container).
+    if (xdnGigapaxosApp != null && !xdnGigapaxosApp.hostsService(serviceName)) {
+      request.setHttpErrorCode(404);
+      request.setErrorMessage("Replica no longer hosts service '" + serviceName + "'");
+      callback.executed(request, true);
+      return;
+    }
     AbstractReplicaCoordinator<NodeIDType> coordinator = this.serviceCoordinator.get(serviceName);
 
     // prepare for the response

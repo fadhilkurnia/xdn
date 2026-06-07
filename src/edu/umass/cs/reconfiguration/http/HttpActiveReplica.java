@@ -893,7 +893,11 @@ public class HttpActiveReplica {
 
                 // Check if this is a request to get replica info
                 // GET /api/v2/services/{name}/replica/info
-                String uri = this.request.uri();
+                // Match on the PATH only: request.uri() includes the query string, so a
+                // caller that passes the service name via ?_xdnsvc=<name> (e.g. the
+                // dashboard, which uses the query param to avoid a CORS preflight on the
+                // XDN header) would otherwise miss this branch and get proxied to the app.
+                String uri = new QueryStringDecoder(this.request.uri()).path();
                 if (uri.startsWith("/api/v2/") &&
                         this.request.method() == HttpMethod.GET &&
                         uri.matches("/api/v2/services/[^/]+/replica/info")) {

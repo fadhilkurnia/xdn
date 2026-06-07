@@ -29,6 +29,7 @@ declare -A IMAGES=(
   ["xdn-bookcatalog-nd"]="bookcatalog-nd"
   ["xdn-bookcatalog-mongo"]="bookcatalog-mongo"
   ["xdn-noop"]="noop"
+  ["xdn-randstate"]="randstate"
   ["xdn-smallbank"]="smallbank"
   ["xdn-seats"]="seats"
   ["xdn-ecommerce"]="ecommerce"
@@ -37,7 +38,7 @@ declare -A IMAGES=(
 )
 REPOS="xdn-rsmbench xdn-webkv xdn-tpcc xdn-tpcc-java xdn-todo \
        xdn-bookcatalog xdn-bookcatalog-nd xdn-bookcatalog-mongo \
-       xdn-noop xdn-smallbank xdn-seats xdn-ecommerce \
+       xdn-noop xdn-randstate xdn-smallbank xdn-seats xdn-ecommerce \
        xdn-socialnetwork xdn-moviereview"
 
 cd "$(dirname "$0")"  # services/

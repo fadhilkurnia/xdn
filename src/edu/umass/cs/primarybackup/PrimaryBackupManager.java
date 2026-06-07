@@ -75,6 +75,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private final boolean ENABLE_NON_DETERMINISTIC_INIT = Config.getGlobalBoolean(
             ReconfigurationConfig.RC.XDN_PB_ENABLE_NON_DETERMINISTIC_INIT);
 
+    // How the primary seeds backups with its non-deterministic initial state (see
+    // XDN_PB_INIT_SYNC_MODE). RSYNC = legacy out-of-band rsync; RECORDER = capture via the
+    // configured recorder and ship in-band as the first ordered ApplyStateDiff (atomic, no seam).
+    private enum InitSyncMode {RSYNC, RECORDER}
+    private final InitSyncMode INIT_SYNC_MODE =
+            "RECORDER".equalsIgnoreCase(
+                    Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE))
+                    ? InitSyncMode.RECORDER : InitSyncMode.RSYNC;
+
     // Retry configuration for StartEpochPacket proposal
     // This handles the race condition where other nodes may not have created their paxos instances yet
     private static final int START_EPOCH_PROPOSAL_MAX_RETRIES = 50;
@@ -1248,17 +1257,27 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 + executedRequest.getClass().getSimpleName();
 
                 ClientRequest requestWithResponse = (ClientRequest) executedRequest;
-                // ResponsePacket is the one wire form that intentionally carries
-                // the locally-computed response back to the entry replica, so
-                // opt in to including it. The default toBytes() now strips it.
+                // executedRequest is a RequestPacket WRAPPING the executed app request; the actual
+                // XdnHttpRequest carrying the primary-computed HTTP response is its getResponse().
+                // Checking executedRequest's own type missed this -- a RequestPacket matches neither
+                // XdnHttpRequest nor XdnHttpRequestBatch, so it fell to the toString() else-branch,
+                // which serializes WITHOUT the HTTP response and silently dropped it on the wire
+                // (the entry replica then delivered a null response -> client saw a dropped conn).
+                ClientRequest appResponse = requestWithResponse.getResponse();
+                if (appResponse == null) {
+                    appResponse = requestWithResponse;
+                }
+                // ResponsePacket is the one wire form that intentionally carries the
+                // locally-computed response back to the entry replica, so opt in to including it
+                // (toBytes(true)). The default toBytes() strips it.
                 byte[] encodedWithResponse;
-                if (requestWithResponse instanceof XdnHttpRequest xhr) {
+                if (appResponse instanceof XdnHttpRequest xhr) {
                     encodedWithResponse = xhr.toBytes(true);
-                } else if (requestWithResponse instanceof XdnHttpRequestBatch batch) {
+                } else if (appResponse instanceof XdnHttpRequestBatch batch) {
                     encodedWithResponse = batch.toBytes(true);
                 } else {
-                    encodedWithResponse = requestWithResponse.getResponse().toString()
-                            .getBytes(StandardCharsets.ISO_8859_1);
+                    encodedWithResponse =
+                            appResponse.toString().getBytes(StandardCharsets.ISO_8859_1);
                 }
                 ResponsePacket resp = new ResponsePacket(
                         executedRequest.getServiceName(),
@@ -1318,6 +1337,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         //    - update the cache in getRequest() of XdnGigapaxosApp to consider the request.
         if (appRequest instanceof XdnHttpRequestBatch) {
             appRequest = XdnHttpRequestBatch.createFromBytes(encodedResponse);
+        } else if (appRequest instanceof XdnHttpRequest) {
+            // Same cache hazard as the batch case above: getRequest() returns the cached entry
+            // WITHOUT the primary-computed response, so a single forwarded request would deliver a
+            // null HTTP response to the client (entry replica logs "ignoring empty HTTP response"
+            // and the client sees a dropped connection). Force-deserialize the wire form, which
+            // does carry the response (XdnHttpRequest.createFromString parses hasResponse()).
+            appRequest = XdnHttpRequest.createFromString(encodedResponseStr);
         }
 
         if (appRequest instanceof ClientRequest appRequestWithResponse) {
@@ -1416,6 +1442,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         PrimaryEpoch<NodeIDType> newEpoch = new PrimaryEpoch<NodeIDType>(
                 myNodeID, curEpoch.counter + 1);
 
+        // Build the node->IP map needed to (re)start the container and re-sync backups on
+        // promotion. The move-primary path previously only flipped the role, leaving the newly
+        // promoted primary container-less (so it served nothing) and the backups un-initialized --
+        // unlike initializePrimaryEpoch, which starts the container + runs the init sync.
+        Set<NodeIDType> nodes = this.getReplicaGroup(groupName);
+        Map<String, InetAddress> ipAddresses = new HashMap<>();
+        if (nodes != null) {
+            NodeConfig<NodeIDType> changeNodeConfig = this.messenger.getNodeConfig();
+            nodes.forEach(node -> ipAddresses.put(
+                    String.valueOf(node).toLowerCase(),
+                    changeNodeConfig.getNodeAddress(node)));
+        }
+
         this.paxosManager.tryToBePaxosCoordinator(groupName); // could still be fail
         this.currentRole.put(groupName, Role.PRIMARY_CANDIDATE);
         this.currentPrimaryEpoch.put(groupName, newEpoch);
@@ -1429,6 +1468,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     currentRole.put(groupName, Role.PRIMARY);
                     currentPrimary.put(groupName, myNodeID);
                     processOutstandingRequests();
+
+                    // Start the container on the newly promoted primary and re-init the backups
+                    // (same lifecycle as initializePrimaryEpoch). Without this the role flips to
+                    // PRIMARY but no container runs, so the new primary returns nothing and the old
+                    // primary's stale container is never replaced -- the move-primary bug.
+                    if (nodes != null) {
+                        handleXdnPrimaryInitialization(
+                                groupName, nodes, ipAddresses, newEpoch.counter);
+                    }
 
                     logger.log(Level.INFO,
                             String.format(
@@ -1581,6 +1629,25 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                                 "%s:%s - stepping down svc=%s role=%s oldEpoch=%s newEpoch=%s",
                                 myNodeID, PrimaryBackupManager.class.getSimpleName(),
                                 groupName, myCurrentRole, currentEpoch, newPrimaryEpoch));
+
+                // This node was the PRIMARY and just learned (via StartEpoch) that another node
+                // took over. A backup runs no container, so terminate the now-stale container we
+                // were serving from -- previously it was left running, so the old primary kept a
+                // live container (and FUSE capture mount) after demotion. State is preserved on
+                // disk; the new primary's InitBackupPacket re-establishes this node in backup
+                // (apply) mode.
+                if (this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp demotionMw
+                        && demotionMw.getReplicableApp() instanceof XdnGigapaxosApp demotionApp) {
+                    try {
+                        demotionApp.stopServiceContainerOnDemotion(groupName);
+                    } catch (RuntimeException e) {
+                        logger.log(Level.WARNING, String.format(
+                                "%s:%s - failed to stop container on demotion for %s: %s",
+                                myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                                groupName, e.getMessage()));
+                    }
+                }
+
                 this.restartPaxosInstance(groupName);
                 return true;
             }
@@ -1597,6 +1664,12 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // executeInitBackupPacket is being called by execute() in the PaxosMiddlewareApp
     private boolean executeInitBackupPacket(InitBackupPacket packet) {
         String serviceName = packet.getServiceName();
+        // In RECORDER init-sync the InitBackup is proposed through paxos, so EVERY replica executes
+        // it -- but the primary is in capture mode and must not re-init itself as a backup. (In the
+        // legacy RSYNC path this is messaged only to backups, so the guard is a no-op there.)
+        if (this.currentRole.get(serviceName) == Role.PRIMARY) {
+            return true;
+        }
         return this.replicableApp.restore(serviceName, "nondeter:start:backup");
     }
 
@@ -2038,6 +2111,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 .filter(node -> !node.equals(myNodeID))
                 .collect(Collectors.toSet());
 
+        // RECORDER init-sync: order everything through paxos -- an InitBackup (sets up each backup's
+        // apply mount) followed by the captured initial state diff (1.4a). RSYNC init-sync (and
+        // disabled init) just message InitBackup to start fuselog-apply on the backups; the initial
+        // state was already pushed out-of-band by nonDeterministicInitialization's rsync.
+        if (INIT_SYNC_MODE == InitSyncMode.RECORDER && ENABLE_NON_DETERMINISTIC_INIT) {
+            recorderModeInitSync(groupName);
+            return;
+        }
+
         InitBackupPacket initPacket = new InitBackupPacket(groupName);
         GenericMessagingTask<NodeIDType, InitBackupPacket> m = new GenericMessagingTask<>(backupNodes.toArray(), initPacket);
 
@@ -2049,6 +2131,48 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         } catch (IOException | JSONException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * RECORDER init-sync (1.4a). Seed the backups entirely in-band and strictly ordered via paxos:
+     *   (1) propose an InitBackup so every backup sets up its apply mount (executeInitBackupPacket),
+     *   (2) in its commit callback, atomically capture the primary's bootstrap state via the
+     *       configured recorder and propose it as the FIRST ApplyStateDiff.
+     * Because the capture is atomic (and the per-request capture thread continues from exactly that
+     * point) the backups see a totally-ordered, gap-free log: [init diff][req-1 diff]... -- no rsync
+     * seam, no write quiescence needed, and no inter-node SSH.
+     */
+    private void recorderModeInitSync(String groupName) {
+        // We just became PRIMARY (this runs inside the StartEpoch commit callback, after the
+        // line-2095 coordinator wait) so we should be the paxos coordinator already; be defensive
+        // before proposing. getPaxosCoordinator may return null transiently -> treat as not-us.
+        NodeIDType coordinator = this.paxosManager.getPaxosCoordinator(groupName);
+        if (coordinator == null || !coordinator.equals(this.myNodeID)) {
+            this.paxosManager.tryToBePaxosCoordinator(groupName);
+        }
+        PrimaryEpoch<NodeIDType> epoch = this.currentPrimaryEpoch.get(groupName);
+
+        InitBackupPacket initPacket = new InitBackupPacket(groupName);
+        ReplicableClientRequest initReq = ReplicableClientRequest.wrap(initPacket);
+        initReq.setClientAddress(messenger.getListeningSocketAddress());
+        this.paxosManager.propose(groupName, initReq, (ip, ih) -> {
+            // Backups have set up their apply mounts; capture + ship the bootstrap state in-band.
+            byte[] initDiff = backupableApp.captureStatediff(groupName);
+            if (initDiff == null || initDiff.length == 0) {
+                logger.log(Level.INFO, String.format(
+                        "%s:%s - RECORDER init-sync: empty initial state for %s (nothing to ship)",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(), groupName));
+                return;
+            }
+            ApplyStateDiffPacket diffPkt = new ApplyStateDiffPacket(groupName, epoch, initDiff);
+            ReplicableClientRequest diffReq = ReplicableClientRequest.wrap(diffPkt);
+            diffReq.setClientAddress(messenger.getListeningSocketAddress());
+            this.paxosManager.propose(groupName, diffReq, (dp, dh) ->
+                    logger.log(Level.INFO, String.format(
+                            "%s:%s - RECORDER init-sync: initial state diff committed for %s (size=%d)",
+                            myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                            groupName, initDiff.length)));
+        });
     }
 
     private void processOutstandingRequests() {
@@ -2080,6 +2204,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             if (worker != null) worker.interrupt();
         }
         serviceBatchQueues.remove(groupName);
+
+        // Clear this node's role/primary bookkeeping for the dropped service so a query on a
+        // dropped replica no longer reports a stale PRIMARY role via replica/info (and so
+        // isCurrentPrimary2 stops re-triggering paxos coordinator election for a service this node
+        // no longer hosts). Guard against the reconfiguration race: a REMAINING node drops the old
+        // epoch AFTER the new epoch already set its role, so only clear when the service is fully
+        // gone from this node (no newer paxos group survives).
+        Set<NodeIDType> remainingGroup = this.paxosManager.getReplicaGroup(groupName);
+        if (remainingGroup == null || remainingGroup.isEmpty()) {
+            this.currentRole.remove(groupName);
+            this.currentPrimary.remove(groupName);
+            this.currentPrimaryEpoch.remove(groupName);
+        }
 
         return true;
     }
@@ -2118,14 +2255,22 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // paxos coordinator as well.
     public boolean isCurrentPrimary2(String groupName) {
         Role myCurrentRole = this.currentRole.get(groupName);
-        if (myCurrentRole == null) {
+        if (myCurrentRole == null || !myCurrentRole.equals(Role.PRIMARY)) {
             return false;
         }
-        boolean isPrimary = myCurrentRole.equals(Role.PRIMARY);
-        if (isPrimary) {
-            this.paxosManager.tryToBePaxosCoordinator(groupName);
+        // A node dropped from the placement keeps a stale currentRole=PRIMARY: the reconfiguration
+        // drop tears down the container + app service instance (deleteFinalState) but does not go
+        // through deleteReplicaGroup, so the PB role maps are not cleared. Verify this node still
+        // hosts the service before claiming PRIMARY, so a query (replica/info) on a dropped replica
+        // reports the truth and does not re-trigger coordinator election below. Race-free at query
+        // time: a REMAINING node keeps its new-epoch service instance.
+        if (this.paxosMiddlewareApp instanceof PrimaryBackupMiddlewareApp mw
+                && mw.getReplicableApp() instanceof XdnGigapaxosApp xdnApp
+                && !xdnApp.hostsService(groupName)) {
+            return false;
         }
-        return isPrimary;
+        this.paxosManager.tryToBePaxosCoordinator(groupName);
+        return true;
     }
 
     private void restartPaxosInstance(String groupName) {
@@ -2296,6 +2441,14 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
             if (request instanceof ApplyStateDiffPacket stateDiffPacket) {
                 return this.primaryBackupManager.executeApplyStateDiffPacket(stateDiffPacket);
+            }
+
+            // RECORDER init-sync proposes InitBackup through paxos (so it is ordered before the
+            // init-state diff). Paxos unwraps the ReplicableClientRequest, so it arrives here as a
+            // raw InitBackupPacket -- dispatch it the same way as StartEpoch/ApplyStateDiff above.
+            // (In legacy RSYNC mode InitBackup never reaches this path; it is messaged directly.)
+            if (request instanceof InitBackupPacket initBackupPacket) {
+                return this.primaryBackupManager.executeInitBackupPacket(initBackupPacket);
             }
 
             // Unwrap ReplicableClientRequest to get the inner app request
