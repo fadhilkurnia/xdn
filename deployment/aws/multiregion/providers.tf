@@ -1,6 +1,6 @@
 # Multi-region XDN deployment.
 #
-# Unlike ../main.tf (single-region: all nodes in one us-east-1 VPC), this config
+# Unlike ../useast1/main.tf (single-region: all nodes in one us-east-1 VPC), this config
 # physically spreads the ActiveReplicas across AWS regions. The control plane (RC
 # + coredns + EIP + ACME/cert/domain) stays in us-east-1; each AR lives in a VPC
 # in its own region and joins consensus over its GLOBAL IPv6 (the gigapaxos wire

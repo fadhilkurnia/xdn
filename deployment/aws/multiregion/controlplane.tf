@@ -4,7 +4,7 @@
 # delegation. Identical to the single-region config -- the RC is single-homed.
 # ===========================================================================
 
-# PERSISTENT public IP for the RC, allocated OUTSIDE this config by ../../bin/persist-eip.sh
+# PERSISTENT public IP for the RC, allocated OUTSIDE this config by ../../../bin/persist-eip.sh
 # (tag Name=xdn-rc-persist-eip) so it survives `terraform destroy`. Referenced as a data source
 # -- never managed/released here -- so the RC keeps the SAME IP across redeploys and the domain's
 # nameserver glue (ns1/ns2 -> this IP) never changes (no DNS-propagation window for the dashboard).
@@ -23,7 +23,7 @@ resource "aws_eip_association" "rc" {
 
 # ACME DNS-01 delegation zone: coredns is authoritative for the apex but can't
 # serve the dynamic _acme-challenge TXT, so that single subzone is hosted in
-# Route53 and delegated from coredns (see ../rc-userdata.tftpl).
+# Route53 and delegated from coredns (see ../useast1/rc-userdata.tftpl).
 resource "aws_route53_zone" "acme" {
   name    = "_acme-challenge.${var.base_domain}"
   comment = "ACME DNS-01 challenge records for the *.${var.base_domain} wildcard (delegated from coredns)."
@@ -165,7 +165,7 @@ resource "acme_certificate" "wildcard" {
 }
 
 # Durable cert store (only written when issuing; otherwise the persistent bucket
-# created out-of-band by ../bin/persist-cert.sh is used).
+# created out-of-band by ../../../bin/persist-cert.sh is used).
 resource "aws_s3_bucket" "tls" {
   count         = var.issue_cert ? 1 : 0
   bucket_prefix = "xdn-tls-"

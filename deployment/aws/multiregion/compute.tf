@@ -58,7 +58,7 @@ resource "aws_instance" "rc" {
   iam_instance_profile   = aws_iam_instance_profile.rc_tls.name
 
   user_data_replace_on_change = true
-  user_data = templatefile("${path.module}/../rc-userdata.tftpl", {
+  user_data = templatefile("${path.module}/../useast1/rc-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     rc_eip               = data.aws_eip.rc.public_ip
     base_domain          = var.base_domain
@@ -122,7 +122,7 @@ resource "aws_instance" "ar_use1" {
   }
 
   user_data_replace_on_change = true
-  user_data = templatefile("${path.module}/../ar-userdata.tftpl", {
+  user_data = templatefile("${path.module}/../useast1/ar-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     node_id              = each.key
     aws_region           = local.control_region
@@ -163,7 +163,7 @@ resource "aws_instance" "ar_use2" {
   }
 
   user_data_replace_on_change = true
-  user_data = templatefile("${path.module}/../ar-userdata.tftpl", {
+  user_data = templatefile("${path.module}/../useast1/ar-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     node_id              = each.key
     aws_region           = local.control_region
@@ -204,7 +204,7 @@ resource "aws_instance" "ar_usw2" {
   }
 
   user_data_replace_on_change = true
-  user_data = templatefile("${path.module}/../ar-userdata.tftpl", {
+  user_data = templatefile("${path.module}/../useast1/ar-userdata.tftpl", {
     gigapaxos_properties = local.gigapaxos_properties
     node_id              = each.key
     aws_region           = local.control_region

@@ -4,7 +4,7 @@ locals {
   control_region = "us-east-1"
 
   # Persistent TLS cert store -- a bucket created OUTSIDE this config
-  # (../bin/persist-cert.sh) so it survives `terraform destroy`. RC + ARs always
+  # (../../../bin/persist-cert.sh) so it survives `terraform destroy`. RC + ARs always
   # pull the wildcard cert from here (it lives in us-east-1).
   persist_tls_bucket     = "xdn-tls-persist-${data.aws_caller_identity.current.account_id}"
   persist_tls_bucket_arn = "arn:aws:s3:::xdn-tls-persist-${data.aws_caller_identity.current.account_id}"
