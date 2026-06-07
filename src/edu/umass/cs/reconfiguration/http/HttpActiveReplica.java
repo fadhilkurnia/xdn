@@ -426,8 +426,19 @@ public class HttpActiveReplica {
             // aggregate to FullHttpRequest
             p.addLast(new HttpObjectAggregator(1 << 20));
 
-            // handle CORS
-            CorsConfig corsConfig = CorsConfigBuilder.forAnyOrigin().build();
+            // handle CORS. forAnyOrigin() alone leaves Access-Control-Allow-{Methods,
+            // Headers} empty, failing the preflight for any non-simple request (POST/
+            // PUT/DELETE with Content-Type); allow the REST methods + Content-Type.
+            CorsConfig corsConfig =
+                    CorsConfigBuilder.forAnyOrigin()
+                            .allowedRequestMethods(
+                                    HttpMethod.GET,
+                                    HttpMethod.POST,
+                                    HttpMethod.PUT,
+                                    HttpMethod.DELETE,
+                                    HttpMethod.OPTIONS)
+                            .allowedRequestHeaders("Content-Type", "Authorization")
+                            .build();
             p.addLast(new CorsHandler(corsConfig));
 
             // handle http request in separate executor group because execution

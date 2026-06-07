@@ -337,7 +337,20 @@ public class HttpReconfigurator {
             // CORS: allow any origin so the browser dashboard (served from a
             // different origin, e.g. GitHub Pages) can call the control-plane API.
             // Handles preflight (OPTIONS) automatically. Mirrors HttpActiveReplica.
-            CorsConfig corsConfig = CorsConfigBuilder.forAnyOrigin().build();
+            // forAnyOrigin() alone leaves Access-Control-Allow-{Methods,Headers}
+            // empty, so a non-simple request -- e.g. the deploy POST with
+            // Content-Type: application/json -- fails its preflight. Explicitly
+            // allow the REST methods and the Content-Type request header.
+            CorsConfig corsConfig =
+                    CorsConfigBuilder.forAnyOrigin()
+                            .allowedRequestMethods(
+                                    HttpMethod.GET,
+                                    HttpMethod.POST,
+                                    HttpMethod.PUT,
+                                    HttpMethod.DELETE,
+                                    HttpMethod.OPTIONS)
+                            .allowedRequestHeaders("Content-Type", "Authorization")
+                            .build();
             p.addLast(new CorsHandler(corsConfig));
 
             p.addLast(new HttpReconfiguratorHandler(rcFunctions, rcNodeId));
