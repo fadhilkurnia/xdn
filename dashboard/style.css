@@ -142,7 +142,7 @@ summary { cursor: pointer; font-weight: 600; font-size: 13px; }
   font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto;
 }
 
-#map { height: 320px; border-radius: 8px; border: 1px solid var(--line); background: #e8eef3; }
+#map { height: 320px; margin-top: 10px; border-radius: 8px; border: 1px solid var(--line); background: #e8eef3; }
 .leaflet-container { font: inherit; }
 
 footer {
