@@ -148,3 +148,42 @@ footer {
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #cbd5e1; }
 .dot.ok { background: var(--ok); }
 .dot.bad { background: var(--bad); }
+
+/* ---- Client emulator ----------------------------------------------------- */
+:root { --client: #8b5cf6; } /* synthetic client sources — distinct from leader/replica */
+
+.emu-cities { gap: 6px; margin-top: 4px; }
+.emu-cities button {
+  padding: 3px 9px; font-size: 12px; font-weight: 600;
+  background: #f3f0fc; color: #6d28d9; border: 1px solid #e2d9fb; border-radius: 999px;
+}
+.emu-cities button:hover { background: #ece6fb; }
+
+.emu-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.emu-list:empty { display: none; }
+.emu-list li {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 6px 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 12px; background: #faf8ff;
+}
+.emu-list li .dot { width: 8px; height: 8px; background: var(--client); }
+.emu-list li button {
+  padding: 0; width: 18px; height: 18px; line-height: 1; font-size: 14px;
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+}
+.emu-list li button:hover { color: var(--bad); }
+
+.emu-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+.emu-controls label { font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.emu-controls input[type="range"] { width: 96px; }
+.emu-controls #emu-toggle { background: var(--client); border-color: var(--client); color: #fff; }
+.emu-controls #emu-toggle.running { background: var(--bad); border-color: var(--bad); }
+.emu-controls #emu-toggle:disabled { background: #e5e7eb; border-color: #e5e7eb; color: #9ca3af; }
+
+/* Pulsing marker for a synthetic client source on the map. */
+.emu-pulse { position: relative; display: block; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--client); box-shadow: 0 0 0 2px #fff; }
+.emu-pulse::after { content: ""; position: absolute; left: -5px; top: -5px;
+  width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--client);
+  animation: emu-ring 1.6s ease-out infinite; opacity: 0.7; }
+@keyframes emu-ring { 0% { transform: scale(0.4); opacity: 0.7; } 100% { transform: scale(1.7); opacity: 0; } }

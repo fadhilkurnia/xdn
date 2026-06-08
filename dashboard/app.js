@@ -19,6 +19,9 @@ const params = new URLSearchParams(location.search);
 let controlPlane = bareHost(params.get("cp")) || DEFAULT_CP;
 let currentSvc = params.get("svc") || null;
 let map, markerLayer, heatLayers = [], lastDemandCells = [], demandTimer, topologyLayer;
+// Client emulator state.
+let emuLayer, emuClients = [], emuTimer, emuPlacementTimer, emuRR = 0, emuSent = 0;
+let lastPlacementNodes = [];
 
 // ---- URL state -------------------------------------------------------------
 function syncUrl() {
@@ -129,7 +132,7 @@ async function destroy(name) {
 }
 
 // ---- Placement view --------------------------------------------------------
-async function inspect(name) {
+async function inspect(name, fit = true) {
   currentSvc = name;
   syncUrl();
   $("#svc-name").value = name;
@@ -141,20 +144,42 @@ async function inspect(name) {
     const r = await api(`/api/v2/services/${encodeURIComponent(name)}/placement`);
     if (!r.ok || !r.body) {
       note.textContent = `No placement for "${name}" (HTTP ${r.status}).`;
-      renderReplicas([]); drawMarkers([]);
+      lastPlacementNodes = [];
+      renderReplicas([]); drawMarkers([]); updateEmuState();
       return;
     }
-    const nodes = (r.body.DATA && r.body.DATA.NODES) || [];
-    const meta = (r.body.DATA && r.body.DATA.SERVICE_METADATA) || "";
-    note.innerHTML =
-      `epoch <b>${r.body.EPOCH ?? "?"}</b> · ${nodes.length} replica(s)` +
-      (meta ? ` · <span class="mono">${esc(meta)}</span>` : "");
-    renderReplicas(nodes);
-    drawMarkers(nodes);
+    applyPlacement(r.body, fit);
     startDemandPolling(name);
   } catch (e) {
     note.textContent = `Error loading placement: ${e.message}`;
   }
+}
+
+// Render a /placement response: epoch note, replica table, map markers, and the
+// emulator's target list. `fit` controls whether the map re-zooms — false on the
+// periodic refresh while emulating, so moving replicas don't yank the viewport.
+function applyPlacement(body, fit = true) {
+  const nodes = (body.DATA && body.DATA.NODES) || [];
+  const meta = (body.DATA && body.DATA.SERVICE_METADATA) || "";
+  $("#placement-note").innerHTML =
+    `epoch <b>${body.EPOCH ?? "?"}</b> · ${nodes.length} replica(s)` +
+    (meta ? ` · <span class="mono">${esc(meta)}</span>` : "");
+  lastPlacementNodes = nodes;
+  renderReplicas(nodes);
+  drawMarkers(nodes, fit);
+  updateEmuState();
+  return nodes;
+}
+
+// Lightweight placement refresh used while emulating: updates markers/table/epoch
+// without re-zooming or disturbing demand polling, so a reconfiguration shows up
+// as replicas moving in place and the epoch bumping.
+async function refreshPlacement() {
+  if (!currentSvc) return;
+  try {
+    const r = await api(`/api/v2/services/${encodeURIComponent(currentSvc)}/placement`);
+    if (r.ok && r.body) applyPlacement(r.body, false);
+  } catch (_) { /* transient — keep emulating */ }
 }
 
 function clearPlacement() {
@@ -164,7 +189,10 @@ function clearPlacement() {
   $("#svc-name").value = "";
   $("#destroy-btn").disabled = true;
   stopDemandPolling();
+  stopEmu();
+  lastPlacementNodes = [];
   renderReplicas([]); drawMarkers([]);
+  updateEmuState();
 }
 
 function roleIsLeader(role) {
@@ -353,9 +381,14 @@ function initMap() {
   // the per-service placement markers.
   topologyLayer = L.layerGroup().addTo(map);
   markerLayer = L.layerGroup().addTo(map);
+  emuLayer = L.layerGroup().addTo(map); // synthetic client sources
+  // Click-to-add a client source when the emulator's "click map to add" is on.
+  map.on("click", (e) => {
+    if ($("#emu-add") && $("#emu-add").checked) addClient(e.latlng.lat, e.latlng.lng);
+  });
 }
 
-function drawMarkers(nodes) {
+function drawMarkers(nodes, fit = true) {
   if (!markerLayer) return;
   markerLayer.clearLayers();
   const pts = [];
@@ -376,7 +409,7 @@ function drawMarkers(nodes) {
   if (!pts.length && nodes.length) {
     note.innerHTML += ` · <span class="muted">no node geolocation configured (set ` +
       `<code>active.&lt;node&gt;.geolocation</code> to plot replicas)</span>`;
-  } else if (pts.length) {
+  } else if (pts.length && fit) {
     map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 });
   }
 }
@@ -467,6 +500,137 @@ function stopDemandPolling() {
   clearHeatLayers();
 }
 
+// ---- Client emulator -------------------------------------------------------
+// Generates geo-located traffic to drive XDN's demand-based reconfiguration.
+// Each request rides ?_xdnsvc=<svc>&_xdnloc=<lat>,<lon> — a CORS-simple GET/POST
+// (no custom header, hence no preflight) — so the receiving AR records demand at
+// that location, as if a real client there had called the service.
+const CITIES = [
+  ["N. Virginia", 39.04, -77.49], ["San Francisco", 37.77, -122.42],
+  ["São Paulo", -23.55, -46.63], ["London", 51.51, -0.13],
+  ["Frankfurt", 50.11, 8.68], ["Mumbai", 19.08, 72.88],
+  ["Singapore", 1.35, 103.82], ["Tokyo", 35.68, 139.69],
+  ["Sydney", -33.87, 151.21],
+];
+
+function renderCities() {
+  const box = $("#emu-cities");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const [label, lat, lon] of CITIES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "+ " + label;
+    b.onclick = () => addClient(lat, lon, label);
+    box.appendChild(b);
+  }
+}
+
+function clientMarker(lat, lon, label) {
+  const icon = L.divIcon({ className: "", html: '<span class="emu-pulse"></span>', iconSize: [12, 12] });
+  return L.marker([lat, lon], { icon }).bindTooltip(`client: ${label}`, { direction: "top" });
+}
+
+function addClient(lat, lon, label) {
+  label = label || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+  const m = clientMarker(lat, lon, label);
+  if (emuLayer) m.addTo(emuLayer);
+  emuClients.push({ lat, lon, label, marker: m });
+  renderEmuList();
+  updateEmuState();
+}
+
+function removeClient(idx) {
+  const c = emuClients[idx];
+  if (!c) return;
+  if (c.marker && emuLayer) emuLayer.removeLayer(c.marker);
+  emuClients.splice(idx, 1);
+  renderEmuList();
+  if (!emuClients.length) stopEmu();
+  updateEmuState();
+}
+
+function renderEmuList() {
+  const ul = $("#emu-list");
+  if (!ul) return;
+  ul.innerHTML = "";
+  emuClients.forEach((c, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="dot"></span>${esc(c.label)}`;
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "×"; x.title = "remove";
+    x.onclick = () => removeClient(i);
+    li.appendChild(x);
+    ul.appendChild(li);
+  });
+}
+
+// Browser-reachable base URLs for the current service's replicas — the request
+// targets. Reuses the per-replica edge-name / advertised-address resolution.
+function emuTargets() {
+  const out = [];
+  for (const n of lastPlacementNodes) {
+    const bases = replicaInfoBases(n);
+    if (bases.length) out.push(bases[0]);
+  }
+  return out;
+}
+
+function updateEmuState() {
+  if (!$("#emu-toggle")) return;
+  $("#emu-svc").textContent = currentSvc ? `· ${currentSvc}` : "";
+  const targets = emuTargets();
+  const ready = !!currentSvc && emuClients.length > 0 && targets.length > 0;
+  // Keep "Stop" usable while running; otherwise enable only when ready.
+  $("#emu-toggle").disabled = emuTimer ? false : !ready;
+  const hint = $("#emu-hint");
+  if (!currentSvc) hint.textContent = "Inspect a service first, then add client locations.";
+  else if (!emuClients.length) hint.textContent = "Add client locations: tick “click map to add”, or pick a city.";
+  else if (!targets.length) hint.textContent = "No browser-reachable replica address for this deployment.";
+  else hint.textContent = `Ready — tagging traffic with ${emuClients.length} location(s) across ${targets.length} replica(s).`;
+}
+
+function emuTick() {
+  const targets = emuTargets();
+  if (!currentSvc || !emuClients.length || !targets.length) return;
+  const c = emuClients[emuRR % emuClients.length];
+  const base = targets[emuRR % targets.length];
+  emuRR++;
+  const writePct = Number($("#emu-write").value) || 0;
+  const isWrite = Math.random() * 100 < writePct;
+  const url = `${base}/?_xdnsvc=${encodeURIComponent(currentSvc)}` +
+    `&_xdnloc=${c.lat.toFixed(4)},${c.lon.toFixed(4)}`;
+  // Fire-and-forget: a CORS-simple request. Even if the browser can't read the
+  // response, the AR has already received it and recorded the demand.
+  fetch(url, { method: isWrite ? "POST" : "GET", mode: "cors", cache: "no-store" }).catch(() => {});
+  emuSent++;
+  const s = $("#emu-status");
+  s.textContent = `sent ${emuSent}`;
+  s.className = "status ok";
+}
+
+function startEmu() {
+  if (emuTimer) return;
+  const rate = Math.min(20, Math.max(1, Number($("#emu-rate").value) || 6));
+  emuTimer = setInterval(emuTick, Math.round(1000 / rate));
+  // Refresh placement while running so replica markers + epoch reflect any
+  // reconfiguration the demand triggers (without re-zooming the map).
+  emuPlacementTimer = setInterval(refreshPlacement, 8000);
+  const btn = $("#emu-toggle");
+  btn.textContent = "Stop"; btn.classList.add("running"); btn.disabled = false;
+  log(`Emulating ~${rate} req/s from ${emuClients.length} location(s) to "${currentSvc}".`);
+}
+
+function stopEmu() {
+  if (emuTimer) { clearInterval(emuTimer); emuTimer = null; }
+  if (emuPlacementTimer) { clearInterval(emuPlacementTimer); emuPlacementTimer = null; }
+  const btn = $("#emu-toggle");
+  if (btn) { btn.textContent = "Start"; btn.classList.remove("running"); }
+  updateEmuState();
+}
+
+function toggleEmu() { if (emuTimer) stopEmu(); else startEmu(); }
+
 // ---- utils -----------------------------------------------------------------
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"]/g, (c) =>
@@ -494,5 +658,18 @@ window.addEventListener("DOMContentLoaded", () => {
     if ($("#topo-toggle").checked) topologyLayer.addTo(map); else map.removeLayer(topologyLayer);
   };
   $("#deploy-form").addEventListener("submit", (e) => { e.preventDefault(); deploy(e.target); });
+
+  // Client emulator wire-up.
+  renderCities();
+  $("#emu-toggle").onclick = toggleEmu;
+  $("#emu-rate").addEventListener("input", () => {
+    $("#emu-rate-val").textContent = `${$("#emu-rate").value}/s`;
+    if (emuTimer) { stopEmu(); startEmu(); } // apply new rate live
+  });
+  $("#emu-write").addEventListener("input", () => {
+    $("#emu-write-val").textContent = `${$("#emu-write").value}%`;
+  });
+  updateEmuState();
+
   connect();
 });

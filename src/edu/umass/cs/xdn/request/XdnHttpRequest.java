@@ -56,6 +56,14 @@ public class XdnHttpRequest extends XdnRequest
   // Geolocation and stripped before the request reaches the container).
   public static final String X_CLIENT_LOCATION_HEADER = "X-Client-Location";
 
+  // URL query-param alternative to the X-Client-Location header, e.g.
+  // http://host/?_xdnsvc=foo&_xdnloc=42.36,-71.06 . It lets a browser declare a
+  // (synthetic) client location with a CORS-simple GET — no custom header, hence
+  // no preflight — which the geo-demand profiler records like a real client's.
+  // As an XDN-reserved param (XDN_RESERVED_QUERY_PREFIX) it is stripped from the
+  // URI before the request reaches the containerized service.
+  public static final String XDN_CLIENT_LOCATION_QUERY_PARAM = "_xdnloc";
+
   public static final List<RequestMatcher> defaultSingletonRequestMatchers =
       ServiceProperty.createDefaultMatchers();
 
@@ -283,16 +291,28 @@ public class XdnHttpRequest extends XdnRequest
     return null;
   }
 
-  // Returns the client geolocation from the X-Client-Location header, or null
-  // if the header is absent or malformed. Accepts both "lat,lon" and the
-  // "lat; lon" form emitted by the eval latency proxy by normalizing the
-  // separator before delegating to Geolocation.parse (which already handles
-  // whitespace, surrounding quotes, range checks, and null-on-error).
+  // Returns the client geolocation, or null if absent/malformed. The value comes
+  // from the X-Client-Location header, or, when that header is absent, from the
+  // _xdnloc URL query param (XDN_CLIENT_LOCATION_QUERY_PARAM) — the param form
+  // lets a browser declare a location with a CORS-simple GET (no preflight).
+  // Accepts both "lat,lon" and the "lat; lon" form emitted by the eval latency
+  // proxy by normalizing the separator before delegating to Geolocation.parse
+  // (which already handles whitespace, surrounding quotes, range checks, and
+  // null-on-error).
   private static Geolocation parseClientGeolocation(HttpRequest httpRequest) {
-    if (httpRequest.headers() == null) {
-      return null;
+    String raw = null;
+    if (httpRequest.headers() != null) {
+      raw = httpRequest.headers().get(X_CLIENT_LOCATION_HEADER);
     }
-    String raw = httpRequest.headers().get(X_CLIENT_LOCATION_HEADER);
+    if ((raw == null || raw.isEmpty()) && httpRequest.uri() != null) {
+      List<String> values =
+          new QueryStringDecoder(httpRequest.uri())
+              .parameters()
+              .get(XDN_CLIENT_LOCATION_QUERY_PARAM);
+      if (values != null && !values.isEmpty()) {
+        raw = values.get(0);
+      }
+    }
     if (raw == null || raw.isEmpty()) {
       return null;
     }
