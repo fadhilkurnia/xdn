@@ -108,6 +108,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .legend-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: -1px; }
 .legend-dot.active { background: var(--replica); box-shadow: 0 0 0 2px #fff, 0 0 0 3px var(--replica); }
 .legend-dot.candidate { background: #fff; border: 1.5px solid var(--muted); width: 9px; height: 9px; }
+/* Demand-heatmap legend swatches — match the read (blue) / write (red) gradients in app.js. */
+.legend-dot.read { background: #2563eb; }
+.legend-dot.write { background: #ef4444; }
 code { font-family: var(--mono); background: #eef1f5; padding: 1px 4px; border-radius: 4px; }
 
 .status { font-size: 12.5px; font-weight: 600; }
