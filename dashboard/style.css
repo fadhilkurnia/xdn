@@ -88,6 +88,9 @@ input, select, button {
 }
 input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
 #cp { flex: 1; min-width: 140px; font-family: var(--mono); }
+/* Right-align the service actions: margin-left:auto on the first button pushes
+   Inspect + Destroy to the right edge of the row, leaving the name input left. */
+#inspect-btn { margin-left: auto; }
 
 button {
   background: var(--accent);
