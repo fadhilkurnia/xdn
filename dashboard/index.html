@@ -85,34 +85,9 @@
       </details>
       <pre id="action-log" class="log" hidden></pre>
       </section>
-
-      <!-- Emulate clients: generate geo-located traffic to drive demand-based
-           reconfiguration. Each request carries ?_xdnloc=<lat>,<lon> so the AR
-           records demand as if it came from that place. -->
-      <section class="card" id="emulator-card">
-        <h2>Emulate clients <span id="emu-svc" class="muted"></span></h2>
-        <p class="hint">
-          Add client sources — tick <b>click map to add</b> and click the map, or
-          pick a city below — then <b>Start</b>. Each request is tagged with that
-          location (<code>_xdnloc</code>), so XDN's demand-driven placement moves
-          replicas closer. Watch the heatmap and replica markers update live.
-        </p>
-        <div class="row emu-cities" id="emu-cities"></div>
-        <ul id="emu-list" class="emu-list"></ul>
-        <div class="emu-controls">
-          <label class="check"><input type="checkbox" id="emu-add" /> click map to add</label>
-          <label>rate <input id="emu-rate" type="range" min="1" max="20" value="6" />
-            <span id="emu-rate-val" class="mono">6/s</span></label>
-          <label>writes <input id="emu-write" type="range" min="0" max="100" value="0" step="10" />
-            <span id="emu-write-val" class="mono">0%</span></label>
-          <button id="emu-toggle" disabled>Start</button>
-          <span id="emu-status" class="status"></span>
-        </div>
-        <p class="hint" id="emu-hint">Inspect a service first, then add client locations.</p>
-      </section>
     </div>
 
-    <!-- Right column: the cluster map. -->
+    <!-- Right column: the cluster map, with the client emulator below it. -->
     <div class="col">
       <!-- Placement view: replica table + map for the selected service -->
       <section class="card">
@@ -142,6 +117,32 @@
         <tbody></tbody>
       </table>
       <p id="placement-note" class="hint"></p>
+      </section>
+
+      <!-- Emulate clients: generate geo-located traffic to drive demand-based
+           reconfiguration. Each request carries ?_xdnloc=<lat>,<lon> so the AR
+           records demand as if it came from that place. Sits below the map so the
+           heatmap/replica markers it drives are visible right above it. -->
+      <section class="card" id="emulator-card">
+        <h2>Emulate clients <span id="emu-svc" class="muted"></span></h2>
+        <p class="hint">
+          Add client sources — tick <b>click map to add</b> and click the map, or
+          pick a city below — then <b>Start</b>. Each request is tagged with that
+          location (<code>_xdnloc</code>), so XDN's demand-driven placement moves
+          replicas closer. Watch the heatmap and replica markers update live.
+        </p>
+        <div class="row emu-cities" id="emu-cities"></div>
+        <ul id="emu-list" class="emu-list"></ul>
+        <div class="emu-controls">
+          <label class="check"><input type="checkbox" id="emu-add" /> click map to add</label>
+          <label>rate <input id="emu-rate" type="range" min="1" max="20" value="6" />
+            <span id="emu-rate-val" class="mono">6/s</span></label>
+          <label>writes <input id="emu-write" type="range" min="0" max="100" value="0" step="10" />
+            <span id="emu-write-val" class="mono">0%</span></label>
+          <button id="emu-toggle" disabled>Start</button>
+          <span id="emu-status" class="status"></span>
+        </div>
+        <p class="hint" id="emu-hint">Inspect a service first, then add client locations.</p>
       </section>
     </div>
   </main>
