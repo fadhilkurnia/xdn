@@ -505,12 +505,15 @@ function stopDemandPolling() {
 // Each request rides ?_xdnsvc=<svc>&_xdnloc=<lat>,<lon> — a CORS-simple GET/POST
 // (no custom header, hence no preflight) — so the receiving AR records demand at
 // that location, as if a real client there had called the service.
+// US-only client locations (the cluster's ARs + edge candidates are all US),
+// spanning east -> west to make demand-driven placement easy to see.
 const CITIES = [
-  ["N. Virginia", 39.04, -77.49], ["San Francisco", 37.77, -122.42],
-  ["São Paulo", -23.55, -46.63], ["London", 51.51, -0.13],
-  ["Frankfurt", 50.11, 8.68], ["Mumbai", 19.08, 72.88],
-  ["Singapore", 1.35, 103.82], ["Tokyo", 35.68, 139.69],
-  ["Sydney", -33.87, 151.21],
+  ["N. Virginia", 39.04, -77.49], ["New York", 40.71, -74.01],
+  ["Boston", 42.36, -71.06], ["Atlanta", 33.75, -84.39],
+  ["Miami", 25.76, -80.19], ["Cleveland", 41.5, -81.69],
+  ["Chicago", 41.85, -87.65], ["Dallas", 32.78, -96.8],
+  ["Denver", 39.74, -104.99], ["Seattle", 47.61, -122.33],
+  ["San Francisco", 37.77, -122.42], ["Los Angeles", 34.05, -118.24],
 ];
 
 function renderCities() {
