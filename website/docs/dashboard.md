@@ -16,8 +16,10 @@ Connect field below.
   /* Embed the dashboard SPA full-width under the site's header/footer/tabs. */
   .xdn-dash-frame {
     width: 100%;
-    height: calc(100vh - 11rem);
-    min-height: 720px;
+    /* Tall enough to show the whole SPA (map + replica table + client emulator
+       below it) without an inner scrollbar. */
+    height: calc(100vh - 8rem);
+    min-height: 1100px;
     border: 1px solid var(--md-default-fg-color--lightest);
     border-radius: 6px;
   }
