@@ -11,8 +11,20 @@ For each request, the AR derives one approximate client location, in priority
 order:
 
 1. **`X-Client-Location` header** — a `lat,lon` the client (or an upstream proxy)
-   declares explicitly.
-2. **Source IP geolocation** — when no header is present, the client's IP
+   declares explicitly. Ideal for server-to-server callers, load-test tools, and
+   the eval latency proxy, where it costs nothing.
+2. **`_xdnloc` query parameter** — a URL-based equivalent of the header, e.g.
+   `…/path?_xdnsvc=<name>&_xdnloc=42.36,-71.06`, used when the header is absent.
+   This exists for **browsers**. A custom request header makes a cross-origin call
+   "non-simple", so the browser must first send a CORS **preflight** (`OPTIONS`)
+   that the data-plane AR frontend would have to explicitly allow (e.g.
+   `Access-Control-Allow-Headers: X-Client-Location`). Putting the location in the
+   URL instead keeps the request **CORS-simple** — a plain GET/POST with no custom
+   header, hence no preflight — so an in-browser client such as the dashboard's
+   *Emulate clients* panel can declare a (synthetic) client location and fire
+   high-rate traffic directly cross-origin. Both forms feed the same parser and
+   produce the same `Geolocation`.
+3. **Source IP geolocation** — when neither is present, the client's IP
    (IPv4 or IPv6) is mapped to a city-level location using a local GeoLite2-City
    database.
 
@@ -21,8 +33,9 @@ link-local, multicast, IPv6 ULA, IPv4 CGNAT — are ignored, and any IP that can
 be resolved simply contributes nothing.
 
 The geolocation lookup never touches the request hot path: each request only
-enqueues its header or its source IP, and a background worker does the
-(comparatively expensive) database lookup and grid update asynchronously.
+enqueues its declared location (header or `_xdnloc`) or its source IP, and a
+background worker does the (comparatively expensive) database lookup and grid
+update asynchronously.
 
 ## The demand grid
 

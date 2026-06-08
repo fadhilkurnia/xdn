@@ -83,7 +83,8 @@ bytes travel out-of-band, AR→AR**, not through the RC.
 ## Step-by-step
 
 **Trigger.** Each AR samples client demand per request (the `X-Client-Location`
-header, else the client IP via GeoIP) and reports an aggregated grid to the RC at
+header or the `_xdnloc` query param — the CORS-simple form browsers use — else the
+client IP via GeoIP) and reports an aggregated grid to the RC at
 most once every 10 s (`XdnGeoDemandProfiler`). On each report the RC runs the
 placement policy: it computes the demand-weighted **centroid** of all cells and
 picks the `N` ARs closest to it (`N` = the current group size). If that set differs
