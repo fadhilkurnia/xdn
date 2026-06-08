@@ -53,7 +53,8 @@
         <form id="deploy-form" class="grid">
           <label>Name <input name="name" required pattern="[a-zA-Z0-9_-]{1,64}" /></label>
           <label>Docker image
-            <input name="image" list="xdn-images" required placeholder="fadhilkurnia/xdn-bookcatalog" />
+            <input name="image" list="xdn-images" required value="fadhilkurnia/xdn-bookcatalog"
+                   placeholder="fadhilkurnia/xdn-bookcatalog" />
           </label>
           <datalist id="xdn-images">
             <option value="fadhilkurnia/xdn-bookcatalog">Book catalog — deterministic</option>
