@@ -51,7 +51,6 @@ nav:
       - Multi-container services: 'multi-container.md'
   - Consistency: 'flexible-consistency.md'
   - Service Properties: 'service-properties.md'
-  - Deployment: 'become-operator.md'
   - Architecture: 'how-xdn-work.md'
   # The repo's docs/*.md are staged into docs/reference/ by bin/build_site.sh.
   # Mostly internal docs intended for XDN developers.

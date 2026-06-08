@@ -87,8 +87,7 @@ Let's dechiper what just happened when we deploy a stateful service with the com
   it is commonly `/var/lib/mysql` in MySQL and `/var/lib/pgsql/data` in PostgreSQL. When not specified, XDN will 
   snapshot the entire data in the container `/`. 
 - **XDN Provider.** Here, we are using an existing XDN provider, accessible at `xdnapp.com`. You can use another XDN
-  Provider using `--control-plane=<control_plane_url>` option. Alternatively, you can be your own XDN Provider! check
-  out [this page](become-operator.md).
+  Provider using `--control-plane=<control_plane_url>` option.
 
 ## Deploy using a service declaration file
 
