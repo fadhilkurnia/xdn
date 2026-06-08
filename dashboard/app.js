@@ -374,8 +374,11 @@ function statusClass(s) {
 // ---- Map -------------------------------------------------------------------
 function initMap() {
   map = L.map("map", { worldCopyJump: true }).setView([20, 0], 2);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap", maxZoom: 18,
+  // CARTO Positron: a clean, light basemap (uniform land, subtle labels, no
+  // streets/terrain/forests) so the edge/replica markers and demand heatmap stand
+  // out — the placement is the focus, not the cartographic detail.
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    attribution: "© OpenStreetMap © CARTO", subdomains: "abcd", maxZoom: 19,
   }).addTo(map);
   // Cluster-topology layer (all candidate locations + active replicas) sits below
   // the per-service placement markers.

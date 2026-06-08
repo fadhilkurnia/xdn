@@ -143,6 +143,8 @@ summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 }
 
 #map { height: 320px; margin-top: 10px; border-radius: 8px; border: 1px solid var(--line); background: #e8eef3; }
+/* Shrink the "Leaflet | © OpenStreetMap © CARTO" attribution so it stays out of the way. */
+#map .leaflet-control-attribution { font-size: 9px; padding: 0 4px; line-height: 1.5; }
 .leaflet-container { font: inherit; }
 
 footer {
