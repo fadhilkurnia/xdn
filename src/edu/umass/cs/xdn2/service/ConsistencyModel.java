@@ -1,0 +1,14 @@
+package edu.umass.cs.xdn2.service;
+
+public enum ConsistencyModel {
+  LINEARIZABILITY,
+  LINEARIZABLE,
+  SEQUENTIAL,
+  CAUSAL,
+  PRAM,
+  EVENTUAL,
+  READ_YOUR_WRITES,
+  WRITES_FOLLOW_READS,
+  MONOTONIC_READS,
+  MONOTONIC_WRITES
+}
