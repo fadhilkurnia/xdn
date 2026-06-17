@@ -288,6 +288,7 @@ public class DeterministicService {
         ServiceInstance instance = new ServiceInstance(
                 property, name, networkName, allocatedPort, containerNames);
 
+        sandboxManager.prepareStateDirectory(name, epoch);
         sandboxManager.createNetwork(name);
         boolean started = sandboxManager.startService(instance, epoch);
         if (!started) return false;
@@ -442,12 +443,13 @@ public class DeterministicService {
     }
 
     private FullHttpRequest copyHttpRequest(XdnHttpRequest xdnRequest) {
-        FullHttpRequest original = (FullHttpRequest) xdnRequest.getHttpRequest();
+        HttpRequest original = xdnRequest.getHttpRequest();
+        HttpContent content = xdnRequest.getHttpRequestContent();
         FullHttpRequest copy = new DefaultFullHttpRequest(
                 original.protocolVersion(),
                 original.method(),
                 original.uri(),
-                original.content().copy());
+                content.content().copy());
         copy.headers().setAll(original.headers());
         return copy;
     }

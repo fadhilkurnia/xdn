@@ -27,6 +27,7 @@ import edu.umass.cs.nio.JSONMessenger;
 import edu.umass.cs.nio.MessageNIOTransport;
 import edu.umass.cs.nio.NIOTransport;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.nio.nioutils.NIOInstrumenter;
 import edu.umass.cs.pram.PramReplicaCoordinator;
@@ -41,6 +42,7 @@ import edu.umass.cs.xdn.XdnReplicaCoordinator;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.net.InetSocketAddress;
 import java.util.HashSet;
 import java.util.Set;
@@ -214,62 +216,45 @@ public abstract class ReconfigurableNode<NodeIDType> {
             nodeIDStringifier = s;
         }
 
-        // TODO: handle this programmatically
-        switch (coordinatorClassName) {
-            case "edu.umass.cs.reconfiguration.PaxosReplicaCoordinator" -> {
-                return new PaxosReplicaCoordinator<NodeIDType>(app, myID, nodeIDStringifier,
-                        messenger).setOutOfOrderLimit(Config
-                        .getGlobalInt(ReconfigurationConfig.RC.OUT_OF_ORDER_LIMIT));
+        try {
+            Class<?> coordinatorClass = Class.forName(coordinatorClassName);
+
+            Constructor<?> constructor = null;
+            for (Constructor<?> c : coordinatorClass.getConstructors()) {
+                Class<?>[] paramTypes = c.getParameterTypes();
+                if (paramTypes.length == 4
+                        && Replicable.class.isAssignableFrom(paramTypes[0])
+                        && Stringifiable.class.isAssignableFrom(paramTypes[2])
+                        && Messenger.class.isAssignableFrom(paramTypes[3])) {
+                    constructor = c;
+                    break;
+                }
             }
-            case "edu.umass.cs.reconfiguration.ChainAndPaxosReplicaCoordinator" -> {
-                ReconfigurationConfig.getLogger().log(
-                        Level.SEVERE, "Unimplemented ChainAndPaxosReplicaCoordinator");
+            if (constructor == null) {
+                throw new NoSuchMethodException(
+                        "No matching (Replicable, NodeIDType, Stringifiable, Messenger) "
+                                + "constructor found for " + coordinatorClassName);
             }
-            case "edu.umass.cs.reconfiguration.ChainReplicaCoordinator" -> {
-                return new ChainReplicaCoordinator<NodeIDType>(app, myID, nodeIDStringifier,
-                        messenger);
+
+            @SuppressWarnings("unchecked")
+            AbstractReplicaCoordinator<NodeIDType> coordinator =
+                    (AbstractReplicaCoordinator<NodeIDType>) constructor.newInstance(
+                            app, myID, nodeIDStringifier, messenger);
+
+            if (coordinator instanceof PaxosReplicaCoordinator<NodeIDType> paxosCoordinator) {
+                coordinator = paxosCoordinator.setOutOfOrderLimit(
+                        Config.getGlobalInt(ReconfigurationConfig.RC.OUT_OF_ORDER_LIMIT));
             }
-            case "edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator" -> {
-                return new PrimaryBackupReplicaCoordinator<NodeIDType>(
-                        app, myID, nodeIDStringifier, messenger);
-            }
-            case "edu.umass.cs.xdn.XdnReplicaCoordinator" -> {
-                return new XdnReplicaCoordinator<NodeIDType>(
-                        app, myID, nodeIDStringifier, messenger);
-            }
-            case "edu.umass.cs.causal.CausalReplicaCoordinator" -> {
-                return new CausalReplicaCoordinator<NodeIDType>(
-                        app, myID, nodeIDStringifier, messenger);
-            }
-            case "edu.umass.cs.pram.PramReplicaCoordinator" -> {
-                return new PramReplicaCoordinator<NodeIDType>(
-                        app, myID, nodeIDStringifier, messenger);
-            }
+
+            return coordinator;
+        } catch (Exception e) {
+            ReconfigurationConfig.getLogger().log(Level.SEVERE,
+                    "Failed to instantiate replica coordinator class '"
+                            + coordinatorClassName + "': " + e);
+            e.printStackTrace();
+            System.exit(-1);
+            return null;
         }
-
-        ReconfigurationConfig.getLogger().log(
-                Level.SEVERE, "Unknown replica coordinator class of " + coordinatorClassName);
-        System.exit(-1);
-        return null;
-
-        // FIXME: instantiating {@link ReplicaCoordinator} with Generic type
-        // 		  parameters is  not possible as the Generic type information
-        // 		  is erased in the JVM runtime even though the code compiles.
-
-		/*
-		Class<?> c;
-		ReplicaCoordinator<?> coordinator = null;
-		try {
-			c = Class.forName(coordinatorClassName);
-			coordinator = (ReplicaCoordinator<?>) c.getDeclaredConstructor(
-					Replicable.class, Object.class, Stringifiable.class, JSONMessenger.class)
-					.newInstance(app, myID, nodeConfig, messenger);
-		} catch (ClassNotFoundException | NoSuchMethodException | InstantiationException | IllegalAccessException | InvocationTargetException e) {
-			e.printStackTrace();
-		}
-		// typecast ReplicaCoordinator to AbstractReplicaCoordinator
-		return (AbstractReplicaCoordinator) coordinator;
-		*/
     }
 
     /**

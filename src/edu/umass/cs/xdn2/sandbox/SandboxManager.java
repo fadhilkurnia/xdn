@@ -111,6 +111,18 @@ public abstract class SandboxManager {
     // -------------------------------------------------------------------------
 
     /**
+     * Prepares a clean state directory for a fresh service creation.
+     * Wipes any existing content and creates the directory.
+     * Must NOT be called during reconfiguration — restoreStateFromSnapshot()
+     * handles directory setup in that case.
+     *
+     * @param serviceName name of the service
+     * @param epoch       current placement epoch
+     * @return true iff the directory was successfully prepared
+     */
+    public abstract boolean prepareStateDirectory(String serviceName, int epoch);
+
+    /**
      * Captures a full snapshot of the service's state directory as a tar archive.
      * Used during reconfiguration (getFinalState) and Paxos checkpointing
      * (DeterministicService.checkpoint).

@@ -235,7 +235,7 @@ public class XdnHttpRequest extends XdnRequest
 
   // Returns true if the request carries a browser-only XDN signal that the legacy
   // header/Host dispatcher would miss: the _xdnsvc URL query param or the XDN cookie.
-  // Used by HttpActiveReplica's top-level channelRead0 dispatcher so that browser
+  // Used by XdnHttpActiveReplica's top-level channelRead0 dispatcher so that browser
   // clicks on http://host/?_xdnsvc=foo (and their follow-up cookie-bearing requests)
   // are routed to the XDN handler instead of the legacy GigaPaxos path.
   public static boolean hasXdnBrowserSignal(HttpRequest httpRequest) {

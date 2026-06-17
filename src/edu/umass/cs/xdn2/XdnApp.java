@@ -49,12 +49,7 @@ public class XdnApp
         NON_DETERMINISTIC
     }
 
-    // GigaPaxos internal group names that must not be routed to either service
-    private static final Set<String> INTERNAL_GP_GROUPS = Set.of(
-            PaxosConfig.getDefaultServiceName(),
-            AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString(),
-            AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString()
-    );
+    private final Set<String> internalGpGroups;
 
     private final String myNodeId;
 
@@ -94,6 +89,13 @@ public class XdnApp
 
         // Verify Docker is available before doing anything else
         checkDockerAvailable();
+
+        // GigaPaxos internal group names that must not be routed to either service
+        this.internalGpGroups = Set.of(
+                PaxosConfig.getDefaultServiceName(),
+                AbstractReconfiguratorDB.RecordNames.AR_AR_NODES.toString(),
+                AbstractReconfiguratorDB.RecordNames.AR_RC_NODES.toString()
+        );
 
         // Load XDN config and create shared infrastructure
         XdnConfig config = new XdnConfig();
@@ -395,6 +397,17 @@ public class XdnApp
         return statuses;
     }
 
+    public void stop() {
+        for (Map.Entry<String, ServiceType> entry : serviceRegistry.entrySet()) {
+            String serviceName = entry.getKey();
+            var instance = getServiceInstance(serviceName);
+            if (instance != null) {
+                sandboxManager.deleteService(instance);
+            }
+        }
+        serviceRegistry.clear();
+    }
+
     /**
      * Caches a deserialized request so getRequest() can return it without
      * re-deserializing when GigaPaxos calls it on the same node.
@@ -517,8 +530,8 @@ public class XdnApp
         return request;
     }
 
-    private static boolean isInternalGroup(String name) {
-        return INTERNAL_GP_GROUPS.contains(name);
+    private boolean isInternalGroup(String name) {
+        return internalGpGroups.contains(name);
     }
 
     private static void checkDockerAvailable() {

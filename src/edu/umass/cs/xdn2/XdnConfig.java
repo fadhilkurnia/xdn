@@ -34,6 +34,9 @@ public class XdnConfig {
     private static final String DEFAULT_CONFIG_PATH  = "conf/xdn.properties";
     private static final String CONFIG_PATH_PROPERTY = "xdnConfig";
 
+    private static final String KEY_FUSELOG_BASE_DIR = "FUSELOG_BASE_DIR";
+    private static final String DEFAULT_FUSELOG_BASE_DIR = "/tmp/xdn/state/fuselog/";
+
     private static final String KEY_SANDBOX_TYPE  = "SANDBOX_TYPE";
     private static final String KEY_RECORDER_TYPE = "RECORDER_TYPE";
     private static final String KEY_HC_INTERVAL   = "DEFAULT_HEALTHCHECK_INTERVAL_SECONDS";
@@ -49,6 +52,7 @@ public class XdnConfig {
     private final int healthcheckIntervalSeconds;
     private final int healthcheckTimeoutSeconds;
     private final int healthcheckRetries;
+    private final String fuselogBaseDir;
 
     private static final Logger logger = Logger.getLogger(XdnConfig.class.getName());
 
@@ -76,6 +80,8 @@ public class XdnConfig {
                 props, KEY_HC_TIMEOUT, DEFAULT_HC_TIMEOUT);
         this.healthcheckRetries         = parseOptionalInt(
                 props, KEY_HC_RETRIES, DEFAULT_HC_RETRIES);
+        this.fuselogBaseDir = props.getProperty(
+                KEY_FUSELOG_BASE_DIR, DEFAULT_FUSELOG_BASE_DIR);
     }
 
     public SandboxType getSandboxType() {
@@ -96,6 +102,10 @@ public class XdnConfig {
 
     public int getHealthcheckRetries() {
         return healthcheckRetries;
+    }
+
+    public String getFuselogBaseDir() {
+        return fuselogBaseDir;
     }
 
     // -------------------------------------------------------------------------

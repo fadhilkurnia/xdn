@@ -1,6 +1,6 @@
 package edu.umass.cs.xdn2.service;
 
-import edu.umass.cs.xdn.interfaces.behavior.RequestBehaviorType;
+import edu.umass.cs.xdn2.interfaces.behavior.RequestBehaviorType;
 import io.netty.handler.codec.http.HttpMethod;
 import java.util.HashSet;
 import java.util.List;

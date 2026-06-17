@@ -13,7 +13,7 @@ public abstract class AbstractStateDiffRecorder {
   public static AbstractStateDiffRecorder create(XdnConfig config, String nodeId) {
     return switch (config.getRecorderType()) {
       case RSYNC    -> new RsyncStateDiffRecorder(nodeId);
-      case FUSELOG -> new FuselogStateDiffRecorder(nodeId);
+      case FUSELOG -> new FuselogStateDiffRecorder(nodeId, config.getFuselogBaseDir());
       case FUSERUST -> new FuseRustStateDiffRecorder(nodeId);
       case ZIP -> new ZipStateDiffRecorder(nodeId);
       default -> throw new RuntimeException(

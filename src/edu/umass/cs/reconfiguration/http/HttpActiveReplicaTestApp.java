@@ -25,7 +25,7 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 /**
  * @author gaozy
  *
- * A no-op example app for HttpActiveReplica
+ * A no-op example app for XdnHttpActiveReplica
  */
 public class HttpActiveReplicaTestApp extends AbstractReconfigurablePaxosApp<String>
 	implements Replicable, Reconfigurable, ClientMessenger, AppRequestParserBytes {

@@ -80,7 +80,7 @@ in the `./conf/logging.properties` file. For example
 ...
 edu.umass.cs.xdn.XdnGeoDemandProfiler.level=FINEST
 edu.umass.cs.xdn.XdnReplicaCoordinator.level=FINEST
-edu.umass.cs.reconfiguration.http.HttpActiveReplica.level=FINE
+edu.umass.cs.xdn2.http.XdnHttpActiveReplica.level=FINE
 ```
 
 ## TODO

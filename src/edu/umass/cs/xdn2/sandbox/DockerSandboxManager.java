@@ -141,6 +141,7 @@ public class DockerSandboxManager extends SandboxManager {
             String mountSource = null;
             if (component.isStateful() && stateDirMountTarget != null) {
                 mountSource = getStateDirectory(serviceName, epoch);
+                Shell.runCommand("mkdir -p " + mountSource, true);
             }
 
             // Determine healthcheck command: client-specified takes priority,
@@ -223,6 +224,14 @@ public class DockerSandboxManager extends SandboxManager {
     // -------------------------------------------------------------------------
     // State management
     // -------------------------------------------------------------------------
+
+    @Override
+    public boolean prepareStateDirectory(String serviceName, int epoch) {
+        String stateDir = getStateDirectory(serviceName, epoch);
+        Shell.runCommand("rm -rf " + stateDir, true);
+        int code = Shell.runCommand("mkdir -p " + stateDir, true);
+        return code == 0;
+    }
 
     /**
      * Captures the full state directory as a compressed tar archive.

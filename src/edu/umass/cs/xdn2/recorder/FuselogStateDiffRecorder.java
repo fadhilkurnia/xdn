@@ -36,10 +36,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   private static final String defaultWorkingBasePath = "/tmp/xdn/state/fuselog/";
 
-  // the default working base directory is /tmp/xdn/state/fuselog/
-  private static final String workingBasePath =
-      Config.getGlobalString(ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR);
-
+  private final String workingBasePath;
   private final String baseMountDirPath;
   private final String baseSocketDirPath;
   private final String baseDiffDirPath;
@@ -77,8 +74,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   private final Logger logger = Logger.getLogger(FuselogStateDiffRecorder.class.getSimpleName());
 
-  public FuselogStateDiffRecorder(String nodeID) {
-    super(nodeID, workingBasePath + nodeID + "/");
+  public FuselogStateDiffRecorder(String nodeID, String basePath) {
+    super(nodeID, basePath);
+    this.workingBasePath = basePath;
     logger.log(
         Level.INFO,
         String.format(
@@ -313,12 +311,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // in-band as the first ApplyStateDiff, so it must NOT be drained here -- the
     // PrimaryBackupManager captures and proposes it right after init. Only RSYNC init-sync drains
     // (it ships the init state out-of-band, making the buffered diffs redundant).
-    /*
-    boolean recorderInitSync =
-        "RECORDER"
-            .equalsIgnoreCase(
-                Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE));
-   */
+
+    // TODO: move XDN_PB_INIT_SYNC_MODE to xdn.properties (XdnConfig)
+    // Defaulting to false (RSYNC mode) — drain always runs after init
+    boolean recorderInitSync = false;
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
     if (!recorderInitSync && epochToChannelMap != null) {
       SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
@@ -873,7 +869,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     backupNodes.forEach(
         node ->
             backupIdToTargetPaths.put(
-                node, String.format("%s%s/", FuselogStateDiffRecorder.workingBasePath, node)));
+                node, String.format("%s%s/", this.workingBasePath, node)));
 
     String mntDir = String.format("mnt/%s/", serviceName);
     String username = Shell.runCommandWithOutput("whoami").stdout.trim();

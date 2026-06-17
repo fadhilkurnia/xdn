@@ -12,7 +12,7 @@ import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn2.interfaces.behavior.BehavioralRequest;
 import org.json.JSONException;
 
 import java.io.IOException;

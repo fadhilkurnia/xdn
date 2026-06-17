@@ -1,5 +1,5 @@
 // To generate the class, from the project root directory:
-// protoc --java_out=./src src/edu/umass/cs/xdn/proto/xdn_stop_request.proto
+// protoc --java_out=./src src/edu/umass/cs/xdn2/proto/xdn_stop_request.proto
 
 syntax = "proto3";
 

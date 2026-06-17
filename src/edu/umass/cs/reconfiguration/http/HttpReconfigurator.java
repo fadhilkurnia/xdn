@@ -189,7 +189,7 @@ public class HttpReconfigurator {
         // PEM cert chain + key (e.g. the wildcard *.xdnapp.com cert the RC pulls
         // from S3) so an HTTPS client like the browser dashboard can reach the
         // control plane without mixed-content blocking; fall back to an (untrusted)
-        // self-signed cert if none is configured. Mirrors HttpActiveReplica.
+        // self-signed cert if none is configured. Mirrors XdnHttpActiveReplica.
         final SslContext sslCtx;
         if (ssl) {
             String certChainPath = Config.getGlobalString(
@@ -336,7 +336,7 @@ public class HttpReconfigurator {
 
             // CORS: allow any origin so the browser dashboard (served from a
             // different origin, e.g. GitHub Pages) can call the control-plane API.
-            // Handles preflight (OPTIONS) automatically. Mirrors HttpActiveReplica.
+            // Handles preflight (OPTIONS) automatically. Mirrors XdnHttpActiveReplica.
             CorsConfig corsConfig = CorsConfigBuilder.forAnyOrigin().build();
             p.addLast(new CorsHandler(corsConfig));
 

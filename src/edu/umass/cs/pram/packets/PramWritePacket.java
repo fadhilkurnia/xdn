@@ -8,8 +8,8 @@ import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
-import edu.umass.cs.xdn.interfaces.behavior.WriteOnlyRequest;
+import edu.umass.cs.xdn2.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn2.interfaces.behavior.WriteOnlyRequest;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;

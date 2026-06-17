@@ -1,17 +1,20 @@
-package edu.umass.cs.reconfiguration.http;
+package edu.umass.cs.xdn2.http;
 
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
+import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.reconfiguration.http.HttpActiveReplicaPacketType;
+import edu.umass.cs.reconfiguration.http.HttpActiveReplicaRequest;
+import edu.umass.cs.reconfiguration.http.HttpReconfigurator;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.utils.Config;
-import edu.umass.cs.xdn.XdnGigapaxosApp;
-import edu.umass.cs.xdn.XdnHttpForwarderClient;
+import edu.umass.cs.xdn2.XdnHttpForwarderClient;
 import edu.umass.cs.xdn.XdnHttpRequestBatcher;
-import edu.umass.cs.xdn.request.XdnGetReplicaInfoRequest;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn2.request.XdnGetReplicaInfoRequest;
+import edu.umass.cs.xdn2.request.XdnHttpRequest;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -42,7 +45,6 @@ import org.json.JSONObject;
 
 import javax.net.ssl.SSLException;
 import java.io.File;
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.nio.channels.ClosedChannelException;
@@ -53,7 +55,6 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -84,22 +85,22 @@ import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
  * <p>
  * Or open your browser to interact with this http front end directly
  * <p>
- * Start ActiveReplica with HttpActiveReplica:
+ * Start ActiveReplica with XdnHttpActiveReplica:
  * java -ea -cp jars/gigapaxos-1.0.08.jar -Djava.util.logging.config.file=conf/logging.properties \
  * -Dlog4j.configuration=conf/log4j.properties -Djavax.net.ssl.keyStorePassword=qwerty -Djavax.net.ssl.trustStorePassword=qwerty \
  * -Djavax.net.ssl.keyStore=conf/keyStore.jks -Djavax.net.ssl.trustStore=conf/trustStore.jks \
  * -DgigapaxosConfig=conf/xdn.local.properties -DHTTPADDR=127.0.0.1 -Dcontainer=localhost:3000 \
  * edu.umass.cs.reconfiguration.ReconfigurableNode AR0
  * <p>
- * Start HttpActiveReplica alone:
+ * Start XdnHttpActiveReplica alone:
  * java -ea -cp jars/gigapaxos-1.0.08.jar -DHTTPADDR=127.0.0.1 -Dcontainer=localhost:3000 \
- * edu.umass.cs.reconfiguration.http.HttpActiveReplica
+ * edu.umass.cs.xdn2.http.XdnHttpActiveReplica
  *
  * @author gaozy
  */
-public class HttpActiveReplica {
+public class XdnHttpActiveReplica {
 
-    private static final Logger logger = Logger.getLogger(HttpActiveReplica.class.getName());
+    private static final Logger logger = Logger.getLogger(XdnHttpActiveReplica.class.getName());
 
     private final static int DEFAULT_HTTP_PORT = 8080;
 
@@ -138,8 +139,10 @@ public class HttpActiveReplica {
     // Direct reference to the app for debugging purpose, needed for DBG_HDR_DIRECT_EXECUTE.
     // In normal execution, the app should be interacted with through the replica coordinator,
     // and this reference should not be used.
-    public static XdnGigapaxosApp debugAppReference = null;
+    public static Replicable debugAppReference = null;
 
+    private static final boolean TIMING_HEADERS_ENABLED =
+            Boolean.getBoolean("XDN_TIMING_HEADERS");
     // Debug flag: bypass coordinator/PBM but still use the async response path.
     // Tests whether the bottleneck is the coordinator/PBM pipeline or the async mechanism.
     private static final boolean BYPASS_COORDINATOR =
@@ -164,10 +167,10 @@ public class HttpActiveReplica {
         }
     }
 
-    public HttpActiveReplica(String nodeId,
-                             ActiveReplicaFunctions arf,
-                             InetSocketAddress sockAddr,
-                             boolean ssl)
+    public XdnHttpActiveReplica(String nodeId,
+                                ActiveReplicaFunctions arf,
+                                InetSocketAddress sockAddr,
+                                boolean ssl)
             throws CertificateException, SSLException, InterruptedException {
 
         assert nodeId != null : "Node ID cannot be null";
@@ -186,7 +189,7 @@ public class HttpActiveReplica {
                 sslBuilder = SslContextBuilder.forServer(
                         new File(certChainPath), new File(privateKeyPath));
                 logger.log(Level.INFO,
-                        "HttpActiveReplica terminating TLS with cert chain {0}",
+                        "XdnHttpActiveReplica terminating TLS with cert chain {0}",
                         new Object[]{certChainPath});
             } else {
                 // Fallback: ephemeral self-signed cert (browsers will not trust it).
@@ -194,16 +197,16 @@ public class HttpActiveReplica {
                 sslBuilder = SslContextBuilder.forServer(
                         ssc.certificate(), ssc.privateKey());
                 logger.log(Level.WARNING,
-                        "HttpActiveReplica TLS enabled but no cert configured; "
+                        "XdnHttpActiveReplica TLS enabled but no cert configured; "
                                 + "using an untrusted self-signed certificate");
             }
             // Prefer native OpenSSL/BoringSSL (netty-tcnative) for TLS throughput;
             // fall back to the JDK provider when the native lib is unavailable.
             if (OpenSsl.isAvailable()) {
                 sslBuilder.sslProvider(SslProvider.OPENSSL);
-                logger.log(Level.INFO, "HttpActiveReplica TLS provider: OpenSSL");
+                logger.log(Level.INFO, "XdnHttpActiveReplica TLS provider: OpenSSL");
             } else {
-                logger.log(Level.INFO, "HttpActiveReplica TLS provider: JDK (tcnative unavailable)");
+                logger.log(Level.INFO, "XdnHttpActiveReplica TLS provider: JDK (tcnative unavailable)");
             }
             sslCtx = sslBuilder.build();
         } else {
@@ -241,7 +244,7 @@ public class HttpActiveReplica {
                 new DefaultEventExecutorGroup((int) (threads * 0.4));
 
         logger.log(Level.INFO,
-                "HttpActiveReplica pools: bossThreads={0} workerThreads={1} "
+                "XdnHttpActiveReplica pools: bossThreads={0} workerThreads={1} "
                         + "writePool={2} readPool={3}",
                 new Object[]{
                         bossThreads > 0 ? bossThreads : "default(2*cores)",
@@ -288,7 +291,7 @@ public class HttpActiveReplica {
             }
             Channel channel = b.bind(sockAddr).sync().channel();
 
-            logger.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
+            logger.log(Level.INFO, "XdnHttpActiveReplica is ready on {0}", new Object[]{sockAddr});
 
             // When terminating TLS, also run a tiny plaintext listener on :80 that
             // 308-redirects to https:// so http:// URLs keep working. This is NOT a
@@ -335,7 +338,7 @@ public class HttpActiveReplica {
                     }
                 });
         Channel ch = rb.bind(new InetSocketAddress(addr, 80)).sync().channel();
-        logger.log(Level.INFO, "HttpActiveReplica HTTP->HTTPS redirect ready on :80");
+        logger.log(Level.INFO, "XdnHttpActiveReplica HTTP->HTTPS redirect ready on :80");
         return ch;
     }
 
@@ -627,8 +630,7 @@ public class HttpActiveReplica {
                     HttpActiveReplicaHandler.sendStringResponse(
                             msg, status, false, ctx);
                 } else {
-                    if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
-                            && httpResponse != null) {
+                    if (TIMING_HEADERS_ENABLED && httpResponse != null) {
                         long callbackElapsedMs = (System.nanoTime() - rctx.startExecTimeNs()) / 1_000_000;
                         httpResponse.headers().set("X-XDN-Pipeline",
                                 String.format("callback=%dms", callbackElapsedMs));
@@ -1137,7 +1139,7 @@ public class HttpActiveReplica {
                             ? this.readPool
                             : this.writePool;
                             
-            // Debug: send dummy response, the goal is to identify whether HttpActiveReplica
+            // Debug: send dummy response, the goal is to identify whether XdnHttpActiveReplica
             //  is a bottleneck on receiving the incoming Http requests.
             if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_DUMMY_RESPONSE)) {
                 long startExecTimeNs = System.nanoTime();
@@ -1161,7 +1163,7 @@ public class HttpActiveReplica {
             // Debug: directly execute the request using XdnGigapaxosApp, skip replica coordinator.
             if (httpRequest.getHttpRequest().headers().contains(DBG_HDR_DIRECT_EXECUTE)) {
                 assert debugAppReference != null :
-                        "XdnGigapaxosApp reference has not been set in HttpActiveReplica";
+                        "XdnGigapaxosApp reference has not been set in XdnHttpActiveReplica";
                 long startExecTimeNs = System.nanoTime();
 
                 httpRequest.getHttpRequest().headers().remove(DBG_HDR_DIRECT_EXECUTE);
@@ -1374,7 +1376,7 @@ public class HttpActiveReplica {
             ChannelFuture cf = ctx.writeAndFlush(response);
             if (!cf.isSuccess()) {
                 System.out.printf("%s:%s - sendBadRequestResponse, write failed: %s\n",
-                        nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause());
+                        nodeId, XdnHttpActiveReplica.class.getSimpleName(), cf.cause());
             }
         }
 
@@ -1402,7 +1404,7 @@ public class HttpActiveReplica {
             if (!cf.isSuccess() && cf.cause() != null) {
                 System.out.println("write failed: " + cf.cause());
                 System.out.printf("%s:%s - sendStringResponse, write failed: %s, string:%s\n",
-                        nodeId, HttpActiveReplica.class.getSimpleName(), cf.cause(), message);
+                        nodeId, XdnHttpActiveReplica.class.getSimpleName(), cf.cause(), message);
             }
 
             // If keep-alive is off, close the connection once the content is fully written.
@@ -1424,10 +1426,10 @@ public class HttpActiveReplica {
             assert requestId != null;
             if (httpResponse == null) {
                 System.out.printf("%s:%s - ignoring empty HTTP response (id: %d)%n",
-                        nodeId, HttpActiveReplica.class.getSimpleName(), requestId);
+                        nodeId, XdnHttpActiveReplica.class.getSimpleName(), requestId);
                 logger.log(Level.WARNING,
                         String.format("%s:%s - ignoring empty HTTP response (id: %d)",
-                                nodeId, HttpActiveReplica.class.getSimpleName(), requestId));
+                                nodeId, XdnHttpActiveReplica.class.getSimpleName(), requestId));
                 return;
             }
 
@@ -1440,7 +1442,7 @@ public class HttpActiveReplica {
                 logger.log(Level.FINE, "{0}:{1} - HTTP post-execution over {2}ms",
                         new Object[]{
                                 nodeId.toLowerCase(),
-                                HttpActiveReplica.class.getSimpleName(),
+                                XdnHttpActiveReplica.class.getSimpleName(),
                                 (postExecElapsedTime / 1_000_000.0)});
                 httpResponse.headers().remove(postExecTimestampHeaderKey);
             }
@@ -1485,7 +1487,7 @@ public class HttpActiveReplica {
                                 "{0}:{1} - Overall HTTP execution within {2}ms (wrt={3}ms) [id: {4}]",
                                 new Object[]{
                                         nodeId.toLowerCase(),
-                                        HttpActiveReplica.class.getSimpleName(),
+                                        XdnHttpActiveReplica.class.getSimpleName(),
                                         (elapsedOverallTime / 1_000_000.0),
                                         (writeDuration / 1_000_000.0),
                                         String.valueOf(requestId)});

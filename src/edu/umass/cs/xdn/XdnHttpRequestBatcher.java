@@ -2,12 +2,12 @@ package edu.umass.cs.xdn;
 
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
-import edu.umass.cs.reconfiguration.http.HttpActiveReplica;
+import edu.umass.cs.xdn2.http.XdnHttpActiveReplica;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
-import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
-import edu.umass.cs.xdn.service.RequestMatcher;
+import edu.umass.cs.xdn2.request.XdnHttpRequest;
+import edu.umass.cs.xdn2.request.XdnHttpRequestBatch;
+import edu.umass.cs.xdn2.service.RequestMatcher;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -31,13 +31,13 @@ import java.util.logging.Logger;
  * execution. The batcher is composed of three different kind of workers:
  *
  * <ol>
- *   <li>Submission workers that drains the submission queue fed by {@link HttpActiveReplica} and
+ *   <li>Submission workers that drains the submission queue fed by {@link XdnHttpActiveReplica} and
  *       pushes them into the batching queue. These workers can be bypassed.
  *   <li>A batching worker that aggregates pending requests into {@link XdnHttpRequestBatch}
  *       instances and forwards them to the application by invoking {@link
  *       ActiveReplicaFunctions#handRequestToAppForHttp(Request, ExecutedCallback)}.
  *   <li>A completion worker that receives finished batches and invokes the supplied {@link
- *       RequestCompletionHandler} so that {@link HttpActiveReplica} can respond to end-clients.
+ *       RequestCompletionHandler} so that {@link XdnHttpActiveReplica} can respond to end-clients.
  * </ol>
  */
 public final class XdnHttpRequestBatcher implements Closeable {

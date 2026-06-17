@@ -111,7 +111,7 @@ public class XdnGigapaxosApp
   private AbstractStateDiffRecorder stateDiffRecorder;
 
   // Client to forward HTTP requests into the containerized services.
-  // It is specifically designed with Netty, matching HttpActiveReplica, to avoid
+  // It is specifically designed with Netty, matching XdnHttpActiveReplica, to avoid
   // unnecessary request conversion (e.g., Netty request to OpenJDK request).
   private final XdnHttpForwarderClient httpForwarderClient;
 
@@ -321,7 +321,7 @@ public class XdnGigapaxosApp
             .headers()
             .set("X-XDN-Timing", String.format("exec=%.2fms;fwd=%.2fms", totalExecMs, fwdMs));
       }
-      // Post-execution timestamp for HttpActiveReplica to measure callback→response delay.
+      // Post-execution timestamp for XdnHttpActiveReplica to measure callback→response delay.
       if (xdnHttpRequest.getHttpResponse() != null) {
         String headerKey = String.format("X-E-EXC-TS-%s", this.myNodeId);
         xdnHttpRequest
@@ -370,13 +370,13 @@ public class XdnGigapaxosApp
 
   //  Releasing buffer for httpResponse is tricky because
   //  the release depends on the replica's role. If the replica
-  //  is the entry replica, then HttpActiveReplica is responsible
+  //  is the entry replica, then XdnHttpActiveReplica is responsible
   //  to release the response after writing it for the end client.
   //  However, if the replica is not the entry replica, then we can
   //  immediately release the response here as it will be discarded.
   //  .
   //  Our approach is to have a flag inside XdnHttpRequest (i.e., isCreatedFromString)
-  //  that indicates whether it is created in HttpActiveReplica (and
+  //  that indicates whether it is created in XdnHttpActiveReplica (and
   //  is in the entry replica) or it is created by XdnGigapaxosApp.getRequest()
   //  in a non-entry replica.
   //  .

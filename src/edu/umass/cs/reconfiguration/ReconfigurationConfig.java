@@ -459,10 +459,10 @@ public class ReconfigurationConfig {
         /**
          * HTTP active replica name
          */
-        HTTP_ACTIVE_REPLICA_NAME("edu.umass.cs.reconfiguration.http.HttpActiveReplica"),
+        HTTP_ACTIVE_REPLICA_NAME("edu.umass.cs.xdn2.http.XdnHttpActiveReplica"),
 
         /**
-         * Enable HttpActiveReplica to listen at port 80, ignoring the offset specified in
+         * Enable XdnHttpActiveReplica to listen at port 80, ignoring the offset specified in
          * {@link ReconfigurationConfig#HTTP_PORT_OFFSET}.
          */
         ENABLE_ACTIVE_REPLICA_HTTP_PORT_80(false),
@@ -530,6 +530,8 @@ public class ReconfigurationConfig {
          */
         OUT_OF_ORDER_LIMIT(100),
 
+        HTTP_ACTIVE_REPLICA_CLASS("edu.umass.cs.reconfiguration.http.HttpActiveReplica"),
+
         /**
          * Default coordinator: {@link edu.umass.cs.reconfiguration.PaxosReplicaCoordinator}
          */
@@ -594,45 +596,29 @@ public class ReconfigurationConfig {
         XDN_FUSELOG_BASE_DIR("/tmp/xdn/state/fuselog/"),
 
         /**
-         * Anti-entropy round period (ms) for the eventual-consistency
-         * LazyReplicaCoordinator: every period, replicas exchange vector clocks and
-         * state digests, and a frontier replica ships its checkpoint to lagging peers.
-         * TODO: this should be specific to XDN, and not Gigapaxos config.
-         */
-        XDN_EVENTUAL_ANTI_ENTROPY_INTERVAL_MS(5000L),
-
-        /**
-         * Maximum checkpoint size (bytes) shipped inline inside a LazyCheckpointPacket;
-         * larger checkpoints use an out-of-band LargeCheckpointer handle. Must stay
-         * below NIO_MAX_PAYLOAD_SIZE with headroom.
-         * TODO: this should be specific to XDN, and not Gigapaxos config.
-         */
-        XDN_EVENTUAL_CHECKPOINT_INLINE_MAX_BYTES(8_000_000L),
-
-        /**
-         * A flag to enable/disable batching in HttpActiveReplica.
+         * A flag to enable/disable batching in XdnHttpActiveReplica.
          */
         HTTP_AR_FRONTEND_BATCH_ENABLED(false),
 
         /**
-         * Timeout for frontend request execution in HttpActiveReplica (milliseconds).
+         * Timeout for frontend request execution in XdnHttpActiveReplica (milliseconds).
          */
         HTTP_AR_FRONTEND_REQUEST_TIMEOUT_MS(120_000L),
 
         /**
          * Enable reporting demand profile into the Reconfigurators (i.e. Control Plane)
-         * upon executing HTTP request in the HttpActiveReplica.
+         * upon executing HTTP request in the XdnHttpActiveReplica.
          */
         HTTP_ACTIVE_REPLICA_ENABLE_DEMAND_PROFILER(false),
 
         /**
-         * Number of Netty boss group threads (accepting connections) in HttpActiveReplica.
+         * Number of Netty boss group threads (accepting connections) in XdnHttpActiveReplica.
          * 0 means use Netty default (2 * availableProcessors).
          */
         HTTP_AR_BOSS_THREADS(0),
 
         /**
-         * Number of Netty worker group threads (I/O handling) in HttpActiveReplica.
+         * Number of Netty worker group threads (I/O handling) in XdnHttpActiveReplica.
          * 0 means use Netty default (2 * availableProcessors).
          */
         HTTP_AR_WORKER_THREADS(0),

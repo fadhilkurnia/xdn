@@ -354,6 +354,7 @@ public class NonDeterministicService {
         List<String> containerNames = buildContainerNames(name, epoch, property);
         ServiceInstance instance = new ServiceInstance(
                 property, name, networkName, allocatedPort, containerNames);
+        sandboxManager.prepareStateDirectory(name, epoch);
         stateDiffRecorder.preInitialization(name, epoch);
 
         serviceInstances.put(name, instance);
@@ -566,12 +567,13 @@ public class NonDeterministicService {
     }
 
     private FullHttpRequest copyHttpRequest(XdnHttpRequest xdnRequest) {
-        FullHttpRequest original = (FullHttpRequest) xdnRequest.getHttpRequest();
+        HttpRequest original = xdnRequest.getHttpRequest();
+        HttpContent content = xdnRequest.getHttpRequestContent();
         FullHttpRequest copy = new DefaultFullHttpRequest(
                 original.protocolVersion(),
                 original.method(),
                 original.uri(),
-                original.content().copy());
+                content.content().copy());
         copy.headers().setAll(original.headers());
         return copy;
     }

@@ -4,6 +4,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 
+import edu.umass.cs.xdn2.http.XdnHttpActiveReplica;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -17,12 +18,12 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientReque
 import edu.umass.cs.utils.Util;
 
 /**
- * HttpRequest is the type of request used by {@link HttpActiveReplica}.
- * All the applications that need to use {@link HttpActiveReplica} must
+ * HttpRequest is the type of request used by {@link XdnHttpActiveReplica}.
+ * All the applications that need to use {@link XdnHttpActiveReplica} must
  * follow the spec of this class (HttpRequest).
  *
  * HttpRequest requires the content of a HTTP POST request (to
- * {@link HttpActiveReplica} ) in JSON format.
+ * {@link XdnHttpActiveReplica} ) in JSON format.
  * It must contains the following keys: NAME, VALUE, and SYNC
  * 
  * The key PACKET_TYPE of {@link JSONPacket}.

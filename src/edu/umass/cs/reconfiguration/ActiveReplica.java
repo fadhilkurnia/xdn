@@ -16,6 +16,7 @@
 package edu.umass.cs.reconfiguration;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.math.BigInteger;
 import java.net.InetAddress;
@@ -32,8 +33,7 @@ import java.util.logging.Logger;
 
 import edu.umass.cs.reconfiguration.reconfigurationpackets.*;
 import edu.umass.cs.reconfiguration.reconfigurationutils.*;
-import edu.umass.cs.xdn.XdnGigapaxosApp;
-import edu.umass.cs.xdn.XdnReplicaCoordinator;
+import edu.umass.cs.xdn2.XdnReplicaCoordinator;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -66,7 +66,6 @@ import edu.umass.cs.nio.nioutils.RTTEstimator;
 import edu.umass.cs.protocoltask.ProtocolExecutor;
 import edu.umass.cs.protocoltask.ProtocolTask;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.RC;
-import edu.umass.cs.reconfiguration.http.HttpActiveReplica;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableAppInfo;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
@@ -186,7 +185,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 			String nodeId = this.getMyID().toString();
 			// Terminate TLS directly in the frontend (no reverse-proxy hop) when
 			// ENABLE_ACTIVE_REPLICA_HTTPS is set; the bind port is then overridden
-			// to ACTIVE_REPLICA_HTTPS_PORT (default 443) inside HttpActiveReplica.
+			// to ACTIVE_REPLICA_HTTPS_PORT (default 443) inside XdnHttpActiveReplica.
 			final boolean ssl = Config.getGlobalBoolean(RC.ENABLE_ACTIVE_REPLICA_HTTPS);
 
 			this.protocolExecutor.submit(new Runnable() {
@@ -200,17 +199,35 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 
 	private void initHTTPServer(String nodeId, boolean ssl, InetSocketAddress addr){
 		try {
-			// For debugging purpose in XDN we need to pass the app into HttpActiveReplica.
-			if (originalAppCoordinator instanceof XdnReplicaCoordinator<NodeIDType> &&
-					originalAppCoordinator.app instanceof TrivialRepliconfigurable tRc &&
-					tRc.app instanceof XdnGigapaxosApp xdnGigapaxosApp) {
-				HttpActiveReplica.debugAppReference = xdnGigapaxosApp;
+			String httpActiveReplicaClassName = Config.getGlobalString(
+					ReconfigurationConfig.RC.HTTP_ACTIVE_REPLICA_CLASS);
+			Class<?> httpActiveReplicaClass = Class.forName(httpActiveReplicaClassName);
+
+			// Set debugAppReference reflectively, only if the field exists on this class
+			// (the original GigaPaxos HttpActiveReplica has no such field).
+			if (originalAppCoordinator instanceof XdnReplicaCoordinator<NodeIDType>) {
+				Replicable rawApp;
+				if (originalAppCoordinator.app instanceof TrivialRepliconfigurable tRc) {
+					rawApp = (Replicable) tRc.app;
+				} else {
+					rawApp = originalAppCoordinator.app;
+				}
+				try {
+					java.lang.reflect.Field debugField =
+							httpActiveReplicaClass.getField("debugAppReference");
+					debugField.set(null, rawApp);
+				} catch (NoSuchFieldException ignored) {
+					// The configured HTTP class doesn't support this debug hook; skip.
+				}
 			}
 
-			// Initialize HTTP server
-			new HttpActiveReplica(nodeId, this, addr, ssl);
+			// Find the (String, ActiveReplicaFunctions, InetSocketAddress, boolean) constructor
+			Constructor<?> constructor = httpActiveReplicaClass.getConstructor(
+					String.class, ActiveReplicaFunctions.class,
+					InetSocketAddress.class, boolean.class);
+			constructor.newInstance(nodeId, this, addr, ssl);
 		} catch (Exception e) {
-			if (!(e instanceof InterruptedException)) // close
+			if (!(e instanceof InterruptedException))
 				e.printStackTrace();
 		}
 	}
@@ -1658,7 +1675,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	}
 
 	/**
-	 * A wrapper method for handRequestToApp, should only be used by {@link HttpActiveReplica}.
+	 * A wrapper method for handRequestToApp, should only be used by {@link XdnHttpActiveReplica}.
 	 */
 	@Override
 	public boolean handRequestToAppForHttp(Request request, ExecutedCallback callback) {
@@ -1667,7 +1684,7 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	}
 
 	/**
-	 * A wrapper method for updateDemandStats, should only be used by {@link HttpActiveReplica}.
+	 * A wrapper method for updateDemandStats, should only be used by {@link XdnHttpActiveReplica}.
 	 */
 	@Override
 	public void updateDemandStatsFromHttp(Request request, InetAddress addr) {

@@ -12,7 +12,11 @@ import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn2.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn2.request.XdnHttpRequest;
+import edu.umass.cs.xdn2.request.XdnHttpRequestBatch;
+import io.netty.buffer.ByteBuf;
+import io.netty.util.ReferenceCountUtil;
 import org.json.JSONException;
 
 import java.io.IOException;
@@ -26,6 +30,46 @@ public class WritesFollowReadsHandler {
 
     private static final Logger logger = Logger.getLogger(WritesFollowReadsHandler.class.getSimpleName());
 
+    // Static Helper Methods
+    private static void retainRequestContent(Object request) {
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) {
+                retainSingleRequestContent(xhr);
+            }
+        } else if (request instanceof XdnHttpRequest xhr) {
+            retainSingleRequestContent(xhr);
+        }
+    }
+
+    private static void retainSingleRequestContent(XdnHttpRequest xhr) {
+        if (xhr.getHttpRequestContent() != null) {
+            ByteBuf content = xhr.getHttpRequestContent().content();
+            if (content != null && content.refCnt() > 0) {
+                ReferenceCountUtil.retain(content);
+            }
+        }
+    }
+
+    private static void releaseRequestContent(Object request) {
+        if (request instanceof XdnHttpRequestBatch batch) {
+            for (XdnHttpRequest xhr : batch.getRequestList()) {
+                releaseSingleRequestContent(xhr);
+            }
+        } else if (request instanceof XdnHttpRequest xhr) {
+            releaseSingleRequestContent(xhr);
+        }
+    }
+
+    private static void releaseSingleRequestContent(XdnHttpRequest xhr) {
+        if (xhr.getHttpRequestContent() != null) {
+            ByteBuf content = xhr.getHttpRequestContent().content();
+            if (content != null && content.refCnt() > 0) {
+                ReferenceCountUtil.release(content);
+            }
+        }
+    }
+
+    // Methods
     protected static <NodeIDType> boolean coordinateRequest(
             Request request,
             ExecutedCallback callback,
@@ -155,47 +199,52 @@ public class WritesFollowReadsHandler {
                 // Case-1: Handle write directly if this replica already sees
                 //   all writes in the previous reads.
                 if (finalReadTs2.isLessThanOrEqualTo(serviceLastTimestamp)) {
-                    boolean isExecSuccess = app.execute(clientRequest, false);
-                    if (!isExecSuccess) {
-                        logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
-                        callback.executed(clientRequest, false);
-                        return;
-                    }
-
-                    // Enqueue the executed request
-                    synchronized (serviceInstance.executedRequests()) {
-                        serviceInstance.executedRequests().add(clientRequest.toBytes());
-                    }
-
-                    // Bump up our timestamp
-                    VectorTimestamp updatedTimestamp = serviceInstance.currTimestamp()
-                            .increaseNodeTimestamp(myNodeID.toString());
-
-                    // Update the client's write timestamp, then send response back to client.
-                    ((TimestampedResponse) clientRequest)
-                            .setLastTimestamp("W", updatedTimestamp);
-                    callback.executed(clientRequest, true);
-
-                    // Asynchronously send the writes to other replicas
-                    Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
-                    otherReplicas.remove(myNodeID);
-                    ClientCentricWriteAfterPacket writeAfterPacket =
-                            new ClientCentricWriteAfterPacket(
-                                    /*senderID=*/myNodeID.toString(),
-                                    /*timestamp=*/updatedTimestamp,
-                                    /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
-                    GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                            new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
+                    retainRequestContent(clientRequest);
                     try {
-                        if (logger.isLoggable(Level.INFO)) {
-                            logger.log(Level.INFO,
-                                    String.format("%s:%s - sending WriteAfterPacket for reqId=%d",
-                                            myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
-                                            ((ClientRequest) clientRequest).getRequestID()));
+                        boolean isExecSuccess = app.execute(clientRequest, false);
+                        if (!isExecSuccess) {
+                            logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
+                            callback.executed(clientRequest, false);
+                            return;
                         }
-                        messenger.send(m);
-                    } catch (JSONException | IOException e) {
-                        throw new RuntimeException(e);
+
+                        // Enqueue the executed request
+                        synchronized (serviceInstance.executedRequests()) {
+                            serviceInstance.executedRequests().add(clientRequest.toBytes());
+                        }
+
+                        // Bump up our timestamp
+                        VectorTimestamp updatedTimestamp = serviceInstance.currTimestamp()
+                                .increaseNodeTimestamp(myNodeID.toString());
+
+                        // Update the client's write timestamp, then send response back to client.
+                        ((TimestampedResponse) clientRequest)
+                                .setLastTimestamp("W", updatedTimestamp);
+                        callback.executed(clientRequest, true);
+
+                        // Asynchronously send the writes to other replicas
+                        Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
+                        otherReplicas.remove(myNodeID);
+                        ClientCentricWriteAfterPacket writeAfterPacket =
+                                new ClientCentricWriteAfterPacket(
+                                        /*senderID=*/myNodeID.toString(),
+                                        /*timestamp=*/updatedTimestamp,
+                                        /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
+                        GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                                new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
+                        try {
+                            if (logger.isLoggable(Level.INFO)) {
+                                logger.log(Level.INFO,
+                                        String.format("%s:%s - sending WriteAfterPacket for reqId=%d",
+                                                myNodeID, WritesFollowReadsHandler.class.getSimpleName(),
+                                                ((ClientRequest) clientRequest).getRequestID()));
+                            }
+                            messenger.send(m);
+                        } catch (JSONException | IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    } finally {
+                        releaseRequestContent(clientRequest);
                     }
                     return;
                 }

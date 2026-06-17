@@ -8,12 +8,12 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.packets.*;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn2.request.XdnHttpRequest;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.ReferenceCountUtil;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn2.interfaces.behavior.BehavioralRequest;
 import org.json.JSONException;
 import org.json.JSONObject;
 

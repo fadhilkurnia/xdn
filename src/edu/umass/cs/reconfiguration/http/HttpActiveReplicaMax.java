@@ -2,7 +2,7 @@ package edu.umass.cs.reconfiguration.http;
 
 import java.util.logging.Logger;
 
-// TODO: iterative steps to implement updated HttpActiveReplica.
+// TODO: iterative steps to implement updated XdnHttpActiveReplica.
 //      1. Just a simple optimized proxy.
 //      2. Separate the forwarder client into its own class.
 //      3. Add workers for batching requests in the frontend side,

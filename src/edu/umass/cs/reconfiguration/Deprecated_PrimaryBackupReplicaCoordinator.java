@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * PrimaryBackupReplicaCoordinator uses PaxosManager to ensure all replicas agree on the
  * order of statediffs, generated from each request execution.
  * <p>
- * Note that this coordinator is currently only tested when HttpActiveReplica is used.
+ * Note that this coordinator is currently only tested when XdnHttpActiveReplica is used.
  * More adjustments are needed to support plain ActiveReplica.
  *
  * @param <NodeIDType>
