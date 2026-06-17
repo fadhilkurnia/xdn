@@ -57,7 +57,6 @@ import edu.umass.cs.protocoltask.ProtocolExecutor;
 import edu.umass.cs.protocoltask.ProtocolTask;
 import edu.umass.cs.protocoltask.ProtocolTaskCreationException;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig.RC;
-import edu.umass.cs.reconfiguration.http.HttpReconfigurator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.RCRecordRequest.RequestTypes;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.CommitWorker;
 import edu.umass.cs.reconfiguration.reconfigurationprotocoltasks.ReconfiguratorProtocolTask;
@@ -240,15 +239,31 @@ public class Reconfigurator<NodeIDType> implements
         int port = ssl ? ReconfigurationConfig.getHTTPSPort(me.getPort())
                 : ReconfigurationConfig.getHTTPPort(me.getPort());
         try {
+            String httpReconfiguratorClassName = Config.getGlobalString(
+                    RC.HTTP_RECONFIGURATOR_CLASS);
+            Class<?> httpReconfiguratorClass = Class.forName(httpReconfiguratorClassName);
+            Constructor<?> constructor = httpReconfiguratorClass.getConstructor(
+                    ReconfiguratorFunctions.class, InetSocketAddress.class, boolean.class);
             /* We don't really need to hold a pointer to the HTTP server except
              * maybe for instrumentation purposes. */
-            new HttpReconfigurator(this,
+            constructor.newInstance(this,
                     new InetSocketAddress(me.getAddress(), port), ssl);
-        } catch (CertificateException | InterruptedException | SSLException e) {
+        } catch (Exception e) {
             if (!(e instanceof InterruptedException)) // close
                 e.printStackTrace();
             // throw new IOException(e);
             // eat up exceptions until HTTP server is stable
+        }
+    }
+
+    private void closeHTTPServer() {
+        try {
+            String httpReconfiguratorClassName = Config.getGlobalString(
+                    RC.HTTP_RECONFIGURATOR_CLASS);
+            Class<?> httpReconfiguratorClass = Class.forName(httpReconfiguratorClassName);
+            httpReconfiguratorClass.getMethod("closeAll").invoke(null);
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
@@ -433,7 +448,7 @@ public class Reconfigurator<NodeIDType> implements
         this.protocolExecutor.stop();
         this.messenger.stop();
         this.DB.close();
-        HttpReconfigurator.closeAll();
+        closeHTTPServer();
         ReconfigurationConfig.log.log(Level.INFO, "{0} closing with nodeConfig = {1}", new Object[]{
                 this, this.consistentNodeConfig});
     }
@@ -4094,7 +4109,7 @@ public class Reconfigurator<NodeIDType> implements
     public String getServiceDemandJson(String serviceName) {
         // Read-only; delegates to the profiler, which returns [] for non-geographic
         // demand profilers or services with no collected demand. Used by the
-        // dashboard geo-demand heatmap (HttpReconfigurator).
+        // dashboard geo-demand heatmap (XdnHttpReconfigurator).
         return this.demandProfiler.getDemandGeoCells(serviceName).toString();
     }
 

@@ -7,7 +7,6 @@ import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
 import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.http.HttpActiveReplicaPacketType;
 import edu.umass.cs.reconfiguration.http.HttpActiveReplicaRequest;
-import edu.umass.cs.reconfiguration.http.HttpReconfigurator;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.utils.Config;
@@ -77,7 +76,7 @@ import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
  * documentation page:
  * https://github.com/netty/netty/blob/4.1/example/src/main/java/io/netty/example/http/snoop/HttpSnoopServerHandler.java
  * <p>
- * A similar implementation to {@link HttpReconfigurator}
+ * A similar implementation to {@link XdnHttpReconfigurator}
  * <p>
  * Example command:
  * <p>

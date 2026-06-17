@@ -533,6 +533,16 @@ public class ReconfigurationConfig {
         HTTP_ACTIVE_REPLICA_CLASS("edu.umass.cs.reconfiguration.http.HttpActiveReplica"),
 
         /**
+         * The class used as the HTTP front-end for a Reconfigurator. Must have a
+         * public constructor of the form (ReconfiguratorFunctions, InetSocketAddress,
+         * boolean) and a public static no-arg closeAll() method. Defaults to the
+         * stock GigaPaxos HttpReconfigurator; set to
+         * edu.umass.cs.xdn2.http.XdnHttpReconfigurator for XDN's REST API,
+         * placement, demand, and coordinator-change endpoints.
+         */
+        HTTP_RECONFIGURATOR_CLASS("edu.umass.cs.reconfiguration.http.HttpReconfigurator"),
+
+        /**
          * Default coordinator: {@link edu.umass.cs.reconfiguration.PaxosReplicaCoordinator}
          */
         REPLICA_COORDINATOR_CLASS("edu.umass.cs.reconfiguration.PaxosReplicaCoordinator"),
