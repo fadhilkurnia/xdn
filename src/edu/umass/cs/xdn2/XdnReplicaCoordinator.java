@@ -13,10 +13,6 @@ import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.PramReplicaCoordinator;
-import edu.umass.cs.primarybackup.PrimaryBackupManager;
-import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
-import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
-import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
 import edu.umass.cs.reconfiguration.PaxosReplicaCoordinator;
@@ -26,6 +22,9 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.SetCoordinatorNodeReq
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn2.interfaces.behavior.RequestBehaviorType;
+import edu.umass.cs.xdn2.primarybackup.PrimaryBackupCoordinator;
+import edu.umass.cs.xdn2.primarybackup.PrimaryBackupManager;
+import edu.umass.cs.xdn2.primarybackup.packets.PrimaryBackupPacketType;
 import edu.umass.cs.xdn2.request.XdnGetReplicaInfoRequest;
 import edu.umass.cs.xdn2.request.XdnHttpRequest;
 import edu.umass.cs.xdn2.request.XdnHttpRequestBatch;
@@ -121,20 +120,20 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // This step is needed especially for PrimaryBackupReplicaCoordinator that require
     // a middleware application as the Paxos's app. The Middleware app does Primary Backup logic
     // before handing/forwarding some of the AppRequest to the actual App: XdnGigapaxosApp.
-    BackupableApplication backupableApplication = (BackupableApplication) app;
-    Replicable preProcessedApp = PrimaryBackupManager.PrimaryBackupMiddlewareApp.wrapApp(app);
-
-    // Pre-process PaxosManager that will be used by multiple coordinators.
     PrimaryBackupManager.setupPaxosConfiguration();
+    PrimaryBackupManager.PrimaryBackupMiddlewareApp preProcessedApp =
+            new PrimaryBackupManager.PrimaryBackupMiddlewareApp(this.xdnApp);
     PaxosManager<NodeIDType> paxosManager =
-        new PaxosManager<>(myID, unstringer, messenger, preProcessedApp);
+            new PaxosManager<>(myID, unstringer, messenger, preProcessedApp);
+
+    PrimaryBackupCoordinator<NodeIDType> primaryBackupReplicaCoordinator =
+            new PrimaryBackupCoordinator<>(this.xdnApp, myID, unstringer, messenger, paxosManager);
+    preProcessedApp.setManager(primaryBackupReplicaCoordinator.getPrimaryBackupManager());
+
 
     // Initialize all the wrapped coordinators, using the pre-processed app and paxos manager.
     PaxosReplicaCoordinator<NodeIDType> paxosReplicaCoordinator =
         new PaxosReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
-    PrimaryBackupReplicaCoordinator<NodeIDType> primaryBackupReplicaCoordinator =
-        new PrimaryBackupReplicaCoordinator<>(
-            preProcessedApp, myID, unstringer, messenger, paxosManager);
     AwReplicaCoordinator<NodeIDType> awReplicaCoordinator =
         new AwReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
     PramReplicaCoordinator<NodeIDType> pramReplicaCoordinator =
@@ -165,7 +164,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // including all request types of each coordination managers.
     Set<IntegerPacketType> types = new HashSet<>();
     types.add(XdnRequestType.XDN_SERVICE_HTTP_REQUEST);
-    types.addAll(PrimaryBackupManager.getAllPrimaryBackupPacketTypes());
+    types.addAll(java.util.Arrays.asList(PrimaryBackupPacketType.values()));
     types.addAll(PramReplicaCoordinator.getAllPramRequestTypes());
     this.requestTypes = types;
 
@@ -425,26 +424,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       }
     }
 
-    if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pb
-        && setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
-      ChangePrimaryPacket cpPacket = new ChangePrimaryPacket(serviceName, myNodeID);
-      try {
-        if (pb.isPrimary(serviceName)) {
-          setCoordinatorNodeRequest.setResponseMessage("OK");
-          callback.executed(setCoordinatorNodeRequest, true);
-        } else {
-          primaryBackupCoordinator.coordinateRequest(
-              cpPacket,
-              (response, handled) -> {
-                assert handled : "Unhandled ChangePrimaryPacket";
-                setCoordinatorNodeRequest.setResponseMessage("OK");
-                callback.executed(setCoordinatorNodeRequest, true);
-              });
-        }
-      } catch (IOException | RequestParseException e) {
-        throw new RuntimeException(e);
-      }
-      return;
+    if (coordinator instanceof PrimaryBackupCoordinator<NodeIDType>
+            && setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
+      // TODO: ChangePrimaryPacket not yet designed for the new PrimaryBackupCoordinator
     }
 
     setCoordinatorNodeRequest.setResponseMessage("OK");
@@ -535,9 +517,8 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       boolean isCoordinator = sequentialCoordinator.isPaxosCoordinator(serviceName);
       roleName = isCoordinator ? "leader" : "follower";
     }
-    if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pbCoordinator) {
-      boolean isPrimary = pbCoordinator.isPrimary(serviceName);
-      roleName = isPrimary ? "primary" : "backup";
+    if (coordinator instanceof PrimaryBackupCoordinator<NodeIDType> pbCoordinator) {
+      roleName = pbCoordinator.isPrimary(serviceName) ? "primary" : "backup";
     }
 
     if (xdnApp != null) {
@@ -604,7 +585,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     if (coordinator instanceof AwReplicaCoordinator<NodeIDType>) {
       return ConsistencyModel.SEQUENTIAL.toString();
     }
-    if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType>) {
+    if (coordinator instanceof PrimaryBackupCoordinator<NodeIDType>) {
       return ConsistencyModel.LINEARIZABILITY.toString();
     }
     if (coordinator instanceof CausalReplicaCoordinator<NodeIDType>) {

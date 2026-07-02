@@ -397,6 +397,35 @@ public class XdnApp
         return statuses;
     }
 
+    /**
+     * Waits until all containers for the given service are healthy.
+     * Iterates containerNames and components in order (they correspond 1-to-1).
+     *
+     * TODO: add an overload to allow waiting for a specific container only.
+     */
+    public boolean waitUntilReady(String serviceName) {
+        var instance = getServiceInstance(serviceName);
+        if (instance == null) return false;
+
+        List<edu.umass.cs.xdn2.service.ServiceComponent> components =
+                instance.property.getComponents();
+
+        for (int i = 0; i < instance.containerNames.size(); i++) {
+            String containerName = instance.containerNames.get(i);
+            String healthcheckCmd = (i < components.size())
+                    ? components.get(i).getHealthcheckCommand()
+                    : null;
+            boolean ready = sandboxManager.waitUntilReady(containerName, healthcheckCmd);
+            if (!ready) {
+                logger.log(Level.WARNING,
+                        "{0}:XdnApp waitUntilReady() container {1} not ready for {2}",
+                        new Object[]{myNodeId, containerName, serviceName});
+                return false;
+            }
+        }
+        return true;
+    }
+
     public void stop() {
         for (Map.Entry<String, ServiceType> entry : serviceRegistry.entrySet()) {
             String serviceName = entry.getKey();
@@ -480,15 +509,15 @@ public class XdnApp
      * Parses a ServiceProperty from any known state string format:
      *   xdn:init:<servicePropertyJSON>
      *   xdn:final:<epoch>::<servicePropertyJSON>::<state>
-     *   nondeter:create:xdn:init:<servicePropertyJSON>
+     *   non-deter:load:xdn:init:<servicePropertyJSON>
      */
     public static ServiceProperty parseServiceProperty(String state) {
         if (state == null) return null;
 
-        // Strip legacy nondeter:create: prefix
-        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX)) {
+        // Strip legacy non-deter:load: prefix
+        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_LOAD_PREFIX)) {
             state = state.substring(
-                    ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX.length());
+                    ServiceProperty.NON_DETERMINISTIC_LOAD_PREFIX.length());
         }
 
         if (state.startsWith(ServiceProperty.XDN_INITIAL_STATE_PREFIX)) {

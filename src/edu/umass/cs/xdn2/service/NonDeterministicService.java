@@ -59,6 +59,11 @@ public class NonDeterministicService {
 
     private final String myNodeId;
 
+    public enum BackupNum {
+        BACKUP1,
+        BACKUP2
+    }
+
     // serviceName → current placement epoch
     private final Map<String, Integer> servicePlacementEpoch = new ConcurrentHashMap<>();
 
@@ -157,12 +162,13 @@ public class NonDeterministicService {
     /**
      * Routes based on state prefix:
      *
-     *   null                   → wipe state
-     *   xdn:init:…             → createServiceInstance() only, no container
-     *   nondeter:create:…      → same as above (legacy PBM prefix)
-     *   nondeter:start:        → start container on primary
-     *   nondeter:startbackup:  → start recorder apply-side on backup
-     *   xdn:final:…            → revive container from previous epoch state
+     *   null                       → wipe state
+     *   xdn:init:…                 → createServiceInstance() only, no container
+     *   non-deter:load:…           → same as above (legacy PBM prefix)
+     *   non-deter:start-primary:   → start container on primary
+     *   non-deter:start-backup1:   → start recorder apply-side on backup + start container if eventual
+     *   non-deter:start-backup2:   → start recorder apply-side on backup + start container if eventual
+     *   xdn:final:…                → revive container from previous epoch state
      */
     public boolean restore(String name, String state) {
         if (state == null) {
@@ -171,26 +177,31 @@ public class NonDeterministicService {
             return deleteContainerInstance(name, epoch);
         }
 
-        // Strip legacy nondeter:create: prefix (added by PBM before passing to Paxos)
-        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX)) {
-            state = state.substring(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX.length());
+        // Strip legacy non-deter:load: prefix (added by PBM before passing to Paxos)
+        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_LOAD_PREFIX)) {
+            state = state.substring(ServiceProperty.NON_DETERMINISTIC_LOAD_PREFIX.length());
         }
 
         if (state.startsWith(ServiceProperty.XDN_INITIAL_STATE_PREFIX)) {
-            // Metadata setup only — PBM calls nondeter:start: separately to
-            // start the actual container after primary election completes.
             return createServiceInstance(name, state);
         }
 
-        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_PREFIX)
-                && !state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
+        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_PRIMARY_PREFIX)) {
             // Primary won the election — start the container
             return startContainerAsPrimary(name);
         }
 
-        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
-            // This node is a backup — start the recorder apply-side
-            return startRecorderAsBackup(name);
+        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX)
+            || (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX))
+        ) {
+            BackupNum backup = null;
+            if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX)) {
+                backup = BackupNum.BACKUP1;
+            } else {
+                backup = BackupNum.BACKUP2;
+            }
+
+            return startRecorderAsBackup(name, backup);
         }
 
         if (state.startsWith(ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX)) {
@@ -398,10 +409,10 @@ public class NonDeterministicService {
 
     /**
      * Starts the recorder apply-side on a backup node.
-     * Called from restore("nondeter:startbackup:") after PBM sends InitBackupPacket.
+     * Called from restore("non-deter:start-backup1:") after PBM sends InitBackupPacket.
      * No container is started — backups only apply state diffs.
      */
-    private boolean startRecorderAsBackup(String name) {
+    private boolean startRecorderAsBackup(String name, BackupNum backup) {
         Integer epoch = servicePlacementEpoch.get(name);
         if (epoch == null) {
             logger.log(Level.WARNING,

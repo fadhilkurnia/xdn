@@ -13,9 +13,11 @@ public class ServiceProperty {
   public static String XDN_INITIAL_STATE_PREFIX = "xdn:init:";
   public static String XDN_CHECKPOINT_PREFIX = "xdn:checkpoint:";
   public static String XDN_EPOCH_FINAL_STATE_PREFIX = "xdn:final:";
-  public static String NON_DETERMINISTIC_CREATE_PREFIX = "nondeter:create:";
-  public static String NON_DETERMINISTIC_START_PREFIX = "nondeter:start:";
-  public static String NON_DETERMINISTIC_START_BACKUP_PREFIX = "nondeter:start:backup";
+
+  public static String NON_DETERMINISTIC_LOAD_PREFIX = "non-deter:load:";
+  public static String NON_DETERMINISTIC_START_PRIMARY_PREFIX = "non-deter:start:primary:";
+  public static String NON_DETERMINISTIC_START_BACKUP1_PREFIX = "non-deter:start:backup1:";
+  public static String NON_DETERMINISTIC_START_BACKUP2_PREFIX = "non-deter:start:backup2:";
 
   private final String serviceName;
   private final boolean isDeterministic;
