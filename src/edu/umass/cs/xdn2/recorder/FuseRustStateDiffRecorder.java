@@ -138,9 +138,21 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
+    // TODO: implement if this recorder needs per-service directory setup
+    return true;
+  }
+
+  @Override
+  public String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type) {
     // location: /tmp/xdn/state/fuserust/<node-id>/mnt/<service-name>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
+  }
+
+  @Override
+  public String getSnapshotDir(String serviceName, int epoch) {
+    // TODO: implement if this recorder needs per-service snapshot dir access
+    return "";
   }
 
   @Override
@@ -162,7 +174,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // create target mnt dir, if not exist
     // e.g., /tmp/xdn/state/fuserust/node1/mnt/service1/
-    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch, null);
     File targetDir = new File(targetDirPath);
     if (!targetDir.exists()) {
       logger.log(
@@ -213,7 +225,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean postInitialization(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectory(serviceName, placementEpoch, null);
     String captureSocketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
     // initialize file system in the mnt dir, with socket
@@ -338,7 +350,10 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
+  public boolean applyStateDiff(String serviceName, int placementEpoch,
+                                byte[] encodedState, int primaryEpoch,
+                                String primaryID, int stateDiffCount) {
+    // TODO: use stateDiffCount for named diff files when these recorders are updated
     // TODO: directly apply stateDiff from the obtained byte[], not via
     //  the fuselog-apply program, which we currently use.
 
@@ -391,150 +406,10 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectory(serviceName, placementEpoch, null);
     int umountRetCode = Shell.runCommand("fusermount -u " + targetDir, false);
     int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
     assert rmRetCode == 0;
     return true;
-  }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
-
-  @Override
-  public void initContainerSync(
-      String myNodeId,
-      String serviceName,
-      Map<String, InetAddress> ipAddresses,
-      int placementEpoch,
-      String sshKey) {
-    System.out.printf(
-        "%s:FuseRust.initContainerSync(serviceName=%s, placementEpoch=%d)\n",
-        myNodeId, serviceName, placementEpoch);
-
-    Set<String> backupNodes =
-        ipAddresses.keySet().stream()
-            .filter(node -> !node.equals(myNodeId.toString()))
-            .map(String::toLowerCase)
-            .collect(Collectors.toSet());
-    System.out.printf("FuseRustStateDiff backupNodes = %s\n", backupNodes);
-    System.out.printf("FuseRustStateDiff ipAddresses = %s\n", ipAddresses);
-
-    String currentReplica = this.baseDirectoryPath;
-
-    Map<String, String> backupReplicas = new HashMap<>();
-    backupNodes.forEach(
-        node ->
-            backupReplicas.put(
-                node,
-                String.format("%s%s/", FuseRustStateDiffRecorder.defaultWorkingBasePath, node)));
-
-    String mntDir = String.format("mnt/%s/", serviceName);
-    String username = Shell.runCommandWithOutput("whoami").stdout.trim();
-
-    // Copy data to other replicas
-    Boolean allSyncSuccess = false;
-    int count = 0;
-
-    ExecutorService executor = Executors.newFixedThreadPool(backupReplicas.size());
-
-    while (!allSyncSuccess) {
-      if (++count > 10) {
-        throw new RuntimeException("Failed running rsync after 10 iterations");
-      }
-
-      allSyncSuccess = true;
-      List<Future<Boolean>> futures = new ArrayList<>();
-
-      for (String key : backupReplicas.keySet()) {
-        final String replicaKey = key;
-
-        List<String> cmd = new ArrayList<>();
-        cmd.add("rsync");
-        cmd.add("-avz");
-        cmd.add("--delete");
-        cmd.add("--human-readable");
-
-        futures.add(
-            executor.submit(
-                () -> {
-                  String hostAddr = ipAddresses.get(replicaKey).getHostAddress();
-                  int exitCode = 0;
-
-                  if (!hostAddr.equals("127.0.0.1")) {
-                    String resolvedKeyPath = sshKey;
-                    if (sshKey.startsWith("~")) {
-                      resolvedKeyPath = sshKey.replaceFirst("^~", System.getProperty("user.home"));
-                    }
-
-                    cmd.add("-e");
-                    cmd.add("ssh -i " + resolvedKeyPath);
-                  }
-
-                  cmd.add("--include=mnt/");
-                  cmd.add("--include=" + mntDir);
-                  cmd.add(
-                      "--include="
-                          + mntDir
-                          + "***"); // Note: Ensure mntDir doesn't end in / if adding ***
-                  // immediately
-                  cmd.add("--exclude=*");
-                  cmd.add(currentReplica);
-
-                  if (hostAddr.equals("127.0.0.1")) {
-                    cmd.add(backupReplicas.get(key));
-                  } else {
-                    // rsync needs IPv6 literals bracketed in user@host:path, else it mis-parses
-                    // the colons as the host:path separator (IPv6-only clusters fail to sync).
-                    String sshHost = hostAddr.contains(":") ? "[" + hostAddr + "]" : hostAddr;
-                    cmd.add(username + "@" + sshHost + ":" + backupReplicas.get(key));
-                  }
-
-                  exitCode = Shell.runCommand(cmd, false);
-
-                  if (exitCode != 0) {
-                    System.out.println(
-                        String.format(
-                            "Failed to sync %s to %s", currentReplica, backupReplicas.get(key)));
-                    return false;
-                  }
-
-                  return true;
-                }));
-      }
-
-      for (Future<Boolean> future : futures) {
-        try {
-          if (!future.get()) {
-            allSyncSuccess = false;
-          }
-        } catch (InterruptedException | ExecutionException e) {
-          e.printStackTrace();
-          allSyncSuccess = false;
-        }
-      }
-
-      try {
-        Thread.sleep(3000);
-      } catch (InterruptedException e) {
-        e.printStackTrace();
-      }
-    }
-
-    Map<Integer, SocketPair> epochToChannelMap = this.serviceFsSocket.get(serviceName);
-    assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
-    SocketChannel socketChannel = epochToChannelMap.get(placementEpoch).getCaptureSocket();
-    assert socketChannel != null : "unknown fs socket client for " + serviceName;
-
-    // begin capturing statediff (c) in the filesystem
-    try {
-      System.out.println(">> clear stateDiffs...");
-      socketChannel.write(ByteBuffer.wrap("c".getBytes()));
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    executor.shutdown();
   }
 }

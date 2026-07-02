@@ -89,6 +89,18 @@ public abstract class SandboxManager {
     public abstract boolean startService(ServiceInstance instance, int epoch);
 
     /**
+     * Starts the service with an explicit volume mount path, overriding the default
+     * state directory. Used by PrimaryBackupManager to mount primaryLive/, backupLive1/,
+     * or backupLive2/ depending on the node's role.
+     *
+     * @param instance  the service instance to start
+     * @param epoch     the epoch number
+     * @param mountPath the explicit directory to bind-mount into the container
+     * @return true iff all containers started successfully
+     */
+    public abstract boolean startService(ServiceInstance instance, int epoch, String mountPath);
+
+    /**
      * Stops all containers for the given service instance without deleting
      * the state directory. The container can be restarted later.
      *

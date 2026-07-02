@@ -335,9 +335,13 @@ public class PrimaryBackupManager<NodeIDType> {
 
         // Initialize stateDiffCount for this service
         stateDiffCount.putIfAbsent(serviceName, 0);
+        int bootstrapCount = 1;
 
         // Capture bootstrap diff
         byte[] diff = this.app.captureStatediff(serviceName);
+        logger.log(Level.WARNING,
+                "{0}:PBM initializePrimaryContainer captureStatediff result={1} bytes for {2}",
+                new Object[]{myNodeID, diff == null ? "null" : diff.length, serviceName});
         if (diff == null) diff = new byte[0];
 
         ApplyStateDiffPacket applyPacket = new ApplyStateDiffPacket(
@@ -345,11 +349,16 @@ public class PrimaryBackupManager<NodeIDType> {
                 currPlacement.get(serviceName),
                 currPlacementEpoch.get(serviceName),
                 myNodeID.toString(),
-                stateDiffCount.get(serviceName),
+                bootstrapCount,
                 diff);
 
+        logger.log(Level.WARNING,
+                "{0}:PBM initializePrimaryContainer proposing ApplyStateDiff count={1} size={2} for {3}",
+                new Object[]{myNodeID, stateDiffCount.get(serviceName), diff.length, serviceName});
         paxosManager.propose(serviceName, applyPacket, (executedRequest, handled) -> {
-            // Success
+            logger.log(Level.WARNING,
+                    "{0}:PBM initializePrimaryContainer propose callback handled={1} for {2}",
+                    new Object[]{myNodeID, handled, serviceName});
         });
     }
 
@@ -359,21 +368,39 @@ public class PrimaryBackupManager<NodeIDType> {
 
     private boolean handleApplyStateDiffPacket(ApplyStateDiffPacket packet) {
         String serviceName = packet.getServiceName();
+        logger.log(Level.WARNING,
+                "{0}:PBM handleApplyStateDiffPacket received count={1} size={2} for {3}",
+                new Object[]{myNodeID, packet.getStateDiffCount(),
+                        packet.getStateDiff().length, serviceName});
+
+        logger.log(Level.INFO,
+                "{0}:PBM handleApplyStateDiffPacket checks: " +
+                        "packet.placement={1} currPlacement={2} " +
+                        "packet.primaryID={3} currPrimaryID={4} " +
+                        "packet.primaryEpoch={5} currPlacementEpoch={6}",
+                new Object[]{myNodeID,
+                        packet.getPlacement(), currPlacement.getOrDefault(serviceName, -1),
+                        packet.getPrimaryID(), currPrimaryID.get(serviceName),
+                        packet.getPrimaryEpoch(), currPlacementEpoch.get(serviceName)});
 
         if (packet.getPlacement() != currPlacement.getOrDefault(serviceName, -1)) {
-            // TODO: confirm throwing is the right behavior here vs. a no-op/log
+            logger.log(Level.SEVERE, "{0}:PBM handleApplyStateDiffPacket placement mismatch for {1}",
+                    new Object[]{myNodeID, serviceName});
             throw new IllegalStateException("placement mismatch for " + serviceName);
         }
 
         NodeIDType packetPrimaryID = unstringer.valueOf(packet.getPrimaryID());
         if (!packetPrimaryID.equals(currPrimaryID.get(serviceName))) {
+            logger.log(Level.SEVERE, "{0}:PBM handleApplyStateDiffPacket primaryID mismatch for {1}",
+                    new Object[]{myNodeID, serviceName});
             throw new IllegalStateException("primaryID mismatch for " + serviceName);
         }
 
-        // TODO: per the unresolved field-naming question, this compares
-        //  against currPlacementEpoch -- confirm this is correct.
         Integer curEpoch = currPlacementEpoch.get(serviceName);
         if (curEpoch == null || curEpoch != packet.getPrimaryEpoch()) {
+            logger.log(Level.SEVERE, "{0}:PBM handleApplyStateDiffPacket primaryEpoch mismatch for {1} " +
+                            "curEpoch={2} packet.primaryEpoch={3}",
+                    new Object[]{myNodeID, serviceName, curEpoch, packet.getPrimaryEpoch()});
             throw new IllegalStateException("primaryEpoch mismatch for " + serviceName);
         }
 
@@ -381,7 +408,13 @@ public class PrimaryBackupManager<NodeIDType> {
         int difference = packet.getStateDiffCount() - currentCount;
 
         if (difference == 1) {
-            // TODO: applyStateDiff via AbstractStateDiffRecorder, then
+            boolean applied = app.applyStatediff(serviceName, packet.getStateDiff(),
+                    packet.getPrimaryEpoch(), packet.getPrimaryID(), packet.getStateDiffCount());
+            if (!applied) {
+                logger.log(Level.WARNING,
+                        "{0}:PBM handleApplyStateDiffPacket applyStatediff failed for {1} count={2}",
+                        new Object[]{myNodeID, serviceName, packet.getStateDiffCount()});
+            }
             stateDiffCount.put(serviceName, packet.getStateDiffCount());
         } else if (difference > 1) {
             // Deliberate per design: any gap triggers this node to attempt
@@ -497,7 +530,7 @@ public class PrimaryBackupManager<NodeIDType> {
         }
 
         Role role = currentRole.get(serviceName);
-        logger.log(Level.WARNING, "{0}:PBM handleClientRequest serviceName={1} role={2}",
+        logger.log(Level.INFO, "{0}:PBM handleClientRequest serviceName={1} role={2}",
                 new Object[]{myNodeID, serviceName, role});
 
 
@@ -516,22 +549,28 @@ public class PrimaryBackupManager<NodeIDType> {
             }
             return true;
         } else if (role == Role.PRIMARY) {
-            logger.log(Level.WARNING, "{0}:PBM handleClientRequest PRIMARY executing request for {1}",
+            logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY executing request for {1}",
                     new Object[]{myNodeID, serviceName});
 
             app.execute(request);
 
-            logger.log(Level.WARNING, "{0}:PBM handleClientRequest PRIMARY executed, capturing diff for {1}",
+            if (!isWriteRequest) {
+                callback.executed(request, true);
+                return true;
+            }
+
+            logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY executed, capturing diff for {1}",
                     new Object[]{myNodeID, serviceName});
 
             byte[] diff = app.captureStatediff(serviceName);
             if (diff == null) diff = new byte[0];
 
-            logger.log(Level.WARNING, "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
+            logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
                     new Object[]{myNodeID, serviceName, diff.length});
 
             int nextCount = stateDiffCount.getOrDefault(serviceName, 0) + 1;
-            stateDiffCount.put(serviceName, nextCount);
+            // Do NOT update stateDiffCount here — let handleApplyStateDiffPacket
+            // update it after Paxos commits, uniformly on all nodes including primary.
 
             ApplyStateDiffPacket applyPacket = new ApplyStateDiffPacket(
                     serviceName,
@@ -541,11 +580,11 @@ public class PrimaryBackupManager<NodeIDType> {
                     nextCount,
                     diff);
 
-            logger.log(Level.WARNING, "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
+            logger.log(Level.FINE, "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
                     new Object[]{myNodeID, serviceName, nextCount});
 
             paxosManager.propose(serviceName, applyPacket, (executedRequest, handled) -> {
-                logger.log(Level.WARNING, "{0}:PBM handleClientRequest PRIMARY propose callback fired handled={2} for {1}",
+                logger.log(Level.FINE, "{0}:PBM handleClientRequest PRIMARY propose callback fired handled={2} for {1}",
                         new Object[]{myNodeID, serviceName, handled});
                 callback.executed(request, handled);
             });

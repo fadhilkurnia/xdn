@@ -38,6 +38,38 @@ public abstract class AbstractStateDiffRecorder {
   }
 
   /**
+   * Enumerates the live directory types for a service replica.
+   * PRIMARY     — the FUSE-mounted capture directory for the primary container.
+   * BACKUP1/2   — the rsync-seeded directories for the two blue/green backup containers.
+   */
+  public enum LiveDirType {
+    PRIMARY,
+    BACKUP1,
+    BACKUP2
+  }
+
+  public static final String DIR_SNAPSHOT  = "snp/";
+  public static final String DIR_STATEDIFF = "cmtDiff/";
+  public static final String DIR_STATEDIFF_UNCOMMITED = "prpDiff/";
+  public static final String DIR_PRIMARY   = "primary/";
+  public static final String DIR_BACKUP1   = "backup1/";
+  public static final String DIR_BACKUP2   = "backup2/";
+
+  /**
+   * Creates the service-specific directories needed before the service starts.
+   * For fuselog: creates snapshot/ and stateDiff/.
+   * For other recorders: may be a no-op.
+   *
+   * Called once per service per epoch on all nodes (primary and backup)
+   * before any container starts.
+   *
+   * @param serviceName    name of the service
+   * @param placementEpoch current placement epoch
+   * @return true iff all directories were successfully created
+   */
+  public abstract boolean prepareServiceDirectories(String serviceName, int placementEpoch);
+
+  /**
    * Returns the actual directory in which the state is stored for a specific placement epoch.
    *
    * @param serviceName name of the app/service (e.g., "my-service")
@@ -45,7 +77,14 @@ public abstract class AbstractStateDiffRecorder {
    * @return the actual path ending with '/' where the state is stored (e.g.,
    *     "/tmp/xdn/state/rsync/ar0/mnt/my-service/e0/")
    */
-  public abstract String getTargetDirectory(String serviceName, int placementEpoch);
+  public abstract String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type);
+
+  /**
+   * Returns the snapshot directory path for a service epoch.
+   * This is the directory where applyStateDiff writes committed state,
+   * and from which primaryLive/ and backupLive1/ or backupLive2/ are seeded via rsync.
+   */
+  public abstract String getSnapshotDir(String serviceName, int placementEpoch);
 
   /**
    * Prepares the state directory before the service is initialized. Examples of things that we can
@@ -83,15 +122,20 @@ public abstract class AbstractStateDiffRecorder {
   public abstract byte[] captureStateDiff(String serviceName, int placementEpoch);
 
   /**
-   * Applies the previously captured state diff into the state directory. Mainly used by backups.
+   * Applies the previously captured state diff into snapshot/.
+   * The stateDiffCount is used to name the diff file (e.g., stateDiff/42.diff).
    *
-   * @param serviceName name of the app/service (e.g., "my-service")
-   * @param placementEpoch current placement epoch number.
-   * @param encodedState the state diff captured by primary.
-   * @return true iff all operations successfully executed.
+   * @param serviceName      name of the app/service
+   * @param placementEpoch   current placement epoch number
+   * @param encodedState     the state diff bytes captured by primary
+   * @param primaryEpoch     primary epoch number (different from placement epoch)
+   * @param primaryID        node-id of the primary that proposes the stateDiff
+   * @param stateDiffCount   the monotonically increasing count for this diff
+   * @return true if all operations successfully executed
    */
   public abstract boolean applyStateDiff(
-      String serviceName, int placementEpoch, byte[] encodedState);
+          String serviceName, int placementEpoch, byte[] encodedState,
+          int primaryEpoch, String primaryID, int stateDiffCount);
 
   /**
    * Removes the target directory that hold the safety-critical state, include unmounting filesystem
@@ -99,14 +143,7 @@ public abstract class AbstractStateDiffRecorder {
    *
    * @param serviceName name of the app/service (e.g., "my-service")
    * @param placementEpoch current placement epoch number.
-   * @return true iff all operations successfully executed.
+   * @return true if all operations successfully executed.
    */
   public abstract boolean removeServiceRecorder(String serviceName, int placementEpoch);
-
-  public abstract void initContainerSync(
-      String myNodeId,
-      String serviceName,
-      Map<String, InetAddress> ipAddresses,
-      int placementEpoch,
-      String sshKey);
 }

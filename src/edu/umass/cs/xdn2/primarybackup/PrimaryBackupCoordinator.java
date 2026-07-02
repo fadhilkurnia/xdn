@@ -16,6 +16,8 @@ import edu.umass.cs.xdn2.primarybackup.packets.ApplyStateDiffPacket;
 import edu.umass.cs.xdn2.primarybackup.packets.PrimaryBackupPacket;
 import edu.umass.cs.xdn2.primarybackup.packets.PrimaryBackupPacketType;
 import edu.umass.cs.xdn2.primarybackup.packets.StartEpochPacket;
+import edu.umass.cs.xdn2.request.XdnHttpRequest;
+import io.netty.handler.codec.http.HttpMethod;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -102,8 +104,14 @@ public class PrimaryBackupCoordinator<NodeIDType>
             //  stateDiffCount cookie/header lives was not traced in this
             //  pass -- placeholders below.
             Integer clientStateDiffCount = null; // TODO: extract from request headers/cookie
-            boolean isWriteRequest = false;       // TODO: extract from request HTTP method
-
+            boolean isWriteRequest = false;
+            if (rcr.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
+                HttpMethod method = xdnHttpRequest.getHttpRequest().method();
+                isWriteRequest = method.equals(HttpMethod.POST)
+                        || method.equals(HttpMethod.PUT)
+                        || method.equals(HttpMethod.DELETE)
+                        || method.equals(HttpMethod.PATCH);
+            }
             return this.pbManager.handleClientRequest(
                     serviceName, rcr.getRequest(), clientStateDiffCount,
                     isWriteRequest, callback);

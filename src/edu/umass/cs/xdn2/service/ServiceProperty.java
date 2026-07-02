@@ -16,8 +16,9 @@ public class ServiceProperty {
 
   public static String NON_DETERMINISTIC_LOAD_PREFIX = "non-deter:load:";
   public static String NON_DETERMINISTIC_START_PRIMARY_PREFIX = "non-deter:start:primary:";
-  public static String NON_DETERMINISTIC_START_BACKUP1_PREFIX = "non-deter:start:backup1:";
-  public static String NON_DETERMINISTIC_START_BACKUP2_PREFIX = "non-deter:start:backup2:";
+  public static String NON_DETERMINISTIC_START_BACKUP_PREFIX = "non-deter:start:backup:";
+  public static String NON_DETERMINISTIC_START_BACKUP1_PREFIX = "non-deter:start:backup:1:";
+  public static String NON_DETERMINISTIC_START_BACKUP2_PREFIX = "non-deter:start:backup:2:";
 
   private final String serviceName;
   private final boolean isDeterministic;

@@ -8,6 +8,7 @@ import edu.umass.cs.xdn2.request.XdnStopRequest;
 import edu.umass.cs.xdn2.XdnHttpForwarderClient;
 import edu.umass.cs.xdn2.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn2.sandbox.SandboxManager;
+import edu.umass.cs.xdn2.utils.Shell;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 
@@ -58,11 +59,6 @@ public class NonDeterministicService {
     public static final String CHECKPOINT_STUB = "xdn:nondeter:checkpoint:stub";
 
     private final String myNodeId;
-
-    public enum BackupNum {
-        BACKUP1,
-        BACKUP2
-    }
 
     // serviceName → current placement epoch
     private final Map<String, Integer> servicePlacementEpoch = new ConcurrentHashMap<>();
@@ -191,17 +187,16 @@ public class NonDeterministicService {
             return startContainerAsPrimary(name);
         }
 
-        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX)
-            || (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX))
-        ) {
-            BackupNum backup = null;
+        if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
+            AbstractStateDiffRecorder.LiveDirType backup = null;
             if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX)) {
-                backup = BackupNum.BACKUP1;
+                backup = AbstractStateDiffRecorder.LiveDirType.BACKUP1;
+            } else if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX)) {
+                backup = AbstractStateDiffRecorder.LiveDirType.BACKUP2;
             } else {
-                backup = BackupNum.BACKUP2;
+                throw new RuntimeException("Unknown backup prefix: " + state);
             }
-
-            return startRecorderAsBackup(name, backup);
+            return startContainerAsBackup(name, backup);
         }
 
         if (state.startsWith(ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX)) {
@@ -238,7 +233,8 @@ public class NonDeterministicService {
      * Called by PBM on each backup after Paxos commits an ApplyStateDiffPacket.
      * Applied on a single-threaded executor to preserve ordering.
      */
-    public boolean applyStatediff(String serviceName, byte[] statediff) {
+    public boolean applyStatediff(String serviceName, byte[] statediff,
+                                  int primaryEpoch, String primaryID, int stateDiffCount) {
         Integer epoch = servicePlacementEpoch.get(serviceName);
         if (epoch == null) {
             logger.log(Level.WARNING,
@@ -246,7 +242,8 @@ public class NonDeterministicService {
                     new Object[]{myNodeId, serviceName});
             return false;
         }
-        return stateDiffRecorder.applyStateDiff(serviceName, epoch, statediff);
+        return stateDiffRecorder.applyStateDiff(
+                serviceName, epoch, statediff, primaryEpoch, primaryID, stateDiffCount);
     }
 
     // -------------------------------------------------------------------------
@@ -365,8 +362,11 @@ public class NonDeterministicService {
         List<String> containerNames = buildContainerNames(name, epoch, property);
         ServiceInstance instance = new ServiceInstance(
                 property, name, networkName, allocatedPort, containerNames);
+
         sandboxManager.prepareStateDirectory(name, epoch);
-        stateDiffRecorder.preInitialization(name, epoch);
+        stateDiffRecorder.prepareServiceDirectories(name, epoch);
+        // Note: preInitialization() is now called inside startContainerAsPrimary(),
+        // not here - it mounts fuselog on primaryLive/ which only happens on primary.
 
         serviceInstances.put(name, instance);
         servicePlacementEpoch.put(name, epoch);
@@ -394,12 +394,22 @@ public class NonDeterministicService {
         Integer epoch = servicePlacementEpoch.get(name);
         if (epoch == null) return false;
 
-        sandboxManager.createNetwork(name);
-        boolean started = sandboxManager.startService(instance, epoch);
-        if (!started) return false;
+        // Step 1: rsync snapshot/ -> primaryLive/ to seed the FUSE mount with latest state.
+        // For a brand-new service, snapshot/ is empty — this is a no-op.
+        String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch);
+        String primaryLiveDir = stateDiffRecorder.getTargetDirectory(
+                name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+        Shell.runCommand("mkdir -p " + primaryLiveDir);
+        Shell.runCommand(String.format("rsync -a %s %s", snapshotDir, primaryLiveDir));
 
-        boolean postInit = stateDiffRecorder.postInitialization(name, epoch);
-        if (!postInit) return false;
+        // Step 2: Mount fuselog on primaryLive/ — start capturing writes.
+        boolean preInit = stateDiffRecorder.preInitialization(name, epoch);
+        if (!preInit) return false;
+
+        // Step 3: Start the container with primaryLive/ as the volume mount.
+        sandboxManager.createNetwork(name);
+        boolean started = sandboxManager.startService(instance, epoch, primaryLiveDir);
+        if (!started) return false;
 
         logger.log(Level.INFO,
                 "{0}:NonDeterministicService container started as primary for {1}",
@@ -412,22 +422,43 @@ public class NonDeterministicService {
      * Called from restore("non-deter:start-backup1:") after PBM sends InitBackupPacket.
      * No container is started — backups only apply state diffs.
      */
-    private boolean startRecorderAsBackup(String name, BackupNum backup) {
-        Integer epoch = servicePlacementEpoch.get(name);
-        if (epoch == null) {
-            logger.log(Level.WARNING,
-                    "{0}:NonDeterministicService startRecorderAsBackup() " +
+    private boolean startContainerAsBackup(String name,
+                                           AbstractStateDiffRecorder.LiveDirType backup) {
+        ServiceInstance instance = serviceInstances.get(name);
+        if (instance == null) {
+            logger.log(Level.SEVERE,
+                    "{0}:NonDeterministicService startContainerAsBackup() " +
                             "called before createServiceInstance() for {1}",
                     new Object[]{myNodeId, name});
             return false;
         }
 
-        boolean started = stateDiffRecorder.postInitialization(name, epoch);
+        Integer epoch = servicePlacementEpoch.get(name);
+        if (epoch == null) return false;
+
+        // Step 1: rsync snapshot/ -> backupLive1/ or backupLive2/
+        String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch);
+        String backupLiveDir = stateDiffRecorder.getTargetDirectory(name, epoch, backup);
+        Shell.runCommand("mkdir -p " + backupLiveDir);
+        int rsyncCode = Shell.runCommand(
+                String.format("rsync -a %s %s", snapshotDir, backupLiveDir));
+        if (rsyncCode != 0) {
+            logger.log(Level.SEVERE,
+                    "{0}:NonDeterministicService startContainerAsBackup() rsync failed for {1}",
+                    new Object[]{myNodeId, name});
+            return false;
+        }
+
+        // Step 2: Start the container with backupLiveDir as the volume mount.
+        // No recorder setup — backups receive diffs via applyStateDiff() → fuselog-apply.
+        sandboxManager.createNetwork(name);
+        boolean started = sandboxManager.startService(instance, epoch, backupLiveDir);
+        if (!started) return false;
 
         logger.log(Level.INFO,
-                "{0}:NonDeterministicService recorder apply-side started for backup {1}: {2}",
-                new Object[]{myNodeId, name, started});
-        return started;
+                "{0}:NonDeterministicService container started as {2} backup for {1}",
+                new Object[]{myNodeId, name, backup});
+        return true;
     }
 
     /**

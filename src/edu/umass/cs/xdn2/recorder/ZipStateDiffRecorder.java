@@ -55,16 +55,28 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
+    // TODO: implement if this recorder needs per-service directory setup
+    return true;
+  }
+
+  @Override
+  public String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type) {
     // location: /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
+  }
+
+  @Override
+  public String getSnapshotDir(String serviceName, int epoch) {
+    // TODO: implement if this recorder needs per-service snapshot dir access
+    return "";
   }
 
   @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // remove and re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectory(serviceName, placementEpoch, null);
     try {
       int code = Shell.runCommand("rm -rf " + targetDir);
       assert code == 0;
@@ -156,7 +168,10 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
+  public boolean applyStateDiff(String serviceName, int placementEpoch,
+                                byte[] encodedState, int primaryEpoch,
+                                String primaryID, int stateDiffCount) {
+    // TODO: use stateDiffCount for named diff files when these recorders are updated
     // important location
     // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
     // snapshot dir : /tmp/xdn/state/zip/<nodeId>/snp/<serviceName>/e<epoch>/
@@ -202,24 +217,9 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetMountDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetMountDir = this.getTargetDirectory(serviceName, placementEpoch, null);
     int code = Shell.runCommand("rm -rf " + targetMountDir);
     assert code == 0;
     return true;
-  }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
-
-  @Override
-  public void initContainerSync(
-      String myNodeId,
-      String serviceName,
-      Map<String, InetAddress> ipAddresses,
-      int placementEpoch,
-      String sshKey) {
-    System.out.println("Multi-file initialization is not supported on Zip.");
-    return;
   }
 }

@@ -3,12 +3,12 @@ package edu.umass.cs.xdn2;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
-import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.interfaces.InitialStateValidator;
 import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
+import edu.umass.cs.xdn2.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.xdn2.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn2.request.XdnHttpRequest;
 import edu.umass.cs.xdn2.request.XdnHttpRequestBatch;
@@ -325,15 +325,13 @@ public class XdnApp
     }
 
     @Override
-    public boolean applyStatediff(String serviceName, byte[] statediff) {
+    public boolean applyStatediff(String serviceName, byte[] statediff,
+                                  int primaryEpoch, String primaryID, int stateDiffCount) {
+        if (isInternalGroup(serviceName)) return false;
         ServiceType type = serviceRegistry.get(serviceName);
-        if (type != ServiceType.NON_DETERMINISTIC) {
-            logger.log(Level.SEVERE,
-                    "{0}:XdnApp applyStatediff() called for non-PB service={1}",
-                    new Object[]{myNodeId, serviceName});
-            return false;
-        }
-        return nonDeterministicService.applyStatediff(serviceName, statediff);
+        if (type != ServiceType.NON_DETERMINISTIC) return false;
+        return nonDeterministicService.applyStatediff(
+                serviceName, statediff, primaryEpoch, primaryID, stateDiffCount);
     }
 
     // -------------------------------------------------------------------------

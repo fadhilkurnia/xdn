@@ -60,16 +60,28 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
+    // TODO: implement if this recorder needs per-service directory setup
+    return true;
+  }
+
+  @Override
+  public String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type) {
     // location: /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
+  }
+
+  @Override
+  public String getSnapshotDir(String serviceName, int epoch) {
+    // TODO: implement if this recorder needs per-service snapshot dir access
+    return "";
   }
 
   @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // remove and then re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
-    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch, null);
 
     // Preserve any state already materialized at targetDirPath across the wipe below. This dir is
     // the container's bind-mount source, and by the time preInitialization runs it may already hold
@@ -212,7 +224,10 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
+  public boolean applyStateDiff(String serviceName, int placementEpoch,
+                                byte[] encodedState, int primaryEpoch,
+                                String primaryID, int stateDiffCount) {
+    // TODO: use stateDiffCount for named diff files when these recorders are updated
     // important location:
     // target dir   : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
     // diff file    : /tmp/xdn/state/rsync/<nodeId>/diff/<serviceName>/e<epoch>.diff
@@ -255,127 +270,9 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectory(serviceName, placementEpoch, null);
     int retCode = Shell.runCommand("rm -rf " + targetDir);
     assert retCode == 0;
     return true;
-  }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
-
-  @Override
-  public void initContainerSync(
-      String myNodeId,
-      String serviceName,
-      Map<String, InetAddress> ipAddresses,
-      int placementEpoch,
-      String sshKey) {
-    Set<String> backupNodes =
-        ipAddresses.keySet().stream()
-            .filter(node -> !node.equals(myNodeId.toString()))
-            .map(String::toLowerCase)
-            .collect(Collectors.toSet());
-
-    String currentReplica = String.format("%s%s/", this.defaultWorkingBasePath, myNodeId);
-
-    Map<String, String> backupReplicas = new HashMap<>();
-    backupNodes.forEach(
-        node ->
-            backupReplicas.put(node, String.format("%s%s/", this.defaultWorkingBasePath, node)));
-
-    String mntDir = String.format("mnt/%s/", serviceName);
-    String snpDir = String.format("snp/%s/", serviceName);
-
-    String username = Shell.runCommandWithOutput("whoami").stdout.trim();
-
-    while (true) {
-      int exitCode =
-          Shell.runCommand(
-              String.format(
-                  "rsync -avz --delete --human-readable %s/%s %s/%s",
-                  currentReplica, mntDir, currentReplica, snpDir),
-              true);
-
-      if (exitCode != 0) {
-        System.out.printf("Failed to sync /mnt/ to /snp/ in %s%n", currentReplica);
-      } else {
-        break;
-      }
-
-      try {
-        Thread.sleep(3000);
-      } catch (InterruptedException e) {
-        e.printStackTrace();
-      }
-    }
-
-    // Copy data to other replicas
-    Boolean allSyncSuccess = false;
-    String sshOption =
-        sshKey != null && !sshKey.trim().isEmpty() ? String.format("-e \"ssh -i %s\"", sshKey) : "";
-    int count = 0;
-    while (!allSyncSuccess) {
-      if (++count > 10) {
-        throw new RuntimeException(
-            String.format(
-                "%s failed to rsync files for %s:%d during non-deterministic init after %d tries",
-                this.getClass().getSimpleName(), serviceName, placementEpoch, count));
-      }
-
-      allSyncSuccess = true;
-
-      for (String key : backupReplicas.keySet()) {
-        String hostAddr = ipAddresses.get(key).getHostAddress();
-        // rsync needs IPv6 literals bracketed in user@host:path, else it mis-parses the
-        // colons as the host:path separator (an IPv6-only cluster otherwise fails to sync).
-        String sshHost = hostAddr.contains(":") ? "[" + hostAddr + "]" : hostAddr;
-
-        int exitCode = 0;
-        if (hostAddr.equals("127.0.0.1")) {
-          exitCode =
-              Shell.runCommand(
-                  String.format(
-                      """
-                                    rsync -avz --delete --human-readable \
-                                    --include='mnt/' --include='%s' --include='%s***' \
-                                    --exclude='*' \
-                                    %s %s""",
-                      mntDir, mntDir, currentReplica, backupReplicas.get(key)),
-                  true);
-        } else {
-          exitCode =
-              Shell.runCommand(
-                  String.format(
-                      """
-                                    rsync -avz --delete --human-readable \
-                                    %s \
-                                    --include='mnt/' --include='%s' --include='%s***' \
-                                    --exclude='*' \
-                                    %s %s@%s:%s""",
-                      sshOption,
-                      mntDir,
-                      mntDir,
-                      currentReplica,
-                      username,
-                      sshHost,
-                      backupReplicas.get(key)),
-                  true);
-        }
-
-        if (exitCode != 0) {
-          System.out.println(
-              String.format("Failed to sync %s to %s", currentReplica, backupReplicas.get(key)));
-          allSyncSuccess = false;
-        }
-      }
-
-      try {
-        Thread.sleep(3000);
-      } catch (InterruptedException e) {
-        e.printStackTrace();
-      }
-    }
   }
 }

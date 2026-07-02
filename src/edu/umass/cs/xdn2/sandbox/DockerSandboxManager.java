@@ -119,6 +119,11 @@ public class DockerSandboxManager extends SandboxManager {
     // Container lifecycle
     // -------------------------------------------------------------------------
 
+    public boolean startService(ServiceInstance instance, int epoch) {
+        return startService(instance, epoch,
+                getStateDirectory(instance.serviceName, epoch));
+    }
+
     /**
      * Starts all components of the service at the given epoch.
      * Each component is started via docker run with appropriate flags.
@@ -127,7 +132,8 @@ public class DockerSandboxManager extends SandboxManager {
      * --health-* flags added so Docker tracks readiness internally.
      * waitUntilReady() must be called separately after this method.
      */
-    public boolean startService(ServiceInstance instance, int epoch) {
+    @Override
+    public boolean startService(ServiceInstance instance, int epoch, String mountPath) {
         String serviceName = instance.serviceName;
         String networkName = buildNetworkName(serviceName);
         String stateDirMountTarget = instance.property.getStatefulComponentDirectory();
@@ -137,25 +143,22 @@ public class DockerSandboxManager extends SandboxManager {
             String containerName = instance.containerNames.get(componentIdx);
             String imageName = component.getImageName();
 
-            // Determine mount source for stateful components
+            // Use the explicitly provided mountPath instead of getStateDirectory()
             String mountSource = null;
             if (component.isStateful() && stateDirMountTarget != null) {
-                mountSource = getStateDirectory(serviceName, epoch);
+                mountSource = mountPath;
                 Shell.runCommand("mkdir -p " + mountSource, true);
             }
 
-            // Determine healthcheck command: client-specified takes priority,
-            // then infer from image name, then no healthcheck
             String healthcheckCmd = component.getHealthcheckCommand();
             if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
                 healthcheckCmd = inferHealthcheckCmd(imageName);
             }
 
-            // Determine port publishing
-            Integer publishedPort   = component.getEntryPort();
-            Integer allocatedPort   = component.isEntryComponent()
+            Integer publishedPort = component.getEntryPort();
+            Integer allocatedPort = component.isEntryComponent()
                     ? instance.allocatedHttpPort : null;
-            Integer exposedPort     = component.getExposedPort();
+            Integer exposedPort = component.getExposedPort();
 
             boolean started = runDockerContainer(
                     imageName,
@@ -172,8 +175,8 @@ public class DockerSandboxManager extends SandboxManager {
 
             if (!started) {
                 logger.log(Level.SEVERE,
-                        "{0}:DockerSandboxManager failed to start container {1}",
-                        new Object[]{nodeId, containerName});
+                        "{0}:DockerSandboxManager failed to start container {1} with mountPath {2}",
+                        new Object[]{nodeId, containerName, mountPath});
                 return false;
             }
 
