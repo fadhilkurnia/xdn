@@ -137,18 +137,30 @@ public class DockerSandboxManager extends SandboxManager {
         String serviceName = instance.serviceName;
         String networkName = buildNetworkName(serviceName);
         String stateDirMountTarget = instance.property.getStatefulComponentDirectory();
+        List<ServiceComponent> components = instance.property.getComponents();
 
-        int componentIdx = 0;
-        for (ServiceComponent component : instance.property.getComponents()) {
-            String containerName = instance.containerNames.get(componentIdx);
+        // Validate: only one stateful container is supported
+        long statefulCount = components.stream()
+                .filter(ServiceComponent::isStateful)
+                .count();
+        if (statefulCount > 1) {
+            logger.log(Level.SEVERE,
+                    "{0}:DockerSandboxManager unsupported: {1} stateful containers for {2}",
+                    new Object[]{nodeId, statefulCount, serviceName});
+            return false;
+        }
+
+        // Step 1 — find and start the stateful container first
+        int statefulIdx = -1;
+        for (int i = 0; i < components.size(); i++) {
+            ServiceComponent component = components.get(i);
+            if (!component.isStateful()) continue;
+
+            statefulIdx = i;
+            String containerName = instance.containerNames.get(i);
             String imageName = component.getImageName();
 
-            // Use the explicitly provided mountPath instead of getStateDirectory()
-            String mountSource = null;
-            if (component.isStateful() && stateDirMountTarget != null) {
-                mountSource = mountPath;
-                Shell.runCommand("mkdir -p " + mountSource, true);
-            }
+            Shell.runCommand("mkdir -p " + mountPath, true);
 
             String healthcheckCmd = component.getHealthcheckCommand();
             if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
@@ -160,28 +172,74 @@ public class DockerSandboxManager extends SandboxManager {
                     ? instance.allocatedHttpPort : null;
             Integer exposedPort = component.getExposedPort();
 
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager starting stateful container {1} for {2}",
+                    new Object[]{nodeId, containerName, serviceName});
+
             boolean started = runDockerContainer(
-                    imageName,
-                    containerName,
-                    networkName,
-                    component.getComponentName(),
-                    exposedPort,
-                    publishedPort,
-                    allocatedPort,
-                    mountSource,
-                    stateDirMountTarget,
-                    component.getEnvironmentVariables(),
-                    healthcheckCmd);
+                    imageName, containerName, networkName,
+                    component.getComponentName(), exposedPort, publishedPort,
+                    allocatedPort, mountPath, stateDirMountTarget,
+                    component.getEnvironmentVariables(), healthcheckCmd);
 
             if (!started) {
                 logger.log(Level.SEVERE,
-                        "{0}:DockerSandboxManager failed to start container {1} with mountPath {2}",
-                        new Object[]{nodeId, containerName, mountPath});
+                        "{0}:DockerSandboxManager failed to start stateful container {1} for {2}",
+                        new Object[]{nodeId, containerName, serviceName});
                 return false;
             }
 
-            componentIdx++;
+            // Step 2 — wait for stateful container healthcheck before starting others
+            boolean ready = waitUntilReady(containerName, healthcheckCmd);
+            if (!ready) {
+                logger.log(Level.SEVERE,
+                        "{0}:DockerSandboxManager stateful container {1} failed healthcheck for {2}",
+                        new Object[]{nodeId, containerName, serviceName});
+                return false;
+            }
+
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager stateful container {1} healthy for {2}",
+                    new Object[]{nodeId, containerName, serviceName});
+            break;
         }
+
+        // Step 3 — start non-stateful containers
+        for (int i = 0; i < components.size(); i++) {
+            if (i == statefulIdx) continue; // already started
+
+            ServiceComponent component = components.get(i);
+            String containerName = instance.containerNames.get(i);
+            String imageName = component.getImageName();
+
+            String healthcheckCmd = component.getHealthcheckCommand();
+            if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
+                healthcheckCmd = inferHealthcheckCmd(imageName);
+            }
+
+            Integer publishedPort = component.getEntryPort();
+            Integer allocatedPort = component.isEntryComponent()
+                    ? instance.allocatedHttpPort : null;
+            Integer exposedPort = component.getExposedPort();
+
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager starting non-stateful container {1} for {2}",
+                    new Object[]{nodeId, containerName, serviceName});
+
+            boolean started = runDockerContainer(
+                    imageName, containerName, networkName,
+                    component.getComponentName(), exposedPort, publishedPort,
+                    allocatedPort, null, null,
+                    component.getEnvironmentVariables(), healthcheckCmd);
+
+            if (!started) {
+                logger.log(Level.SEVERE,
+                        "{0}:DockerSandboxManager failed to start non-stateful container {1} for {2}",
+                        new Object[]{nodeId, containerName, serviceName});
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -553,11 +611,19 @@ public class DockerSandboxManager extends SandboxManager {
         }
 
         // Environment variables
-        if (env != null) {
+        // Environment variables
+        if (env != null && !env.isEmpty()) {
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager container={1} env vars: {2}",
+                    new Object[]{nodeId, containerName, env});
             for (Map.Entry<String, String> entry : env.entrySet()) {
                 cmd.add("--env");
                 cmd.add(entry.getKey() + "=" + entry.getValue());
             }
+        } else {
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager container={1} no env vars",
+                    new Object[]{nodeId, containerName});
         }
 
         // Healthcheck flags — only if a command is defined

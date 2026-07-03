@@ -326,7 +326,12 @@ public class PrimaryBackupManager<NodeIDType> {
         // Starts container + recorder via NonDeterministicService.startContainerAsPrimary()
         this.app.restore(serviceName, ServiceProperty.NON_DETERMINISTIC_START_PRIMARY_PREFIX);
 
-        // Wait for all containers to pass healthcheck before capturing diff
+        // TODO: stateful container healthcheck is already done inside startService()
+        //  before non-stateful containers start. This waitUntilReady() call is therefore
+        //  redundant for the stateful container — only the non-stateful containers
+        //  actually need to be waited on here. Refactor waitUntilReady() to skip
+        //  already-healthy containers, or split into stateful/non-stateful variants.
+        //  NOTE: Also consider XdnApp.waitUntilReady
         boolean ready = this.app.waitUntilReady(serviceName);
         if (!ready) {
             logger.log(Level.SEVERE,
