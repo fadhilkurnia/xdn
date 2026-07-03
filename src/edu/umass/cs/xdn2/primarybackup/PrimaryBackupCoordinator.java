@@ -12,6 +12,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
+import edu.umass.cs.xdn2.XdnApp;
 import edu.umass.cs.xdn2.primarybackup.packets.ApplyStateDiffPacket;
 import edu.umass.cs.xdn2.primarybackup.packets.PrimaryBackupPacket;
 import edu.umass.cs.xdn2.primarybackup.packets.PrimaryBackupPacketType;
@@ -54,7 +55,7 @@ public class PrimaryBackupCoordinator<NodeIDType>
      * @param messenger    messenger for inter-node communication.
      * @param paxosManager the Paxos manager to use for consensus.
      */
-    public PrimaryBackupCoordinator(Replicable app,
+    public PrimaryBackupCoordinator(XdnApp app,
                                     NodeIDType myID,
                                     Stringifiable<NodeIDType> unstringer,
                                     Messenger<NodeIDType, JSONObject> messenger,

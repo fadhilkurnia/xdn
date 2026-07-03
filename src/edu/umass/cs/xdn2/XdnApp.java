@@ -325,13 +325,24 @@ public class XdnApp
     }
 
     @Override
-    public boolean applyStatediff(String serviceName, byte[] statediff,
-                                  int primaryEpoch, String primaryID, int stateDiffCount) {
-        if (isInternalGroup(serviceName)) return false;
-        ServiceType type = serviceRegistry.get(serviceName);
-        if (type != ServiceType.NON_DETERMINISTIC) return false;
-        return nonDeterministicService.applyStatediff(
-                serviceName, statediff, primaryEpoch, primaryID, stateDiffCount);
+    public boolean applyStatediff(String serviceName, byte[] statediff, String filename) {
+        return nonDeterministicService.applyStatediff(serviceName, statediff, filename);
+    }
+
+    public boolean writeToPrpDiff(String serviceName, String filename, byte[] encodedState) {
+        return nonDeterministicService.writeToPrpDiff(serviceName, filename, encodedState);
+    }
+
+    public String getPrpDiffFilePath(String serviceName, String filename) {
+        return nonDeterministicService.getPrpDiffFilePath(serviceName, filename);
+    }
+
+    public String getPrpDiffFilePath(String nodeID, String serviceName, String filename) {
+        return nonDeterministicService.getPrpDiffFilePath(nodeID, serviceName, filename);
+    }
+
+    public boolean movePrpDiffToCmtDiff(String serviceName, String filename) {
+        return nonDeterministicService.movePrpDiffToCmtDiff(serviceName, filename);
     }
 
     // -------------------------------------------------------------------------

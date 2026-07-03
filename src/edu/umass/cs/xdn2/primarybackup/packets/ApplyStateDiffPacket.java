@@ -55,16 +55,25 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
     private final String primaryID;
     private final int stateDiffCount;
     private final byte[] stateDiff;
+    private final boolean isLargeDiff;
 
     public ApplyStateDiffPacket(String serviceName, int placement, int primaryEpoch,
                                 String primaryID, int stateDiffCount, byte[] stateDiff) {
         this(Math.abs(UUID.randomUUID().getLeastSignificantBits()),
-                serviceName, placement, primaryEpoch, primaryID, stateDiffCount, stateDiff);
+                serviceName, placement, primaryEpoch, primaryID, stateDiffCount,
+                stateDiff, false);
+    }
+
+    public ApplyStateDiffPacket(String serviceName, int placement, int primaryEpoch,
+                                String primaryID, int stateDiffCount) {
+        this(Math.abs(UUID.randomUUID().getLeastSignificantBits()),
+                serviceName, placement, primaryEpoch, primaryID, stateDiffCount,
+                new byte[0], true);
     }
 
     private ApplyStateDiffPacket(long packetId, String serviceName, int placement,
                                  int primaryEpoch, String primaryID, int stateDiffCount,
-                                 byte[] stateDiff) {
+                                 byte[] stateDiff, boolean isLargeDiff) {
         assert packetId > 0;
         assert serviceName != null;
         assert primaryID != null;
@@ -77,6 +86,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
         this.primaryID = primaryID;
         this.stateDiffCount = stateDiffCount;
         this.stateDiff = stateDiff;
+        this.isLargeDiff = isLargeDiff;
     }
 
     @Override
@@ -117,6 +127,14 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
 
     public byte[] getStateDiff() {
         return this.stateDiff;
+    }
+
+    public boolean isLargeDiff() {
+        return this.isLargeDiff;
+    }
+
+    public String getDiffFilename() {
+        return "p" + primaryEpoch + ":" + primaryID + ":" + stateDiffCount + ".diff";
     }
 
     @Override
@@ -167,6 +185,7 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
             out.write(primaryIDBytes);
 
             out.writeInt(this.stateDiffCount);
+            out.writeBoolean(this.isLargeDiff);
 
             out.writeInt(this.stateDiff.length);
             out.write(this.stateDiff);
@@ -202,11 +221,13 @@ public class ApplyStateDiffPacket extends PrimaryBackupPacket implements Byteabl
 
         int stateDiffCount = buffer.getInt();
 
+        boolean isLargeDiff = buffer.get() != 0;
+
         int stateDiffLen = buffer.getInt();
         byte[] stateDiff = new byte[stateDiffLen];
         buffer.get(stateDiff);
 
         return new ApplyStateDiffPacket(packetId, serviceName, placement,
-                primaryEpoch, primaryID, stateDiffCount, stateDiff);
+                primaryEpoch, primaryID, stateDiffCount, stateDiff, isLargeDiff);
     }
 }

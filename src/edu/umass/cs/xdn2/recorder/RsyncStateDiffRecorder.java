@@ -60,24 +60,6 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
-    // TODO: implement if this recorder needs per-service directory setup
-    return true;
-  }
-
-  @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type) {
-    // location: /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
-    return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
-  }
-
-  @Override
-  public String getSnapshotDir(String serviceName, int epoch) {
-    // TODO: implement if this recorder needs per-service snapshot dir access
-    return "";
-  }
-
-  @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // remove and then re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
@@ -225,8 +207,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, int primaryEpoch,
-                                String primaryID, int stateDiffCount) {
+                                byte[] encodedState, String filename) {
     // TODO: use stateDiffCount for named diff files when these recorders are updated
     // important location:
     // target dir   : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/

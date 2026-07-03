@@ -233,8 +233,7 @@ public class NonDeterministicService {
      * Called by PBM on each backup after Paxos commits an ApplyStateDiffPacket.
      * Applied on a single-threaded executor to preserve ordering.
      */
-    public boolean applyStatediff(String serviceName, byte[] statediff,
-                                  int primaryEpoch, String primaryID, int stateDiffCount) {
+    public boolean applyStatediff(String serviceName, byte[] statediff, String filename) {
         Integer epoch = servicePlacementEpoch.get(serviceName);
         if (epoch == null) {
             logger.log(Level.WARNING,
@@ -242,8 +241,32 @@ public class NonDeterministicService {
                     new Object[]{myNodeId, serviceName});
             return false;
         }
-        return stateDiffRecorder.applyStateDiff(
-                serviceName, epoch, statediff, primaryEpoch, primaryID, stateDiffCount);
+        return stateDiffRecorder.applyStateDiff(serviceName, epoch, statediff, filename);
+    }
+
+    public boolean writeToPrpDiff(String serviceName, String filename, byte[] encodedState) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) return false;
+        return stateDiffRecorder.writeToPrpDiff(serviceName, epoch, filename, encodedState);
+    }
+
+    public String getPrpDiffFilePath(String serviceName, String filename) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) return null;
+        return stateDiffRecorder.getPrpDiffFilePath(serviceName, epoch, filename);
+    }
+
+    public String getPrpDiffFilePath(String nodeID, String serviceName, String filename) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) return null;
+        return stateDiffRecorder.getServiceBaseDir(nodeID, serviceName, epoch)
+                + AbstractStateDiffRecorder.DIR_PROPOSED_STATEDIFF + filename;
+    }
+
+    public boolean movePrpDiffToCmtDiff(String serviceName, String filename) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) return false;
+        return stateDiffRecorder.movePrpDiffToCmtDiff(serviceName, epoch, filename);
     }
 
     // -------------------------------------------------------------------------

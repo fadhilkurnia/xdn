@@ -12,6 +12,5 @@ package edu.umass.cs.xdn2.primarybackup.interfaces;
  */
 public interface BackupableApplication {
     byte[] captureStatediff(String serviceName);
-    boolean applyStatediff(String serviceName, byte[] statediff,
-                           int primaryEpoch, String primaryID, int stateDiffCount);
+    boolean applyStatediff(String serviceName, byte[] statediff, String filename);
 }

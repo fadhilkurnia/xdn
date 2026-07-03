@@ -22,16 +22,12 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   private static final String FUSELOG_BIN_PATH = "/usr/local/bin/fuselog";
   private static final String FUSELOG_APPLY_BIN_PATH = "/usr/local/bin/fuselog-apply";
 
-  private static final String defaultWorkingBasePath = "/tmp/xdn/state/fuselog/";
-
   // /tmp/xdn/state/fuselog/<node-id>/<service-name>/e<epoch>/snp/
   // /tmp/xdn/state/fuselog/<node-id>/<service-name>/e<epoch>/cmtDiff/
   // /tmp/xdn/state/fuselog/<node-id>/<service-name>/e<epoch>/primary/
   // /tmp/xdn/state/fuselog/<node-id>/<service-name>/e<epoch>/backup1/
   // /tmp/xdn/state/fuselog/<node-id>/<service-name>/e<epoch>/backup2/
   // /tmp/xdn/state/fuselog/<node-id>/<service-name>/e<epoch>/fuselog.sock
-
-  private final String workingBasePath;
 
   // mapping service name and epoch into its fuselog filesystem socket
   private final Map<String, Map<Integer, SocketChannel>> serviceFsSocket;
@@ -40,7 +36,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   public FuselogStateDiffRecorder(String nodeID, String basePath) {
     super(nodeID, basePath);
-    this.workingBasePath = basePath;
     logger.log(
             Level.INFO,
             String.format(
@@ -73,47 +68,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
-    String snapshotDir  = getSnapshotDir(serviceName, placementEpoch);
-    String stateDiffDir = getStateDiffDir(serviceName, placementEpoch);
-    String uncomittedStateDiffDir = getUncommitedStateDiffDir(serviceName, placementEpoch);
-
-    int code1 = Shell.runCommand("mkdir -p " + snapshotDir);
-    int code2 = Shell.runCommand("mkdir -p " + stateDiffDir);
-    int code3 = Shell.runCommand("mkdir -p " + uncomittedStateDiffDir);
-
-    if (code1 != 0 || code2 != 0 || code3 != 0) {
-      logger.log(Level.SEVERE, String.format(
-              "%s:%s - failed to create service directories for %s epoch %d",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              serviceName, placementEpoch));
-      return false;
-    }
-    return true;
-  }
-
-  public String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type) {
-    String base = getServiceBaseDir(serviceName, placementEpoch);
-    return switch (type) {
-      case PRIMARY -> base + DIR_PRIMARY;
-      case BACKUP1 -> base + DIR_BACKUP1;
-      case BACKUP2 -> base + DIR_BACKUP2;
-    };
-  }
-
-  public String getSnapshotDir(String serviceName, int epoch) {
-    return getServiceBaseDir(serviceName, epoch) + DIR_SNAPSHOT;
-  }
-
-  private String getStateDiffDir(String serviceName, int epoch) {
-    return getServiceBaseDir(serviceName, epoch) + DIR_STATEDIFF;
-  }
-
-  private String getUncommitedStateDiffDir(String serviceName, int epoch) {
-    return getServiceBaseDir(serviceName, epoch) + DIR_STATEDIFF_UNCOMMITED;
-  }
-
-  @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // preInitialization is only called on the primary — mounts fuselog on primaryLive/.
     // snapshot/ is seeded by the caller (NonDeterministicService) via rsync before this runs.
@@ -126,7 +80,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     int code = Shell.runCommand("mkdir -p " + primaryLiveDir);
     if (code != 0) {
       String errMessage = String.format(
-              "failed to create primaryLive directory %s with exit code %d",
+              "failed to create %s directory with exit code %d",
               primaryLiveDir, code);
       logger.log(Level.SEVERE, String.format("%s:%s - %s",
               this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
@@ -619,20 +573,18 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, int primaryEpoch,
-                                String primaryID, int stateDiffCount) {
+                                byte[] encodedState, String filename) {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
     assert encodedState != null : "encoded stateDiff should not be null";
 
-    String diffFile = getStateDiffDir(serviceName, placementEpoch)
-            + "p" + primaryEpoch + ":" + primaryID + ":" + stateDiffCount + ".diff";
+    String diffFile = getStateDiffDir(serviceName, placementEpoch) + filename;
     String snapshotDir = getSnapshotDir(serviceName, placementEpoch);
 
     logger.log(Level.INFO, String.format(
-            "%s:%s - applying stateDiff count=%d name=%s epoch=%d size=%d bytes",
+            "%s:%s - applying stateDiff service=%s filename=%s size=%d bytes",
             this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-            stateDiffCount, serviceName, placementEpoch, encodedState.length));
+            serviceName, filename, encodedState.length));
 
     // Write diff bytes to stateDiff/<count>.diff
     try (FileOutputStream outputStream = new FileOutputStream(diffFile)) {
@@ -658,15 +610,15 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     int exitCode = Shell.runCommand(cmd, true);
 
     logger.log(Level.WARNING, String.format(
-            "%s:%s - fuselog-apply exit=%d for count=%d service=%s",
+            "%s:%s - fuselog-apply exit=%d for service=%s filename=%s",
             this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-            exitCode, stateDiffCount, serviceName));
+            exitCode, serviceName, filename));
 
     if (exitCode != 0) {
       logger.log(Level.SEVERE, String.format(
-              "%s:%s - failed to apply stateDiff count=%d for %s epoch %d exit=%d",
+              "%s:%s - failed to apply stateDiff for service=%s filename=%s",
               this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              stateDiffCount, serviceName, placementEpoch, exitCode));
+              serviceName, filename));
       return false;
     }
 
@@ -714,10 +666,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   // =========================================================================
   // Helpers
   // =========================================================================
-
-  private String getServiceBaseDir(String serviceName, int epoch) {
-    return String.format("%s%s/%s/e%d/", baseDirectoryPath, nodeID, serviceName, epoch);
-  }
 
   private String getSocketPath(String serviceName, int epoch) {
     return getServiceBaseDir(serviceName, epoch) + "fuselog.sock";

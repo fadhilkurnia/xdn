@@ -138,24 +138,6 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
-    // TODO: implement if this recorder needs per-service directory setup
-    return true;
-  }
-
-  @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch, LiveDirType type) {
-    // location: /tmp/xdn/state/fuserust/<node-id>/mnt/<service-name>/e<epoch>/
-    return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
-  }
-
-  @Override
-  public String getSnapshotDir(String serviceName, int epoch) {
-    // TODO: implement if this recorder needs per-service snapshot dir access
-    return "";
-  }
-
-  @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
     if (this.serviceFsSocket.containsKey(serviceName)
         && this.serviceFsSocket.get(serviceName).containsKey((placementEpoch))) {
@@ -351,8 +333,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, int primaryEpoch,
-                                String primaryID, int stateDiffCount) {
+                                byte[] encodedState, String filename) {
     // TODO: use stateDiffCount for named diff files when these recorders are updated
     // TODO: directly apply stateDiff from the obtained byte[], not via
     //  the fuselog-apply program, which we currently use.

@@ -8,16 +8,19 @@ import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.GenericMessagingTask;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.nio.interfaces.Messenger;
+import edu.umass.cs.nio.interfaces.NodeConfig;
 import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn2.XdnApp;
 import edu.umass.cs.xdn2.primarybackup.packets.*;
+import edu.umass.cs.xdn2.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn2.request.XdnHttpRequest;
 import edu.umass.cs.xdn2.service.ConsistencyModel;
 import edu.umass.cs.xdn2.service.ServiceInstance;
 import edu.umass.cs.xdn2.service.ServiceProperty;
+import edu.umass.cs.xdn2.utils.Shell;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
@@ -129,12 +132,12 @@ public class PrimaryBackupManager<NodeIDType> {
 
     public PrimaryBackupManager(NodeIDType myNodeID,
                                 Stringifiable<NodeIDType> unstringer,
-                                Replicable app,
+                                XdnApp app,
                                 PaxosManager<NodeIDType> paxosManager,
                                 Messenger<NodeIDType, JSONObject> messenger) {
         this.myNodeID = myNodeID;
         this.unstringer = unstringer;
-        this.app = (XdnApp) app;
+        this.app = app;
         this.paxosManager = paxosManager;
         this.messenger = messenger;
     }
@@ -408,8 +411,56 @@ public class PrimaryBackupManager<NodeIDType> {
         int difference = packet.getStateDiffCount() - currentCount;
 
         if (difference == 1) {
-            boolean applied = app.applyStatediff(serviceName, packet.getStateDiff(),
-                    packet.getPrimaryEpoch(), packet.getPrimaryID(), packet.getStateDiffCount());
+            boolean applied;
+            if (!packet.isLargeDiff()) {
+                // Small diff — apply inline bytes
+                applied = app.applyStatediff(serviceName, packet.getStateDiff(),
+                        packet.getDiffFilename());
+            } else {
+                // Large diff — mv prpDiff/ -> cmtDiff/, then apply from file
+                String filename = packet.getDiffFilename();
+                String prpPath = app.getPrpDiffFilePath(serviceName, filename);
+
+                // Wait for file to appear (scp may still be in flight on non-primary nodes)
+                int maxWaitMs = 30_000;
+                int waitedMs = 0;
+                while (!new java.io.File(prpPath).exists() && waitedMs < maxWaitMs) {
+                    sleepQuietly(500);
+                    waitedMs += 500;
+                }
+
+                if (!new java.io.File(prpPath).exists()) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM handleApplyStateDiffPacket large diff file not found " +
+                                    "after {1}ms: {2} for {3}",
+                            new Object[]{myNodeID, maxWaitMs, prpPath, serviceName});
+                    applied = false;
+                } else {
+                    boolean moved = app.movePrpDiffToCmtDiff(serviceName, filename);
+                    if (!moved) {
+                        logger.log(Level.SEVERE,
+                                "{0}:PBM handleApplyStateDiffPacket failed to mv {1} for {2}",
+                                new Object[]{myNodeID, filename, serviceName});
+                        applied = false;
+                    } else {
+                        // Read bytes from cmtDiff/ and apply
+                        String cmtPath = app.getPrpDiffFilePath(serviceName, filename)
+                                .replace(AbstractStateDiffRecorder.DIR_PROPOSED_STATEDIFF,
+                                        AbstractStateDiffRecorder.DIR_COMMITTED_STATEDIFF);
+                        // TODO: expose a method to apply directly from file path rather
+                        //  than reading into memory — avoids double memory allocation for large diffs
+                        byte[] diffBytes;
+                        try {
+                            diffBytes = java.nio.file.Files.readAllBytes(
+                                    java.nio.file.Path.of(cmtPath));
+                        } catch (java.io.IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                        applied = app.applyStatediff(serviceName, diffBytes, filename);
+                    }
+                }
+            }
+
             if (!applied) {
                 logger.log(Level.WARNING,
                         "{0}:PBM handleApplyStateDiffPacket applyStatediff failed for {1} count={2}",
@@ -571,14 +622,43 @@ public class PrimaryBackupManager<NodeIDType> {
             int nextCount = stateDiffCount.getOrDefault(serviceName, 0) + 1;
             // Do NOT update stateDiffCount here — let handleApplyStateDiffPacket
             // update it after Paxos commits, uniformly on all nodes including primary.
+            int pEpoch = currPlacementEpoch.get(serviceName);
+            int placement = currPlacement.get(serviceName);
 
-            ApplyStateDiffPacket applyPacket = new ApplyStateDiffPacket(
-                    serviceName,
-                    currPlacement.get(serviceName),
-                    currPlacementEpoch.get(serviceName),
-                    myNodeID.toString(),
-                    nextCount,
-                    diff);
+            ApplyStateDiffPacket applyPacket;
+
+            if (diff.length <= 500 * 1024) {
+                // Small diff — propose inline
+                applyPacket = new ApplyStateDiffPacket(
+                        serviceName, placement, pEpoch,
+                        myNodeID.toString(), nextCount, diff);
+            } else {
+                // Large diff — write to prpDiff/, scp to backups, then propose
+                String filename = "p" + pEpoch + ":" + myNodeID.toString() + ":" + nextCount + ".diff";
+                boolean written = app.writeToPrpDiff(serviceName, filename, diff);
+                if (!written) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM handleClientRequest failed to write large diff for {1}",
+                            new Object[]{myNodeID, serviceName});
+                    callback.executed(request, false);
+                    return false;
+                }
+
+                String localPath = app.getPrpDiffFilePath(serviceName, filename);
+                boolean scpOk = scpToBackups(serviceName, localPath, filename);
+
+                if (!scpOk) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM handleClientRequest scp failed for large diff {1} service={2}",
+                            new Object[]{myNodeID, filename, serviceName});
+                    callback.executed(request, false);
+                    return false;
+                }
+
+                applyPacket = new ApplyStateDiffPacket(
+                        serviceName, placement, pEpoch,
+                        myNodeID.toString(), nextCount);
+            }
 
             logger.log(Level.FINE, "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
                     new Object[]{myNodeID, serviceName, nextCount});
@@ -767,6 +847,70 @@ public class PrimaryBackupManager<NodeIDType> {
         }
     }
 
+private boolean scpToBackups(String serviceName, String localPath, String filename) {
+    Set<NodeIDType> nodes = replicaGroups.get(serviceName);
+    if (nodes == null) return true;
+
+    String sshKey = edu.umass.cs.utils.Config.getGlobalString(
+            edu.umass.cs.gigapaxos.PaxosConfig.PC.SSH_KEY_PATH);
+
+    // Cast unstringer to NodeConfig to get IP addresses
+    @SuppressWarnings("unchecked")
+    NodeConfig<NodeIDType> nodeConfig = (NodeConfig<NodeIDType>) unstringer;
+
+    // Run scp to all backup nodes in parallel
+    java.util.List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
+    java.util.concurrent.ExecutorService scpPool =
+            java.util.concurrent.Executors.newFixedThreadPool(nodes.size());
+
+    for (NodeIDType node : nodes) {
+        if (node.equals(myNodeID)) continue; // skip self
+
+        java.net.InetAddress addr = nodeConfig.getNodeAddress(node);
+        String ip = addr.getHostAddress();
+        String destPath = app.getPrpDiffFilePath(node.toString(), serviceName, filename);
+        String destDir = destPath.substring(0, destPath.lastIndexOf('/') + 1);
+
+        futures.add(scpPool.submit(() -> {
+            String cmd;
+            if (ip.equals("127.0.0.1") || ip.equals("localhost")) {
+                // Same machine — use cp
+                Shell.runCommand("mkdir -p " + destDir);
+                cmd = String.format("cp %s %s", localPath, destPath);
+            } else {
+                // Remote machine — use scp
+                String scpOpts = (sshKey != null && !sshKey.isBlank())
+                        ? "-i " + sshKey + " -o StrictHostKeyChecking=no"
+                        : "-o StrictHostKeyChecking=no";
+                cmd = String.format("scp %s %s %s:%s", scpOpts, localPath, ip, destPath);
+            }
+            logger.log(Level.WARNING,
+                    "{0}:PBM scpToBackups cmd={1}",
+                    new Object[]{myNodeID, cmd});
+            int code = Shell.runCommand(cmd);
+            if (code != 0) {
+                logger.log(Level.SEVERE,
+                        "{0}:PBM scpToBackups failed exit={1} cmd={2}",
+                        new Object[]{myNodeID, code, cmd});
+            }
+            return code == 0;
+        }));
+    }
+
+    scpPool.shutdown();
+    boolean allOk = true;
+    for (java.util.concurrent.Future<Boolean> f : futures) {
+        try {
+            if (!f.get()) allOk = false;
+        } catch (Exception e) {
+            logger.log(Level.SEVERE,
+                    "{0}:PBM scpToBackups exception: {1}",
+                    new Object[]{myNodeID, e.getMessage()});
+            allOk = false;
+        }
+    }
+    return allOk;
+}
 
     // =========================================================================
     // Public Methods
