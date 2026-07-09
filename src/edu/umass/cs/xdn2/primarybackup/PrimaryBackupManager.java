@@ -82,6 +82,8 @@ public class PrimaryBackupManager<NodeIDType> {
     private final Messenger<NodeIDType, JSONObject> messenger;
     private final ConcurrentHashMap<Long, RequestAndCallback> forwardedRequests =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AbstractStateDiffRecorder.LiveDirType> currentLiveDirType =
+            new ConcurrentHashMap<>();
 
     private record RequestAndCallback(Request request, ExecutedCallback callback) {}
 
@@ -302,6 +304,14 @@ public class PrimaryBackupManager<NodeIDType> {
         }
 
         if (isNewRoleTheSame) {
+            // Even if role is the same, a backup with eventual consistency
+            // needs to start its container if it hasn't done so yet
+            if (!isNewPrimary
+                    && isEventualConsistency(serviceName)
+                    && currentLiveDirType.get(serviceName) == null
+                    && backupPollerStopFlags.get(serviceName) == null) {
+                initializeBackupContainer(serviceName);
+            }
             return true;
         }
 
@@ -310,7 +320,6 @@ public class PrimaryBackupManager<NodeIDType> {
         if (isNewPrimary) {
             currentRole.put(serviceName, Role.PRIMARY);
             initializePrimaryContainer(serviceName); // Blocking
-            return true;
         } else if (isEventualConsistency(serviceName)) {
             initializeBackupContainer(serviceName); // Runs in background
         }
@@ -352,22 +361,41 @@ public class PrimaryBackupManager<NodeIDType> {
                 new Object[]{myNodeID, diff == null ? "null" : diff.length, serviceName});
         if (diff == null) diff = new byte[0];
 
-        ApplyStateDiffPacket applyPacket = new ApplyStateDiffPacket(
+        logger.log(Level.WARNING,
+                "{0}:PBM initializePrimaryContainer proposing ApplyStateDiff count={1} size={2} for {3}",
+                new Object[]{myNodeID, bootstrapCount, diff.length, serviceName});
+        proposeStateDiff(
                 serviceName,
                 currPlacement.get(serviceName),
                 currPlacementEpoch.get(serviceName),
-                myNodeID.toString(),
                 bootstrapCount,
-                diff);
+                diff,
+                (executedRequest, handled) -> {
+                    logger.log(Level.WARNING,
+                            "{0}:PBM initializePrimaryContainer propose callback handled={1} for {2}",
+                            new Object[]{myNodeID, handled, serviceName});
 
-        logger.log(Level.WARNING,
-                "{0}:PBM initializePrimaryContainer proposing ApplyStateDiff count={1} size={2} for {3}",
-                new Object[]{myNodeID, stateDiffCount.get(serviceName), diff.length, serviceName});
-        paxosManager.propose(serviceName, applyPacket, (executedRequest, handled) -> {
-            logger.log(Level.WARNING,
-                    "{0}:PBM initializePrimaryContainer propose callback handled={1} for {2}",
-                    new Object[]{myNodeID, handled, serviceName});
-        });
+                    // Flush any remaining filesystem operations (e.g. RocksDB renames)
+                    // that happened after the bootstrap diff was captured.
+                    // This ensures snapshot/ on all nodes has a complete, openable DB
+                    // before the backup container starts its first rsync.
+                    int flushCount = stateDiffCount.getOrDefault(serviceName, 0) + 1;
+                    byte[] flushDiff = app.captureStatediff(serviceName);
+                    if (flushDiff == null) flushDiff = new byte[0];
+                    if (flushDiff.length > 0) {
+                        logger.log(Level.WARNING,
+                                "{0}:PBM initializePrimaryContainer flush diff size={1} for {2}",
+                                new Object[]{myNodeID, flushDiff.length, serviceName});
+                        proposeStateDiff(serviceName,
+                                currPlacement.get(serviceName),
+                                currPlacementEpoch.get(serviceName),
+                                flushCount,
+                                flushDiff,
+                                (r, h) -> logger.log(Level.WARNING,
+                                        "{0}:PBM initializePrimaryContainer flush callback handled={1} for {2}",
+                                        new Object[]{myNodeID, h, serviceName}));
+                    }
+                });
     }
 
     // =========================================================================
@@ -519,42 +547,80 @@ public class PrimaryBackupManager<NodeIDType> {
         backupPollerStopFlags.put(serviceName, stopFlag);
 
         backgroundThreadPool.submit(() -> {
-            String currentLivePrefix = null; // null, non-deter:start-backup1, non-deter:start-backup2
+            AbstractStateDiffRecorder.LiveDirType currentLiveType = null;
             long lastSwitchTimeMs = 0;
 
             while (!stopFlag.get()) {
-                long now = System.currentTimeMillis();
-                if (lastSwitchTimeMs != 0 && now - lastSwitchTimeMs < 30_000) {
-                    // TODO: busy-wait acknowledged as acceptable per design
-                    //  discussion ("sleep is fine, ideally find a way to poll
-                    //  that doesn't take much compute power") -- using a
-                    //  short sleep here rather than a true busy-wait.
+                // Wait until both bootstrap diff and flush diff have been applied
+                // to snapshot/ before rsyncing. Ensures complete RocksDB state
+                // (CURRENT, MANIFEST, etc.) is present before backup container starts.
+                if (stateDiffCount.getOrDefault(serviceName, 0) < 2) {
                     sleepQuietly(1000);
                     continue;
                 }
 
-                lastSwitchTimeMs = now;
+                long now = System.currentTimeMillis();
+                if (lastSwitchTimeMs != 0 && now - lastSwitchTimeMs < 30_000) {
+                    sleepQuietly(1000);
+                    continue;
+                }
+
                 int stateDiffCountStamp = stateDiffCount.getOrDefault(serviceName, 0);
 
-                String nextLivePrefix = null;
-                if (currentLivePrefix == null || "backupLive2/".equals(currentLivePrefix)) {
-                    nextLivePrefix = ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX;
-                    // TODO: rsync "snapshot/" -> "backupLive1/"
-                } else {
-                    nextLivePrefix = ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
-                    // TODO: rsync "snapshot/" -> "backupLive2/"
+                // Step 1 - decide next live type and prefix
+                AbstractStateDiffRecorder.LiveDirType nextLiveType =
+                        (currentLiveType == null ||
+                                currentLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP2)
+                                ? AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                                : AbstractStateDiffRecorder.LiveDirType.BACKUP2;
+
+                String nextLivePrefix = nextLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                        ? ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX
+                        : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
+
+                // Step 2 - start new backup container (rsync + docker run)
+                logger.log(Level.WARNING,
+                        "{0}:PBM initializeBackupContainer starting {1} for {2}",
+                        new Object[]{myNodeID, nextLiveType, serviceName});
+                boolean started = this.app.restore(serviceName, nextLivePrefix);
+                if (!started) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM initializeBackupContainer failed to start {1} for {2}",
+                            new Object[]{myNodeID, nextLiveType, serviceName});
+                    sleepQuietly(5000);
+                    continue;
                 }
-                this.app.restore(serviceName, nextLivePrefix);
 
-                // TODO: poll new container status until READY
-                // while (!"READY".equals(...)) { sleepQuietly(1000); }
+                // Step 3 - wait for new container to be healthy
+                boolean ready = this.app.waitUntilReady(serviceName);
+                if (!ready) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM initializeBackupContainer container not ready {1} for {2}",
+                            new Object[]{myNodeID, nextLiveType, serviceName});
+                    sleepQuietly(5000);
+                    continue;
+                }
 
+                // Step 4 - reroute: update currentLiveDirType BEFORE switchStateDiffCount
+                // so handleClientRequest routes to new container only after it's healthy
+                currentLiveDirType.put(serviceName, nextLiveType);
                 switchStateDiffCount.put(serviceName, stateDiffCountStamp);
-                // TODO: reroute http request to new container
 
-                // TODO: stop old container at currentLivePrefix, clear its directory
+                logger.log(Level.WARNING,
+                        "{0}:PBM initializeBackupContainer switched to {1} for {2} at count={3}",
+                        new Object[]{myNodeID, nextLiveType, serviceName, stateDiffCountStamp});
 
-                currentLivePrefix = nextLivePrefix;
+                // Step 5 - stop old container (skip on first iteration)
+                if (currentLiveType != null) {
+                    logger.log(Level.WARNING,
+                            "{0}:PBM initializeBackupContainer stopping old {1} for {2}",
+                            new Object[]{myNodeID, currentLiveType, serviceName});
+                    this.app.stopBackupContainer(serviceName, currentLiveType);
+                }
+
+                // Step 6 - update tracking
+                currentLiveType = nextLiveType;
+                lastSwitchTimeMs = now;
             }
         });
     }
@@ -629,51 +695,19 @@ public class PrimaryBackupManager<NodeIDType> {
             // update it after Paxos commits, uniformly on all nodes including primary.
             int pEpoch = currPlacementEpoch.get(serviceName);
             int placement = currPlacement.get(serviceName);
-
-            ApplyStateDiffPacket applyPacket;
-
-            if (diff.length <= 500 * 1024) {
-                // Small diff — propose inline
-                applyPacket = new ApplyStateDiffPacket(
-                        serviceName, placement, pEpoch,
-                        myNodeID.toString(), nextCount, diff);
-            } else {
-                // Large diff — write to prpDiff/, scp to backups, then propose
-                String filename = "p" + pEpoch + ":" + myNodeID.toString() + ":" + nextCount + ".diff";
-                boolean written = app.writeToPrpDiff(serviceName, filename, diff);
-                if (!written) {
-                    logger.log(Level.SEVERE,
-                            "{0}:PBM handleClientRequest failed to write large diff for {1}",
-                            new Object[]{myNodeID, serviceName});
-                    callback.executed(request, false);
-                    return false;
-                }
-
-                String localPath = app.getPrpDiffFilePath(serviceName, filename);
-                boolean scpOk = scpToBackups(serviceName, localPath, filename);
-
-                if (!scpOk) {
-                    logger.log(Level.SEVERE,
-                            "{0}:PBM handleClientRequest scp failed for large diff {1} service={2}",
-                            new Object[]{myNodeID, filename, serviceName});
-                    callback.executed(request, false);
-                    return false;
-                }
-
-                applyPacket = new ApplyStateDiffPacket(
-                        serviceName, placement, pEpoch,
-                        myNodeID.toString(), nextCount);
-            }
-
-            logger.log(Level.FINE, "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
+            logger.log(Level.FINE,
+                    "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
                     new Object[]{myNodeID, serviceName, nextCount});
 
-            paxosManager.propose(serviceName, applyPacket, (executedRequest, handled) -> {
-                logger.log(Level.FINE, "{0}:PBM handleClientRequest PRIMARY propose callback fired handled={2} for {1}",
-                        new Object[]{myNodeID, serviceName, handled});
-                callback.executed(request, handled);
-            });
+            proposeStateDiff(serviceName, placement, pEpoch, nextCount, diff,
+                    (executedRequest, handled) -> {
+                        logger.log(Level.FINE,
+                                "{0}:PBM handleClientRequest PRIMARY propose callback handled={2} for {1}",
+                                new Object[]{myNodeID, serviceName, handled});
+                        callback.executed(request, handled);
+                    });
             return true;
+
         } else if (role == Role.BACKUP) {
             if (!isEventualConsistency(serviceName) || isWriteRequest) {
                 return forwardRequestToPrimary(serviceName, request, callback);
@@ -682,13 +716,35 @@ public class PrimaryBackupManager<NodeIDType> {
             Integer switchCount = switchStateDiffCount.get(serviceName);
             if (switchCount == null
                     || (clientStateDiffCount != null && clientStateDiffCount > switchCount)) {
-                // TODO: forward request to primary
+                return forwardRequestToPrimary(serviceName, request, callback);
+            }
+
+            AbstractStateDiffRecorder.LiveDirType liveType = currentLiveDirType.get(serviceName);
+            if (liveType == null) {
+                if (request instanceof XdnHttpRequest xdnHttpRequest) {
+                    ByteBuf content = Unpooled.copiedBuffer(
+                            "Service unavailable: backup container not yet ready".getBytes());
+                    FullHttpResponse response = new DefaultFullHttpResponse(
+                            HttpVersion.HTTP_1_1,
+                            HttpResponseStatus.SERVICE_UNAVAILABLE,
+                            content);
+                    response.headers().setInt(
+                            HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+                    xdnHttpRequest.setHttpResponse(response);
+                    callback.executed(xdnHttpRequest, true);
+                }
                 return true;
             }
 
-            // TODO: execute request locally against the live backup container,
-            //  return response to user
-            return true;
+            Integer backupPort = app.getActiveBackupPort(serviceName, liveType);
+            if (backupPort == null) {
+                logger.log(Level.SEVERE,
+                        "{0}:PBM handleClientRequest backup port not found for {1} type={2}",
+                        new Object[]{myNodeID, serviceName, liveType});
+                return forwardRequestToPrimary(serviceName, request, callback);
+            }
+
+            return app.forwardToBackupContainer(serviceName, backupPort, request, callback);
         }
 
         throw new IllegalStateException(
@@ -722,6 +778,45 @@ public class PrimaryBackupManager<NodeIDType> {
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    private void proposeStateDiff(String serviceName, int placement, int pEpoch,
+                                  int count, byte[] diff, ExecutedCallback callback) {
+        String filename = "p" + pEpoch + ":" + myNodeID.toString() + ":" + count + ".diff";
+        ApplyStateDiffPacket applyPacket;
+
+        if (diff.length <= 500 * 1024) {
+            // Small diff — propose inline
+            applyPacket = new ApplyStateDiffPacket(
+                    serviceName, placement, pEpoch, myNodeID.toString(), count, diff);
+        } else {
+            // Large diff — write to prpDiff/, scp to backups, propose with isLargeDiff=true
+            boolean written = app.writeToPrpDiff(serviceName, filename, diff);
+            if (!written) {
+                logger.log(Level.SEVERE,
+                        "{0}:PBM proposeStateDiff failed to write large diff for {1}",
+                        new Object[]{myNodeID, serviceName});
+                if (callback != null) callback.executed(null, false);
+                return;
+            }
+
+            String localPath = app.getPrpDiffFilePath(serviceName, filename);
+            boolean scpOk = scpToBackups(serviceName, localPath, filename);
+            if (!scpOk) {
+                logger.log(Level.SEVERE,
+                        "{0}:PBM proposeStateDiff scp failed for {1} file={2}",
+                        new Object[]{myNodeID, serviceName, filename});
+                if (callback != null) callback.executed(null, false);
+                return;
+            }
+
+            applyPacket = new ApplyStateDiffPacket(
+                    serviceName, placement, pEpoch, myNodeID.toString(), count);
+        }
+
+        paxosManager.propose(serviceName, applyPacket, (executedRequest, handled) -> {
+            if (callback != null) callback.executed(executedRequest, handled);
+        });
+    }
 
     private boolean isEventualConsistency(String serviceName) {
         ServiceInstance instance = this.app.getServiceInstance(serviceName);

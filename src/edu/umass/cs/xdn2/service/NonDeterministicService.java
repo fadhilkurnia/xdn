@@ -1,5 +1,6 @@
 package edu.umass.cs.xdn2.service;
 
+import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.xdn2.request.XdnHttpRequest;
@@ -71,6 +72,10 @@ public class NonDeterministicService {
 
     // HTTP forwarder: sends requests to the local container
     private final XdnHttpForwarderClient httpForwarderClient;
+
+    // Backup ports for forwarder client switch
+    private final ConcurrentHashMap<String, Integer> backup1AllocatedPort = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Integer> backup2AllocatedPort = new ConcurrentHashMap<>();
 
     // State diff recorder: captures and applies filesystem changes
     // Initialized lazily per service via SandboxManager
@@ -358,6 +363,15 @@ public class NonDeterministicService {
         return false; // placeholder — XRC queries PBRC directly
     }
 
+    public Integer getActiveBackupPort(String name,
+                                       AbstractStateDiffRecorder.LiveDirType backup) {
+        if (backup == AbstractStateDiffRecorder.LiveDirType.BACKUP1) {
+            return backup1AllocatedPort.get(name);
+        } else {
+            return backup2AllocatedPort.get(name);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Private: service lifecycle
     // -------------------------------------------------------------------------
@@ -443,10 +457,14 @@ public class NonDeterministicService {
     /**
      * Starts the recorder apply-side on a backup node.
      * Called from restore("non-deter:start-backup1:") after PBM sends InitBackupPacket.
-     * No container is started — backups only apply state diffs.
+     * No container is started - backups only apply state diffs.
      */
     private boolean startContainerAsBackup(String name,
                                            AbstractStateDiffRecorder.LiveDirType backup) {
+        logger.log(Level.WARNING,
+                "{0}:NonDeterministicService.startContainerAsBackup({1}, {2})",
+                new Object[]{myNodeId, name, backup});
+
         ServiceInstance instance = serviceInstances.get(name);
         if (instance == null) {
             logger.log(Level.SEVERE,
@@ -473,14 +491,60 @@ public class NonDeterministicService {
         }
 
         // Step 2: Start the container with backupLiveDir as the volume mount.
-        // No recorder setup — backups receive diffs via applyStateDiff() → fuselog-apply.
+        // No recorder setup - backups receive diffs via applyStateDiff() → fuselog-apply.
+        int allocatedPort = sandboxManager.allocatePort();
+        if (backup == AbstractStateDiffRecorder.LiveDirType.BACKUP1) {
+            backup1AllocatedPort.put(name, allocatedPort);
+        } else {
+            backup2AllocatedPort.put(name, allocatedPort);
+        }
+
         sandboxManager.createNetwork(name);
-        boolean started = sandboxManager.startService(instance, epoch, backupLiveDir);
+
+        // Build backup-specific container names to avoid conflict between backup1 and backup2
+        String suffix = backup == AbstractStateDiffRecorder.LiveDirType.BACKUP1 ? "-b1" : "-b2";
+        List<String> backupContainerNames = buildContainerNames(name, epoch,
+                instance.property, suffix);
+        ServiceInstance backupInstance = new ServiceInstance(
+                instance.property, name,
+                String.format("net::%s:%s", myNodeId, name),
+                allocatedPort, backupContainerNames);
+        boolean started = sandboxManager.startService(backupInstance, epoch, backupLiveDir, allocatedPort);
         if (!started) return false;
 
         logger.log(Level.INFO,
                 "{0}:NonDeterministicService container started as {2} backup for {1}",
                 new Object[]{myNodeId, name, backup});
+        return true;
+    }
+
+    public boolean stopContainerAsBackup(String name,
+                                         AbstractStateDiffRecorder.LiveDirType backup) {
+        ServiceInstance instance = serviceInstances.get(name);
+        if (instance == null) return false;
+
+        Integer epoch = servicePlacementEpoch.get(name);
+        if (epoch == null) return false;
+
+        // Stop each container by name
+        String suffix = backup == AbstractStateDiffRecorder.LiveDirType.BACKUP1 ? "-b1" : "-b2";
+        List<String> backupContainerNames = buildContainerNames(name, epoch,
+                instance.property, suffix);
+        for (String containerName : backupContainerNames) {
+            sandboxManager.stopContainer(containerName);
+        }
+
+        // Clear the backup live directory
+        String backupLiveDir = stateDiffRecorder.getTargetDirectory(name, epoch, backup);
+        Shell.runCommand("rm -rf " + backupLiveDir);
+
+        // Clear stored port
+        if (backup == AbstractStateDiffRecorder.LiveDirType.BACKUP1) {
+            backup1AllocatedPort.remove(name);
+        } else {
+            backup2AllocatedPort.remove(name);
+        }
+
         return true;
     }
 
@@ -654,11 +718,42 @@ public class NonDeterministicService {
 
     private List<String> buildContainerNames(String serviceName, int epoch,
                                              ServiceProperty property) {
+        return buildContainerNames(serviceName, epoch, property, "");
+    }
+
+    private List<String> buildContainerNames(String serviceName, int epoch,
+                                             ServiceProperty property, String suffix) {
         List<String> names = new java.util.ArrayList<>();
         for (int i = 0; i < property.getComponents().size(); i++) {
-            names.add(String.format("c%d.e%d.%s.%s.xdn.io",
-                    i, epoch, serviceName, myNodeId));
+            names.add(String.format("c%d.e%d.%s.%s%s.xdn.io",
+                    i, epoch, serviceName, myNodeId, suffix));
         }
         return names;
+    }
+
+    // -------------------------------------------------------------------------
+    // Public: request forwarding
+    // -------------------------------------------------------------------------
+    public boolean forwardToBackupContainer(String name, int port,
+                                            XdnHttpRequest xdnRequest,
+                                            ExecutedCallback callback) {
+        try {
+            FullHttpResponse response = httpForwarderClient.execute(
+                    "127.0.0.1", port, copyHttpRequest(xdnRequest));
+            if (response == null) {
+                logger.log(Level.WARNING,
+                        "{0}:NonDeterministicService forwardToBackupContainer null response for {1}",
+                        new Object[]{myNodeId, name});
+                return false;
+            }
+            xdnRequest.setHttpResponse(response);
+            callback.executed(xdnRequest, true);
+            return true;
+        } catch (Exception e) {
+            logger.log(Level.WARNING,
+                    "{0}:NonDeterministicService forwardToBackupContainer failed for {1}: {2}",
+                    new Object[]{myNodeId, name, e.getMessage()});
+            return false;
+        }
     }
 }

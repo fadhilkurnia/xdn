@@ -156,9 +156,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     return true;
   }
 
-  // Maximum plausible state diff for a single HTTP request (100 MB).
+  // Maximum plausible state diff for a single HTTP request (500 MB).
   // Values above this indicate protocol desynchronization (garbage size header).
-  private static final long MAX_STATEDIFF_BYTES = 100L * 1024 * 1024;
+  private static final long MAX_STATEDIFF_BYTES = 500L * 1024 * 1024;
 
   private static String toHexString(byte[] bytes) {
     StringBuilder sb = new StringBuilder();
@@ -468,90 +468,28 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       return null;
     }
 
-    // Read all the stateDiff based on the obtained size.
-    // For small diffs (common case), use fast blocking reads on the Unix domain socket
-    // to avoid the overhead of Selector.open() + configureBlocking per call.
-    // For large diffs (>1MB), use a Selector-based read with timeout to detect fuselog stalls.
-    final long LARGE_DIFF_THRESHOLD = 1024 * 1024; // 1 MB
-    final long PAYLOAD_READ_TIMEOUT_MS = 5000;
+    // Always use blocking reads — the socket is a local Unix domain socket so
+    // network stalls are not a concern. The Selector+timeout approach caused
+    // desync for large diffs (e.g. 200MB MySQL state) where fuselog legitimately
+    // takes longer than the timeout to write all payload bytes.
+    // TODO: if fuselog stall detection is needed in future, implement it via a
+    //  separate watchdog thread rather than a read timeout.
     ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
     numRead = 0;
-    if (stateDiffSize <= LARGE_DIFF_THRESHOLD) {
-      // Fast path: blocking reads — no Selector overhead.
-      try {
-        while (numRead < stateDiffSize) {
-          int n = socketChannel.read(stateDiffBuffer);
-          if (n < 0) {
-            logger.log(
-                    Level.SEVERE,
-                    String.format(
-                            "%s:%s - socket closed after reading %d/%d bytes",
-                            this.nodeID,
-                            FuselogStateDiffRecorder.class.getSimpleName(),
-                            numRead,
-                            stateDiffSize));
-            return null;
-          }
-          numRead += n;
+    try {
+      while (numRead < stateDiffSize) {
+        int n = socketChannel.read(stateDiffBuffer);
+        if (n < 0) {
+          logger.log(Level.SEVERE, String.format(
+                  "%s:%s - socket closed after reading %d/%d bytes",
+                  this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+                  numRead, stateDiffSize));
+          return null;
         }
-      } catch (IOException e) {
-        throw new RuntimeException(e);
+        numRead += n;
       }
-    } else {
-      // Large diff path: Selector with timeout to detect fuselog stalls.
-      try {
-        socketChannel.configureBlocking(false);
-        try (Selector selector = Selector.open()) {
-          SelectionKey key = socketChannel.register(selector, SelectionKey.OP_READ);
-          while (numRead < stateDiffSize) {
-            int ready = selector.select(PAYLOAD_READ_TIMEOUT_MS);
-            if (ready == 0) {
-              logger.log(
-                      Level.SEVERE,
-                      String.format(
-                              "%s:%s - timeout after %dms reading payload; received %d/%d bytes."
-                                      + " Reconnecting socket to restore protocol sync"
-                                      + " (fuselog may be stuck in write_all).",
-                              this.nodeID,
-                              FuselogStateDiffRecorder.class.getSimpleName(),
-                              PAYLOAD_READ_TIMEOUT_MS,
-                              numRead,
-                              stateDiffSize));
-              key.cancel();
-              reconnectSocket(serviceName, placementEpoch);
-              return null;
-            }
-            selector.selectedKeys().clear();
-            int n = socketChannel.read(stateDiffBuffer);
-            if (n < 0) {
-              logger.log(
-                      Level.SEVERE,
-                      String.format(
-                              "%s:%s - socket closed after reading %d/%d bytes",
-                              this.nodeID,
-                              FuselogStateDiffRecorder.class.getSimpleName(),
-                              numRead,
-                              stateDiffSize));
-              key.cancel();
-              return null;
-            }
-            numRead += n;
-          }
-          key.cancel();
-        }
-      } catch (IOException e) {
-        throw new RuntimeException(e);
-      } finally {
-        try {
-          socketChannel.configureBlocking(true);
-        } catch (IOException e) {
-          logger.log(
-                  Level.WARNING,
-                  String.format(
-                          "%s:%s - failed to restore blocking mode: %s",
-                          this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), e.getMessage()));
-        }
-      }
+    } catch (IOException e) {
+      throw new RuntimeException(e);
     }
 
     byte[] stateDiff = stateDiffBuffer.array();

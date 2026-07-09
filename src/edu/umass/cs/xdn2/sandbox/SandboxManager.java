@@ -99,6 +99,7 @@ public abstract class SandboxManager {
      * @return true iff all containers started successfully
      */
     public abstract boolean startService(ServiceInstance instance, int epoch, String mountPath);
+    public abstract boolean startService(ServiceInstance instance, int epoch, String mountPath, int allocatedPort);
 
     /**
      * Stops all containers for the given service instance without deleting
@@ -108,6 +109,15 @@ public abstract class SandboxManager {
      * @return true iff all containers stopped successfully
      */
     public abstract boolean stopService(ServiceInstance instance);
+
+    /**
+     * Stops and removes a single container by name without affecting
+     * other containers in the same service.
+     *
+     * @param containerName name of the container to stop and remove
+     * @return true iff the container was successfully stopped and removed
+     */
+    public abstract boolean stopContainer(String containerName);
 
     /**
      * Stops and removes all containers for the given service instance,

@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn2;
 
 import edu.umass.cs.gigapaxos.PaxosConfig;
+import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
@@ -15,9 +16,7 @@ import edu.umass.cs.xdn2.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn2.request.XdnRequestType;
 import edu.umass.cs.xdn2.request.XdnStopRequest;
 import edu.umass.cs.xdn2.sandbox.SandboxManager;
-import edu.umass.cs.xdn2.service.DeterministicService;
-import edu.umass.cs.xdn2.service.NonDeterministicService;
-import edu.umass.cs.xdn2.service.ServiceProperty;
+import edu.umass.cs.xdn2.service.*;
 import edu.umass.cs.xdn2.utils.Shell;
 
 import java.util.*;
@@ -406,21 +405,26 @@ public class XdnApp
         return statuses;
     }
 
-    /**
-     * Waits until all containers for the given service are healthy.
-     * Iterates containerNames and components in order (they correspond 1-to-1).
-     *
-     * TODO: add an overload to allow waiting for a specific container only.
-     */
     public boolean waitUntilReady(String serviceName) {
+        return waitUntilReady(serviceName, null);
+    }
+
+    // TODO: remove redundant healthcheck on stateful container — it is already
+    //  waited on inside startService(). This overload is a step toward only
+    //  waiting on non-stateful containers here.
+    // TODO: add an overload to allow waiting for a specific container only.
+    // Waits until all containers for the given service are healthy.
+    // Iterates containerNames and components in order (they correspond 1-to-1).
+    public boolean waitUntilReady(String serviceName, Set<String> containerNames) {
         var instance = getServiceInstance(serviceName);
         if (instance == null) return false;
 
-        List<edu.umass.cs.xdn2.service.ServiceComponent> components =
+        List<ServiceComponent> components =
                 instance.property.getComponents();
 
         for (int i = 0; i < instance.containerNames.size(); i++) {
             String containerName = instance.containerNames.get(i);
+            if (containerNames != null && !containerNames.contains(containerName)) continue;
             String healthcheckCmd = (i < components.size())
                     ? components.get(i).getHealthcheckCommand()
                     : null;
@@ -471,7 +475,7 @@ public class XdnApp
         };
     }
 
-    public edu.umass.cs.xdn2.service.ServiceInstance getServiceInstance(
+    public ServiceInstance getServiceInstance(
             String serviceName) {
         ServiceType type = serviceRegistry.get(serviceName);
         if (type == null) return null;
@@ -481,6 +485,28 @@ public class XdnApp
             case NON_DETERMINISTIC ->
                     nonDeterministicService.getServiceInstance(serviceName);
         };
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Public helpers for Non-Deterministic Services
+    // -------------------------------------------------------------------------
+
+    public boolean stopBackupContainer(String serviceName,
+                                       AbstractStateDiffRecorder.LiveDirType backup) {
+        return nonDeterministicService.stopContainerAsBackup(serviceName, backup);
+    }
+
+    public Integer getActiveBackupPort(String serviceName,
+                                       AbstractStateDiffRecorder.LiveDirType backup) {
+        return nonDeterministicService.getActiveBackupPort(serviceName, backup);
+    }
+
+    public boolean forwardToBackupContainer(String serviceName, int port,
+                                            Request request, ExecutedCallback callback) {
+        if (!(request instanceof XdnHttpRequest xdnHttpRequest)) return false;
+        return nonDeterministicService.forwardToBackupContainer(
+                serviceName, port, xdnHttpRequest, callback);
     }
 
     // -------------------------------------------------------------------------

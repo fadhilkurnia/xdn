@@ -119,11 +119,6 @@ public class DockerSandboxManager extends SandboxManager {
     // Container lifecycle
     // -------------------------------------------------------------------------
 
-    public boolean startService(ServiceInstance instance, int epoch) {
-        return startService(instance, epoch,
-                getStateDirectory(instance.serviceName, epoch));
-    }
-
     /**
      * Starts all components of the service at the given epoch.
      * Each component is started via docker run with appropriate flags.
@@ -132,14 +127,15 @@ public class DockerSandboxManager extends SandboxManager {
      * --health-* flags added so Docker tracks readiness internally.
      * waitUntilReady() must be called separately after this method.
      */
-    @Override
-    public boolean startService(ServiceInstance instance, int epoch, String mountPath) {
+    public boolean startService(ServiceInstance instance, int epoch,
+                                String mountPath, int allocatedPort) {
+        // Same as startService(instance, epoch, mountPath) but uses explicit
+        // allocatedPort instead of instance.allocatedHttpPort for the entry component.
         String serviceName = instance.serviceName;
         String networkName = buildNetworkName(serviceName);
         String stateDirMountTarget = instance.property.getStatefulComponentDirectory();
         List<ServiceComponent> components = instance.property.getComponents();
 
-        // Validate: only one stateful container is supported
         long statefulCount = components.stream()
                 .filter(ServiceComponent::isStateful)
                 .count();
@@ -150,7 +146,6 @@ public class DockerSandboxManager extends SandboxManager {
             return false;
         }
 
-        // Step 1 — find and start the stateful container first
         int statefulIdx = -1;
         for (int i = 0; i < components.size(); i++) {
             ServiceComponent component = components.get(i);
@@ -168,18 +163,14 @@ public class DockerSandboxManager extends SandboxManager {
             }
 
             Integer publishedPort = component.getEntryPort();
-            Integer allocatedPort = component.isEntryComponent()
-                    ? instance.allocatedHttpPort : null;
+            Integer allocatedPortForComponent = component.isEntryComponent()
+                    ? allocatedPort : null;
             Integer exposedPort = component.getExposedPort();
-
-            logger.log(Level.WARNING,
-                    "{0}:DockerSandboxManager starting stateful container {1} for {2}",
-                    new Object[]{nodeId, containerName, serviceName});
 
             boolean started = runDockerContainer(
                     imageName, containerName, networkName,
                     component.getComponentName(), exposedPort, publishedPort,
-                    allocatedPort, mountPath, stateDirMountTarget,
+                    allocatedPortForComponent, mountPath, stateDirMountTarget,
                     component.getEnvironmentVariables(), healthcheckCmd);
 
             if (!started) {
@@ -189,7 +180,6 @@ public class DockerSandboxManager extends SandboxManager {
                 return false;
             }
 
-            // Step 2 — wait for stateful container healthcheck before starting others
             boolean ready = waitUntilReady(containerName, healthcheckCmd);
             if (!ready) {
                 logger.log(Level.SEVERE,
@@ -197,16 +187,11 @@ public class DockerSandboxManager extends SandboxManager {
                         new Object[]{nodeId, containerName, serviceName});
                 return false;
             }
-
-            logger.log(Level.WARNING,
-                    "{0}:DockerSandboxManager stateful container {1} healthy for {2}",
-                    new Object[]{nodeId, containerName, serviceName});
             break;
         }
 
-        // Step 3 — start non-stateful containers
         for (int i = 0; i < components.size(); i++) {
-            if (i == statefulIdx) continue; // already started
+            if (i == statefulIdx) continue;
 
             ServiceComponent component = components.get(i);
             String containerName = instance.containerNames.get(i);
@@ -218,18 +203,14 @@ public class DockerSandboxManager extends SandboxManager {
             }
 
             Integer publishedPort = component.getEntryPort();
-            Integer allocatedPort = component.isEntryComponent()
-                    ? instance.allocatedHttpPort : null;
+            Integer allocatedPortForComponent = component.isEntryComponent()
+                    ? allocatedPort : null;
             Integer exposedPort = component.getExposedPort();
-
-            logger.log(Level.WARNING,
-                    "{0}:DockerSandboxManager starting non-stateful container {1} for {2}",
-                    new Object[]{nodeId, containerName, serviceName});
 
             boolean started = runDockerContainer(
                     imageName, containerName, networkName,
                     component.getComponentName(), exposedPort, publishedPort,
-                    allocatedPort, null, null,
+                    allocatedPortForComponent, null, null,
                     component.getEnvironmentVariables(), healthcheckCmd);
 
             if (!started) {
@@ -242,6 +223,17 @@ public class DockerSandboxManager extends SandboxManager {
 
         return true;
     }
+
+    @Override
+    public boolean startService(ServiceInstance instance, int epoch, String mountPath) {
+        return startService(instance, epoch, mountPath, instance.allocatedHttpPort);
+    }
+
+    @Override
+    public boolean startService(ServiceInstance instance, int epoch) {
+        return startService(instance, epoch, getStateDirectory(instance.serviceName, epoch));
+    }
+
 
     @Override
     public boolean stopService(ServiceInstance instance) {
@@ -258,6 +250,25 @@ public class DockerSandboxManager extends SandboxManager {
             }
         }
         return allStopped;
+    }
+
+    @Override
+    public boolean stopContainer(String containerName) {
+        int stopCode = Shell.runCommand(
+                String.format("docker stop %s", containerName), true);
+        if (stopCode != 0) {
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager failed to stop container {1} exit={2}",
+                    new Object[]{nodeId, containerName, stopCode});
+        }
+        int rmCode = Shell.runCommand(
+                String.format("docker rm %s", containerName), true);
+        if (rmCode != 0) {
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager failed to remove container {1} exit={2}",
+                    new Object[]{nodeId, containerName, rmCode});
+        }
+        return stopCode == 0 && rmCode == 0;
     }
 
     @Override
