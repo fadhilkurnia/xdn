@@ -29,6 +29,8 @@ bin/*
 screen_logs
 merge-review
 *-paper/
+# paper projects live in their own private repos (double-blind); never track them here
+papers/
 .claude
 *.tar.gz
 
