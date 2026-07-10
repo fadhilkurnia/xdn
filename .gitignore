@@ -37,3 +37,10 @@ papers/
 .github/appmod/
 .github/modernize/
 /site/
+
+# generated mkdocs site output (source lives elsewhere under docs/)
+docs/xdn/site/
+# leftover local build artifacts of the removed todo service
+services/todo/
+# superseded root-level aws terraform (moved to deployment/aws/ in #56)
+/aws/
