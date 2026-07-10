@@ -439,6 +439,27 @@ public class XdnApp
         return true;
     }
 
+    public int getContainerRestartCount(String serviceName) {
+        var instance = getServiceInstance(serviceName);
+        if (instance == null) return -1;
+        // Check the entry component container
+        for (int i = 0; i < instance.containerNames.size(); i++) {
+            if (instance.property.getComponents().get(i).isEntryComponent()) {
+                return sandboxManager.getContainerRestartCount(
+                        instance.containerNames.get(i));
+            }
+        }
+        // Fall back to first container if no entry component found
+        return instance.containerNames.isEmpty() ? -1
+                : sandboxManager.getContainerRestartCount(instance.containerNames.get(0));
+    }
+
+    public String getServiceBaseDir(String serviceName) {
+        ServiceType type = serviceRegistry.get(serviceName);
+        if (type != ServiceType.NON_DETERMINISTIC) return null;
+        return nonDeterministicService.getServiceBaseDir(serviceName);
+    }
+
     public void stop() {
         for (Map.Entry<String, ServiceType> entry : serviceRegistry.entrySet()) {
             String serviceName = entry.getKey();

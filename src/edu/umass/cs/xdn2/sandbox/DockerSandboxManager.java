@@ -536,6 +536,20 @@ public class DockerSandboxManager extends SandboxManager {
         return result;
     }
 
+    @Override
+    public int getContainerRestartCount(String containerName) {
+        String result = dockerInspect(containerName, "{{.RestartCount}}");
+        if (result == null) return -1;
+        try {
+            return Integer.parseInt(result.trim());
+        } catch (NumberFormatException e) {
+            logger.log(Level.WARNING,
+                    "{0}:DockerSandboxManager getContainerRestartCount parse failed for {1}: {2}",
+                    new Object[]{nodeId, containerName, result});
+            return -1;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Port allocation
     // -------------------------------------------------------------------------

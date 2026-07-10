@@ -547,11 +547,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     int exitCode = Shell.runCommand(cmd, true);
 
-    logger.log(Level.WARNING, String.format(
-            "%s:%s - fuselog-apply exit=%d for service=%s filename=%s",
-            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-            exitCode, serviceName, filename));
-
     if (exitCode != 0) {
       logger.log(Level.SEVERE, String.format(
               "%s:%s - failed to apply stateDiff for service=%s filename=%s",

@@ -225,6 +225,15 @@ public abstract class SandboxManager {
      */
     public abstract List<String> getContainerCreatedAt(List<String> containerNames);
 
+    /**
+     * Returns the number of times the container has been restarted.
+     * Returns -1 if the container does not exist or the count cannot be determined.
+     *
+     * @param containerName name of the container to inspect
+     * @return restart count, or -1 on failure
+     */
+    public abstract int getContainerRestartCount(String containerName);
+
     // -------------------------------------------------------------------------
     // Infrastructure
     // -------------------------------------------------------------------------

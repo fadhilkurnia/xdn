@@ -404,11 +404,6 @@ public class PrimaryBackupManager<NodeIDType> {
 
     private boolean handleApplyStateDiffPacket(ApplyStateDiffPacket packet) {
         String serviceName = packet.getServiceName();
-        logger.log(Level.WARNING,
-                "{0}:PBM handleApplyStateDiffPacket received count={1} size={2} for {3}",
-                new Object[]{myNodeID, packet.getStateDiffCount(),
-                        packet.getStateDiff().length, serviceName});
-
         logger.log(Level.INFO,
                 "{0}:PBM handleApplyStateDiffPacket checks: " +
                         "packet.placement={1} currPlacement={2} " +
@@ -579,7 +574,7 @@ public class PrimaryBackupManager<NodeIDType> {
                         : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
 
                 // Step 2 - start new backup container (rsync + docker run)
-                logger.log(Level.WARNING,
+                logger.log(Level.INFO,
                         "{0}:PBM initializeBackupContainer starting {1} for {2}",
                         new Object[]{myNodeID, nextLiveType, serviceName});
                 boolean started = this.app.restore(serviceName, nextLivePrefix);
@@ -591,34 +586,67 @@ public class PrimaryBackupManager<NodeIDType> {
                     continue;
                 }
 
-                // Step 3 - wait for new container to be healthy
-                boolean ready = this.app.waitUntilReady(serviceName);
-                if (!ready) {
-                    logger.log(Level.SEVERE,
-                            "{0}:PBM initializeBackupContainer container not ready {1} for {2}",
-                            new Object[]{myNodeID, nextLiveType, serviceName});
+                // Step 3 - wait for new container to be healthy, with restart count detection
+                final int MAX_RESTARTS = 5;
+                boolean ready = false;
+                boolean permanentFailure = false;
+                while (!ready && !stopFlag.get()) {
+                    ready = this.app.waitUntilReady(serviceName);
+                    if (!ready) {
+                        int restartCount = this.app.getContainerRestartCount(serviceName);
+                        logger.log(Level.WARNING,
+                                "{0}:PBM initializeBackupContainer {1} not ready, restartCount={2} for {3}",
+                                new Object[]{myNodeID, nextLiveType, restartCount, serviceName});
+                        if (restartCount >= MAX_RESTARTS) {
+                            logger.log(Level.SEVERE,
+                                    "{0}:PBM initializeBackupContainer {1} exceeded max restarts ({2}) for {3}, " +
+                                            "skipping this cycle — will retry next cycle",
+                                    new Object[]{myNodeID, nextLiveType, MAX_RESTARTS, serviceName});
+                            permanentFailure = true;
+                            break;
+                        }
+                        sleepQuietly(5000);
+                    }
+                }
+
+                if (!ready || permanentFailure) {
+                    // Do NOT update lastSwitchTimeMs — let full 30s elapse before retrying
                     sleepQuietly(5000);
                     continue;
                 }
 
                 // Step 4 - reroute: update currentLiveDirType BEFORE switchStateDiffCount
-                // so handleClientRequest routes to new container only after it's healthy
                 currentLiveDirType.put(serviceName, nextLiveType);
                 switchStateDiffCount.put(serviceName, stateDiffCountStamp);
 
-                logger.log(Level.WARNING,
+                // Record switchover timestamp to log file
+                String switchoverLog = app.getServiceBaseDir(serviceName) + "switchovers.log";
+                String logLine = System.currentTimeMillis() + " " + myNodeID.toString() + " " + nextLiveType.name().toLowerCase() + "\n";
+                try {
+                    java.nio.file.Files.writeString(
+                            java.nio.file.Path.of(switchoverLog),
+                            logLine,
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.APPEND);
+                } catch (java.io.IOException e) {
+                    logger.log(Level.WARNING,
+                            "{0}:PBM initializeBackupContainer failed to write switchover log for {1}: {2}",
+                            new Object[]{myNodeID, serviceName, e.getMessage()});
+                }
+
+                logger.log(Level.INFO,
                         "{0}:PBM initializeBackupContainer switched to {1} for {2} at count={3}",
                         new Object[]{myNodeID, nextLiveType, serviceName, stateDiffCountStamp});
 
                 // Step 5 - stop old container (skip on first iteration)
                 if (currentLiveType != null) {
-                    logger.log(Level.WARNING,
+                    logger.log(Level.INFO,
                             "{0}:PBM initializeBackupContainer stopping old {1} for {2}",
                             new Object[]{myNodeID, currentLiveType, serviceName});
                     this.app.stopBackupContainer(serviceName, currentLiveType);
                 }
 
-                // Step 6 - update tracking
+                // Step 6 - update tracking only on success
                 currentLiveType = nextLiveType;
                 lastSwitchTimeMs = now;
             }
@@ -691,7 +719,7 @@ public class PrimaryBackupManager<NodeIDType> {
                     new Object[]{myNodeID, serviceName, diff.length});
 
             int nextCount = stateDiffCount.getOrDefault(serviceName, 0) + 1;
-            // Do NOT update stateDiffCount here — let handleApplyStateDiffPacket
+            // Do NOT update stateDiffCount here n let handleApplyStateDiffPacket
             // update it after Paxos commits, uniformly on all nodes including primary.
             int pEpoch = currPlacementEpoch.get(serviceName);
             int placement = currPlacement.get(serviceName);
@@ -841,7 +869,7 @@ public class PrimaryBackupManager<NodeIDType> {
         forwardedRequests.put(forwardPacket.getRequestID(),
                 new RequestAndCallback(request, callback));
 
-        logger.log(Level.WARNING,
+        logger.log(Level.INFO,
                 "{0}:PBM forwardRequestToPrimary forwarding to {1} for {2}",
                 new Object[]{myNodeID, primaryID, serviceName});
 
@@ -857,7 +885,7 @@ public class PrimaryBackupManager<NodeIDType> {
     private boolean handleForwardedRequestPacket(ForwardedRequestPacket packet) {
         String serviceName = packet.getServiceName();
 
-        logger.log(Level.WARNING,
+        logger.log(Level.INFO,
                 "{0}:PBM handleForwardedRequestPacket from {1} for {2}",
                 new Object[]{myNodeID, packet.getEntryNodeId(), serviceName});
 
@@ -902,7 +930,7 @@ public class PrimaryBackupManager<NodeIDType> {
     }
 
     private boolean handleResponsePacket(ResponsePacket packet) {
-        logger.log(Level.WARNING,
+        logger.log(Level.INFO,
                 "{0}:PBM handleResponsePacket for {1} requestId={2}",
                 new Object[]{myNodeID, packet.getServiceName(), packet.getRequestID()});
 

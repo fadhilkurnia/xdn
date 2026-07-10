@@ -372,6 +372,12 @@ public class NonDeterministicService {
         }
     }
 
+    public String getServiceBaseDir(String serviceName) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) return null;
+        return stateDiffRecorder.getServiceBaseDir(serviceName, epoch);
+    }
+
     // -------------------------------------------------------------------------
     // Private: service lifecycle
     // -------------------------------------------------------------------------
