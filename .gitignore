@@ -29,8 +29,10 @@ bin/*
 screen_logs
 merge-review
 *-paper/
-# paper projects live in their own private repos (double-blind); never track them here
-papers/
+# paper projects live in their own private repos (double-blind); never track them here.
+# ignore everything under papers/ EXCEPT the placeholder that keeps the folder in-repo.
+papers/*
+!papers/README.md
 .claude
 *.tar.gz
 
