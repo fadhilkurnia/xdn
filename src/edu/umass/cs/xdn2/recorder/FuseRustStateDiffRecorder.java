@@ -332,56 +332,15 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, String filename) {
-    // TODO: use stateDiffCount for named diff files when these recorders are updated
-    // TODO: directly apply stateDiff from the obtained byte[], not via
-    //  the fuselog-apply program, which we currently use.
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
 
-    logger.log(
-        Level.FINER,
-        String.format(
-            "%s:%s - applying stateDiff name=%s epoch=%d size=%d bytes",
-            this.nodeID,
-            FuseRustStateDiffRecorder.class.getSimpleName(),
-            serviceName,
-            placementEpoch,
-            encodedState.length));
-
-    String applySocketFile =
-        this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
-    try (SocketChannel channel =
-        SocketChannel.open(UnixDomainSocketAddress.of(Path.of(applySocketFile)))) {
-      logger.log(
-          Level.INFO,
-          String.format(
-              "%s:%s - connecting to %s",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), applySocketFile));
-
-      ByteBuffer buffer = ByteBuffer.wrap(encodedState);
-      while (buffer.hasRemaining()) {
-        channel.write(buffer);
-      }
-
-      channel.shutdownOutput();
-
-      ByteBuffer responseBuffer = ByteBuffer.allocate(1024);
-      StringBuilder response = new StringBuilder();
-
-      while (channel.read(responseBuffer) != -1) {
-        responseBuffer.flip();
-        response.append(StandardCharsets.UTF_8.decode(responseBuffer).toString());
-        responseBuffer.clear();
-      }
-
-      logger.log(
-          Level.INFO,
-          String.format(
-              "%s:%s - fuserust-apply responded with: %s",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), response.toString()));
-    } catch (IOException e) {
-      throw new RuntimeException("Fuserust error: " + e);
-    }
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
     return true;
   }
 

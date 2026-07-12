@@ -150,49 +150,15 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, String filename) {
-    // TODO: use stateDiffCount for named diff files when these recorders are updated
-    // important location
-    // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
-    // snapshot dir : /tmp/xdn/state/zip/<nodeId>/snp/<serviceName>/e<epoch>/
-    // diff file    : /tmp/xdn/state/zip/<nodeId>/diff/<serviceName>/e<epoch>.zip
-    String targetMountDir =
-        String.format("%s%s/e%d/", this.baseMountDirPath, serviceName, placementEpoch);
-    String targetSnpDir =
-        String.format("%s%s/e%d/", this.baseSnapshotDirPath, serviceName, placementEpoch);
-    String targetZipFile =
-        String.format("%s%s/e%d.zip", this.baseZipDirPath, serviceName, placementEpoch);
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
 
-    byte[] compressedStateDiff = encodedState;
-
-    // decompress the stateDiff
-    byte[] stateDiff;
-    try {
-      stateDiff = Utils.decompressBytes(compressedStateDiff);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    // write the stateDiff back to .zip file
-    try {
-      Files.write(
-          Paths.get(targetZipFile), stateDiff, StandardOpenOption.CREATE, StandardOpenOption.DSYNC);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    // un-archive the .zip file
-    ZipFiles.unzip(targetZipFile, targetSnpDir);
-
-    // copy back the un-archived state to the mount dir (rsync, not `cp -a`: the
-    // mount dir already exists, so `cp -a snp/ mnt/` would nest the state under an
-    // extra dir and the container would never see it; rsync copies contents flat).
-    int exitCode = Shell.runCommand(String.format("rsync -a %s %s", targetSnpDir, targetMountDir));
-    if (exitCode != 0) {
-      throw new RuntimeException("failed to apply zip stateDiff");
-    }
-
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
     return true;
   }
 

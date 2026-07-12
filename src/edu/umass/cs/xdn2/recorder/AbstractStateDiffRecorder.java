@@ -164,17 +164,29 @@ public abstract class AbstractStateDiffRecorder {
   public abstract byte[] captureStateDiff(String serviceName, int placementEpoch);
 
   /**
-   * Applies the previously captured state diff into snapshot/.
-   * The stateDiffCount is used to name the diff file (e.g., stateDiff/42.diff).
+   * Writes the state diff bytes to cmtDiff/<filename>.
+   * Does NOT apply the diff to snp/ — that is done separately by applySnpDiff().
    *
-   * @param serviceName      name of the app/service
-   * @param placementEpoch   current placement epoch number
-   * @param encodedState     the state diff bytes captured by primary
-   * @param filename         state diff filename
-   * @return true if all operations successfully executed
+   * @param serviceName    name of the service
+   * @param placementEpoch current placement epoch
+   * @param encodedState   the state diff bytes
+   * @param filename       filename e.g. "p0:east1b:5.diff"
+   * @return true iff write succeeded
    */
-  public abstract boolean applyStateDiff(
+  public abstract boolean saveStateDiff(
           String serviceName, int placementEpoch, byte[] encodedState, String filename);
+
+  /**
+   * Applies a previously saved diff from cmtDiff/<filename> to snp/
+   * via fuselog-apply. Called by applyCmtDiffToSnpDiff before backup refresh.
+   *
+   * @param serviceName    name of the service
+   * @param placementEpoch current placement epoch
+   * @param filename       filename e.g. "p0:east1b:5.diff"
+   * @return true iff fuselog-apply succeeded
+   */
+  public abstract boolean applySnpDiff(
+          String serviceName, int placementEpoch, String filename);
 
   /**
    * Removes the target directory that hold the safety-critical state, include unmounting filesystem

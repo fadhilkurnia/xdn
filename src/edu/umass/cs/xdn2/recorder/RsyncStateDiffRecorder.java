@@ -206,46 +206,15 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, String filename) {
-    // TODO: use stateDiffCount for named diff files when these recorders are updated
-    // important location:
-    // target dir   : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
-    // diff file    : /tmp/xdn/state/rsync/<nodeId>/diff/<serviceName>/e<epoch>.diff
-    String targetDir =
-        String.format("%s%s/e%d/", this.baseMountDirPath, serviceName, placementEpoch);
-    String targetDiffFile =
-        String.format("%s%s/e%d.diff", this.baseDiffDirPath, serviceName, placementEpoch);
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
 
-    int retCode = Shell.runCommand("rm -rf " + targetDiffFile);
-    assert retCode == 0;
-
-    // decompress
-    byte[] compressedStateDiff = encodedState;
-    byte[] stateDiff;
-    try {
-      stateDiff = Utils.decompressBytes(compressedStateDiff);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    // write stateDiff to .diff file
-    try {
-      Files.write(
-          Paths.get(targetDiffFile),
-          stateDiff,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.DSYNC);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    // apply the stateDiff inside the .diff file using rsync
-    String command =
-        String.format("%s -ar --read-batch=%s %s", RSYNC_BIN_PATH, targetDiffFile, targetDir);
-    retCode = Shell.runCommand(command);
-    assert retCode == 0;
-
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
     return true;
   }
 

@@ -27,14 +27,19 @@ import io.netty.handler.codec.http.*;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -84,6 +89,10 @@ public class PrimaryBackupManager<NodeIDType> {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AbstractStateDiffRecorder.LiveDirType> currentLiveDirType =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ReentrantLock> snpDiffApplyLocks =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicBoolean> snpDiffApplyStopFlags =
+            new ConcurrentHashMap<>();
 
     private record RequestAndCallback(Request request, ExecutedCallback callback) {}
 
@@ -102,19 +111,20 @@ public class PrimaryBackupManager<NodeIDType> {
     /** Node ID of the current primary for this service. */
     private final ConcurrentHashMap<String, NodeIDType> currPrimaryID = new ConcurrentHashMap<>();
 
+    /** This node's current role for the service. */
+    private final ConcurrentHashMap<String, Role> currentRole = new ConcurrentHashMap<>();
+
     /**
      * Epoch of the current primary within the current placement.
      */
     private final ConcurrentHashMap<String, Integer> currPlacementEpoch = new ConcurrentHashMap<>();
 
-    /** Count of state diffs applied so far, used for gap detection. */
-    private final ConcurrentHashMap<String, Integer> stateDiffCount = new ConcurrentHashMap<>();
-
-    /** This node's current role for the service. */
-    private final ConcurrentHashMap<String, Role> currentRole = new ConcurrentHashMap<>();
-
-    /** stateDiffCount at the time the backup last switched live containers (blue/green). */
-    private final ConcurrentHashMap<String, Integer> switchStateDiffCount = new ConcurrentHashMap<>();
+    // Count of state diffs commited so far, used for gap detection.
+    private final ConcurrentHashMap<String, Integer> cmtDiffCount = new ConcurrentHashMap<>();
+    // Count of state diffs applied to `snp/` from `cmtDiff/`
+    private final ConcurrentHashMap<String, Integer> snpDiffCount = new ConcurrentHashMap<>();
+    // stateDiffCount at the time the backup last switched live containers (blue/green).
+    private final ConcurrentHashMap<String, Integer> liveDiffCount = new ConcurrentHashMap<>();
 
     /** Per-service single thread executor: serializes captureStateDiff() + propose(). */
     private final ConcurrentHashMap<String, ExecutorService> captureExecutors =
@@ -298,6 +308,12 @@ public class PrimaryBackupManager<NodeIDType> {
             currPlacement.put(serviceName, packet.getNextPlacement());
             currPrimaryID.put(serviceName, nextPrimaryID);
             currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
+            cmtDiffCount.put(serviceName, -1);
+            snpDiffCount.put(serviceName, -1);
+            snpDiffApplyLocks.put(serviceName, new ReentrantLock());
+            AtomicBoolean stopFlag = new AtomicBoolean(false);
+            snpDiffApplyStopFlags.put(serviceName, stopFlag);
+            startSnpDiffApplyThread(serviceName, stopFlag);
         } else if (packet.getNextPlacement() == curPlacementVal) {
             currPrimaryID.put(serviceName, nextPrimaryID);
             currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
@@ -351,8 +367,7 @@ public class PrimaryBackupManager<NodeIDType> {
         }
 
         // Initialize stateDiffCount for this service
-        stateDiffCount.putIfAbsent(serviceName, 0);
-        int bootstrapCount = 1;
+        int bootstrapCount = 0;
 
         // Capture bootstrap diff
         byte[] diff = this.app.captureStatediff(serviceName);
@@ -364,38 +379,16 @@ public class PrimaryBackupManager<NodeIDType> {
         logger.log(Level.WARNING,
                 "{0}:PBM initializePrimaryContainer proposing ApplyStateDiff count={1} size={2} for {3}",
                 new Object[]{myNodeID, bootstrapCount, diff.length, serviceName});
+
         proposeStateDiff(
                 serviceName,
                 currPlacement.get(serviceName),
                 currPlacementEpoch.get(serviceName),
                 bootstrapCount,
                 diff,
-                (executedRequest, handled) -> {
-                    logger.log(Level.WARNING,
-                            "{0}:PBM initializePrimaryContainer propose callback handled={1} for {2}",
-                            new Object[]{myNodeID, handled, serviceName});
-
-                    // Flush any remaining filesystem operations (e.g. RocksDB renames)
-                    // that happened after the bootstrap diff was captured.
-                    // This ensures snapshot/ on all nodes has a complete, openable DB
-                    // before the backup container starts its first rsync.
-                    int flushCount = stateDiffCount.getOrDefault(serviceName, 0) + 1;
-                    byte[] flushDiff = app.captureStatediff(serviceName);
-                    if (flushDiff == null) flushDiff = new byte[0];
-                    if (flushDiff.length > 0) {
-                        logger.log(Level.WARNING,
-                                "{0}:PBM initializePrimaryContainer flush diff size={1} for {2}",
-                                new Object[]{myNodeID, flushDiff.length, serviceName});
-                        proposeStateDiff(serviceName,
-                                currPlacement.get(serviceName),
-                                currPlacementEpoch.get(serviceName),
-                                flushCount,
-                                flushDiff,
-                                (r, h) -> logger.log(Level.WARNING,
-                                        "{0}:PBM initializePrimaryContainer flush callback handled={1} for {2}",
-                                        new Object[]{myNodeID, h, serviceName}));
-                    }
-                });
+                (executedRequest, handled) -> logger.log(Level.WARNING,
+                        "{0}:PBM initializePrimaryContainer bootstrap diff committed handled={1} for {2}",
+                        new Object[]{myNodeID, handled, serviceName}));
     }
 
     // =========================================================================
@@ -435,29 +428,28 @@ public class PrimaryBackupManager<NodeIDType> {
             throw new IllegalStateException("primaryEpoch mismatch for " + serviceName);
         }
 
-        int currentCount = stateDiffCount.getOrDefault(serviceName, 0);
+        int currentCount = cmtDiffCount.getOrDefault(serviceName, 0);
         int difference = packet.getStateDiffCount() - currentCount;
 
         if (difference == 1) {
             boolean applied;
             if (!packet.isLargeDiff()) {
-                // Small diff — apply inline bytes
-                applied = app.applyStatediff(serviceName, packet.getStateDiff(),
-                        packet.getDiffFilename());
+                // Small diff - apply inline bytes
+                applied = app.saveStatediff(serviceName, packet.getStateDiff(), packet.getDiffFilename());
             } else {
-                // Large diff — mv prpDiff/ -> cmtDiff/, then apply from file
+                // Large diff - mv prpDiff/ -> cmtDiff/
                 String filename = packet.getDiffFilename();
                 String prpPath = app.getPrpDiffFilePath(serviceName, filename);
 
                 // Wait for file to appear (scp may still be in flight on non-primary nodes)
                 int maxWaitMs = 30_000;
                 int waitedMs = 0;
-                while (!new java.io.File(prpPath).exists() && waitedMs < maxWaitMs) {
+                while (!new File(prpPath).exists() && waitedMs < maxWaitMs) {
                     sleepQuietly(500);
                     waitedMs += 500;
                 }
 
-                if (!new java.io.File(prpPath).exists()) {
+                if (!new File(prpPath).exists()) {
                     logger.log(Level.SEVERE,
                             "{0}:PBM handleApplyStateDiffPacket large diff file not found " +
                                     "after {1}ms: {2} for {3}",
@@ -470,22 +462,11 @@ public class PrimaryBackupManager<NodeIDType> {
                                 "{0}:PBM handleApplyStateDiffPacket failed to mv {1} for {2}",
                                 new Object[]{myNodeID, filename, serviceName});
                         applied = false;
-                    } else {
-                        // Read bytes from cmtDiff/ and apply
-                        String cmtPath = app.getPrpDiffFilePath(serviceName, filename)
-                                .replace(AbstractStateDiffRecorder.DIR_PROPOSED_STATEDIFF,
-                                        AbstractStateDiffRecorder.DIR_COMMITTED_STATEDIFF);
-                        // TODO: expose a method to apply directly from file path rather
-                        //  than reading into memory — avoids double memory allocation for large diffs
-                        byte[] diffBytes;
-                        try {
-                            diffBytes = java.nio.file.Files.readAllBytes(
-                                    java.nio.file.Path.of(cmtPath));
-                        } catch (java.io.IOException e) {
-                            throw new RuntimeException(e);
-                        }
-                        applied = app.applyStatediff(serviceName, diffBytes, filename);
                     }
+
+                    // File already in cmtDiff/ after mv - no further action needed here.
+                    // applySnpDiff will be called by applyCmtDiffToSnpDiff before next backup refresh.
+                    applied = true;
                 }
             }
 
@@ -494,7 +475,7 @@ public class PrimaryBackupManager<NodeIDType> {
                         "{0}:PBM handleApplyStateDiffPacket applyStatediff failed for {1} count={2}",
                         new Object[]{myNodeID, serviceName, packet.getStateDiffCount()});
             }
-            stateDiffCount.put(serviceName, packet.getStateDiffCount());
+            cmtDiffCount.put(serviceName, packet.getStateDiffCount());
         } else if (difference > 1) {
             // Deliberate per design: any gap triggers this node to attempt
             // to become the new primary itself, rather than resyncing.
@@ -546,82 +527,82 @@ public class PrimaryBackupManager<NodeIDType> {
             long lastSwitchTimeMs = 0;
 
             while (!stopFlag.get()) {
-                // Wait until both bootstrap diff and flush diff have been applied
-                // to snapshot/ before rsyncing. Ensures complete RocksDB state
-                // (CURRENT, MANIFEST, etc.) is present before backup container starts.
-                if (stateDiffCount.getOrDefault(serviceName, 0) < 2) {
-                    sleepQuietly(1000);
-                    continue;
-                }
-
                 long now = System.currentTimeMillis();
                 if (lastSwitchTimeMs != 0 && now - lastSwitchTimeMs < 30_000) {
                     sleepQuietly(1000);
                     continue;
                 }
 
-                int stateDiffCountStamp = stateDiffCount.getOrDefault(serviceName, 0);
-
-                // Step 1 - decide next live type and prefix
+                // Decide next live type
                 AbstractStateDiffRecorder.LiveDirType nextLiveType =
                         (currentLiveType == null ||
                                 currentLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP2)
                                 ? AbstractStateDiffRecorder.LiveDirType.BACKUP1
                                 : AbstractStateDiffRecorder.LiveDirType.BACKUP2;
 
-                String nextLivePrefix = nextLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP1
-                        ? ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX
-                        : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
+                String nextLivePrefix =
+                        nextLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                                ? ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX
+                                : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
 
-                // Step 2 - start new backup container (rsync + docker run)
-                logger.log(Level.INFO,
-                        "{0}:PBM initializeBackupContainer starting {1} for {2}",
-                        new Object[]{myNodeID, nextLiveType, serviceName});
-                boolean started = this.app.restore(serviceName, nextLivePrefix);
+                ReentrantLock snpLock = snpDiffApplyLocks.get(serviceName);
+                if (snpLock == null) {
+                    // TODO: stop snpDiffApplyThread properly - not yet implemented
+                    throw new IllegalStateException(
+                            "snpDiffApplyLock is null for " + serviceName);
+                }
+
+                snpLock.lock();
+                int currentSnpDiffCount;
+                boolean started;
+                try {
+                    currentSnpDiffCount = snpDiffCount.getOrDefault(serviceName, -1);
+                    logger.log(Level.WARNING,
+                            "{0}:PBM initializeBackupContainer starting {1} " +
+                                    "at snpDiffCount={2} for {3}",
+                            new Object[]{myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
+                    started = this.app.restore(serviceName, nextLivePrefix);
+                    liveDiffCount.put(serviceName, currentSnpDiffCount);
+                } finally {
+                    snpLock.unlock();
+                }
+
                 if (!started) {
                     logger.log(Level.SEVERE,
                             "{0}:PBM initializeBackupContainer failed to start {1} for {2}",
                             new Object[]{myNodeID, nextLiveType, serviceName});
+                    // Do NOT update lastSwitchTimeMs
+                    app.stopBackupContainer(serviceName, nextLiveType);
                     sleepQuietly(5000);
                     continue;
                 }
 
-                // Step 3 - wait for new container to be healthy, with restart count detection
-                final int MAX_RESTARTS = 5;
-                boolean ready = false;
-                boolean permanentFailure = false;
-                while (!ready && !stopFlag.get()) {
-                    ready = this.app.waitUntilReady(serviceName);
-                    if (!ready) {
-                        int restartCount = this.app.getContainerRestartCount(serviceName);
-                        logger.log(Level.WARNING,
-                                "{0}:PBM initializeBackupContainer {1} not ready, restartCount={2} for {3}",
-                                new Object[]{myNodeID, nextLiveType, restartCount, serviceName});
-                        if (restartCount >= MAX_RESTARTS) {
-                            logger.log(Level.SEVERE,
-                                    "{0}:PBM initializeBackupContainer {1} exceeded max restarts ({2}) for {3}, " +
-                                            "skipping this cycle — will retry next cycle",
-                                    new Object[]{myNodeID, nextLiveType, MAX_RESTARTS, serviceName});
-                            permanentFailure = true;
-                            break;
-                        }
-                        sleepQuietly(5000);
-                    }
-                }
-
-                if (!ready || permanentFailure) {
-                    // Do NOT update lastSwitchTimeMs — let full 30s elapse before retrying
+                // Wait for new container to be healthy
+                boolean ready = this.app.waitUntilReady(serviceName);
+                if (!ready) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM initializeBackupContainer container failed healthcheck {1} for {2}",
+                            new Object[]{myNodeID, nextLiveType, serviceName});
+                    app.stopBackupContainer(serviceName, nextLiveType);
                     sleepQuietly(5000);
                     continue;
                 }
 
-                // Step 4 - reroute: update currentLiveDirType BEFORE switchStateDiffCount
+                // Reroute: update currentLiveDirType BEFORE liveDiffCount
+                // liveDiffCount already set inside the lock above
                 currentLiveDirType.put(serviceName, nextLiveType);
-                switchStateDiffCount.put(serviceName, stateDiffCountStamp);
 
-                // Record switchover timestamp to log file
+                logger.log(Level.WARNING,
+                        "{0}:PBM initializeBackupContainer switched to {1} " +
+                                "liveDiffCount={2} for {3} — container healthy and serving requests",
+                        new Object[]{myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
+
+                // Record switchover to log file
                 String switchoverLog = app.getServiceBaseDir(serviceName) + "switchovers.log";
-                String logLine = System.currentTimeMillis() + " " + myNodeID.toString() + " " + nextLiveType.name().toLowerCase() + "\n";
+                String logLine = System.currentTimeMillis() + " "
+                        + myNodeID.toString() + " "
+                        + nextLiveType.name().toLowerCase() + " "
+                        + currentSnpDiffCount + "\n";
                 try {
                     java.nio.file.Files.writeString(
                             java.nio.file.Path.of(switchoverLog),
@@ -630,23 +611,20 @@ public class PrimaryBackupManager<NodeIDType> {
                             java.nio.file.StandardOpenOption.APPEND);
                 } catch (java.io.IOException e) {
                     logger.log(Level.WARNING,
-                            "{0}:PBM initializeBackupContainer failed to write switchover log for {1}: {2}",
+                            "{0}:PBM initializeBackupContainer failed to write " +
+                                    "switchover log for {1}: {2}",
                             new Object[]{myNodeID, serviceName, e.getMessage()});
                 }
 
-                logger.log(Level.INFO,
-                        "{0}:PBM initializeBackupContainer switched to {1} for {2} at count={3}",
-                        new Object[]{myNodeID, nextLiveType, serviceName, stateDiffCountStamp});
-
-                // Step 5 - stop old container (skip on first iteration)
+                // Stop old container (skip on first iteration)
                 if (currentLiveType != null) {
-                    logger.log(Level.INFO,
+                    logger.log(Level.WARNING,
                             "{0}:PBM initializeBackupContainer stopping old {1} for {2}",
                             new Object[]{myNodeID, currentLiveType, serviceName});
                     this.app.stopBackupContainer(serviceName, currentLiveType);
                 }
 
-                // Step 6 - update tracking only on success
+                // Update tracking — only on success
                 currentLiveType = nextLiveType;
                 lastSwitchTimeMs = now;
             }
@@ -718,7 +696,7 @@ public class PrimaryBackupManager<NodeIDType> {
             logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
                     new Object[]{myNodeID, serviceName, diff.length});
 
-            int nextCount = stateDiffCount.getOrDefault(serviceName, 0) + 1;
+            int nextCount = cmtDiffCount.getOrDefault(serviceName, 0) + 1;
             // Do NOT update stateDiffCount here n let handleApplyStateDiffPacket
             // update it after Paxos commits, uniformly on all nodes including primary.
             int pEpoch = currPlacementEpoch.get(serviceName);
@@ -741,9 +719,9 @@ public class PrimaryBackupManager<NodeIDType> {
                 return forwardRequestToPrimary(serviceName, request, callback);
             }
 
-            Integer switchCount = switchStateDiffCount.get(serviceName);
-            if (switchCount == null
-                    || (clientStateDiffCount != null && clientStateDiffCount > switchCount)) {
+            Integer liveCount = liveDiffCount.get(serviceName);
+            if (liveCount == null
+                    || (clientStateDiffCount != null && clientStateDiffCount > liveCount)) {
                 return forwardRequestToPrimary(serviceName, request, callback);
             }
 
@@ -777,6 +755,69 @@ public class PrimaryBackupManager<NodeIDType> {
 
         throw new IllegalStateException(
                 "Unhandled role " + role + " for service " + serviceName);
+    }
+
+    // =========================================================================
+    // Upon startSnpDiffApplyThread(serviceName)
+    // =========================================================================
+
+    private void startSnpDiffApplyThread(String serviceName, AtomicBoolean stopFlag) {
+        String stateDiffDir = app.getStateDiffDir(serviceName);
+        backgroundThreadPool.submit(() -> {
+            while (!stopFlag.get()) {
+                int nextCount = snpDiffCount.getOrDefault(serviceName, -1) + 1;
+
+                // Scan cmtDiff/ for file matching *:<nextCount>.diff
+                if (stateDiffDir == null) {
+                    sleepQuietly(100);
+                    continue;
+                }
+
+                File dir = new File(stateDiffDir);
+                final int count = nextCount;
+                File[] matches = dir.listFiles((d, name) ->
+                        name.endsWith(":" + count + ".diff"));
+
+                if (matches == null || matches.length == 0) {
+                    sleepQuietly(100);
+                    continue;
+                }
+
+                String filename = matches[0].getName();
+
+                ReentrantLock lock = snpDiffApplyLocks.get(serviceName);
+                if (lock == null) {
+                    sleepQuietly(100);
+                    continue;
+                }
+
+                lock.lock();
+                try {
+                    logger.log(Level.FINEST,
+                            "{0}:PBM snpDiffApplyThread applying count={1} file={2} for {3}",
+                            new Object[]{myNodeID, nextCount, filename, serviceName});
+
+                    boolean applied = app.applySnpDiff(serviceName, filename);
+                    if (!applied) {
+                        logger.log(Level.SEVERE,
+                                "{0}:PBM snpDiffApplyThread failed to apply count={1} for {2}",
+                                new Object[]{myNodeID, nextCount, serviceName});
+                    } else {
+                        snpDiffCount.put(serviceName, nextCount);
+                        logger.log(Level.WARNING,
+                                "{0}:PBM snpDiffApplyThread applied count={1} for {2} " +
+                                        "snpDiffCount={3}",
+                                new Object[]{myNodeID, nextCount, serviceName, nextCount});
+                    }
+                } finally {
+                    lock.unlock();
+                }
+            }
+
+            logger.log(Level.WARNING,
+                    "{0}:PBM snpDiffApplyThread stopped for {1}",
+                    new Object[]{myNodeID, serviceName});
+        });
     }
 
     // =========================================================================
@@ -909,12 +950,21 @@ public class PrimaryBackupManager<NodeIDType> {
         NodeIDType entryNodeID = unstringer.valueOf(packet.getEntryNodeId());
         long originalRequestId = packet.getRequestID();
 
-        return handleClientRequest(serviceName, request, null, false,
+        boolean isWriteRequest = false;
+        if (request instanceof XdnHttpRequest xdnHttpRequest) {
+            HttpMethod method = xdnHttpRequest.getHttpRequest().method();
+            isWriteRequest = method.equals(HttpMethod.POST)
+                    || method.equals(HttpMethod.PUT)
+                    || method.equals(HttpMethod.DELETE)
+                    || method.equals(HttpMethod.PATCH);
+        }
+
+        return handleClientRequest(serviceName, request, null, isWriteRequest,
                 (executedRequest, handled) -> {
                     byte[] encodedResponse = executedRequest.toString()
                             .getBytes(StandardCharsets.ISO_8859_1);
 
-                    if (executedRequest instanceof edu.umass.cs.xdn2.request.XdnHttpRequest xhr) {
+                    if (executedRequest instanceof XdnHttpRequest xhr) {
                         encodedResponse = xhr.toBytes(true);
                     }
 
@@ -975,70 +1025,70 @@ public class PrimaryBackupManager<NodeIDType> {
         }
     }
 
-private boolean scpToBackups(String serviceName, String localPath, String filename) {
-    Set<NodeIDType> nodes = replicaGroups.get(serviceName);
-    if (nodes == null) return true;
+    private boolean scpToBackups(String serviceName, String localPath, String filename) {
+        Set<NodeIDType> nodes = replicaGroups.get(serviceName);
+        if (nodes == null) return true;
 
-    String sshKey = edu.umass.cs.utils.Config.getGlobalString(
-            edu.umass.cs.gigapaxos.PaxosConfig.PC.SSH_KEY_PATH);
+        String sshKey = edu.umass.cs.utils.Config.getGlobalString(
+                edu.umass.cs.gigapaxos.PaxosConfig.PC.SSH_KEY_PATH);
 
-    // Cast unstringer to NodeConfig to get IP addresses
-    @SuppressWarnings("unchecked")
-    NodeConfig<NodeIDType> nodeConfig = (NodeConfig<NodeIDType>) unstringer;
+        // Cast unstringer to NodeConfig to get IP addresses
+        @SuppressWarnings("unchecked")
+        NodeConfig<NodeIDType> nodeConfig = (NodeConfig<NodeIDType>) unstringer;
 
-    // Run scp to all backup nodes in parallel
-    java.util.List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
-    java.util.concurrent.ExecutorService scpPool =
-            java.util.concurrent.Executors.newFixedThreadPool(nodes.size());
+        // Run scp to all backup nodes in parallel
+        java.util.List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
+        java.util.concurrent.ExecutorService scpPool =
+                java.util.concurrent.Executors.newFixedThreadPool(nodes.size());
 
-    for (NodeIDType node : nodes) {
-        if (node.equals(myNodeID)) continue; // skip self
+        for (NodeIDType node : nodes) {
+            if (node.equals(myNodeID)) continue; // skip self
 
-        java.net.InetAddress addr = nodeConfig.getNodeAddress(node);
-        String ip = addr.getHostAddress();
-        String destPath = app.getPrpDiffFilePath(node.toString(), serviceName, filename);
-        String destDir = destPath.substring(0, destPath.lastIndexOf('/') + 1);
+            java.net.InetAddress addr = nodeConfig.getNodeAddress(node);
+            String ip = addr.getHostAddress();
+            String destPath = app.getPrpDiffFilePath(node.toString(), serviceName, filename);
+            String destDir = destPath.substring(0, destPath.lastIndexOf('/') + 1);
 
-        futures.add(scpPool.submit(() -> {
-            String cmd;
-            if (ip.equals("127.0.0.1") || ip.equals("localhost")) {
-                // Same machine — use cp
-                Shell.runCommand("mkdir -p " + destDir);
-                cmd = String.format("cp %s %s", localPath, destPath);
-            } else {
-                // Remote machine — use scp
-                String scpOpts = (sshKey != null && !sshKey.isBlank())
-                        ? "-i " + sshKey + " -o StrictHostKeyChecking=no"
-                        : "-o StrictHostKeyChecking=no";
-                cmd = String.format("scp %s %s %s:%s", scpOpts, localPath, ip, destPath);
-            }
-            logger.log(Level.WARNING,
-                    "{0}:PBM scpToBackups cmd={1}",
-                    new Object[]{myNodeID, cmd});
-            int code = Shell.runCommand(cmd);
-            if (code != 0) {
-                logger.log(Level.SEVERE,
-                        "{0}:PBM scpToBackups failed exit={1} cmd={2}",
-                        new Object[]{myNodeID, code, cmd});
-            }
-            return code == 0;
-        }));
-    }
-
-    scpPool.shutdown();
-    boolean allOk = true;
-    for (java.util.concurrent.Future<Boolean> f : futures) {
-        try {
-            if (!f.get()) allOk = false;
-        } catch (Exception e) {
-            logger.log(Level.SEVERE,
-                    "{0}:PBM scpToBackups exception: {1}",
-                    new Object[]{myNodeID, e.getMessage()});
-            allOk = false;
+            futures.add(scpPool.submit(() -> {
+                String cmd;
+                if (ip.equals("127.0.0.1") || ip.equals("localhost")) {
+                    // Same machine — use cp
+                    Shell.runCommand("mkdir -p " + destDir);
+                    cmd = String.format("cp %s %s", localPath, destPath);
+                } else {
+                    // Remote machine — use scp
+                    String scpOpts = (sshKey != null && !sshKey.isBlank())
+                            ? "-i " + sshKey + " -o StrictHostKeyChecking=no"
+                            : "-o StrictHostKeyChecking=no";
+                    cmd = String.format("scp %s %s %s:%s", scpOpts, localPath, ip, destPath);
+                }
+                logger.log(Level.WARNING,
+                        "{0}:PBM scpToBackups cmd={1}",
+                        new Object[]{myNodeID, cmd});
+                int code = Shell.runCommand(cmd);
+                if (code != 0) {
+                    logger.log(Level.SEVERE,
+                            "{0}:PBM scpToBackups failed exit={1} cmd={2}",
+                            new Object[]{myNodeID, code, cmd});
+                }
+                return code == 0;
+            }));
         }
+
+        scpPool.shutdown();
+        boolean allOk = true;
+        for (java.util.concurrent.Future<Boolean> f : futures) {
+            try {
+                if (!f.get()) allOk = false;
+            } catch (Exception e) {
+                logger.log(Level.SEVERE,
+                        "{0}:PBM scpToBackups exception: {1}",
+                        new Object[]{myNodeID, e.getMessage()});
+                allOk = false;
+            }
+        }
+        return allOk;
     }
-    return allOk;
-}
 
     // =========================================================================
     // Public Methods
@@ -1094,10 +1144,10 @@ private boolean scpToBackups(String serviceName, String localPath, String filena
         public Request getRequest(String stringified) throws RequestParseException {
             if (stringified == null || stringified.isEmpty()) return null;
             PrimaryBackupPacketType packetType = PrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(
-                                    stringified.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+                    stringified.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
             if (packetType != null) {
                 return PrimaryBackupPacket.createFromBytes(stringified.getBytes(
-                                java.nio.charset.StandardCharsets.ISO_8859_1));
+                        java.nio.charset.StandardCharsets.ISO_8859_1));
             }
             return xdnApp.getRequest(stringified);
         }

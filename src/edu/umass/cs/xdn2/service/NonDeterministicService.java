@@ -234,19 +234,26 @@ public class NonDeterministicService {
         return stateDiffRecorder.captureStateDiff(serviceName, epoch);
     }
 
-    /**
-     * Called by PBM on each backup after Paxos commits an ApplyStateDiffPacket.
-     * Applied on a single-threaded executor to preserve ordering.
-     */
-    public boolean applyStatediff(String serviceName, byte[] statediff, String filename) {
+    public boolean saveStatediff(String serviceName, byte[] statediff, String filename) {
         Integer epoch = servicePlacementEpoch.get(serviceName);
         if (epoch == null) {
             logger.log(Level.WARNING,
-                    "{0}:NonDeterministicService applyStatediff() unknown service={1}",
+                    "{0}:NonDeterministicService saveStatediff() unknown service={1}",
                     new Object[]{myNodeId, serviceName});
             return false;
         }
-        return stateDiffRecorder.applyStateDiff(serviceName, epoch, statediff, filename);
+        return stateDiffRecorder.saveStateDiff(serviceName, epoch, statediff, filename);
+    }
+
+    public boolean applySnpDiff(String serviceName, String filename) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) {
+            logger.log(Level.WARNING,
+                    "{0}:NonDeterministicService applySnpDiff() unknown service={1}",
+                    new Object[]{myNodeId, serviceName});
+            return false;
+        }
+        return stateDiffRecorder.applySnpDiff(serviceName, epoch, filename);
     }
 
     public boolean writeToPrpDiff(String serviceName, String filename, byte[] encodedState) {
@@ -376,6 +383,12 @@ public class NonDeterministicService {
         Integer epoch = servicePlacementEpoch.get(serviceName);
         if (epoch == null) return null;
         return stateDiffRecorder.getServiceBaseDir(serviceName, epoch);
+    }
+
+    public String getStateDiffDir(String serviceName) {
+        Integer epoch = servicePlacementEpoch.get(serviceName);
+        if (epoch == null) return null;
+        return stateDiffRecorder.getStateDiffDir(serviceName, epoch);
     }
 
     // -------------------------------------------------------------------------

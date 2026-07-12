@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -31,6 +32,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   // mapping service name and epoch into its fuselog filesystem socket
   private final Map<String, Map<Integer, SocketChannel>> serviceFsSocket;
+
+  private final ConcurrentHashMap<String, ReentrantLock> captureStateDiffLocks =
+          new ConcurrentHashMap<>();
 
   private final Logger logger = Logger.getLogger(FuselogStateDiffRecorder.class.getSimpleName());
 
@@ -303,15 +307,12 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     String socketFile = getSocketPath(serviceName, placementEpoch);
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
 
-    // Close the old channel — this sends EOF to fuselog, causing its handle_client loop to exit.
+    // Close the old channel - this sends EOF to fuselog, causing its handle_client loop to exit.
     if (epochToChannelMap != null) {
       SocketChannel old = epochToChannelMap.get(placementEpoch);
       if (old != null) {
-        try {
-          old.close();
-        } catch (IOException ignored) {
-        }
-        epochToChannelMap.remove(placementEpoch);
+        try { old.close(); } catch (IOException ignored) {}
+        // Don't remove yet — restore on failed reconnect
       }
     }
 
@@ -380,186 +381,204 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
 
-    Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
-    if (epochToChannelMap == null) {
-      logger.log(
-              Level.WARNING,
-              String.format(
-                      "%s:%s - no socket map for service=%s, returning null",
-                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
-      return null;
-    }
-    SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
-    if (socketChannel == null) {
-      logger.log(
-              Level.WARNING,
-              String.format(
-                      "%s:%s - no socket channel for service=%s epoch=%d, returning null",
-                      this.nodeID,
-                      FuselogStateDiffRecorder.class.getSimpleName(),
-                      serviceName,
-                      placementEpoch));
-      return null;
-    }
-
-    long startTime = System.nanoTime();
-
-    // Send get command (g) to the filesystem
+    ReentrantLock lock = captureStateDiffLocks.computeIfAbsent(
+            serviceName, k -> new ReentrantLock());
+    lock.lock();
     try {
+      Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
+      if (epochToChannelMap == null) {
+        logger.log(
+                Level.WARNING,
+                String.format(
+                        "%s:%s - no socket map for service=%s, returning null",
+                        this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
+        return null;
+      }
+      SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
+      if (socketChannel == null) {
+        logger.log(Level.SEVERE, String.format(
+                "%s:%s - no socket channel for service=%s epoch=%d, " +
+                        "registered epochs=%s",
+                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+                serviceName, placementEpoch,
+                epochToChannelMap.keySet()));
+        return null;
+      }
+
+      long startTime = System.nanoTime();
+
+      // Send get command (g) to the filesystem
+      try {
+        logger.log(
+                Level.FINEST,
+                String.format(
+                        "%s:%s - sending FuselogFS command",
+                        this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
+        socketChannel.write(ByteBuffer.wrap("g".getBytes()));
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+
+      // Wait for response indicating the stateDiff size.
+      ByteBuffer sizeBuffer = ByteBuffer.allocate(8);
+      sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
+      sizeBuffer.clear();
       logger.log(
               Level.FINEST,
               String.format(
-                      "%s:%s - sending FuselogFS command",
+                      "%s:%s - reading FuselogFS response",
                       this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
-      socketChannel.write(ByteBuffer.wrap("g".getBytes()));
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    // Wait for response indicating the stateDiff size.
-    ByteBuffer sizeBuffer = ByteBuffer.allocate(8);
-    sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
-    sizeBuffer.clear();
-    logger.log(
-            Level.FINEST,
-            String.format(
-                    "%s:%s - reading FuselogFS response",
-                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
-    int numRead = 0;
-    try {
-      int n;
-      while (numRead < 8) {
-        n = socketChannel.read(sizeBuffer);
-        if (n < 0) {
-          logger.log(
-                  Level.SEVERE,
-                  String.format(
-                          "%s:%s - filesystem socket closed while reading size header after %d bytes;"
-                                  + " reconnecting",
-                          this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
-          reconnectSocket(serviceName, placementEpoch);
-          return null;
+      int numRead = 0;
+      try {
+        int n;
+        while (numRead < 8) {
+          n = socketChannel.read(sizeBuffer);
+          if (n < 0) {
+            logger.log(
+                    Level.SEVERE,
+                    String.format(
+                            "%s:%s - filesystem socket closed while reading size header after %d bytes;"
+                                    + " reconnecting",
+                            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
+            reconnectSocket(serviceName, placementEpoch);
+            return null;
+          }
+          numRead += n;
         }
-        numRead += n;
+      } catch (IOException e) {
+        throw new RuntimeException(e);
       }
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-    long stateDiffSize = sizeBuffer.getLong(0);
-    logger.log(
-            Level.FINE,
-            String.format(
-                    "%s:%s - receiving stateDiff with size=%d bytes",
-                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
-
-    // Sanity-check the size. If it is negative or implausibly large, the socket is
-    // desynchronized (leftover payload bytes from a previous incomplete read are being
-    // misinterpreted as a size header).  Close and reconnect to restore the protocol.
-    if (stateDiffSize < 0 || stateDiffSize > MAX_STATEDIFF_BYTES) {
+      sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
+      long stateDiffSize = sizeBuffer.getLong(0);
       logger.log(
-              Level.SEVERE,
+              Level.FINE,
               String.format(
-                      "%s:%s - garbage stateDiffSize=%d (raw LE bytes=[%s]); reconnecting socket",
+                      "%s:%s - receiving stateDiff with size=%d bytes",
+                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
+
+      // Sanity-check the size. If it is negative or implausibly large, the socket is
+      // desynchronized (leftover payload bytes from a previous incomplete read are being
+      // misinterpreted as a size header).  Close and reconnect to restore the protocol.
+      if (stateDiffSize < 0 || stateDiffSize > MAX_STATEDIFF_BYTES) {
+        logger.log(
+                Level.SEVERE,
+                String.format(
+                        "%s:%s - garbage stateDiffSize=%d (raw LE bytes=[%s]); reconnecting socket",
+                        this.nodeID,
+                        FuselogStateDiffRecorder.class.getSimpleName(),
+                        stateDiffSize,
+                        toHexString(sizeBuffer.array())));
+        reconnectSocket(serviceName, placementEpoch);
+        return null;
+      }
+
+      // Always use blocking reads — the socket is a local Unix domain socket so
+      // network stalls are not a concern. The Selector+timeout approach caused
+      // desync for large diffs (e.g. 200MB MySQL state) where fuselog legitimately
+      // takes longer than the timeout to write all payload bytes.
+      // TODO: if fuselog stall detection is needed in future, implement it via a
+      //  separate watchdog thread rather than a read timeout.
+      ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
+      numRead = 0;
+      try {
+        while (numRead < stateDiffSize) {
+          int n = socketChannel.read(stateDiffBuffer);
+          if (n < 0) {
+            logger.log(Level.SEVERE, String.format(
+                    "%s:%s - socket closed after reading %d/%d bytes",
+                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+                    numRead, stateDiffSize));
+            return null;
+          }
+          numRead += n;
+        }
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+
+      byte[] stateDiff = stateDiffBuffer.array();
+
+      long endTime = System.nanoTime();
+      long elapsedTime = endTime - startTime;
+      double elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
+      logger.log(
+              Level.INFO,
+              String.format(
+                      "%s:%s - capturing stateDiff within %f ms, size=%d bytes",
                       this.nodeID,
                       FuselogStateDiffRecorder.class.getSimpleName(),
-                      stateDiffSize,
-                      toHexString(sizeBuffer.array())));
-      reconnectSocket(serviceName, placementEpoch);
-      return null;
+                      elapsedTimeMs,
+                      stateDiff.length));
+
+      return stateDiff;
+    } finally {
+      lock.unlock();
     }
-
-    // Always use blocking reads — the socket is a local Unix domain socket so
-    // network stalls are not a concern. The Selector+timeout approach caused
-    // desync for large diffs (e.g. 200MB MySQL state) where fuselog legitimately
-    // takes longer than the timeout to write all payload bytes.
-    // TODO: if fuselog stall detection is needed in future, implement it via a
-    //  separate watchdog thread rather than a read timeout.
-    ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
-    numRead = 0;
-    try {
-      while (numRead < stateDiffSize) {
-        int n = socketChannel.read(stateDiffBuffer);
-        if (n < 0) {
-          logger.log(Level.SEVERE, String.format(
-                  "%s:%s - socket closed after reading %d/%d bytes",
-                  this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-                  numRead, stateDiffSize));
-          return null;
-        }
-        numRead += n;
-      }
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    byte[] stateDiff = stateDiffBuffer.array();
-
-    long endTime = System.nanoTime();
-    long elapsedTime = endTime - startTime;
-    double elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
-    logger.log(
-            Level.INFO,
-            String.format(
-                    "%s:%s - capturing stateDiff within %f ms, size=%d bytes",
-                    this.nodeID,
-                    FuselogStateDiffRecorder.class.getSimpleName(),
-                    elapsedTimeMs,
-                    stateDiff.length));
-
-    return stateDiff;
   }
 
   @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch,
-                                byte[] encodedState, String filename) {
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
     assert encodedState != null : "encoded stateDiff should not be null";
 
     String diffFile = getStateDiffDir(serviceName, placementEpoch) + filename;
-    String snapshotDir = getSnapshotDir(serviceName, placementEpoch);
 
     logger.log(Level.INFO, String.format(
-            "%s:%s - applying stateDiff service=%s filename=%s size=%d bytes",
+            "%s:%s - saving stateDiff filename=%s size=%d bytes for %s epoch %d",
             this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-            serviceName, filename, encodedState.length));
+            filename, encodedState.length, serviceName, placementEpoch));
 
-    // Write diff bytes to stateDiff/<count>.diff
-    try (FileOutputStream outputStream = new FileOutputStream(diffFile)) {
-      outputStream.write(encodedState);
-      outputStream.flush();
+    try (FileOutputStream fos = new FileOutputStream(diffFile)) {
+      fos.write(encodedState);
+      fos.flush();
+      return true;
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
 
-    // Apply diff to snapshot/ synchronously via fuselog-apply
-    // Apply diff to snapshot/ synchronously via fuselog-apply
-    // Remove --silent temporarily for diagnosis
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+
+    String diffFile = getStateDiffDir(serviceName, placementEpoch) + filename;
+    String snapshotDir = getSnapshotDir(serviceName, placementEpoch);
+
     String cmd = String.format("%s %s --statediff=%s",
             FUSELOG_APPLY_BIN_PATH, snapshotDir, diffFile);
-    logger.log(Level.INFO, String.format(
-            "%s:%s - running: %s (snapshotDir exists=%b, diffFile exists=%b, diffFile size=%d)",
-            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-            cmd,
-            new File(snapshotDir).exists(),
-            new File(diffFile).exists(),
-            new File(diffFile).length()));
+
+    logger.log(Level.FINE, String.format(
+            "%s:%s - running: %s",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), cmd));
 
     int exitCode = Shell.runCommand(cmd, true);
 
+    logger.log(Level.FINE, String.format(
+            "%s:%s - fuselog-apply exit=%d filename=%s for %s epoch %d",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+            exitCode, filename, serviceName, placementEpoch));
+
     if (exitCode != 0) {
       logger.log(Level.SEVERE, String.format(
-              "%s:%s - failed to apply stateDiff for service=%s filename=%s",
+              "%s:%s - failed to apply snp diff filename=%s for %s epoch %d exit=%d",
               this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              serviceName, filename));
+              filename, serviceName, placementEpoch, exitCode));
       return false;
     }
-
     return true;
   }
 
   @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    logger.log(Level.WARNING, String.format(
+            "%s:%s - removeServiceRecorder called for service=%s epoch=%d stack=%s",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
+            serviceName, placementEpoch,
+            java.util.Arrays.toString(Thread.currentThread().getStackTrace())));
+
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
 

@@ -323,9 +323,12 @@ public class XdnApp
         return nonDeterministicService.captureStatediff(serviceName);
     }
 
-    @Override
-    public boolean applyStatediff(String serviceName, byte[] statediff, String filename) {
-        return nonDeterministicService.applyStatediff(serviceName, statediff, filename);
+    public boolean saveStatediff(String serviceName, byte[] statediff, String filename) {
+        return nonDeterministicService.saveStatediff(serviceName, statediff, filename);
+    }
+
+    public boolean applySnpDiff(String serviceName, String filename) {
+        return nonDeterministicService.applySnpDiff(serviceName, filename);
     }
 
     public boolean writeToPrpDiff(String serviceName, String filename, byte[] encodedState) {
@@ -439,21 +442,6 @@ public class XdnApp
         return true;
     }
 
-    public int getContainerRestartCount(String serviceName) {
-        var instance = getServiceInstance(serviceName);
-        if (instance == null) return -1;
-        // Check the entry component container
-        for (int i = 0; i < instance.containerNames.size(); i++) {
-            if (instance.property.getComponents().get(i).isEntryComponent()) {
-                return sandboxManager.getContainerRestartCount(
-                        instance.containerNames.get(i));
-            }
-        }
-        // Fall back to first container if no entry component found
-        return instance.containerNames.isEmpty() ? -1
-                : sandboxManager.getContainerRestartCount(instance.containerNames.get(0));
-    }
-
     public String getServiceBaseDir(String serviceName) {
         ServiceType type = serviceRegistry.get(serviceName);
         if (type != ServiceType.NON_DETERMINISTIC) return null;
@@ -528,6 +516,10 @@ public class XdnApp
         if (!(request instanceof XdnHttpRequest xdnHttpRequest)) return false;
         return nonDeterministicService.forwardToBackupContainer(
                 serviceName, port, xdnHttpRequest, callback);
+    }
+
+    public String getStateDiffDir(String serviceName) {
+        return nonDeterministicService.getStateDiffDir(serviceName);
     }
 
     // -------------------------------------------------------------------------
