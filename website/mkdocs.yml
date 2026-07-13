@@ -37,6 +37,12 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
+  - pymdownx.arithmatex: # LaTeX math via MathJax (consistency definitions)
+      generic: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
 # Bundle the standalone dashboard SPA into the built site at /dashboard/
 # (it is not a MkDocs page; the hook copies ../dashboard/ on each build).
@@ -49,7 +55,9 @@ nav:
   - Quick Start:
       - Getting started: 'getting-started.md'
       - Multi-container services: 'multi-container.md'
-  - Consistency: 'flexible-consistency.md'
+  - Consistency:
+      - Overview: 'flexible-consistency.md'
+      - Formal definitions: 'consistency-definitions.md'
   - Service Properties: 'service-properties.md'
   - Deployment: 'become-operator.md'
   - Architecture: 'how-xdn-work.md'
