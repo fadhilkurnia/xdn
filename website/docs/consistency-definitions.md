@@ -36,7 +36,8 @@ of \(w_1\)). The order in which a source executes its own writes is its
 
 **Apply order.** Writes propagate between replicas asynchronously. Each
 replica \(r\) applies writes, its own and those it receives, in a local total
-order: its *apply order*. Different replicas may apply the same writes in
+order: its *apply order*. A replica applies a write by re-executing it or by
+applying its statediff. Different replicas may apply the same writes in
 different orders (replicas 1 and 2 in the figure), and a replica may not yet
 have received some writes at all (replica 3).
 
