@@ -77,6 +77,10 @@ public class NonDeterministicService {
     private final ConcurrentHashMap<String, Integer> backup1AllocatedPort = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Integer> backup2AllocatedPort = new ConcurrentHashMap<>();
 
+    // serviceName+suffix ("-b1"/"-b2") → the ServiceInstance actually started as that backup.
+    // Needed because serviceInstances only ever stores the primary instance.
+    private final ConcurrentHashMap<String, ServiceInstance> backupInstances = new ConcurrentHashMap<>();
+
     // State diff recorder: captures and applies filesystem changes
     // Initialized lazily per service via SandboxManager
     private final AbstractStateDiffRecorder stateDiffRecorder;
@@ -362,6 +366,12 @@ public class NonDeterministicService {
         return serviceInstances.get(serviceName);
     }
 
+    public ServiceInstance getBackupInstance(String serviceName,
+                                             AbstractStateDiffRecorder.LiveDirType backup) {
+        String suffix = backup == AbstractStateDiffRecorder.LiveDirType.BACKUP1 ? "-b1" : "-b2";
+        return backupInstances.get(serviceName + suffix);
+    }
+
     public boolean isPrimary(String serviceName) {
         // Delegated from XdnApp; actual primary tracking is in PBM.
         // NonDeterministicService itself does not track role — PBM does.
@@ -528,6 +538,7 @@ public class NonDeterministicService {
                 instance.property, name,
                 String.format("net::%s:%s", myNodeId, name),
                 allocatedPort, backupContainerNames);
+        backupInstances.put(name + suffix, backupInstance);
         boolean started = sandboxManager.startService(backupInstance, epoch, backupLiveDir, allocatedPort);
         if (!started) return false;
 
@@ -550,6 +561,9 @@ public class NonDeterministicService {
         List<String> backupContainerNames = buildContainerNames(name, epoch,
                 instance.property, suffix);
         for (String containerName : backupContainerNames) {
+            logger.log(Level.WARNING,
+                    "{0}:NonDeterministicService stopContainerAsBackup removing {1}",
+                    new Object[]{myNodeId, containerName});
             sandboxManager.stopContainer(containerName);
         }
 
@@ -563,6 +577,8 @@ public class NonDeterministicService {
         } else {
             backup2AllocatedPort.remove(name);
         }
+        backupInstances.remove(name + suffix);
+
 
         return true;
     }

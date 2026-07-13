@@ -159,7 +159,7 @@ public class DockerSandboxManager extends SandboxManager {
 
             String healthcheckCmd = component.getHealthcheckCommand();
             if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
-                healthcheckCmd = inferHealthcheckCmd(imageName);
+                healthcheckCmd = ServiceComponent.inferHealthcheckCmd(imageName);
             }
 
             Integer publishedPort = component.getEntryPort();
@@ -199,7 +199,7 @@ public class DockerSandboxManager extends SandboxManager {
 
             String healthcheckCmd = component.getHealthcheckCommand();
             if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
-                healthcheckCmd = inferHealthcheckCmd(imageName);
+                healthcheckCmd = ServiceComponent.inferHealthcheckCmd(imageName);
             }
 
             Integer publishedPort = component.getEntryPort();
@@ -254,21 +254,17 @@ public class DockerSandboxManager extends SandboxManager {
 
     @Override
     public boolean stopContainer(String containerName) {
-        int stopCode = Shell.runCommand(
-                String.format("docker stop %s", containerName), true);
-        if (stopCode != 0) {
-            logger.log(Level.WARNING,
-                    "{0}:DockerSandboxManager failed to stop container {1} exit={2}",
-                    new Object[]{nodeId, containerName, stopCode});
-        }
-        int rmCode = Shell.runCommand(
-                String.format("docker rm %s", containerName), true);
-        if (rmCode != 0) {
+        logger.log(Level.WARNING,
+                "{0}:DockerSandboxManager stopContainer running: docker rm --force {1}",
+                new Object[]{nodeId, containerName});
+        int code = Shell.runCommand(
+                String.format("docker rm --force %s", containerName), true);
+        if (code != 0) {
             logger.log(Level.WARNING,
                     "{0}:DockerSandboxManager failed to remove container {1} exit={2}",
-                    new Object[]{nodeId, containerName, rmCode});
+                    new Object[]{nodeId, containerName, code});
         }
-        return stopCode == 0 && rmCode == 0;
+        return code == 0;
     }
 
     @Override
@@ -505,6 +501,63 @@ public class DockerSandboxManager extends SandboxManager {
         return false;
     }
 
+    /**
+     * Polls an HTTP endpoint on the given host-published port until it
+     * responds with a 2xx status. Returns true immediately if path is null
+     * (no HTTP healthcheck configured). Uses the same healthcheck interval/
+     * timeout/retries as waitUntilReady().
+     */
+    @Override
+    public boolean waitUntilHttpReady(int port, String path) {
+        if (path == null || path.isBlank()) {
+            return true;
+        }
+
+        String urlStr = String.format("http://127.0.0.1:%d%s", port, path);
+        java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(healthcheckTimeoutSeconds))
+                .build();
+        java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(urlStr))
+                .timeout(Duration.ofSeconds(healthcheckTimeoutSeconds))
+                .GET()
+                .build();
+
+        for (int attempt = 1; attempt <= healthcheckRetries; attempt++) {
+            try {
+                Thread.sleep(healthcheckIntervalSeconds * 1000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+
+            try {
+                var response = client.send(request,
+                        java.net.http.HttpResponse.BodyHandlers.discarding());
+                int status = response.statusCode();
+                if (status >= 200 && status < 300) {
+                    logger.log(Level.INFO,
+                            "{0}:DockerSandboxManager {1} is healthy after {2} attempts",
+                            new Object[]{nodeId, urlStr, attempt});
+                    return true;
+                }
+                logger.log(Level.INFO,
+                        "{0}:DockerSandboxManager waiting for {1}: status={2} attempt={3}/{4}",
+                        new Object[]{nodeId, urlStr, status, attempt, healthcheckRetries});
+            } catch (IOException | InterruptedException e) {
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                logger.log(Level.INFO,
+                        "{0}:DockerSandboxManager waiting for {1}: {2} attempt={3}/{4}",
+                        new Object[]{nodeId, urlStr, e.getMessage(), attempt, healthcheckRetries});
+            }
+        }
+
+        logger.log(Level.WARNING,
+                "{0}:DockerSandboxManager {1} did not become healthy after {2} retries",
+                new Object[]{nodeId, urlStr, healthcheckRetries});
+        return false;
+    }
+
     // -------------------------------------------------------------------------
     // Observability
     // -------------------------------------------------------------------------
@@ -665,20 +718,6 @@ public class DockerSandboxManager extends SandboxManager {
 
     private String buildNetworkName(String serviceName) {
         return String.format("net::%s:%s", nodeId, serviceName);
-    }
-
-    /**
-     * Infers the healthcheck command from the Docker image name.
-     * Only covers known databases. Returns null for unknown images.
-     */
-    private static String inferHealthcheckCmd(String imageName) {
-        if (imageName == null) return null;
-        String lower = imageName.toLowerCase();
-        if (lower.contains("mysql") || lower.contains("mariadb"))
-            return "mysqladmin ping -h 127.0.0.1 --silent";
-        if (lower.contains("postgres"))
-            return "pg_isready -U postgres";
-        return null;
     }
 
     /**

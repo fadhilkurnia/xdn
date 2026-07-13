@@ -409,29 +409,56 @@ public class XdnApp
     }
 
     public boolean waitUntilReady(String serviceName) {
-        return waitUntilReady(serviceName, null);
+        return waitUntilReady(serviceName, (Set<String>) null);
     }
 
-    // TODO: remove redundant healthcheck on stateful container — it is already
-    //  waited on inside startService(). This overload is a step toward only
-    //  waiting on non-stateful containers here.
-    // TODO: add an overload to allow waiting for a specific container only.
-    // Waits until all containers for the given service are healthy.
-    // Iterates containerNames and components in order (they correspond 1-to-1).
     public boolean waitUntilReady(String serviceName, Set<String> containerNames) {
         var instance = getServiceInstance(serviceName);
         if (instance == null) return false;
+        return waitUntilInstanceReady(serviceName, instance, containerNames);
+    }
 
-        List<ServiceComponent> components =
-                instance.property.getComponents();
+    // Waits until all containers for the given service's active backup
+    // (backup1 or backup2) are healthy. Resolves the backup-specific
+    // ServiceInstance (its own container names + port), not the primary's.
+    public boolean waitUntilReady(String serviceName,
+                                  AbstractStateDiffRecorder.LiveDirType backup) {
+        var instance = nonDeterministicService.getBackupInstance(serviceName, backup);
+        if (instance == null) return false;
+        return waitUntilInstanceReady(serviceName, instance, null);
+    }
+
+    // TODO: remove redundant healthcheck on stateful container — it is already
+    //  waited on inside startService(). This is a step toward only waiting on
+    //  non-stateful containers here.
+    // Iterates containerNames and components in order (they correspond 1-to-1).
+    // Branches per component: stateful → docker-inspect health poll (existing
+    // path); entry/non-stateful → HTTP endpoint poll (component's declared
+    // healthEndpointPath against the instance's own allocatedHttpPort).
+    private boolean waitUntilInstanceReady(String serviceName, ServiceInstance instance,
+                                           Set<String> containerNames) {
+        List<ServiceComponent> components = instance.property.getComponents();
 
         for (int i = 0; i < instance.containerNames.size(); i++) {
             String containerName = instance.containerNames.get(i);
             if (containerNames != null && !containerNames.contains(containerName)) continue;
-            String healthcheckCmd = (i < components.size())
-                    ? components.get(i).getHealthcheckCommand()
-                    : null;
-            boolean ready = sandboxManager.waitUntilReady(containerName, healthcheckCmd);
+            if (i >= components.size()) continue;
+            ServiceComponent component = components.get(i);
+
+            boolean ready;
+            if (component.getHealthEndpointPath() != null) {
+                // HTTP path takes priority when present -- validates the app
+                // end-to-end rather than just the container's DB layer.
+                ready = sandboxManager.waitUntilHttpReady(
+                        instance.allocatedHttpPort, component.getHealthEndpointPath());
+            } else {
+                String healthcheckCmd = component.getHealthcheckCommand();
+                if (healthcheckCmd == null) {
+                    healthcheckCmd = ServiceComponent.inferHealthcheckCmd(component.getImageName());
+                }
+                ready = sandboxManager.waitUntilReady(containerName, healthcheckCmd);
+            }
+
             if (!ready) {
                 logger.log(Level.WARNING,
                         "{0}:XdnApp waitUntilReady() container {1} not ready for {2}",

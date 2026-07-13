@@ -197,6 +197,20 @@ public abstract class SandboxManager {
      */
     public abstract boolean waitUntilReady(String containerName, String healthcheckCmd);
 
+    /**
+     * Polls an HTTP endpoint on the given host-published port until it
+     * responds with a 2xx status, or returns true immediately if path is
+     * null. Used for entry (non-stateful) components, whose readiness can't
+     * be inferred from a known image name the way stateful DB images can.
+     * Interval, timeout, and retry count are set at construction time from
+     * XdnConfig, same as waitUntilReady().
+     *
+     * @param port host-published port to poll
+     * @param path HTTP path to GET, or null to skip
+     * @return true iff the endpoint became ready within the configured retries
+     */
+    public abstract boolean waitUntilHttpReady(int port, String path);
+
     // -------------------------------------------------------------------------
     // Observability
     // -------------------------------------------------------------------------

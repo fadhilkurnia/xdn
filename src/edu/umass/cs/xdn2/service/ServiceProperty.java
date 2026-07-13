@@ -151,16 +151,52 @@ public class ServiceProperty {
         env = parseEnvironmentVariables(envJSON);
       }
 
+      // parse healthcheck: this component may be both stateful and entry at
+      // once (self-contained single-container app), so either a command or
+      // an HTTP path is acceptable -- HTTP path is preferred since it
+      // validates the app end-to-end rather than just the DB layer.
+      String healthcheckCommand = null;
+      String healthEndpointPath = null;
+      if (json.has("healthcheck")) {
+        Object healthcheckRaw = json.get("healthcheck");
+        if (healthcheckRaw instanceof JSONObject) {
+          JSONObject healthcheckObj = (JSONObject) healthcheckRaw;
+          if (healthcheckObj.has("path")) {
+            healthEndpointPath = healthcheckObj.getString("path");
+          }
+          if (healthcheckObj.has("command")) {
+            healthcheckCommand = healthcheckObj.getString("command");
+          }
+          if (healthEndpointPath == null && healthcheckCommand == null) {
+            throw new IllegalStateException(
+                    "healthcheck object requires a 'command' or 'path' field");
+          }
+        } else if (healthcheckRaw instanceof String) {
+          healthcheckCommand = (String) healthcheckRaw;
+        } else {
+          throw new IllegalStateException("healthcheck must be a string or object");
+        }
+      }
+      if (healthEndpointPath == null && healthcheckCommand == null) {
+        healthcheckCommand = ServiceComponent.inferHealthcheckCmd(imageName);
+        if (healthcheckCommand == null) {
+          throw new IllegalStateException(
+                  "no healthcheck available for image '" + imageName + "' -- specify "
+                          + "an explicit healthcheck path or command");
+        }
+      }
+
       ServiceComponent c =
-          new ServiceComponent(
-              serviceName,
-              imageName,
-              entryPort,
-              (stateDirectory != null),
-              true,
-              entryPort,
-              env,
-              null);
+              new ServiceComponent(
+                      serviceName,
+                      imageName,
+                      entryPort,
+                      (stateDirectory != null),
+                      true,
+                      entryPort,
+                      env,
+                      healthcheckCommand,
+                      healthEndpointPath);
       components.add(c);
     }
     // case-2: handle service with multiple components
@@ -488,42 +524,81 @@ public class ServiceProperty {
         env = parseEnvironmentVariables(envJSON);
       }
 
-      // parse healthcheck command for multi-component readiness gating
+      // parse healthcheck command (stateful) or health endpoint path (entry)
+      // for multi-component readiness gating
       String healthcheckCommand = null;
+      String healthEndpointPath = null;
       if (componentDetailJSON.has("healthcheck")) {
         Object healthcheckRaw = componentDetailJSON.get("healthcheck");
         if (healthcheckRaw instanceof JSONObject) {
           JSONObject healthcheckObj = (JSONObject) healthcheckRaw;
-          if (!healthcheckObj.has("command")) {
+          boolean hasCommand = healthcheckObj.has("command");
+          boolean hasPath = healthcheckObj.has("path");
+          if (!hasCommand && !hasPath) {
             throw new IllegalStateException(
-                "healthcheck object requires a 'command' field for component '"
-                    + componentName
-                    + "'");
+                    "healthcheck object requires at least one of 'command' or 'path' "
+                            + "for component '" + componentName + "'");
           }
-          healthcheckCommand = healthcheckObj.getString("command");
+          if (hasPath) {
+            healthEndpointPath = healthcheckObj.getString("path");
+          }
+          if (hasCommand) {
+            healthcheckCommand = healthcheckObj.getString("command");
+          }
         } else if (healthcheckRaw instanceof String) {
           healthcheckCommand = (String) healthcheckRaw;
         } else {
           throw new IllegalStateException(
-              "healthcheck must be a string or object for component '" + componentName + "'");
+                  "healthcheck must be a string or object for component '" + componentName + "'");
         }
 
-        if (healthcheckCommand == null || healthcheckCommand.isEmpty()) {
+        if (healthcheckCommand != null && healthcheckCommand.isEmpty()) {
           throw new IllegalStateException(
-              "healthcheck command cannot be empty for component '" + componentName + "'");
+                  "healthcheck command cannot be empty for component '" + componentName + "'");
+        }
+        if (healthEndpointPath != null && healthEndpointPath.isEmpty()) {
+          throw new IllegalStateException(
+                  "healthcheck path cannot be empty for component '" + componentName + "'");
         }
       }
 
+      // Validate readiness signaling is resolvable for every component.
+      // Entry components (even if also stateful, e.g. a self-contained
+      // single-container service) are checked first and require an explicit
+      // healthcheck (path or command) -- no image-based inference, since the
+      // point is to validate the app end-to-end, not just a known DB image.
+      if (isEntry) {
+        if (healthEndpointPath == null && healthcheckCommand == null) {
+          throw new IllegalStateException(
+                  "entry component '" + componentName + "' requires a healthcheck "
+                          + "('path' or 'command')");
+        }
+      } else if (isStateful) {
+        if (healthcheckCommand == null
+                && ServiceComponent.inferHealthcheckCmd(imageName) == null) {
+          throw new IllegalStateException(
+                  "no healthcheck available for stateful image '" + imageName
+                          + "', component '" + componentName + "' -- specify an explicit "
+                          + "healthcheck command");
+        }
+      } else {
+        // TODO: support additional non-entry stateless components
+        throw new IllegalStateException(
+                "component '" + componentName + "' is neither stateful nor entry -- "
+                        + "unsupported topology");
+      }
+
       components.add(
-          new ServiceComponent(
-              componentName,
-              imageName,
-              exposedPort == 0 ? null : exposedPort,
-              isStateful,
-              isEntry,
-              entryPort == 0 ? null : entryPort,
-              env,
-              healthcheckCommand));
+              new ServiceComponent(
+                      componentName,
+                      imageName,
+                      exposedPort == 0 ? null : exposedPort,
+                      isStateful,
+                      isEntry,
+                      entryPort == 0 ? null : entryPort,
+                      env,
+                      healthcheckCommand,
+                      healthEndpointPath));
     }
 
     return components;

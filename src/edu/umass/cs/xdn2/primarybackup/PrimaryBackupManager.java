@@ -526,107 +526,117 @@ public class PrimaryBackupManager<NodeIDType> {
             AbstractStateDiffRecorder.LiveDirType currentLiveType = null;
             long lastSwitchTimeMs = 0;
 
-            while (!stopFlag.get()) {
-                long now = System.currentTimeMillis();
-                if (lastSwitchTimeMs != 0 && now - lastSwitchTimeMs < 30_000) {
-                    sleepQuietly(1000);
-                    continue;
-                }
+            try {
+                while (!stopFlag.get()) {
+                    long now = System.currentTimeMillis();
+                    logger.log(Level.FINE,
+                            "{0}:PBM initializeBackupContainer poller tick for {1} " +
+                                    "currentLiveType={2}",
+                            new Object[]{myNodeID, serviceName, currentLiveType});
+                    if (lastSwitchTimeMs != 0 && now - lastSwitchTimeMs < 30_000) {
+                        sleepQuietly(1000);
+                        continue;
+                    }
 
-                // Decide next live type
-                AbstractStateDiffRecorder.LiveDirType nextLiveType =
-                        (currentLiveType == null ||
-                                currentLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP2)
-                                ? AbstractStateDiffRecorder.LiveDirType.BACKUP1
-                                : AbstractStateDiffRecorder.LiveDirType.BACKUP2;
+                    // Decide next live type
+                    AbstractStateDiffRecorder.LiveDirType nextLiveType =
+                            (currentLiveType == null ||
+                                    currentLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP2)
+                                    ? AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                                    : AbstractStateDiffRecorder.LiveDirType.BACKUP2;
 
-                String nextLivePrefix =
-                        nextLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP1
-                                ? ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX
-                                : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
+                    String nextLivePrefix =
+                            nextLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                                    ? ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX
+                                    : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
 
-                ReentrantLock snpLock = snpDiffApplyLocks.get(serviceName);
-                if (snpLock == null) {
-                    // TODO: stop snpDiffApplyThread properly - not yet implemented
-                    throw new IllegalStateException(
-                            "snpDiffApplyLock is null for " + serviceName);
-                }
+                    ReentrantLock snpLock = snpDiffApplyLocks.get(serviceName);
+                    if (snpLock == null) {
+                        // TODO: stop snpDiffApplyThread properly - not yet implemented
+                        throw new IllegalStateException(
+                                "snpDiffApplyLock is null for " + serviceName);
+                    }
 
-                snpLock.lock();
-                int currentSnpDiffCount;
-                boolean started;
-                try {
-                    currentSnpDiffCount = snpDiffCount.getOrDefault(serviceName, -1);
+                    snpLock.lock();
+                    int currentSnpDiffCount;
+                    boolean started;
+                    try {
+                        currentSnpDiffCount = snpDiffCount.getOrDefault(serviceName, -1);
+                        logger.log(Level.WARNING,
+                                "{0}:PBM initializeBackupContainer starting {1} " +
+                                        "at snpDiffCount={2} for {3}",
+                                new Object[]{myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
+                        started = this.app.restore(serviceName, nextLivePrefix);
+                        liveDiffCount.put(serviceName, currentSnpDiffCount);
+                    } finally {
+                        snpLock.unlock();
+                    }
+
+                    if (!started) {
+                        logger.log(Level.SEVERE,
+                                "{0}:PBM initializeBackupContainer failed to start {1} for {2}",
+                                new Object[]{myNodeID, nextLiveType, serviceName});
+                        // Do NOT update lastSwitchTimeMs
+                        app.stopBackupContainer(serviceName, nextLiveType);
+                        sleepQuietly(5000);
+                        continue;
+                    }
+
+                    // Wait for new container to be healthy
+                    boolean ready = this.app.waitUntilReady(serviceName, nextLiveType);
+                    if (!ready) {
+                        logger.log(Level.SEVERE,
+                                "{0}:PBM initializeBackupContainer container failed healthcheck {1} for {2}",
+                                new Object[]{myNodeID, nextLiveType, serviceName});
+                        app.stopBackupContainer(serviceName, nextLiveType);
+                        sleepQuietly(5000);
+                        continue;
+                    }
+
+                    // Reroute: update currentLiveDirType BEFORE liveDiffCount
+                    // liveDiffCount already set inside the lock above
+                    currentLiveDirType.put(serviceName, nextLiveType);
+
                     logger.log(Level.WARNING,
-                            "{0}:PBM initializeBackupContainer starting {1} " +
-                                    "at snpDiffCount={2} for {3}",
+                            "{0}:PBM initializeBackupContainer switched to {1} " +
+                                    "liveDiffCount={2} for {3} — container healthy and serving requests",
                             new Object[]{myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
-                    started = this.app.restore(serviceName, nextLivePrefix);
-                    liveDiffCount.put(serviceName, currentSnpDiffCount);
-                } finally {
-                    snpLock.unlock();
+
+                    // Record switchover to log file
+                    String switchoverLog = app.getServiceBaseDir(serviceName) + "switchovers.log";
+                    String logLine = System.currentTimeMillis() + " "
+                            + myNodeID.toString() + " "
+                            + nextLiveType.name().toLowerCase() + " "
+                            + currentSnpDiffCount + "\n";
+                    try {
+                        Files.writeString(
+                                java.nio.file.Path.of(switchoverLog),
+                                logLine,
+                                java.nio.file.StandardOpenOption.CREATE,
+                                java.nio.file.StandardOpenOption.APPEND);
+                    } catch (java.io.IOException e) {
+                        logger.log(Level.WARNING,
+                                "{0}:PBM initializeBackupContainer failed to write " +
+                                        "switchover log for {1}: {2}",
+                                new Object[]{myNodeID, serviceName, e.getMessage()});
+                    }
+
+                    // Stop old container (skip on first iteration)
+                    if (currentLiveType != null) {
+                        logger.log(Level.WARNING,
+                                "{0}:PBM initializeBackupContainer stopping old {1} for {2}",
+                                new Object[]{myNodeID, currentLiveType, serviceName});
+                        this.app.stopBackupContainer(serviceName, currentLiveType);
+                    }
+
+                    // Update tracking — only on success
+                    currentLiveType = nextLiveType;
+                    lastSwitchTimeMs = now;
                 }
-
-                if (!started) {
-                    logger.log(Level.SEVERE,
-                            "{0}:PBM initializeBackupContainer failed to start {1} for {2}",
-                            new Object[]{myNodeID, nextLiveType, serviceName});
-                    // Do NOT update lastSwitchTimeMs
-                    app.stopBackupContainer(serviceName, nextLiveType);
-                    sleepQuietly(5000);
-                    continue;
-                }
-
-                // Wait for new container to be healthy
-                boolean ready = this.app.waitUntilReady(serviceName);
-                if (!ready) {
-                    logger.log(Level.SEVERE,
-                            "{0}:PBM initializeBackupContainer container failed healthcheck {1} for {2}",
-                            new Object[]{myNodeID, nextLiveType, serviceName});
-                    app.stopBackupContainer(serviceName, nextLiveType);
-                    sleepQuietly(5000);
-                    continue;
-                }
-
-                // Reroute: update currentLiveDirType BEFORE liveDiffCount
-                // liveDiffCount already set inside the lock above
-                currentLiveDirType.put(serviceName, nextLiveType);
-
-                logger.log(Level.WARNING,
-                        "{0}:PBM initializeBackupContainer switched to {1} " +
-                                "liveDiffCount={2} for {3} — container healthy and serving requests",
-                        new Object[]{myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
-
-                // Record switchover to log file
-                String switchoverLog = app.getServiceBaseDir(serviceName) + "switchovers.log";
-                String logLine = System.currentTimeMillis() + " "
-                        + myNodeID.toString() + " "
-                        + nextLiveType.name().toLowerCase() + " "
-                        + currentSnpDiffCount + "\n";
-                try {
-                    java.nio.file.Files.writeString(
-                            java.nio.file.Path.of(switchoverLog),
-                            logLine,
-                            java.nio.file.StandardOpenOption.CREATE,
-                            java.nio.file.StandardOpenOption.APPEND);
-                } catch (java.io.IOException e) {
-                    logger.log(Level.WARNING,
-                            "{0}:PBM initializeBackupContainer failed to write " +
-                                    "switchover log for {1}: {2}",
-                            new Object[]{myNodeID, serviceName, e.getMessage()});
-                }
-
-                // Stop old container (skip on first iteration)
-                if (currentLiveType != null) {
-                    logger.log(Level.WARNING,
-                            "{0}:PBM initializeBackupContainer stopping old {1} for {2}",
-                            new Object[]{myNodeID, currentLiveType, serviceName});
-                    this.app.stopBackupContainer(serviceName, currentLiveType);
-                }
-
-                // Update tracking — only on success
-                currentLiveType = nextLiveType;
-                lastSwitchTimeMs = now;
+            } catch (Throwable t) {
+                logger.log(Level.SEVERE,
+                        "{0}:PBM initializeBackupContainer poller for {1} died: {2}",
+                        new Object[]{myNodeID, serviceName, t});
             }
         });
     }
@@ -804,7 +814,7 @@ public class PrimaryBackupManager<NodeIDType> {
                                 new Object[]{myNodeID, nextCount, serviceName});
                     } else {
                         snpDiffCount.put(serviceName, nextCount);
-                        logger.log(Level.WARNING,
+                        logger.log(Level.FINE,
                                 "{0}:PBM snpDiffApplyThread applied count={1} for {2} " +
                                         "snpDiffCount={3}",
                                 new Object[]{myNodeID, nextCount, serviceName, nextCount});

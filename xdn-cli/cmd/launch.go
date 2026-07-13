@@ -97,6 +97,12 @@ func init() {
 	LaunchCmd.PersistentFlags().Int("min-replicas", 0, "minimum number of replicas (lower bound for reconfiguration)")
 	LaunchCmd.PersistentFlags().Int("max-replicas", 0, "maximum number of replicas (upper bound for reconfiguration)")
 
+	// TODO: add --healthcheck-path / --healthcheck-cmd flags for the flags-based
+	//  launch path (no -f file). Without these, a service launched this way can
+	//  never satisfy the server-side healthcheck validation unless its image is
+	//  a known DB image (mysql/mariadb/postgres). See ServiceProperty.parseServiceComponents()
+	//  (Java side) for the validation this needs to satisfy.
+
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")
 }
@@ -211,6 +217,11 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		"consistency":   prop.consistencyModel,
 		"deterministic": prop.isDeterministic,
 	}
+
+	// TODO: once --healthcheck-path/--healthcheck-cmd flags exist, add:
+	//   config["healthcheck"] = map[string]string{"path": ..., "command": ...}
+	// (only setting whichever was provided). Until then, launching via flags
+	// (no -f file) will fail server-side validation for any non-DB image.
 
 	if len(prop.envVars) > 0 {
 		var envList []map[string]string
