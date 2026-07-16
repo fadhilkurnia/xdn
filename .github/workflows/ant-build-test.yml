@@ -121,6 +121,7 @@ jobs:
       matrix:
         test_class:
           - XdnEventualConsistencyBatchingTest
+          - XdnEventualConvergenceTest
           - XdnGetReplicaInfoTest
           - XdnMultiServiceTest
           - XdnPerReplicaRequestTest
@@ -140,12 +141,13 @@ jobs:
       uses: docker-practice/actions-setup-docker@master
       timeout-minutes: 12
 
-    - name: 📦 Verify Docker and pre-pull bookcatalog image
+    - name: 📦 Verify Docker and pre-pull test images
       run: |
         set -x
         docker version
         docker run --rm hello-world
         docker pull fadhilkurnia/xdn-bookcatalog
+        docker pull fadhilkurnia/xdn-randstate
 
     - name: 🔄 Set up Rsync
       uses: GuillaumeFalourd/setup-rsync@v1.2

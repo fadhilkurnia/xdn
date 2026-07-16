@@ -382,7 +382,7 @@
         <mkdir dir="build/test-classes"/>
         <javac srcdir="test"
                destdir="build/test-classes"
-               includeantruntime="false">
+               includeantruntime="false" release="21">
             <classpath>
                 <pathelement path="build/classes"/>
                 <path refid="classpath.test"/>
