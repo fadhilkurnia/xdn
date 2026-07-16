@@ -768,8 +768,18 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
   private AbstractReplicaCoordinator<NodeIDType> inferCoordinatorByProperties(
       ServiceProperty serviceProperties) {
-    // For non-deterministic service we always use primary-backup, the only coordinator
-    // we have implemented that can handle non-determinism.
+    // An explicitly declared EVENTUAL consistency always uses the anti-entropy
+    // LazyReplicaCoordinator, regardless of determinism or declared behaviors:
+    // frontier-based checkpoint transfer converges replicas to identical state even
+    // for non-deterministic, non-commutative services (see edu.umass.cs.eventual).
+    // Primary-backup remains the default only for strong consistency on
+    // non-deterministic services.
+    if (serviceProperties.getConsistencyModel().equals(ConsistencyModel.EVENTUAL)) {
+      return this.lazyReplicaCoordinator;
+    }
+
+    // For non-deterministic service we otherwise use primary-backup, the only coordinator
+    // we have implemented that can handle non-determinism under strong consistency.
     if (!serviceProperties.isDeterministic()) {
       return this.primaryBackupCoordinator;
     }
@@ -835,19 +845,6 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       if (declaredConsModel.equals(ConsistencyModel.PRAM)
           && !nonRmwBehaviors.containsAll(allDeclaredBehaviors)) {
         return this.awReplicaCoordinator;
-      }
-
-      // Lazy replications generally works for service whose operations are monotonic.
-      Set<RequestBehaviorType> protocolConstraints =
-          new HashSet<>(
-              Arrays.asList(
-                  RequestBehaviorType.MONOTONIC,
-                  RequestBehaviorType.READ_ONLY,
-                  RequestBehaviorType.WRITE_ONLY));
-      allDeclaredBehaviors.remove(RequestBehaviorType.NIL_EXTERNAL); // optional
-      if (declaredConsModel.equals(ConsistencyModel.EVENTUAL)
-          && allDeclaredBehaviors.equals(protocolConstraints)) {
-        return this.lazyReplicaCoordinator;
       }
 
       // It is always safe to fall back with sequential consistency, if the service

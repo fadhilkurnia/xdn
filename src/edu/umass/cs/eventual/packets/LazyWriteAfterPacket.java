@@ -8,7 +8,6 @@ import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.nio.interfaces.Byteable;
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -16,25 +15,41 @@ import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+/**
+ * LazyWriteAfterPacket is the best-effort fast path: after executing and acknowledging a client
+ * write, the source replica broadcasts the encoded write, stamped with its per-source sequence
+ * number, so peers can apply it eagerly. Peers apply a write-after only when it is contiguous
+ * with their vector clock; gapped or duplicate packets are dropped and the periodic anti-entropy
+ * checkpoint transfer recovers the missed writes.
+ */
 public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
 
     private final long packetId;
     private final String senderId;
-    private final ClientRequest clientWriteOnlyRequest;
+    private final long senderSeqNum;
+    private final int epoch;
+    private final ClientRequest clientRequest;   // parsed request (receive side / execution)
+    private final byte[] encodedClientRequest;   // wire encoding (send side)
+    private final String serviceName;
 
-    public LazyWriteAfterPacket(String senderId, ClientRequest clientWriteOnlyRequest) {
-        this(UUID.randomUUID().getLeastSignificantBits(), senderId, clientWriteOnlyRequest);
+    public LazyWriteAfterPacket(String senderId, long senderSeqNum, int epoch,
+                                ClientRequest clientRequest, byte[] encodedClientRequest) {
+        this(UUID.randomUUID().getLeastSignificantBits(), senderId, senderSeqNum, epoch,
+                clientRequest, encodedClientRequest);
     }
 
-    private LazyWriteAfterPacket(long packetId, String senderId, ClientRequest clientWriteOnlyRequest) {
+    private LazyWriteAfterPacket(long packetId, String senderId, long senderSeqNum, int epoch,
+                                 ClientRequest clientRequest, byte[] encodedClientRequest) {
         assert packetId != 0 : "A likely invalid packetID given";
         assert senderId != null : "The sender cannot be null";
-        assert clientWriteOnlyRequest != null : "The provided ClientRequest cannot be null";
-        assert (clientWriteOnlyRequest instanceof BehavioralRequest br && br.isWriteOnlyRequest()) :
-                "The provided ClientRequest must be a WriteOnlyRequest";
+        assert clientRequest != null : "The provided ClientRequest cannot be null";
         this.packetId = packetId;
         this.senderId = senderId;
-        this.clientWriteOnlyRequest = clientWriteOnlyRequest;
+        this.senderSeqNum = senderSeqNum;
+        this.epoch = epoch;
+        this.clientRequest = clientRequest;
+        this.encodedClientRequest = encodedClientRequest;
+        this.serviceName = clientRequest.getServiceName();
     }
 
     @Override
@@ -44,7 +59,7 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
 
     @Override
     public String getServiceName() {
-        return this.clientWriteOnlyRequest.getServiceName();
+        return this.serviceName;
     }
 
     @Override
@@ -57,19 +72,34 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
         return true;
     }
 
-    public ClientRequest getClientWriteOnlyRequest() {
-        return clientWriteOnlyRequest;
+    public String getSenderId() {
+        return senderId;
+    }
+
+    public long getSenderSeqNum() {
+        return senderSeqNum;
+    }
+
+    public int getEpoch() {
+        return epoch;
+    }
+
+    public ClientRequest getClientRequest() {
+        return clientRequest;
     }
 
     @Override
     public byte[] toBytes() {
-        byte[] encodedClientRequest = this.clientWriteOnlyRequest.toBytes();
+        byte[] encodedRequest = this.encodedClientRequest != null
+                ? this.encodedClientRequest : this.clientRequest.toBytes();
         String serviceName = this.getServiceName();
 
         int payloadSize = CodedOutputStream.computeInt64Size(1, this.packetId)
                 + CodedOutputStream.computeStringSize(2, this.senderId)
                 + CodedOutputStream.computeStringSize(3, serviceName)
-                + CodedOutputStream.computeByteArraySize(4, encodedClientRequest);
+                + CodedOutputStream.computeByteArraySize(4, encodedRequest)
+                + CodedOutputStream.computeInt64Size(5, this.senderSeqNum)
+                + CodedOutputStream.computeInt32Size(6, this.epoch);
 
         byte[] serialized = new byte[Integer.BYTES + payloadSize];
         ByteBuffer.wrap(serialized, 0, Integer.BYTES).putInt(this.getRequestType().getInt());
@@ -79,7 +109,9 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
             output.writeInt64(1, this.packetId);
             output.writeString(2, this.senderId);
             output.writeString(3, serviceName);
-            output.writeByteArray(4, encodedClientRequest);
+            output.writeByteArray(4, encodedRequest);
+            output.writeInt64(5, this.senderSeqNum);
+            output.writeInt32(6, this.epoch);
             output.flush();
         } catch (IOException e) {
             throw new RuntimeException("Failed to serialize LazyWriteAfterPacket", e);
@@ -108,6 +140,8 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
         String senderId = null;
         String serviceName = null;
         byte[] encodedClientRequest = null;
+        long senderSeqNum = 0;
+        int epoch = 0;
 
         CodedInputStream input = CodedInputStream.newInstance(
                 encodedPacket, Integer.BYTES, encodedPacket.length - Integer.BYTES);
@@ -119,6 +153,8 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
                     case 18 -> senderId = input.readStringRequireUtf8();
                     case 26 -> serviceName = input.readStringRequireUtf8();
                     case 34 -> encodedClientRequest = input.readByteArray();
+                    case 40 -> senderSeqNum = input.readInt64();
+                    case 48 -> epoch = input.readInt32();
                     default -> input.skipField(tag);
                 }
             }
@@ -142,8 +178,6 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
 
         assert (clientRequest instanceof ClientRequest) :
                 "The request inside LazyWriteAfterPacket must implement ClientRequest interface";
-        assert (clientRequest instanceof BehavioralRequest br && br.isWriteOnlyRequest()) :
-                "The client request inside LazyWriteAfterPacket must be WriteOnlyRequest";
 
         ClientRequest concreteRequest = (ClientRequest) clientRequest;
         if (serviceName != null && !serviceName.equals(concreteRequest.getServiceName())) {
@@ -151,6 +185,7 @@ public class LazyWriteAfterPacket extends LazyPacket implements Byteable {
                     "Service name mismatch when decoding LazyWriteAfterPacket");
         }
 
-        return new LazyWriteAfterPacket(packetId, senderId, concreteRequest);
+        return new LazyWriteAfterPacket(packetId, senderId, senderSeqNum, epoch, concreteRequest,
+                encodedClientRequest);
     }
 }

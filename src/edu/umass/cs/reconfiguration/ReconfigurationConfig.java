@@ -594,6 +594,22 @@ public class ReconfigurationConfig {
         XDN_FUSELOG_BASE_DIR("/tmp/xdn/state/fuselog/"),
 
         /**
+         * Anti-entropy round period (ms) for the eventual-consistency
+         * LazyReplicaCoordinator: every period, replicas exchange vector clocks and
+         * state digests, and a frontier replica ships its checkpoint to lagging peers.
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_EVENTUAL_ANTI_ENTROPY_INTERVAL_MS(5000L),
+
+        /**
+         * Maximum checkpoint size (bytes) shipped inline inside a LazyCheckpointPacket;
+         * larger checkpoints use an out-of-band LargeCheckpointer handle. Must stay
+         * below NIO_MAX_PAYLOAD_SIZE with headroom.
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_EVENTUAL_CHECKPOINT_INLINE_MAX_BYTES(8_000_000L),
+
+        /**
          * A flag to enable/disable batching in HttpActiveReplica.
          */
         HTTP_AR_FRONTEND_BATCH_ENABLED(false),

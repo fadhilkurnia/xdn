@@ -2,6 +2,7 @@ package edu.umass.cs.xdn;
 
 import static org.junit.Assert.assertNotNull;
 
+import edu.umass.cs.eventual.interfaces.CheckpointableApplication;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -38,6 +39,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -48,10 +51,15 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.json.JSONException;
 
 public class XdnGigapaxosApp
-    implements Replicable, Reconfigurable, BackupableApplication, InitialStateValidator {
+    implements Replicable,
+        Reconfigurable,
+        BackupableApplication,
+        CheckpointableApplication,
+        InitialStateValidator {
 
   private final boolean IS_RESTART_UPON_STATE_DIFF_APPLY = false;
 
@@ -1848,6 +1856,229 @@ public class XdnGigapaxosApp
     }
 
     return true;
+  }
+
+  // ==================== CheckpointableApplication (eventual consistency) ====================
+  // Whole-state checkpoint capture/restore used by LazyReplicaCoordinator's frontier-based
+  // anti-entropy. Capture archives the recorder's state directory of the LIVE service (the
+  // coordinator excludes writes while capturing, and CSM crash-consistency covers snapshots
+  // taken at request boundaries). Restore stops the containers, replaces the state directory,
+  // restarts the containers, and waits until the service answers HTTP again, because
+  // execute() silently no-ops while the container is unreachable.
+
+  @Override
+  public byte[] captureCheckpoint(String serviceName) {
+    String tarPath = this.captureCheckpointTar(serviceName);
+    if (tarPath == null) return null;
+    try {
+      return Files.readAllBytes(Paths.get(tarPath));
+    } catch (IOException e) {
+      logger.log(Level.SEVERE, "Failed to read captured checkpoint of " + serviceName, e);
+      return null;
+    }
+  }
+
+  @Override
+  public String captureCheckpointHandle(String serviceName) {
+    String tarPath = this.captureCheckpointTar(serviceName);
+    if (tarPath == null) return null;
+    return this.largeCheckpointer.createCheckpointHandle(this.myNodeId, tarPath);
+  }
+
+  @Override
+  public boolean applyCheckpoint(String serviceName, byte[] checkpoint) {
+    if (checkpoint == null || checkpoint.length == 0) return false;
+    String tarPath =
+        String.format("/tmp/xdn/eventual/%s/%s/rcv_ckpt.tar", this.myNodeId, serviceName);
+    try {
+      Files.createDirectories(Paths.get(tarPath).getParent());
+      Files.write(
+          Paths.get(tarPath),
+          checkpoint,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.TRUNCATE_EXISTING,
+          StandardOpenOption.DSYNC);
+    } catch (IOException e) {
+      logger.log(Level.SEVERE, "Failed to persist received checkpoint of " + serviceName, e);
+      return false;
+    }
+    return this.restoreServiceFromCheckpointTar(serviceName, tarPath);
+  }
+
+  @Override
+  public boolean applyCheckpointHandle(String serviceName, String handle) {
+    if (handle == null || handle.isEmpty()) return false;
+    String tarPath =
+        String.format("/tmp/xdn/eventual/%s/%s/rcv_ckpt.tar", this.myNodeId, serviceName);
+    try {
+      Files.createDirectories(Paths.get(tarPath).getParent());
+    } catch (IOException e) {
+      logger.log(Level.SEVERE, "Failed to prepare checkpoint dir of " + serviceName, e);
+      return false;
+    }
+    String fetchedTarPath = LargeCheckpointer.restoreCheckpointHandle(handle, tarPath);
+    if (fetchedTarPath == null) {
+      logger.log(Level.SEVERE, "Failed to fetch checkpoint handle of " + serviceName);
+      return false;
+    }
+    return this.restoreServiceFromCheckpointTar(serviceName, tarPath);
+  }
+
+  @Override
+  public byte[] getStateDigest(String serviceName) {
+    Integer epoch = this.getEpoch(serviceName);
+    if (epoch == null) return null;
+    Path mountDir = Paths.get(stateDiffRecorder.getTargetDirectory(serviceName, epoch));
+    if (!Files.isDirectory(mountDir)) return null;
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      List<Path> paths;
+      try (var walked = Files.walk(mountDir)) {
+        paths =
+            walked
+                .sorted(Comparator.comparing(p -> mountDir.relativize(p).toString()))
+                .collect(Collectors.toList());
+      }
+      for (Path path : paths) {
+        String relative = mountDir.relativize(path).toString();
+        if (relative.isEmpty()) continue;
+        digest.update(relative.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0);
+        if (Files.isRegularFile(path)) {
+          digest.update(Files.readAllBytes(path));
+        }
+      }
+      return digest.digest();
+    } catch (NoSuchAlgorithmException | IOException e) {
+      logger.log(Level.WARNING, "Failed to compute state digest of " + serviceName, e);
+      return null;
+    }
+  }
+
+  /** Archives the current state directory of the service; returns the tar path or null. */
+  private String captureCheckpointTar(String serviceName) {
+    Integer epoch = this.getEpoch(serviceName);
+    ServiceInstance service = this.services.get(serviceName);
+    if (epoch == null || service == null) {
+      logger.log(Level.WARNING, "Ignoring checkpoint capture for unknown service=" + serviceName);
+      return null;
+    }
+
+    String captureDirPath =
+        String.format("/tmp/xdn/eventual/%s/%s/cap/", this.myNodeId, serviceName);
+    int code = Shell.runCommand(String.format("rm -rf %s", captureDirPath), true);
+    assert code == 0;
+    code = Shell.runCommand(String.format("mkdir -p %s", captureDirPath), true);
+    assert code == 0;
+
+    // Copy the state with rsync (see captureContainerizedServiceFinalState for why rsync
+    // and not `cp -a`), retrying since the service may be mutating background files.
+    String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
+    String copyCommand = String.format("rsync -a %s %s", mountDir, captureDirPath);
+    int attempts = 0;
+    while (true) {
+      if (++attempts >= 10) {
+        logger.log(
+            Level.WARNING,
+            "{0}:{1} rsync failed to capture checkpoint of {2} after {3} attempts",
+            new Object[] {
+              this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName, attempts
+            });
+        return null;
+      }
+      int exitCode = Shell.runCommand(copyCommand, true);
+      if (exitCode == 0) break;
+    }
+
+    String tarPath = String.format("/tmp/xdn/eventual/%s/%s/ckpt.tar", this.myNodeId, serviceName);
+    code = Shell.runCommand(String.format("rm -f %s", tarPath), true);
+    assert code == 0;
+    ZipFiles.zipDirectory(new File(captureDirPath), tarPath);
+    return tarPath;
+  }
+
+  /** Stops the service, replaces its state directory with the tar contents, restarts it. */
+  private boolean restoreServiceFromCheckpointTar(String serviceName, String tarPath) {
+    Integer epoch = this.getEpoch(serviceName);
+    ServiceInstance service = this.services.get(serviceName);
+    if (epoch == null || service == null) {
+      logger.log(Level.WARNING, "Ignoring checkpoint restore for unknown service=" + serviceName);
+      return false;
+    }
+
+    // Stop the containers; app memory caches (e.g., database page caches) make an
+    // in-place file overwrite of a running service unsafe.
+    if (service.composeFilePath != null) {
+      boolean isStopped =
+          DockerComposeManager.composeStop(service.composeFilePath, service.composeProjectName);
+      if (!isStopped) {
+        logger.log(Level.SEVERE, "Failed to stop compose project of " + serviceName);
+        return false;
+      }
+    } else {
+      for (String containerName : service.containerNames) {
+        int exitCode =
+            runShellCommand(String.format("docker container stop %s", containerName), true);
+        if (exitCode != 0 && exitCode != 1) {
+          logger.log(Level.SEVERE, "Failed to stop container " + containerName);
+          return false;
+        }
+      }
+    }
+
+    // Replace the state directory with the checkpoint contents.
+    String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
+    int code = Shell.runCommand(String.format("rm -rf %s", mountDir), true);
+    assert code == 0;
+    code = Shell.runCommand(String.format("mkdir -p %s", mountDir), true);
+    assert code == 0;
+    ZipFiles.unzip(tarPath, mountDir);
+
+    // Restart the containers; docker preserves port bindings across stop/start.
+    if (service.composeFilePath != null) {
+      boolean isStarted =
+          DockerComposeManager.composeUp(service.composeFilePath, service.composeProjectName);
+      if (!isStarted) {
+        logger.log(Level.SEVERE, "Failed to restart compose project of " + serviceName);
+        return false;
+      }
+    } else {
+      for (String containerName : service.containerNames) {
+        int exitCode = runShellCommand(String.format("docker start %s", containerName), true);
+        if (exitCode != 0) {
+          logger.log(Level.SEVERE, "Failed to restart container " + containerName);
+          return false;
+        }
+      }
+    }
+
+    // Wait until the service answers HTTP again: execute() returns true with a null
+    // response while the container is unreachable, which would silently drop the
+    // coordinator's own-write re-application after this restore.
+    Integer httpPort = this.activeServicePorts.get(serviceName);
+    if (httpPort == null) httpPort = service.allocatedHttpPort;
+    long deadline = System.currentTimeMillis() + 30_000;
+    while (System.currentTimeMillis() < deadline) {
+      try {
+        HttpURLConnection connection =
+            (HttpURLConnection) new URL("http://127.0.0.1:" + httpPort + "/").openConnection();
+        connection.setConnectTimeout(500);
+        connection.setReadTimeout(500);
+        connection.getResponseCode(); // any HTTP status means the service is up
+        connection.disconnect();
+        return true;
+      } catch (IOException e) {
+        try {
+          TimeUnit.MILLISECONDS.sleep(200);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          return false;
+        }
+      }
+    }
+    logger.log(
+        Level.SEVERE, "Service " + serviceName + " did not become ready after checkpoint restore");
+    return false;
   }
 
   @Deprecated

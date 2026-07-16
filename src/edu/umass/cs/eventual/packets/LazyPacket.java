@@ -25,6 +25,14 @@ public abstract class LazyPacket implements ReplicableRequest {
             return LazyWriteAfterPacket.createFromBytes(encodedPacket, appRequestParser);
         }
 
+        if (packetType.equals(LazyPacketType.LAZY_SYNC)) {
+            return LazySyncPacket.createFromBytes(encodedPacket);
+        }
+
+        if (packetType.equals(LazyPacketType.LAZY_CHECKPOINT)) {
+            return LazyCheckpointPacket.createFromBytes(encodedPacket);
+        }
+
         throw new RuntimeException("Unimplemented deserializer handler for packet type of " +
                 packetType);
     }

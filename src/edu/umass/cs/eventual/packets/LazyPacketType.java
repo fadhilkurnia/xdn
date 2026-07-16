@@ -11,7 +11,13 @@ public enum LazyPacketType implements IntegerPacketType {
     // Wrapper packet for all packet types for Lazy Replication
     LAZY_PACKET(55500),
 
-    LAZY_WRITE_AFTER(55501);
+    LAZY_WRITE_AFTER(55501),
+
+    // Periodic anti-entropy heartbeat carrying the sender's vector clock and state digest.
+    LAZY_SYNC(55502),
+
+    // Frontier-to-laggard checkpoint transfer (inline bytes or out-of-band handle).
+    LAZY_CHECKPOINT(55503);
 
     private static final Map<Integer, LazyPacketType> numbers = new HashMap<>();
 

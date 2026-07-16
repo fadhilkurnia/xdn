@@ -1,4 +1,7 @@
 // protoc --java_out=./src src/edu/umass/cs/eventual/proto/lazy_packet.proto
+//
+// NOTE: serialization is currently hand-rolled with CodedOutputStream/CodedInputStream in the
+// packet classes (no generated LazyPacketProto class); this schema documents the wire format.
 syntax = "proto3";
 
 package lazy;
@@ -6,7 +9,7 @@ package lazy;
 option java_package = "edu.umass.cs.eventual.proto";
 option java_outer_classname = "LazyPacketProto";
 
-// Protobuf definition for packets used by the lazy replication subsystem.
+// Best-effort fast path: the source replica broadcasts each executed write to peers.
 message LazyWriteAfterPacket {
   // Unique identifier for the packet.
   int64 packet_id = 1;
@@ -19,4 +22,50 @@ message LazyWriteAfterPacket {
 
   // Serialized client request payload.
   bytes encoded_client_request = 4;
+
+  // The sender's per-source sequence number for this write (its own vector-clock
+  // component after executing the write). Receivers apply contiguously or drop.
+  int64 sender_seq_num = 5;
+
+  // Placement epoch of the sender's replica group; mismatches are dropped.
+  int32 epoch = 6;
+}
+
+// Periodic anti-entropy heartbeat advertising the sender's applied-write vector clock.
+message LazySyncPacket {
+  int64 packet_id = 1;
+  string sender_node_id = 2;
+  string service_name = 3;
+
+  // Encoded vector clock: repeated (string node_id = 1, int64 counter = 2) pairs.
+  bytes vector_clock = 4;
+
+  // Optional sha256 digest of the sender's current service state.
+  bytes state_digest = 5;
+
+  int32 epoch = 6;
+}
+
+// Frontier-to-laggard checkpoint transfer.
+message LazyCheckpointPacket {
+  int64 packet_id = 1;
+  string sender_node_id = 2;
+  string service_name = 3;
+
+  // Encoded vector clock at capture time (same encoding as LazySyncPacket).
+  bytes vector_clock = 4;
+
+  // Optional sha256 digest of the captured state.
+  bytes state_digest = 5;
+
+  int32 epoch = 6;
+
+  // 1 = inline (checkpoint_data set), 2 = handle (checkpoint_handle set).
+  int32 mode = 7;
+
+  // The complete service state archive, when shipped inline.
+  bytes checkpoint_data = 8;
+
+  // Out-of-band handle (e.g., LargeCheckpointer handle) for large checkpoints.
+  string checkpoint_handle = 9;
 }
