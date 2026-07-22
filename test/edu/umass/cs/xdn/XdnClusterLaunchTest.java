@@ -92,6 +92,10 @@ public class XdnClusterLaunchTest {
           "cluster-managed",
           infoJson.getString("consistency"),
           "expected cluster-managed consistency tag");
+      assertEquals(
+          "cluster-managed",
+          infoJson.getString("requestedConsistency"),
+          "cluster services must not report the placeholder consistency as requested");
     }
   }
 

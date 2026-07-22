@@ -541,7 +541,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     // prepare for the response
     String protocolName = coordinator != null ? coordinator.getClass().getSimpleName() : "?";
-    String requestedConsistency = currServiceProperty.getConsistencyModel().toString();
+    String requestedConsistency =
+        currServiceProperty.isClusterManaged()
+            ? "cluster-managed"
+            : currServiceProperty.getConsistencyModel().toString();
     String offeredConsistency = getConsistencyModelFromCoordinator(serviceName, coordinator);
     String roleName = "replica";
 
