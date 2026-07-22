@@ -23,7 +23,7 @@ import org.json.JSONObject;
  *
  * <p>Each registered service has a tiny probe sidecar sharing its cluster member's network
  * namespace. The profiler periodically reads every TCP socket's kernel byte counters through the
- * probe ({@code docker exec <probe> ss -tinH}; {@code bytes_acked}/{@code bytes_received} from
+ * probe ({@code docker exec <probe> ss -tainH}; {@code bytes_acked}/{@code bytes_received} from
  * tcp_info are exact cumulative totals, so polling loses nothing on long-lived connections) and
  * folds per-connection deltas into directed per-peer edges.
  *
@@ -171,7 +171,7 @@ public class XdnBandwidthProfiler {
     }
 
     ShellOutput out =
-        Shell.runCommandWithOutput("docker exec " + st.probeContainerName + " ss -tinH", true);
+        Shell.runCommandWithOutput("docker exec " + st.probeContainerName + " ss -tainH", true);
     if (out.exitCode != 0) {
       logger.log(
           Level.FINE,
@@ -180,11 +180,12 @@ public class XdnBandwidthProfiler {
     }
 
     List<SsConn> conns = parseSsOutput(out.stdout);
-    // A probe that sees zero sockets is almost certainly bound to an abandoned network
-    // namespace: the member container restarted (readiness heal, crash loop during first
-    // boot) and got a fresh sandbox while the probe kept the old one. Restarting the probe
-    // rejoins the member's current namespace.
-    if (conns.isEmpty()) {
+    // A namespace with no sockets AT ALL (ss -a shows not even listeners) is almost
+    // certainly abandoned: the member container restarted (readiness heal, crash loop
+    // during first boot) and got a fresh sandbox while the probe kept the old one.
+    // Restarting the probe rejoins the member's current namespace. A quiet-but-live pod
+    // still shows its LISTEN sockets and must not trigger this.
+    if (out.stdout.isBlank()) {
       st.emptyPolls++;
       if (st.emptyPolls >= 3 && now - st.lastProbeRestartMs > 60_000) {
         logger.log(

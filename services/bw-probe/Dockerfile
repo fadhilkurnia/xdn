@@ -2,7 +2,7 @@
 #
 # XDN attaches this container to a cluster member's network namespace
 # (--network=container:<member>) and reads per-connection TCP byte counters
-# with `docker exec <probe> ss -tinH`, plus overlay peer addresses with
+# with `docker exec <probe> ss -tainH`, plus overlay peer addresses with
 # `docker exec <probe> getent hosts replica-0 ...`. The container itself just
 # sleeps; iproute2 provides `ss` with tcp_info support (busybox's does not).
 #

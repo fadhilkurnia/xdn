@@ -15,7 +15,8 @@ public class XdnBwProbeParserTest {
   // Two connections: an IPv4 row and a bracketed IPv4-mapped-IPv6 row, each followed by its
   // tcp_info continuation line, exactly as `ss -tinH` prints them.
   private static final String SS_FIXTURE =
-      "ESTAB 0      0               10.0.3.2:52912          10.0.3.4:2380\n"
+      "LISTEN 0      4096            0.0.0.0:2379            0.0.0.0:*\n"
+          + "ESTAB 0      0               10.0.3.2:52912          10.0.3.4:2380\n"
           + "\t cubic wscale:7,7 rto:201 rtt:0.076/0.015 ato:40 mss:32768 pmtu:65535 rcvmss:536"
           + " advmss:65483 cwnd:10 bytes_sent:84 bytes_acked:85 bytes_received:1024 segs_out:17"
           + " segs_in:16 data_segs_out:14 send 34492631579bps lastsnd:139 rcv_space:65495\n"
