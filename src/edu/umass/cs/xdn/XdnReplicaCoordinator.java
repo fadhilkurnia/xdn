@@ -465,6 +465,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   private boolean createNotFoundResponse(Request request, ExecutedCallback callback) {
     // Unwrap the XDN payload. Single requests and batches follow different shapes.
     String serviceName = request.getServiceName();
+    System.out.printf(
+        ">> XDNReplicaCoordinator:%s@%x 404 for name=%s known=%s%n",
+        myNodeID, System.identityHashCode(this), serviceName, this.serviceCoordinator.keySet());
     Request innerRequest = request;
     if (request instanceof ReplicableClientRequest rcr) {
       innerRequest = rcr.getRequest();
@@ -742,8 +745,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     this.serviceProperties.put(serviceName, serviceProperty);
 
     System.out.printf(
-        ">> XDNReplicaCoordinator:%s name=%s coordinator=%s\n",
-        myNodeID, serviceName, coordinator.getClass().getSimpleName());
+        ">> XDNReplicaCoordinator:%s@%x name=%s coordinator=%s\n",
+        myNodeID,
+        System.identityHashCode(this),
+        serviceName,
+        coordinator.getClass().getSimpleName());
     return true;
   }
 

@@ -1201,6 +1201,61 @@ public class XdnGigapaxosApp
       }
     }
 
+    // Hold off marking the service live until the entry port answers HTTP. Without this, a
+    // request can reach XdnHttpForwarderClient before the container binds its port; on Linux
+    // that fails fast (RST) and the client retries, but Docker Desktop's port forwarder
+    // accepts the connection and leaves it hanging, wedging the serial batch pipeline behind
+    // a request that never completes. Best-effort on timeout: a slow-booting image keeps
+    // today's behavior instead of failing the epoch start.
+    long readinessStartMs = System.currentTimeMillis();
+    boolean entryReady = waitForHttpReadiness(allocatedPort, 30_000);
+    if (!entryReady) {
+      // Docker Desktop's port forwarder occasionally never wires a freshly published port:
+      // the container is healthy inside, the host port accepts TCP, but no bytes ever flow.
+      // A container restart re-programs the forward. Linux never takes this branch — a bound
+      // port there answers within the first wait. Sidecars restart after the member so they
+      // re-join its fresh network namespace.
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} cluster service {2} entry port {3} dead after 30s; restarting container(s)"
+              + " to re-program the port forward",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort)
+          });
+      Shell.runCommand("docker restart " + clusterContainerName, true);
+      for (int i = 0; i < service.containerNames.size(); i++) {
+        if (i != clusterIdx) {
+          Shell.runCommand("docker restart " + service.containerNames.get(i), true);
+        }
+      }
+      entryReady = waitForHttpReadiness(allocatedPort, 30_000);
+    }
+    if (entryReady) {
+      logger.log(
+          Level.INFO,
+          "{0}:{1} cluster service {2} entry port {3} answered HTTP in {4}ms",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort),
+            String.valueOf(System.currentTimeMillis() - readinessStartMs)
+          });
+    } else {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} cluster service {2} entry port {3} not answering HTTP after 60s; proceeding",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort)
+          });
+    }
+
     service.composeFilePath = null;
     service.composeProjectName = null;
     service.initializationSucceed = true;
@@ -2306,7 +2361,23 @@ public class XdnGigapaxosApp
     // coordinator's own-write re-application after this restore.
     Integer httpPort = this.activeServicePorts.get(serviceName);
     if (httpPort == null) httpPort = service.allocatedHttpPort;
-    long deadline = System.currentTimeMillis() + 30_000;
+    if (waitForHttpReadiness(httpPort, 30_000)) {
+      return true;
+    }
+    logger.log(
+        Level.SEVERE, "Service " + serviceName + " did not become ready after checkpoint restore");
+    return false;
+  }
+
+  /**
+   * Polls {@code http://127.0.0.1:<httpPort>/} until any HTTP status is returned or the timeout
+   * elapses. A TCP accept alone does not count: Docker Desktop's port forwarder accepts connections
+   * on a published port even while nothing is bound inside the container yet, so only a completed
+   * HTTP response proves the service is up. The short per-attempt read timeout is what makes the
+   * poll converge instead of hanging on such half-open forwards.
+   */
+  private boolean waitForHttpReadiness(int httpPort, long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs;
     while (System.currentTimeMillis() < deadline) {
       try {
         HttpURLConnection connection =
@@ -2325,8 +2396,6 @@ public class XdnGigapaxosApp
         }
       }
     }
-    logger.log(
-        Level.SEVERE, "Service " + serviceName + " did not become ready after checkpoint restore");
     return false;
   }
 
@@ -2794,13 +2863,21 @@ public class XdnGigapaxosApp
   }
 
   /**
-   * Starts a cluster-mode container on a swarm overlay network with a stable {@code
-   * replica-<ordinal>} hostname and network alias.
+   * Starts a cluster-mode container dual-homed on the default bridge and the swarm overlay network,
+   * with a stable {@code replica-<ordinal>} hostname and overlay alias.
    *
-   * <p>The HTTP entry port is {@code --publish}ed to the host so the local XDN frontend can forward
-   * to it at {@code 127.0.0.1:<allocatedHttpPort>} (Path 1). The cluster's internal peer port is
-   * <em>not</em> published — peers reach each other on the overlay via Docker's embedded DNS (e.g.
-   * {@code replica-2:2380}).
+   * <p>Dual-homing serves each path with the network that can actually carry it: the HTTP entry
+   * port is {@code --publish}ed via the <em>bridge</em>, so the local XDN frontend can forward to
+   * {@code 127.0.0.1:<allocatedHttpPort>} on every platform (Docker Desktop on macOS cannot route
+   * published ports of a {@code docker run} container attached only to an overlay — the classic
+   * publish path needs a bridge interface, and the routing mesh only serves swarm services);
+   * cluster-internal peer traffic rides the <em>overlay</em> via Docker's embedded DNS (e.g. {@code
+   * replica-2:2380}), which is what spans hosts. The peer port is never published.
+   *
+   * <p>The container is {@code docker create}d first and the overlay is attached with its alias
+   * <em>before</em> {@code docker start}, so peer names resolve from the process's first
+   * instruction — a {@code run}-then-{@code connect} sequence would race the entrypoint's initial
+   * peer resolution.
    *
    * <p>This is intentionally a separate method from the regular {@link #startContainer} so the
    * cluster path stays focused on a single component, with no statediff plumbing or healthcheck
@@ -2819,16 +2896,33 @@ public class XdnGigapaxosApp
 
     Shell.runCommand("docker container rm --force " + containerName, true);
 
+    // Pre-create the bind-mount source: Linux dockerd would auto-create a missing source
+    // (as root, breaking the --user mapping below), and Docker Desktop refuses outright
+    // ("bind source path does not exist") — worse, Docker Desktop caches that failed
+    // lookup, so the source must exist before the daemon ever sees the path.
+    if (mountDirSource != null && !mountDirSource.isEmpty()) {
+      try {
+        Files.createDirectories(Paths.get(mountDirSource));
+      } catch (IOException e) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:{1} failed to create bind-mount source {2}: {3}",
+            new Object[] {
+              this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), mountDirSource, e
+            });
+        return false;
+      }
+    }
+
+    // Create on the default bridge (where --publish works everywhere); the overlay is
+    // attached below, before the container starts.
     List<String> cmd = new ArrayList<>();
     cmd.add("docker");
-    cmd.add("run");
-    cmd.add("-d");
+    cmd.add("create");
     cmd.add("--restart");
     cmd.add("unless-stopped");
     cmd.add("--name=" + containerName);
     cmd.add("--hostname=" + replicaName);
-    cmd.add("--network=" + overlayNetwork);
-    cmd.add("--network-alias=" + replicaName);
     if (entryPort != null) {
       cmd.add(String.format("--publish=%d:%d", allocatedHttpPort, entryPort));
     }
@@ -2856,6 +2950,36 @@ public class XdnGigapaxosApp
     if (exitCode != 0) {
       logger.log(
           Level.SEVERE,
+          "{0}:{1} failed to create cluster container {2}",
+          new Object[] {
+            this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), containerName
+          });
+      return false;
+    }
+
+    // Attach the overlay with the stable replica alias before the process starts.
+    String connectCommand =
+        String.format(
+            "docker network connect --alias %s %s %s", replicaName, overlayNetwork, containerName);
+    exitCode = Shell.runCommand(connectCommand, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:{1} failed to attach cluster container {2} to overlay {3}",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            containerName,
+            overlayNetwork
+          });
+      Shell.runCommand("docker container rm --force " + containerName, true);
+      return false;
+    }
+
+    exitCode = Shell.runCommand("docker start " + containerName, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
           "{0}:{1} failed to start cluster container {2} on overlay {3}",
           new Object[] {
             this.myNodeId.toUpperCase(),
@@ -2867,7 +2991,7 @@ public class XdnGigapaxosApp
     }
     logger.log(
         Level.INFO,
-        "{0}:{1} - {2} cluster container started ({3} on {4})",
+        "{0}:{1} - {2} cluster container started ({3} dual-homed on bridge + {4})",
         new Object[] {
           this.myNodeId.toUpperCase(),
           this.getClass().getSimpleName(),

@@ -239,10 +239,37 @@ determinism/consistency checks, since both are meaningless for cluster mode).
 **Identity.** Replicas get deterministic ordinals 0..N-1 by sorting the
 `Set<NodeIDType> nodes` lexicographically. The coordinator pushes a
 `ClusterTopology` (ordinal, size, phase) to `XdnGigapaxosApp` via the
-`ClusterTopologyAware` interface before `restore()`. Each container is started
-with `--hostname=replica-<ordinal> --network-alias=replica-<ordinal>` on a
-swarm-wide overlay (`xdn-cluster-<svc>`), so peers find each other clusterwide
-by name through Docker's embedded DNS.
+`ClusterTopologyAware` interface before `restore()`. Each container gets
+`--hostname=replica-<ordinal>` and joins a swarm-wide overlay
+(`xdn-cluster-<svc>`) under the alias `replica-<ordinal>`, so peers find each
+other clusterwide by name through Docker's embedded DNS.
+
+**Dual-homed networking.** Cluster containers are **created on the default
+bridge** (with the entry port `--publish`ed there) and then attached to the
+overlay via `docker network connect --alias replica-<ordinal>` **before**
+`docker start` (create → connect → start, so peer DNS resolves from the
+process's first instruction). Rationale: Docker Desktop (macOS) cannot route
+published ports of a `docker run` container attached only to an overlay — the
+classic publish path needs a bridge interface and the ingress routing mesh
+only serves swarm services — so bridge carries host→container forwarding
+(`127.0.0.1:<allocatedHttpPort>`) while the overlay carries cross-host peer
+traffic. On Linux both paths worked pre-dual-homing; dual-homing makes macOS
+local dev work too and changes nothing semantically on Linux.
+
+After start, the AR gates on the entry port actually answering HTTP (any
+status) before registering the service — a TCP accept is not enough, because
+Docker Desktop's port forwarder accepts on a published port even when nothing
+is bound inside, and a request forwarded into such a half-open port hangs the
+serial batch pipeline. If the port stays dead for 30s the AR restarts the
+container (then sidecars) once to re-program the forward — a known
+Docker Desktop flake where a freshly published port never gets wired; both
+the gate and the restart are no-ops on Linux. Two further Docker Desktop
+gotchas encoded in `startClusterContainer`: the bind-mount source dir is
+pre-created with Java NIO before `docker create` (the daemon caches a failed
+bind-source lookup, so a later mkdir cannot heal it — only a fresh path
+lookup or daemon restart can), and `docker create` validates bind sources
+eagerly while Linux dockerd would auto-create them as root (breaking
+`--user`).
 
 **Env contract** injected into every cluster container:
 `XDN_CLUSTER_ORDINAL`, `XDN_CLUSTER_SIZE`, `XDN_CLUSTER_SELF`,

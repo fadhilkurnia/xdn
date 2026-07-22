@@ -33,7 +33,10 @@ public class XdnClusterLaunchTest {
   private static final String SERVICE = "etcd-cluster-test";
   private static final int CLIENT_PORT = 2379;
   private static final int PEER_PORT = 2380;
-  private static final Duration LEADER_ELECTION_BUDGET = Duration.ofSeconds(45);
+  // Covers etcd leader election plus, on Docker Desktop, one readiness-gate round trip in
+  // the AR (30s wait + container restart + 30s re-wait) when the host port forward needs
+  // re-programming. See initContainerizedClusterService's readiness gate.
+  private static final Duration LEADER_ELECTION_BUDGET = Duration.ofSeconds(120);
 
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -55,10 +58,12 @@ public class XdnClusterLaunchTest {
           SERVICE, "xdn-etcd-cluster:test", "/etcd-data/", CLIENT_PORT, PEER_PORT, 3);
 
       // Wait for every replica's frontend to forward successfully — that's our proxy for
-      // "the cluster has elected a leader and is serving the v3 API."
-      long deadline = System.nanoTime() + LEADER_ELECTION_BUDGET.toNanos();
+      // "the cluster has elected a leader and is serving the v3 API." Each replica gets its
+      // own budget: with a single shared deadline, one slow replica (e.g. a Docker Desktop
+      // readiness-gate retry on another AR delaying quorum) starves the later replicas of
+      // poll time and the failure is misattributed to them.
       for (int idx = 0; idx < 3; idx++) {
-        waitForHealth(cluster, idx, deadline);
+        waitForHealth(cluster, idx, System.nanoTime() + LEADER_ELECTION_BUDGET.toNanos());
       }
 
       // Write a key through replica 0 and read it back through replicas 1 and 2. If etcd's
