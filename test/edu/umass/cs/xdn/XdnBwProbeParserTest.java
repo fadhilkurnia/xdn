@@ -60,14 +60,23 @@ public class XdnBwProbeParserTest {
   @Test
   public void testClassifyPeer() {
     Map<String, String> map = Map.of("10.0.3.4", "replica-1");
-    assertEquals("replica-1", XdnBandwidthProfiler.classifyPeer("10.0.3.4", map));
+    int entryPort = 2379;
+    assertEquals(
+        "replica-1", XdnBandwidthProfiler.classifyPeer("10.0.3.4", 2380, 51000, entryPort, map));
     assertEquals(
         XdnBandwidthProfiler.CLIENT_EDGE,
-        XdnBandwidthProfiler.classifyPeer("172.17.0.1", map),
+        XdnBandwidthProfiler.classifyPeer("172.17.0.1", 2379, 39000, entryPort, map),
         "bridge-side peers aggregate as client traffic");
+    assertEquals(
+        XdnBandwidthProfiler.CLIENT_EDGE,
+        XdnBandwidthProfiler.classifyPeer("127.0.0.1", 2379, 36694, entryPort, map),
+        "proxy-injected loopback on the entry port's server side is client traffic");
     assertNull(
-        XdnBandwidthProfiler.classifyPeer("127.0.0.1", map),
-        "loopback is intra-pod traffic and must be skipped");
+        XdnBandwidthProfiler.classifyPeer("127.0.0.1", 36694, 2379, entryPort, map),
+        "the proxy's mirror row must be skipped to avoid double counting");
+    assertNull(
+        XdnBandwidthProfiler.classifyPeer("127.0.0.1", 3306, 41000, 80, map),
+        "sidecar-to-member loopback off the entry port stays intra-pod");
   }
 
   @Test

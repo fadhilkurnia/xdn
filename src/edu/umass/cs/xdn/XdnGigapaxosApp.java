@@ -1211,7 +1211,11 @@ public class XdnGigapaxosApp
           Config.getGlobalString(ReconfigurationConfig.RC.XDN_CLUSTER_BW_PROBE_IMAGE);
       String probeName = "bwprobe." + clusterContainerName;
       if (startClusterSidecar(probeImage, probeName, clusterContainerName, null)) {
-        this.bandwidthProfiler.register(serviceName, probeName, topology.clusterSize());
+        this.bandwidthProfiler.register(
+            serviceName,
+            probeName,
+            topology.clusterSize(),
+            publishedContainerPort != null ? publishedContainerPort : 0);
       } else {
         logger.log(
             Level.WARNING,

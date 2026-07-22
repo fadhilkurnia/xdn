@@ -27,10 +27,12 @@ import org.json.JSONObject;
  * tcp_info are exact cumulative totals, so polling loses nothing on long-lived connections) and
  * folds per-connection deltas into directed per-peer edges.
  *
- * <p>Edges are classified by peer address alone: an address that Docker's embedded DNS reports for
- * a {@code replica-N} overlay alias is coordination traffic to that replica; loopback is intra-pod
- * chatter and is skipped; anything else (bridge gateway, host) is aggregated as {@code client}
- * traffic. This yields the coordinated vs. client-demand split without any protocol knowledge.
+ * <p>Edges are classified by peer address and port: an address that Docker's embedded DNS reports
+ * for a {@code replica-N} overlay alias is coordination traffic to that replica; loopback rows on
+ * the entry port's server side are published-port client connections (Docker's userland proxy
+ * injects them into the namespace over loopback); all other loopback is intra-pod chatter and is
+ * skipped; anything else (bridge gateway, host) is aggregated as {@code client} traffic. This
+ * yields the coordinated vs. client-demand split without any protocol knowledge.
  *
  * <p>All failures degrade gracefully: a missing probe or failed exec skips the poll and never
  * affects the service itself.
@@ -74,22 +76,26 @@ public class XdnBandwidthProfiler {
   private static final class ServiceState {
     final String probeContainerName;
     final int clusterSize;
+    final int entryPort;
     volatile Map<String, String> ipToReplica = Map.of();
     long ipMapRefreshedMs;
     final Map<String, ConnCounters> connState = new HashMap<>(); // poll-thread only
     final Map<String, Edge> edges = new ConcurrentHashMap<>();
     long lastPollMs;
+    int emptyPolls;
+    long lastProbeRestartMs;
 
-    ServiceState(String probeContainerName, int clusterSize) {
+    ServiceState(String probeContainerName, int clusterSize, int entryPort) {
       this.probeContainerName = probeContainerName;
       this.clusterSize = clusterSize;
+      this.entryPort = entryPort;
     }
   }
 
   /** Starts profiling {@code serviceName} through the given probe container. */
   public synchronized void register(
-      String serviceName, String probeContainerName, int clusterSize) {
-    this.services.put(serviceName, new ServiceState(probeContainerName, clusterSize));
+      String serviceName, String probeContainerName, int clusterSize, int entryPort) {
+    this.services.put(serviceName, new ServiceState(probeContainerName, clusterSize, entryPort));
     if (this.scheduler == null) {
       long intervalMs =
           Config.getGlobalLong(ReconfigurationConfig.RC.XDN_CLUSTER_BW_POLL_INTERVAL_MS);
@@ -173,12 +179,37 @@ public class XdnBandwidthProfiler {
       return;
     }
 
+    List<SsConn> conns = parseSsOutput(out.stdout);
+    // A probe that sees zero sockets is almost certainly bound to an abandoned network
+    // namespace: the member container restarted (readiness heal, crash loop during first
+    // boot) and got a fresh sandbox while the probe kept the old one. Restarting the probe
+    // rejoins the member's current namespace.
+    if (conns.isEmpty()) {
+      st.emptyPolls++;
+      if (st.emptyPolls >= 3 && now - st.lastProbeRestartMs > 60_000) {
+        logger.log(
+            Level.INFO,
+            "{0}:{1} probe {2} sees no sockets; restarting it to rebind the namespace",
+            new Object[] {
+              myNodeId.toUpperCase(), this.getClass().getSimpleName(), st.probeContainerName
+            });
+        Shell.runCommand("docker restart " + st.probeContainerName, true);
+        st.lastProbeRestartMs = now;
+        st.emptyPolls = 0;
+      }
+      st.lastPollMs = now;
+      return;
+    }
+    st.emptyPolls = 0;
+
     long intervalMs = st.lastPollMs > 0 ? Math.max(1, now - st.lastPollMs) : 0;
     Map<String, long[]> deltaByPeer = new HashMap<>(); // label -> {txDelta, rxDelta}
-    for (SsConn conn : parseSsOutput(out.stdout)) {
-      String label = classifyPeer(conn.peerAddr(), st.ipToReplica);
+    for (SsConn conn : conns) {
+      String label =
+          classifyPeer(
+              conn.peerAddr(), conn.localPort(), conn.peerPort(), st.entryPort, st.ipToReplica);
       if (label == null) {
-        continue; // loopback, intra-pod
+        continue; // intra-pod traffic
       }
       ConnCounters prev = st.connState.get(conn.tupleKey());
       long txDelta;
@@ -236,12 +267,24 @@ public class XdnBandwidthProfiler {
   }
 
   /**
-   * Returns the edge label for a peer address: the replica name for overlay peers, {@link
-   * #CLIENT_EDGE} for external addresses, or null for loopback (intra-pod traffic).
+   * Returns the edge label for a connection: the replica name for overlay peers, {@link
+   * #CLIENT_EDGE} for external addresses, or null for traffic that must not be counted.
+   *
+   * <p>Loopback needs port awareness: Docker's userland proxy delivers published-port client
+   * connections <em>into</em> the namespace over loopback (dockerd 29+), so a loopback row whose
+   * local port is the service's entry port is real client traffic. Its mirror row (the proxy's
+   * injected socket, peer port == entry port) and every other loopback flow (sidecar-to-member
+   * chatter) are intra-pod and skipped.
    */
-  static String classifyPeer(String peerAddr, Map<String, String> ipToReplica) {
-    if (peerAddr.startsWith("127.") || peerAddr.equals("::1")) {
-      return null;
+  static String classifyPeer(
+      String peerAddr,
+      int localPort,
+      int peerPort,
+      int entryPort,
+      Map<String, String> ipToReplica) {
+    boolean loopback = peerAddr.startsWith("127.") || peerAddr.equals("::1");
+    if (loopback) {
+      return entryPort > 0 && localPort == entryPort ? CLIENT_EDGE : null;
     }
     String replica = ipToReplica.get(peerAddr);
     return replica != null ? replica : CLIENT_EDGE;

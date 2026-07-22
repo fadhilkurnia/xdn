@@ -495,11 +495,19 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
-    throw new RuntimeException(
-        "Unknown coordinator for name="
-            + serviceName
-            + " with request type of "
-            + request.getClass().getSimpleName());
+    // Non-HTTP requests (e.g. an XdnStopRequest delivered by a create/delete handshake for a
+    // name this replica no longer — or does not yet — coordinate) must be ACKed, not thrown:
+    // an exception here never fires the callback, so the reconfigurator resends the epoch
+    // message forever and the reconfiguration wedges (same failure mode as the internal
+    // phantom groups handled above).
+    logger.log(
+        Level.INFO,
+        "{0} acking {1} for unknown service {2}",
+        new Object[] {this.myNodeID, request.getClass().getSimpleName(), serviceName});
+    if (callback != null) {
+      callback.executed(innerRequest, true);
+    }
+    return true;
   }
 
   private static HttpResponse buildNotFoundResponse(String errorMessage, HttpHeaders headers) {
