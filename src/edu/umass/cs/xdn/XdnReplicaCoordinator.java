@@ -35,6 +35,7 @@ import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.RequestMatcher;
 import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
+import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import java.io.IOException;
@@ -502,10 +503,15 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   }
 
   private static HttpResponse buildNotFoundResponse(String errorMessage, HttpHeaders headers) {
+    ByteBuf body = Unpooled.copiedBuffer(errorMessage.getBytes());
+    // Content-Length is required for correct framing: the HTTP frontend may override the
+    // Connection header to keep-alive, and a keep-alive response without explicit framing
+    // leaves the client blocked waiting for EOF to delimit the body.
+    headers.setInt(HttpHeaderNames.CONTENT_LENGTH, body.readableBytes());
     return new DefaultFullHttpResponse(
         HttpVersion.HTTP_1_1,
         HttpResponseStatus.NOT_FOUND,
-        Unpooled.copiedBuffer(errorMessage.getBytes()),
+        body,
         headers,
         new DefaultHttpHeaders());
   }
