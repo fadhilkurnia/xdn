@@ -229,6 +229,11 @@ jobs:
         done
         echo "=== docker ps ==="
         docker ps -a || true
+        echo "=== container logs (cluster services fail inside their containers) ==="
+        for c in $(docker ps -aq); do
+          echo "============ BEGIN docker logs $(docker inspect -f '{{.Name}}' $c) ============"
+          docker logs --tail 80 "$c" 2>&1 || true
+        done
         echo "=== dmesg tail ==="
         dmesg | tail -n 100 || true
 
