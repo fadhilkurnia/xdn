@@ -116,7 +116,10 @@ jobs:
 
   xdn-integration:
     name: "${{ matrix.test_class }}"
-    runs-on: ubuntu-latest
+    # Pinned: the 20260720 ubuntu-latest runner image deterministically breaks MySQL
+    # Group Replication bootstrap (XdnWordPressClusterTest red 5/5 on it, green 3/3 on
+    # 20260714; verified by identical-code rerun). Re-evaluate once the image settles.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
 
     strategy:
