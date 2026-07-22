@@ -495,6 +495,16 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
+    // Replica-info queries carry their own error channel; report the missing service as 404.
+    if (innerRequest instanceof XdnGetReplicaInfoRequest infoRequest) {
+      infoRequest.setHttpErrorCode(404);
+      infoRequest.setErrorMessage(errorMessage);
+      if (callback != null) {
+        callback.executed(infoRequest, true);
+      }
+      return true;
+    }
+
     // Non-HTTP requests (e.g. an XdnStopRequest delivered by a create/delete handshake for a
     // name this replica no longer — or does not yet — coordinate) must be ACKed, not thrown:
     // an exception here never fires the callback, so the reconfigurator resends the epoch
