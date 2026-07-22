@@ -79,6 +79,7 @@ public class XdnGigapaxosApp
   private final String myNodeId;
   private final Set<IntegerPacketType> packetTypes;
   private final XdnBandwidthProfiler bandwidthProfiler;
+  private final ConcurrentHashMap<String, Object> serviceInitLocks = new ConcurrentHashMap<>();
 
   // TODO: remove this metadata as the port is already stored inside the ServiceInstance.
   private final HashMap<String, Integer> activeServicePorts;
@@ -919,6 +920,20 @@ public class XdnGigapaxosApp
    * @return false if failed to initialize the service.
    */
   private boolean initContainerizedService2(String serviceName) {
+    // Serialize per-service initialization: the reconfigurator resends START_EPOCH when a
+    // slow first pass (image pull, MySQL first boot behind the readiness gate) outlives its
+    // ack timeout, and an unguarded re-entry would rm -rf the state dir and force-recreate
+    // containers mid-bootstrap -- destroying e.g. a forming Group Replication group and
+    // stranding the bandwidth probe in the old network namespace. Re-entries block here
+    // until the in-flight pass finishes, then get absorbed by the initializationSucceed
+    // check below.
+    Object initLock = this.serviceInitLocks.computeIfAbsent(serviceName, k -> new Object());
+    synchronized (initLock) {
+      return initContainerizedService2Locked(serviceName);
+    }
+  }
+
+  private boolean initContainerizedService2Locked(String serviceName) {
     int initialPlacementEpoch = this.servicePlacementEpoch.get(serviceName);
     assertNotNull("initialPlacementEpoch must not be null", initialPlacementEpoch);
 
