@@ -118,6 +118,53 @@ def drive_rqlite(ars, port, service, phase, dur):
     return n
 
 
+def drive_redis(host, port, phase, dur):
+    def cli(*args):
+        return subprocess.run(
+            ["redis-cli", "-h", host, "-p", str(port), *args],
+            capture_output=True, timeout=10,
+        ).returncode
+
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        if phase == "write":
+            rc = cli("SET", "bw-key", f"value-{n}-padding-for-measurement")
+        else:
+            rc = cli("GET", "bw-key")
+        if rc == 0:
+            n += 1
+        else:
+            time.sleep(0.2)
+    return n
+
+
+def drive_cassandra(host, port, phase, dur):
+    def cql(stmt, timeout=20):
+        return subprocess.run(
+            ["cqlsh", host, str(port), "-e", stmt],
+            capture_output=True, timeout=timeout,
+        ).returncode
+
+    cql(
+        "CREATE KEYSPACE IF NOT EXISTS bw WITH replication ="
+        " {'class':'NetworkTopologyStrategy','dc1':3}"
+    )
+    cql("CREATE TABLE IF NOT EXISTS bw.kv (id int PRIMARY KEY, v text)")
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        if phase == "write":
+            rc = cql(f"CONSISTENCY QUORUM; INSERT INTO bw.kv (id, v) VALUES (1, 'value-{n}')")
+        else:
+            rc = cql("CONSISTENCY QUORUM; SELECT * FROM bw.kv WHERE id = 1")
+        if rc == 0:
+            n += 1
+        else:
+            time.sleep(0.2)
+    return n
+
+
 def drive_mysql(host, port, password, phase, dur):
     def sql(stmt, timeout=10):
         return subprocess.run(
@@ -145,7 +192,8 @@ def drive_mysql(host, port, password, phase, dur):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--service", required=True)
-    ap.add_argument("--kind", required=True, choices=["etcd", "rqlite", "mysql"])
+    ap.add_argument(
+        "--kind", required=True, choices=["etcd", "rqlite", "mysql", "redis", "cassandra"])
     ap.add_argument("--ars", required=True, help="comma-separated AR addresses")
     ap.add_argument("--frontend-port", type=int, default=2300)
     ap.add_argument("--phases", default="idle:30,write:60,read:30")
@@ -154,6 +202,8 @@ def main():
     ap.add_argument("--mysql-host")
     ap.add_argument("--mysql-port", type=int)
     ap.add_argument("--mysql-password")
+    ap.add_argument("--direct-host", help="service host for direct-protocol kinds")
+    ap.add_argument("--direct-port", type=int, help="published port for direct-protocol kinds")
     args = ap.parse_args()
 
     ars = args.ars.split(",")
@@ -173,6 +223,10 @@ def main():
             ops = drive_etcd(ars, args.frontend_port, args.service, name, dur)
         elif args.kind == "rqlite":
             ops = drive_rqlite(ars, args.frontend_port, args.service, name, dur)
+        elif args.kind == "redis":
+            ops = drive_redis(args.direct_host, args.direct_port, name, dur)
+        elif args.kind == "cassandra":
+            ops = drive_cassandra(args.direct_host, args.direct_port, name, dur)
         else:
             ops = drive_mysql(args.mysql_host, args.mysql_port, args.mysql_password,
                               name, dur)

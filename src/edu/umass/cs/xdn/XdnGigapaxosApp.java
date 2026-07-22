@@ -1233,7 +1233,7 @@ public class XdnGigapaxosApp
     // a request that never completes. Best-effort on timeout: a slow-booting image keeps
     // today's behavior instead of failing the epoch start.
     long readinessStartMs = System.currentTimeMillis();
-    boolean entryReady = waitForHttpReadiness(allocatedPort, 30_000);
+    boolean entryReady = waitForEntryPortReadiness(allocatedPort, 30_000);
     if (!entryReady) {
       // Docker Desktop's port forwarder occasionally never wires a freshly published port:
       // the container is healthy inside, the host port accepts TCP, but no bytes ever flow.
@@ -1256,7 +1256,7 @@ public class XdnGigapaxosApp
           Shell.runCommand("docker restart " + service.containerNames.get(i), true);
         }
       }
-      entryReady = waitForHttpReadiness(allocatedPort, 30_000);
+      entryReady = waitForEntryPortReadiness(allocatedPort, 30_000);
     }
     if (entryReady) {
       logger.log(
@@ -2397,6 +2397,45 @@ public class XdnGigapaxosApp
     }
     logger.log(
         Level.SEVERE, "Service " + serviceName + " did not become ready after checkpoint restore");
+    return false;
+  }
+
+  /**
+   * Polls the entry port until the service behind it proves it is alive, or the timeout elapses.
+   *
+   * <p>A TCP accept alone does not count: Docker Desktop's port forwarder accepts connections on a
+   * published port even while nothing is bound inside the container. But requiring an HTTP response
+   * is too strict for cluster services speaking binary protocols (Redis RESP, MySQL, Cassandra
+   * CQL), which can never satisfy an HTTP probe and would burn the full gate plus a needless heal
+   * restart. So the probe sends a CRLF pair and accepts <em>any bytes back or an orderly close</em>
+   * as proof of life: an HTTP server answers 400, Redis answers -ERR, MySQL sends its greeting
+   * unprompted, Cassandra closes the bad frame -- while a dead forward hangs silently and an
+   * unbound Linux port refuses outright.
+   */
+  private boolean waitForEntryPortReadiness(int port, long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs;
+    byte[] probe = "\r\n\r\n".getBytes(StandardCharsets.US_ASCII);
+    while (System.currentTimeMillis() < deadline) {
+      try (java.net.Socket s = new java.net.Socket()) {
+        s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 500);
+        s.setSoTimeout(500);
+        s.getOutputStream().write(probe);
+        s.getOutputStream().flush();
+        // Any byte, or an orderly EOF (-1), means something live handled the connection.
+        s.getInputStream().read();
+        return true;
+      } catch (java.net.SocketTimeoutException e) {
+        // Accepted but silent: a half-open forward. Keep polling.
+      } catch (IOException e) {
+        // Connection refused or reset before proof of life. Keep polling.
+      }
+      try {
+        TimeUnit.MILLISECONDS.sleep(200);
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
+    }
     return false;
   }
 
