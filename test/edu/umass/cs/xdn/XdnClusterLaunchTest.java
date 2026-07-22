@@ -108,7 +108,8 @@ public class XdnClusterLaunchTest {
           return;
         }
         System.out.printf(
-            ">> health poll replica=%d status=%d body=%.60s%n", replicaIdx, r.statusCode(), r.body());
+            ">> health poll replica=%d status=%d body=%.60s%n",
+            replicaIdx, r.statusCode(), r.body());
         last = new IllegalStateException("replica " + replicaIdx + " not healthy: " + r.body());
       } catch (Exception e) {
         System.out.printf(">> health poll replica=%d threw %s%n", replicaIdx, e);
