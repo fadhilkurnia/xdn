@@ -505,11 +505,23 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
+    // The service is instantiated locally but its coordinator has not registered yet (a slow
+    // cluster restore is still inside createReplicaGroup). Acking an epoch message here would
+    // let the reconfigurator's retry/abort machinery advance against a half-created service;
+    // throwing makes it retry until registration completes.
+    if (this.xdnGigapaxosApp != null && this.xdnGigapaxosApp.hostsService(serviceName)) {
+      throw new RuntimeException(
+          "Coordinator not yet registered for name="
+              + serviceName
+              + " with request type of "
+              + request.getClass().getSimpleName());
+    }
+
     // Non-HTTP requests (e.g. an XdnStopRequest delivered by a create/delete handshake for a
-    // name this replica no longer — or does not yet — coordinate) must be ACKed, not thrown:
-    // an exception here never fires the callback, so the reconfigurator resends the epoch
-    // message forever and the reconfiguration wedges (same failure mode as the internal
-    // phantom groups handled above).
+    // name this replica never coordinated — a stale record from before a restart) must be
+    // ACKed, not thrown: an exception here never fires the callback, so the reconfigurator
+    // resends the epoch message forever and the reconfiguration wedges (same failure mode as
+    // the internal phantom groups handled above).
     logger.log(
         Level.INFO,
         "{0} acking {1} for unknown service {2}",
