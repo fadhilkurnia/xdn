@@ -614,6 +614,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     }
 
     request.setRequestBehaviors(currServiceProperty.getRequestMatchers());
+    if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>
+        && this.xdnGigapaxosApp != null) {
+      request.setBandwidth(this.xdnGigapaxosApp.getBandwidthSnapshot(serviceName));
+    }
     request.setResponse(
         this.myNodeID, protocolName, requestedConsistency, offeredConsistency, roleName);
     callback.executed(request, true);
