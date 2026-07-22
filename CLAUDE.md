@@ -239,22 +239,30 @@ determinism/consistency checks, since both are meaningless for cluster mode).
 **Identity.** Replicas get deterministic ordinals 0..N-1 by sorting the
 `Set<NodeIDType> nodes` lexicographically. The coordinator pushes a
 `ClusterTopology` (ordinal, size, phase) to `XdnGigapaxosApp` via the
-`ClusterTopologyAware` interface before `restore()`. Each container gets
-`--hostname=replica-<ordinal>` and joins a swarm-wide overlay
-(`xdn-cluster-<svc>`) under the alias `replica-<ordinal>`, so peers find each
-other clusterwide by name through Docker's embedded DNS.
+`ClusterTopologyAware` interface before `restore()`. Each container joins a
+swarm-wide overlay (`xdn-cluster-<svc>`) under the alias
+`replica-<ordinal>`, so peers find each other clusterwide by name through
+Docker's embedded DNS (the container's `--hostname` is its container name —
+see "Dual-homed networking" for why the alias must stay out of
+`/etc/hosts`).
 
 **Dual-homed networking.** Cluster containers are **created on the default
-bridge** (with the entry port `--publish`ed there) and then attached to the
-overlay via `docker network connect --alias replica-<ordinal>` **before**
-`docker start` (create → connect → start, so peer DNS resolves from the
-process's first instruction). Rationale: Docker Desktop (macOS) cannot route
-published ports of a `docker run` container attached only to an overlay — the
-classic publish path needs a bridge interface and the ingress routing mesh
-only serves swarm services — so bridge carries host→container forwarding
-(`127.0.0.1:<allocatedHttpPort>`) while the overlay carries cross-host peer
-traffic. On Linux both paths worked pre-dual-homing; dual-homing makes macOS
-local dev work too and changes nothing semantically on Linux.
+bridge** (entry port `--publish`ed there), the overlay is attached via
+`docker network connect --alias replica-<ordinal>` **before** `docker start`
+(create → connect → start, so both networks exist from the process's first
+instruction). Rationale: Docker Desktop (macOS) cannot route published ports
+of a container attached only to an overlay — and it programs (and, on the
+heal path, re-programs) the forward against the *create-time* network, so
+bridge must come first — while the overlay carries cross-host peer traffic
+via embedded DNS. The container's `--hostname` is deliberately the
+**container name, not the replica alias**: Docker maps the hostname in
+`/etc/hosts` to the create-time network's IP, and a `replica-N` hosts entry
+would shadow the overlay alias for the container's *own* lookups. Services
+that bind the address their own name resolves to (MySQL Group Replication's
+XCom `group_replication_local_address`) must see the overlay IP that peers
+dial; with the hostname decoupled, `replica-N` resolves through embedded DNS
+to the overlay IP from everywhere. On Linux both paths worked
+pre-dual-homing; dual-homing makes macOS local dev work too.
 
 After start, the AR gates on the entry port actually answering HTTP (any
 status) before registering the service — a TCP accept is not enough, because

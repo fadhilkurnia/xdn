@@ -2864,7 +2864,7 @@ public class XdnGigapaxosApp
 
   /**
    * Starts a cluster-mode container dual-homed on the default bridge and the swarm overlay network,
-   * with a stable {@code replica-<ordinal>} hostname and overlay alias.
+   * reachable by peers under its stable {@code replica-<ordinal>} overlay alias.
    *
    * <p>Dual-homing serves each path with the network that can actually carry it: the HTTP entry
    * port is {@code --publish}ed via the <em>bridge</em>, so the local XDN frontend can forward to
@@ -2874,10 +2874,20 @@ public class XdnGigapaxosApp
    * cluster-internal peer traffic rides the <em>overlay</em> via Docker's embedded DNS (e.g. {@code
    * replica-2:2380}), which is what spans hosts. The peer port is never published.
    *
-   * <p>The container is {@code docker create}d first and the overlay is attached with its alias
-   * <em>before</em> {@code docker start}, so peer names resolve from the process's first
-   * instruction — a {@code run}-then-{@code connect} sequence would race the entrypoint's initial
-   * peer resolution.
+   * <p>The container is {@code docker create}d on the default bridge, the overlay is attached with
+   * the {@code replica-<ordinal>} alias, and only then is it started — both networks are in place
+   * before the process's first instruction (a {@code run}-then-{@code connect} sequence would race
+   * the entrypoint). Bridge must be the create-time network: Docker Desktop programs the host port
+   * forward against it, and both the initial wire-up and the restart heal below are unreliable when
+   * the container was created on the overlay.
+   *
+   * <p>The container's {@code --hostname} is deliberately the <em>container name</em>, not the
+   * replica alias: Docker maps the hostname in {@code /etc/hosts} to the create-time network's IP,
+   * and an {@code /etc/hosts} entry would shadow the overlay alias in DNS. Services that bind the
+   * address their own name resolves to (e.g. MySQL Group Replication's XCom via {@code
+   * group_replication_local_address = replica-N:port}) must get the overlay IP peers actually dial.
+   * With the hostname decoupled, {@code replica-N} resolves — from every replica, including its own
+   * container — through Docker's embedded DNS to the overlay IP.
    *
    * <p>This is intentionally a separate method from the regular {@link #startContainer} so the
    * cluster path stays focused on a single component, with no statediff plumbing or healthcheck
@@ -2914,15 +2924,16 @@ public class XdnGigapaxosApp
       }
     }
 
-    // Create on the default bridge (where --publish works everywhere); the overlay is
-    // attached below, before the container starts.
+    // Create on the default bridge (where the host port forward is reliable); the overlay
+    // carrying the replica alias is attached below, before the container starts. The hostname
+    // is the container name so the replica alias never lands in /etc/hosts (see javadoc).
     List<String> cmd = new ArrayList<>();
     cmd.add("docker");
     cmd.add("create");
     cmd.add("--restart");
     cmd.add("unless-stopped");
     cmd.add("--name=" + containerName);
-    cmd.add("--hostname=" + replicaName);
+    cmd.add("--hostname=" + containerName);
     if (entryPort != null) {
       cmd.add(String.format("--publish=%d:%d", allocatedHttpPort, entryPort));
     }

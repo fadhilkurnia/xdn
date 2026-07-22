@@ -107,8 +107,11 @@ public class XdnClusterLaunchTest {
         if (r.statusCode() == 200 && r.body().contains("\"true\"")) {
           return;
         }
+        System.out.printf(
+            ">> health poll replica=%d status=%d body=%.60s%n", replicaIdx, r.statusCode(), r.body());
         last = new IllegalStateException("replica " + replicaIdx + " not healthy: " + r.body());
       } catch (Exception e) {
+        System.out.printf(">> health poll replica=%d threw %s%n", replicaIdx, e);
         last = e;
       }
       Thread.sleep(1000);
