@@ -341,6 +341,12 @@ hooks ship in the per-service YAML (e.g. `etcdctl member add` commands),
 *not* as Java adapter classes — see the deleted-but-documented adapter
 scaffolding history in commits `37b23c4f` → `79c90ace`.
 
+**Launch-time image check.** The CREATE validator
+(`XdnServiceInitialStateValidator`) runs on the **Reconfigurator host** and
+checks `docker image inspect` there first — a locally built image (e.g.
+`xdn-etcd-cluster:test`) must exist on the RC host too, not just the ARs, or
+the launch 409s with "Unknown container image".
+
 **Helper script.** `bin/xdn-cluster-up.sh` brings up XDN across the
 configured CloudLab hosts (1 RC + 3 ARs by default) and optionally launches
 a demo cluster service:

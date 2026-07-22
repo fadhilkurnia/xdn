@@ -6,7 +6,7 @@
 #
 # Prerequisites — already done on this pod, only restate if rebuilding from
 # zero:
-#   - rsync'd repo at /users/fadhil/xdn-cl/ on each of .1/.2/.3/.4
+#   - repo at ~/xdn on each of .1/.2/.3/.4 (`bin/xdnd dist-init` uploads it)
 #   - Docker swarm initialized across .1-.4 (`bin/xdnd dist-init` does this)
 #   - xdn-etcd-cluster:test and xdn-rqlite-cluster:test images present
 #     on .1/.2/.3/.4 (`docker build` in services/<name>/ on each)
@@ -19,7 +19,8 @@
 
 set -euo pipefail
 
-REMOTE=/users/fadhil/xdn-cl
+# Repo location on each host — dist-init uploads to ~/xdn; override for other layouts.
+REMOTE=${XDN_REMOTE_DIR:-$HOME/xdn}
 CFG=conf/gigapaxos.xdn.cluster-launch.cloudlab.properties
 JF='-ea -Djavax.net.ssl.keyStorePassword=qwerty -Djavax.net.ssl.trustStorePassword=qwerty -Djavax.net.ssl.keyStore=conf/keyStore.jks -Djavax.net.ssl.trustStore=conf/trustStore.jks -Djava.util.logging.config.file=conf/logging.properties -Dlog4j.configuration=conf/log4j.properties -DgigapaxosConfig='"$CFG"' -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED'
 
