@@ -189,18 +189,21 @@ public class XdnTestCluster implements AutoCloseable {
     serviceJson.put("name", serviceName);
 
     String initialState = "xdn:init:" + serviceJson;
-    String encodedInitialState = URLEncoder.encode(initialState, StandardCharsets.UTF_8);
+    // RESTful create: POST /api/v2/services/{name} with the initial state in the body,
+    // same path as launchService (the legacy GET /?type=CREATE control API is deprecated).
+    String body = new JSONObject().put("initial_state", initialState).toString();
     String endpoint =
-        "http://%s:%d/?type=CREATE&name=%s&initial_state=%s"
-            .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName, encodedInitialState);
+        "http://%s:%d/api/v2/services/%s"
+            .formatted(LOOPBACK, getReconfiguratorHttpPort(), serviceName);
     HttpRequest request =
         HttpRequest.newBuilder()
             .uri(URI.create(endpoint))
             .timeout(CLUSTER_CREATE_TIMEOUT)
-            .GET()
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body))
             .build();
     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    if (response.statusCode() != 200) {
+    if (response.statusCode() / 100 != 2) {
       throw new IllegalStateException(
           "Cluster service creation failed with status " + response.statusCode());
     }
