@@ -6,7 +6,8 @@ name: "XDN test workflow"
 #                           non-Xdn unit tests via `ant xdn-regular-unit-tests`
 #                           plus the Xdn*Test classes that don't use
 #                           XdnTestCluster (XdnHttpRequestTest,
-#                           XdnHttpRequestBatchTest, XdnGeoDemandProfilerTest).
+#                           XdnHttpRequestBatchTest, XdnGeoDemandProfilerTest,
+#                           XdnPortAllocatorTest).
 #
 #   - xdn-integration     — Matrix, one entry per Xdn*Test class that drives
 #                           XdnTestCluster. Each entry runs on its own runner
@@ -80,6 +81,7 @@ jobs:
         bin/run_xdn_tests.sh XdnHttpRequestTest
         bin/run_xdn_tests.sh XdnHttpRequestBatchTest
         bin/run_xdn_tests.sh XdnGeoDemandProfilerTest
+        bin/run_xdn_tests.sh XdnPortAllocatorTest
 
     - name: 📝 Reporting the test results ...
       uses: dorny/test-reporter@v2

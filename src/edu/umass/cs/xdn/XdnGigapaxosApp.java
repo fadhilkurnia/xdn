@@ -25,6 +25,7 @@ import edu.umass.cs.xdn.request.*;
 import edu.umass.cs.xdn.service.ServiceComponent;
 import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
+import edu.umass.cs.xdn.utils.PortAllocator;
 import edu.umass.cs.xdn.utils.Shell;
 import edu.umass.cs.xdn.utils.ShellOutput;
 import edu.umass.cs.xdn.utils.Utils;
@@ -838,7 +839,7 @@ public class XdnGigapaxosApp
         idx++;
       }
 
-      int allocatedPort = getRandomPort();
+      int allocatedPort = PortAllocator.allocate();
       service =
           new ServiceInstance(property, serviceName, networkName, allocatedPort, containerNames);
     } else {
@@ -940,7 +941,7 @@ public class XdnGigapaxosApp
       return initContainerizedClusterService(service, serviceName, initialPlacementEpoch);
     }
 
-    int allocatedPort = getRandomPort();
+    int allocatedPort = PortAllocator.allocate();
     service.allocatedHttpPort = allocatedPort;
 
     // Remove already running containers, if any
@@ -1084,7 +1085,7 @@ public class XdnGigapaxosApp
   private boolean initContainerizedClusterService(
       ServiceInstance service, String serviceName, int placementEpoch) {
 
-    int allocatedPort = getRandomPort();
+    int allocatedPort = PortAllocator.allocate();
     service.allocatedHttpPort = allocatedPort;
 
     // idempotent restart: drop any stale containers from a previous attempt
@@ -1420,7 +1421,7 @@ public class XdnGigapaxosApp
 
     // prepare the initialized service
     String networkName = String.format("net::%s:%s", myNodeId, serviceName);
-    int allocatedPort = getRandomPort();
+    int allocatedPort = PortAllocator.allocate();
     ServiceInstance service =
         new ServiceInstance(property, serviceName, networkName, allocatedPort, containerNames);
 
@@ -2730,39 +2731,6 @@ public class XdnGigapaxosApp
   /**********************************************************************************************
    *                                  Begin utility methods                                     *
    *********************************************************************************************/
-
-  private int getRandomNumber(int min, int max) {
-    return (int) ((Math.random() * (max - min)) + min);
-  }
-
-  /**
-   * This method tries to find available port, most of the time. It is possible, in race condition,
-   * that the port deemed as available is being used by others even when this method return the
-   * port.
-   *
-   * @return port number that is potentially available
-   */
-  private int getRandomPort() {
-    int maxAttempt = 5;
-    int port = getRandomNumber(50000, 65000);
-    boolean isPortAvailable = false;
-
-    // check if port is already used by others
-    while (!isPortAvailable && maxAttempt > 0) {
-      try {
-        // success connection means the port is already used
-        Socket s = new Socket("localhost", port);
-        s.close();
-        port = getRandomNumber(50000, 65000);
-      } catch (IOException e) {
-        // unsuccessful connection could mean that the port is available
-        isPortAvailable = true;
-      }
-      maxAttempt--;
-    }
-
-    return port;
-  }
 
   private boolean startContainer(
       String imageName,
