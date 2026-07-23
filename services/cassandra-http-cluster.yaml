@@ -6,7 +6,6 @@
 # Build first:  docker build -t xdn-cassandra-cluster:test services/cassandra-cluster/
 #               docker build -t xdn-cassandra-http:test services/cassandra-http/
 # Launch:       xdn cluster launch casskv -f services/cassandra-http-cluster.yaml
-name: casskv
 mode: cluster
 peer_port: 7000               # gossip/streaming port; CQL is 9042 inside the netns
 num_replicas: 3

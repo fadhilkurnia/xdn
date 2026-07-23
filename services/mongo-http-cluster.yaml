@@ -1,12 +1,13 @@
 # MongoDB replica set behind the uniform HTTP KV shim, as an XDN
-# cluster-mode pod. The frontend (services/mongo-http) discovers the set
-# from its local member: writes go to the primary (w:majority) wherever it
-# is, reads stay on the nearest (local) member.
+# cluster-mode pod. The frontend (services/mongo-http) is dumb: a direct
+# connection to the co-located member only. mongod pushes routing to
+# clients by design, so writes succeed only at the current primary's
+# frontend (secondaries answer NotWritablePrimary); reads are served
+# locally via readPreference=nearest.
 #
 # Build first:  docker build -t xdn-mongo-cluster:test services/mongo-cluster/
 #               docker build -t xdn-mongo-http:test services/mongo-http/
 # Launch:       xdn cluster launch mongokv -f services/mongo-http-cluster.yaml
-name: mongokv
 mode: cluster
 peer_port: 27017
 num_replicas: 3

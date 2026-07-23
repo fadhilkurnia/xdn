@@ -9,7 +9,6 @@
 # Build first:  docker build -t xdn-mysql-cluster:test services/mysql-cluster/
 #               docker build -t xdn-mysql-http:test services/mysql-http/
 # Launch:       xdn cluster launch mysqlkv -f services/mysql-gr-http-cluster.yaml
-name: mysqlkv
 mode: cluster
 peer_port: 33061              # GR group-communication port (not 3306)
 num_replicas: 3
