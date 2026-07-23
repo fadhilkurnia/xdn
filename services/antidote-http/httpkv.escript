@@ -17,39 +17,15 @@
 %% connections, so keep-alive handling is required, and every response
 %% carries Content-Length so the frontend's keep-alive override cannot
 %% leave a response unframed.
+%% The shim is deliberately DUMB: rpc goes to the CO-LOCATED node only.
+%% DC linking is the SERVICE's own job (the antidote-cluster member
+%% entrypoint self-links from ordinal 0), not the shim's.
 main(_) ->
     Node = list_to_atom("antidote@" ++ os:getenv("XDN_CLUSTER_SELF")),
-    case os:getenv("XDN_CLUSTER_ORDINAL") of
-        "0" -> spawn(fun link_dcs/0);
-        _ -> ok
-    end,
     {ok, LSock} = gen_tcp:listen(8080, [binary, {packet, raw}, {active, false},
                                         {reuseaddr, true}, {backlog, 64}]),
     io:format("xdn-antidote-http: serving :8080 for ~p~n", [Node]),
     accept_loop(LSock, Node).
-
-%% Ordinal 0 links the DCs once every antidote node answers rpc: collect
-%% each DC's connection descriptor, then subscribe every DC to the others'
-%% update streams. Retries forever until it succeeds (nodes boot at their
-%% own pace); folds the previously manual xdnlink step into the service.
-link_dcs() ->
-    Peers = string:split(os:getenv("XDN_CLUSTER_PEERS"), ",", all),
-    Nodes = [list_to_atom("antidote@" ++ P) || P <- Peers],
-    Descs = collect_descriptors(Nodes, #{}),
-    lists:foreach(
-      fun(N) ->
-          Others = [maps:get(M, Descs) || M <- Nodes, M =/= N],
-          R = rpc:call(N, antidote_dc_manager, subscribe_updates_from, [Others], 60000),
-          io:format("xdn-antidote-http: ~p subscribed: ~p~n", [N, R])
-      end, Nodes),
-    io:format("xdn-antidote-http: DC linking complete~n").
-
-collect_descriptors([], Acc) -> Acc;
-collect_descriptors([N | Rest] = All, Acc) ->
-    case rpc:call(N, antidote_dc_manager, get_connection_descriptor, [], 15000) of
-        {ok, D} -> collect_descriptors(Rest, Acc#{N => D});
-        _ -> timer:sleep(3000), collect_descriptors(All, Acc)
-    end.
 
 accept_loop(LSock, Node) ->
     {ok, Sock} = gen_tcp:accept(LSock),

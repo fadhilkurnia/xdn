@@ -26,6 +26,12 @@ SELF_IP=$(resolve "$XDN_CLUSTER_SELF")
 export NODE_NAME="antidote@${XDN_CLUSTER_SELF}"
 echo "xdn-antidote: self=$XDN_CLUSTER_SELF ($SELF_IP) node=$NODE_NAME"
 
+# Self-clustering is the service's job: ordinal 0 links the DCs in the
+# background once every node is up (see xdnselflink.escript).
+if [ "${XDN_CLUSTER_ORDINAL:-}" = "0" ]; then
+  (/antidote/erts-*/bin/escript /xdnselflink.escript || true) &
+fi
+
 # The stock image's inline ENTRYPOINT references two vars it never defaults
 # (empty expansions break the erl flag pairing); default everything here so
 # the exec line below is well-formed.

@@ -70,20 +70,42 @@ def drive_httpkv(ars, port, service, phase, dur):
     via XDN's frontend). This is the canonical vantage point: every request
     crosses XDN's proxy, so request boundaries (and thus the coordinated vs
     uncoordinated split) are observable; nothing talks to the backend's
-    native protocol port directly."""
-    url = f"http://{ars[0]}:{port}/kv/bw-measure-key"
+    native protocol port directly.
+
+    The shims are dumb (co-located member only), so some backends reject
+    writes at some replicas (redis sub-replicas, mongo secondaries,
+    single-primary GR). The write phase therefore probes the ARs in order
+    and sticks with the first frontend whose member accepts writes, which
+    is exactly the discovery a native client of those systems performs.
+    Reads always go to ars[0] (local read at that replica)."""
+
+    def put(ar, n):
+        body = f"value-{n}-".encode().ljust(256, b"x")
+        req = urllib.request.Request(
+            f"http://{ar}:{port}/kv/bw-measure-key", data=body, method="PUT",
+            headers={"XDN": service})
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+
+    write_ar = ars[0]
+    if phase == "write":
+        for ar in ars:
+            try:
+                put(ar, 0)
+                write_ar = ar
+                break
+            except Exception:
+                continue
+        print(f"[httpkv] write phase drives {write_ar}", flush=True)
     deadline = time.time() + dur
     n = 0
     while time.time() < deadline:
         try:
             if phase == "write":
-                body = f"value-{n}-".encode().ljust(256, b"x")
-                req = urllib.request.Request(
-                    url, data=body, method="PUT", headers={"XDN": service})
-                with urllib.request.urlopen(req, timeout=10):
-                    pass
+                put(write_ar, n)
             else:
-                http(url, headers={"XDN": service})
+                http(f"http://{ars[0]}:{port}/kv/bw-measure-key",
+                     headers={"XDN": service})
             n += 1
             time.sleep(0.1)
         except Exception:

@@ -1,16 +1,18 @@
 // HTTP key-value frontend for the MongoDB replica-set reference service
 // (services/mongo-cluster). Runs as the entry sidecar in each replica's
-// pod. Same uniform surface as every XDN measurement shim:
+// pod.
 //
-//	GET  /            -> 200 once the replica set answers
-//	PUT  /kv/{key}    -> write, w:majority (driver routes to the primary)
-//	GET  /kv/{key}    -> read, readPreference=nearest (the local member)
+// The shim is deliberately DUMB: directConnection to the CO-LOCATED member
+// (127.0.0.1) only — no replica-set discovery, no routing. MongoDB pushes
+// routing to clients by design (mongod never forwards writes), so a PUT at
+// a secondary returns the member's NotWritablePrimary error as a 500;
+// writes succeed only at whichever member currently holds the primary
+// role. Reads use readPreference=nearest so the local member serves them
+// even while SECONDARY.
 //
-// The driver is seeded with the local member and discovers the replica set
-// (member hosts are replica-N overlay aliases, dialable through embedded
-// DNS), so writes reach the primary wherever it currently is, and reads
-// stay local. That split is the signature to measure: per-write oplog +
-// ack traffic on the overlay, wire-free reads.
+//	GET  /            -> 200 once the local member answers
+//	PUT  /kv/{key}    -> write on the local member (w:majority; fails if SECONDARY)
+//	GET  /kv/{key}    -> read on the local member
 package main
 
 import (
@@ -33,16 +35,13 @@ func main() {
 	if port == "" {
 		port = "27017"
 	}
-	uri := "mongodb://127.0.0.1:" + port + "/?replicaSet=rs0&w=majority&readConcernLevel=majority"
+	uri := "mongodb://127.0.0.1:" + port + "/?directConnection=true&w=majority"
 	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(uri))
 	if err != nil {
 		log.Fatal(err)
 	}
-	coll := client.Database("bw").Collection("kv")
-	readColl := coll // reads pinned to the nearest (local) member
-	if db := client.Database("bw", options.Database().SetReadPreference(readpref.Nearest())); db != nil {
-		readColl = db.Collection("kv")
-	}
+	db := client.Database("bw", options.Database().SetReadPreference(readpref.Nearest()))
+	coll := db.Collection("kv")
 
 	http.HandleFunc("/kv/", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -53,7 +52,7 @@ func main() {
 			var doc struct {
 				V []byte `bson:"v"`
 			}
-			err := readColl.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
+			err := coll.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
 			if err == mongo.ErrNoDocuments {
 				http.Error(w, "not found", http.StatusNotFound)
 				return

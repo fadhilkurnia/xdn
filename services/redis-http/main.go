@@ -1,15 +1,18 @@
 // HTTP key-value frontend for the Redis sub-replica chain reference service
 // (services/redis-chain). Runs as the entry sidecar in each replica's pod.
-// Same uniform surface as every XDN measurement shim:
+//
+// The shim is deliberately DUMB: it translates HTTP to redis commands on
+// the CO-LOCATED member (127.0.0.1) and nothing else — no topology
+// awareness, no routing. Whatever the local member answers is the answer.
+// Redis sub-replicas are read-only and do NOT forward writes to their
+// master, so a PUT at a non-head replica returns the member's -READONLY
+// error as a 500; that rejection is the service's own behavior and is
+// exactly what a blackbox client would observe. Writes succeed only at the
+// chain head (replica-0).
 //
 //	GET  /            -> 200 once the local redis answers
-//	PUT  /kv/{key}    -> write (SET on the chain head, replica-0)
-//	GET  /kv/{key}    -> read  (GET on the local member)
-//
-// Sub-replicas are read-only, so writes must go to the head. Forwarding
-// them there from every frontend is the honest chain shape: the client
-// write travels frontend -> head, then relays down the chain, mirroring
-// how rqlite forwards to its Raft leader internally.
+//	PUT  /kv/{key}    -> SET on the local member
+//	GET  /kv/{key}    -> GET on the local member
 package main
 
 import (
@@ -29,12 +32,7 @@ func main() {
 	if port == "" {
 		port = "6379"
 	}
-	ordinal := os.Getenv("XDN_CLUSTER_ORDINAL")
 	local := redis.NewClient(&redis.Options{Addr: "127.0.0.1:" + port})
-	head := local
-	if ordinal != "0" {
-		head = redis.NewClient(&redis.Options{Addr: "replica-0:" + port})
-	}
 
 	http.HandleFunc("/kv/", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -54,7 +52,7 @@ func main() {
 			w.Write(v)
 		case http.MethodPut, http.MethodPost:
 			body, _ := io.ReadAll(r.Body)
-			if err := head.Set(ctx, key, body, 0).Err(); err != nil {
+			if err := local.Set(ctx, key, body, 0).Err(); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}

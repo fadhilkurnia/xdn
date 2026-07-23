@@ -14,8 +14,9 @@
 # Build: docker build -t xdn-antidote-cluster:test services/antidote-cluster/
 FROM antidotedb/antidote:latest
 COPY entrypoint.sh /xdn-entrypoint.sh
+COPY xdnselflink.escript /xdnselflink.escript
 # XDN starts cluster containers under a non-root --user; the relx start
 # script substitutes env vars into vm.args/sys.config inside the release
 # dir at boot, so the whole tree must be writable.
-RUN chmod +x /xdn-entrypoint.sh && chmod -R a+w /antidote
+RUN chmod +x /xdn-entrypoint.sh /xdnselflink.escript && chmod -R a+w /antidote
 ENTRYPOINT ["/xdn-entrypoint.sh"]

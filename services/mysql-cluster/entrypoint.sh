@@ -75,6 +75,17 @@ innodb_buffer_pool_size           = 128M
 performance_schema                = ON
 EOF
 
+# Optional multi-primary mode (XDN_MYSQL_MULTI_PRIMARY=1): every member
+# accepts writes under certification-based conflict detection. Used by the
+# dumb-frontend measurement pods, where each shim only ever talks to its
+# co-located member; default stays single-primary (the WordPress pod shape).
+if [ "${XDN_MYSQL_MULTI_PRIMARY:-0}" = "1" ]; then
+  cat >> /etc/mysql/conf.d/zz-xdn-group-replication.cnf <<EOF
+loose-group_replication_single_primary_mode          = OFF
+loose-group_replication_enforce_update_everywhere_checks = ON
+EOF
+fi
+
 echo "[xdn-mysql] ${XDN_CLUSTER_SELF} server_id=${SERVER_ID} phase=${PHASE} seeds=${SEEDS}"
 
 # Hand off to the stock entrypoint to initialize the datadir + root password, in the

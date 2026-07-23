@@ -373,19 +373,29 @@ the same surface — `GET /` health, `PUT /kv/{k}` write, `GET /kv/{k}` read —
 so ALL measurement traffic enters through XDN's HTTP proxy. Rationale:
 coordination inference needs request boundaries; a raw binary-protocol pipe
 has none, so coordinated vs uncoordinated demand cannot be attributed
-per-request. The shims also encode each protocol's client-side routing:
-`mysql-http` (Go) discovers the GR primary from `performance_schema` and
-routes writes there, reads local; `redis-http` (Go) writes to the chain head
-replica-0, reads local; `cassandra-http` (Go) pins the local member as
-QUORUM coordinator (host lookup disabled); `mongo-http` (Go) seeds the
-driver locally, writes w:majority to the discovered primary, reads
-nearest; `antidote-http` (escript gen_tcp HTTP loop — the antidote release
-ships no inets — rpc to the local DC over distributed Erlang; ordinal 0
-also links the DCs at startup); `corfu-http` (Java, compiled against the
-corfu image's shaded jars — the frontend IS the corfu client, so the
-client-driven chain originates inside the pod; ordinal 0 bootstraps the
-chain layout, absorbing the manual `corfu_bootstrap_cluster` step and its
-heal-wipe hazard). Launch e.g.
+per-request. The shims are deliberately DUMB — pure protocol translation to
+the CO-LOCATED member at 127.0.0.1, zero topology awareness — because any
+shim-side routing/discovery would put coordination behavior in XDN-side
+code and contaminate the blackbox signal. Consequences per backend:
+`cassandra-http` (Go) and `antidote-http` (escript gen_tcp HTTP loop — the
+antidote release ships no inets — rpc to the local DC over raw dist) are
+naturally local-serving; `mysql-http` (Go) requires the member in GR
+MULTI-PRIMARY mode (`XDN_MYSQL_MULTI_PRIMARY=1` in the pod spec — a
+service-side config, secondaries in single-primary mode reject writes and
+mysqld never forwards); `redis-http` (Go) surfaces `-READONLY` on non-head
+replicas (redis sub-replicas never forward writes — writes only succeed at
+replica-0's frontend); `mongo-http` (Go, directConnection) surfaces
+NotWritablePrimary on secondaries (mongod pushes routing to clients by
+design — writes only succeed at the current primary's frontend);
+`corfu-http` (Java, compiled against the corfu image's shaded jars) is the
+irreducible case — corfu's replication logic lives IN the client library,
+so the shim embeds the corfu client seeded with the local member and its
+fan-out IS the protocol's shape. Cluster formation belongs to the members,
+not the shims: antidote self-links its DCs (ordinal 0,
+`xdnselflink.escript`) and corfu self-bootstraps its chain layout (ordinal
+0, member entrypoint) — both retry in the background until formation.
+Measurement clients probe which frontend accepts writes (the same
+discovery native clients perform). Launch e.g.
 `xdn cluster launch mysqlkv -f services/mysql-gr-http-cluster.yaml`.
 
 **Reconfiguration is deferred** (Component 6 in the design plan). The
