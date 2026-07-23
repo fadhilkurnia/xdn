@@ -1,0 +1,22 @@
+# Cassandra (leaderless quorum) behind the uniform HTTP KV shim, as an XDN
+# cluster-mode pod. The frontend (services/cassandra-http) pins the LOCAL
+# member as coordinator for QUORUM reads and writes, so each request fans
+# out from the replica that received it (the leaderless signature).
+#
+# Build first:  docker build -t xdn-cassandra-cluster:test services/cassandra-cluster/
+#               docker build -t xdn-cassandra-http:test services/cassandra-http/
+# Launch:       xdn cluster launch casskv -f services/cassandra-http-cluster.yaml
+name: casskv
+mode: cluster
+peer_port: 7000               # gossip/streaming port; CQL is 9042 inside the netns
+num_replicas: 3
+state: cassandra:/var/lib/cassandra/
+components:
+  - cassandra:
+      image: xdn-cassandra-cluster:test
+      stateful: true
+      expose: 9042
+  - frontend:
+      image: xdn-cassandra-http:test
+      port: 8080
+      entry: true

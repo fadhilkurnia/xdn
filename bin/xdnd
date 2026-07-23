@@ -614,7 +614,10 @@ function upload_binaries() {
 
   CMD=()
   CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_cli.sh')
-  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_fuselog.sh')
+  # fuselog is an eval-only dependency (FUSE statediff recorders); cluster
+  # mode and rsync-recorder deployments run without it, so a failed build
+  # (e.g. xdn-fs absent from a lean checkout) must not fail the host init.
+  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && { ./bin/build_xdn_fuselog.sh || echo "[dist-init] WARNING: fuselog build failed (eval-only dependency); continuing"; }')
   CMD+=("sudo rm -rf /usr/local/bin/xdn")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")

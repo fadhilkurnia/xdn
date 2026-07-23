@@ -65,6 +65,32 @@ class Sampler(threading.Thread):
 # ---------------------------------------------------------------- load drivers
 
 
+def drive_httpkv(ars, port, service, phase, dur):
+    """Uniform driver for services behind the HTTP KV shim (PUT/GET /kv/k
+    via XDN's frontend). This is the canonical vantage point: every request
+    crosses XDN's proxy, so request boundaries (and thus the coordinated vs
+    uncoordinated split) are observable; nothing talks to the backend's
+    native protocol port directly."""
+    url = f"http://{ars[0]}:{port}/kv/bw-measure-key"
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        try:
+            if phase == "write":
+                body = f"value-{n}-".encode().ljust(256, b"x")
+                req = urllib.request.Request(
+                    url, data=body, method="PUT", headers={"XDN": service})
+                with urllib.request.urlopen(req, timeout=10):
+                    pass
+            else:
+                http(url, headers={"XDN": service})
+            n += 1
+            time.sleep(0.1)
+        except Exception:
+            time.sleep(0.2)
+    return n
+
+
 def drive_etcd(ars, port, service, phase, dur):
     url = f"http://{ars[0]}:{port}/v3/kv/" + ("put" if phase == "write" else "range")
     key = base64.b64encode(b"bw-measure-key").decode()
@@ -261,8 +287,8 @@ def main():
     ap.add_argument("--service", required=True)
     ap.add_argument(
         "--kind", required=True,
-        choices=["etcd", "rqlite", "mysql", "redis", "cassandra", "antidote", "mongo",
-                 "corfu"])
+        choices=["httpkv", "etcd", "rqlite", "mysql", "redis", "cassandra", "antidote",
+                 "mongo", "corfu"])
     ap.add_argument("--ars", required=True, help="comma-separated AR addresses")
     ap.add_argument("--frontend-port", type=int, default=2300)
     ap.add_argument("--phases", default="idle:30,write:60,read:30")
@@ -292,6 +318,8 @@ def main():
         if name == "idle":
             time.sleep(dur)
             ops = 0
+        elif args.kind == "httpkv":
+            ops = drive_httpkv(ars, args.frontend_port, args.service, name, dur)
         elif args.kind == "etcd":
             ops = drive_etcd(ars, args.frontend_port, args.service, name, dur)
         elif args.kind == "rqlite":

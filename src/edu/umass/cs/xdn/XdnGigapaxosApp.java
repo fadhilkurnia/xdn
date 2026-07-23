@@ -1208,6 +1208,14 @@ public class XdnGigapaxosApp
           sidecar.getEnvironmentVariables() != null
               ? new LinkedHashMap<>(sidecar.getEnvironmentVariables())
               : new LinkedHashMap<>();
+      // The XDN_CLUSTER_* contract goes to every container in the pod, not just the cluster
+      // member: entry frontends need the topology too (route writes to the chain head or the
+      // GR primary, name the local Erlang node, bootstrap from ordinal 0).
+      for (Map.Entry<String, String> e : clusterEnv.entrySet()) {
+        if (e.getKey().startsWith("XDN_CLUSTER_")) {
+          sidecarEnv.put(e.getKey(), e.getValue());
+        }
+      }
       boolean ok =
           startClusterSidecar(
               sidecar.getImageName(),

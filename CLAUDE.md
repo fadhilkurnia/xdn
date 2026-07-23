@@ -284,11 +284,14 @@ lookup or daemon restart can), and `docker create` validates bind sources
 eagerly while Linux dockerd would auto-create them as root (breaking
 `--user`).
 
-**Env contract** injected into every cluster container:
+**Env contract** injected into every container of the pod (the cluster
+member AND all sidecars — entry frontends need the topology too, e.g. to
+route writes to the chain head or name the local Erlang node):
 `XDN_CLUSTER_ORDINAL`, `XDN_CLUSTER_SIZE`, `XDN_CLUSTER_SELF`,
 `XDN_CLUSTER_PEERS`, `XDN_CLUSTER_PEER_PORT`, `XDN_CLUSTER_PHASE`
 (`bootstrap` at epoch 0; `join` reserved for the not-yet-wired
-reconfiguration path).
+reconfiguration path). A sidecar's declared env loses to the contract on
+key collision.
 
 **Single-image vs. multi-component.** A cluster service can be one image
 (e.g. etcd alone) or multiple components in a pod-style group (e.g.
@@ -363,6 +366,27 @@ warning and disables profiling). Tests: `XdnBwProbeParserTest` (unit),
   the client. Bootstrap = `corfu_bootstrap_cluster` with
   `layout.json.template`; `corfu_load.clj` is the measurement load driver
   (run through `ShellMain run-script` from a non-member overlay container).
+
+**Uniform HTTP KV shims** (`services/*-http/` + `services/*-http-cluster.yaml`
+pod specs): every non-HTTP reference service gets a thin entry frontend with
+the same surface — `GET /` health, `PUT /kv/{k}` write, `GET /kv/{k}` read —
+so ALL measurement traffic enters through XDN's HTTP proxy. Rationale:
+coordination inference needs request boundaries; a raw binary-protocol pipe
+has none, so coordinated vs uncoordinated demand cannot be attributed
+per-request. The shims also encode each protocol's client-side routing:
+`mysql-http` (Go) discovers the GR primary from `performance_schema` and
+routes writes there, reads local; `redis-http` (Go) writes to the chain head
+replica-0, reads local; `cassandra-http` (Go) pins the local member as
+QUORUM coordinator (host lookup disabled); `mongo-http` (Go) seeds the
+driver locally, writes w:majority to the discovered primary, reads
+nearest; `antidote-http` (escript gen_tcp HTTP loop — the antidote release
+ships no inets — rpc to the local DC over distributed Erlang; ordinal 0
+also links the DCs at startup); `corfu-http` (Java, compiled against the
+corfu image's shaded jars — the frontend IS the corfu client, so the
+client-driven chain originates inside the pod; ordinal 0 bootstraps the
+chain layout, absorbing the manual `corfu_bootstrap_cluster` step and its
+heal-wipe hazard). Launch e.g.
+`xdn cluster launch mysqlkv -f services/mysql-gr-http-cluster.yaml`.
 
 **Reconfiguration is deferred** (Component 6 in the design plan). The
 `xdn:final:` cluster path in `XdnGigapaxosApp.createServiceInstance` throws

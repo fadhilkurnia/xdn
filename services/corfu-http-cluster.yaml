@@ -1,0 +1,24 @@
+# CorfuDB (client-driven chain replication) behind the uniform HTTP KV
+# shim, as an XDN cluster-mode pod. The frontend (services/corfu-http) IS
+# the corfu client: writes take a sequencer token and write each log unit
+# in chain order from inside the pod; reads query the sequencer and fetch
+# from the chain tail. Ordinal 0's frontend bootstraps the chain layout,
+# folding the manual corfu_bootstrap_cluster step into the service.
+#
+# Build first:  docker build -t xdn-corfu-cluster:test services/corfu-cluster/
+#               docker build -t xdn-corfu-http:test services/corfu-http/
+# Launch:       xdn cluster launch corfukv -f services/corfu-http-cluster.yaml
+name: corfukv
+mode: cluster
+peer_port: 9000
+num_replicas: 3
+state: corfu:/config/         # unused in memory mode, required by the spec
+components:
+  - corfu:
+      image: xdn-corfu-cluster:test
+      stateful: true
+      expose: 9000
+  - frontend:
+      image: xdn-corfu-http:test
+      port: 8080
+      entry: true
