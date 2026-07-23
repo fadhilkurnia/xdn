@@ -214,6 +214,24 @@ def drive_mongo(container, phase, dur):
         ["docker", "exec", container, "mongosh", "--quiet", "--eval", js], dur)
 
 
+def drive_corfu(network, phase, dur):
+    """One JVM per phase: run corfu_load.clj (services/corfu-cluster/)
+    through ShellMain from a NON-member container attached to the service
+    overlay, so Corfu's client-driven chain (sequencer token, then a client
+    write to each log unit in chain order) classifies as client edges on
+    every member. Expects the script at /tmp/corfu_load.clj on this host."""
+    ms = dur * 1000 - 6000
+    cfg = "replica-0:9000,replica-1:9000,replica-2:9000"
+    cmd = ["docker", "run", "--rm", "-i", "--network", network,
+           "-v", "/tmp/corfu_load.clj:/tmp/corfu_load.clj:ro",
+           "corfudb/corfu-server:0.9.2.0-SNAPSHOT",
+           "java", "-cp", "/usr/share/corfu/lib/*",
+           "org.corfudb.shell.ShellMain", "run-script", "/tmp/corfu_load.clj",
+           "-c", cfg, "-i", "bw", "-d", str(ms),
+           "write" if phase == "write" else "read"]
+    return _exec_phase_loop(cmd, dur)
+
+
 def drive_mysql(host, port, password, phase, dur):
     def sql(stmt, timeout=10):
         return subprocess.run(
@@ -243,7 +261,8 @@ def main():
     ap.add_argument("--service", required=True)
     ap.add_argument(
         "--kind", required=True,
-        choices=["etcd", "rqlite", "mysql", "redis", "cassandra", "antidote", "mongo"])
+        choices=["etcd", "rqlite", "mysql", "redis", "cassandra", "antidote", "mongo",
+                 "corfu"])
     ap.add_argument("--ars", required=True, help="comma-separated AR addresses")
     ap.add_argument("--frontend-port", type=int, default=2300)
     ap.add_argument("--phases", default="idle:30,write:60,read:30")
@@ -256,6 +275,8 @@ def main():
     ap.add_argument("--direct-port", type=int, help="published port for direct-protocol kinds")
     ap.add_argument("--direct-container",
                     help="local container name for docker-exec kinds (antidote, mongo)")
+    ap.add_argument("--direct-network",
+                    help="overlay network name for client-container kinds (corfu)")
     args = ap.parse_args()
 
     ars = args.ars.split(",")
@@ -283,6 +304,8 @@ def main():
             ops = drive_antidote(args.direct_container, name, dur)
         elif args.kind == "mongo":
             ops = drive_mongo(args.direct_container, name, dur)
+        elif args.kind == "corfu":
+            ops = drive_corfu(args.direct_network, name, dur)
         else:
             ops = drive_mysql(args.mysql_host, args.mysql_port, args.mysql_password,
                               name, dur)

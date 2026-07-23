@@ -332,6 +332,32 @@ warning and disables profiling). Tests: `XdnBwProbeParserTest` (unit),
 - `services/wordpress-mysql-cluster.yaml` — multi-component spec exercising the
   sidecar-netns path: `wordpress` (entry) + `mysql` (stateful GR member). Covered
   by `XdnWordPressClusterTest`.
+- `services/redis-chain/` — Redis sub-replica chaining: ordinal N>0 is a
+  `--replicaof` of ordinal N-1, giving a relay PATH topology (byte-identical
+  store-and-forward, no head↔tail edge) as the chain coordination pattern.
+- `services/cassandra-cluster/` — leaderless Dynamo-style quorum; the
+  entrypoint resolves the overlay IP from the replica-N alias for the
+  listen/broadcast address, with replica-0 as the gossip seed.
+- `services/antidote-cluster/` — CRDT store (causal+): each replica is an
+  independent antidote DC; writes commit locally and replicate asynchronously
+  over ZeroMQ pub/sub (no ack traffic at all). DC linking is a post-start
+  step driven through `xdnlink.escript` over raw distributed Erlang — the
+  release's nodetool reads the unsubstituted `vm.args` (the boot script
+  honors the `NODE_NAME` env but never rewrites the file) and so cannot find
+  the node. Image gotchas encoded in the Dockerfile: the release tree is
+  made world-writable (XDN starts cluster containers under a non-root
+  `--user`, and the relx script writes vm.args/sys.config at boot), and the
+  release runs `-sname` mode, forcing dotless `antidote@replica-N` names.
+- `services/mongo-cluster/` — MongoDB replica set (secondaries PULL the
+  oplog; acks return as `replSetUpdatePosition`); ordinal 0 initiates `rs0`
+  with replica-N member addresses. The primary can migrate after formation —
+  load drivers must find the current primary first.
+- `services/corfu-cluster/` — CorfuDB in memory mode: chain replication, but
+  CLIENT-driven (the client library writes each log unit in chain order), so
+  replica↔replica traffic is management-plane only while data fans out from
+  the client. Bootstrap = `corfu_bootstrap_cluster` with
+  `layout.json.template`; `corfu_load.clj` is the measurement load driver
+  (run through `ShellMain run-script` from a non-member overlay container).
 
 **Reconfiguration is deferred** (Component 6 in the design plan). The
 `xdn:final:` cluster path in `XdnGigapaxosApp.createServiceInstance` throws
