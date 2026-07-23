@@ -1,0 +1,29 @@
+# bench_endpoints.yaml
+#
+# Bench-specific config, one entry per app variant. Everything infra-related
+# (images, env vars, state mount path, healthcheck path, entry port) is read
+# directly from the linked XDN descriptor -- only add here what the descriptor
+# doesn't already encode: HTTP endpoints, payload shape, and ports for this
+# benchmark's own use.
+
+bookcatalog-nd-mysql:
+  descriptor: apps/bookcatalog-nd.my.yaml
+  read_endpoint: "/api/books/{id}"
+  write_endpoint: "/api/books"
+  write_method: POST
+  write_payload: '{"title":"Book #{counter}","author":"Author #{counter}"}'
+  write_headers:
+    Content-Type: application/json
+  capture_host_port: 18080      # host port for capture_bench.py's entry container
+  replay_base_port: 33061       # first host port for replay_checkpoints.py checkpoint containers
+
+bookcatalog-nd-postgres:
+  descriptor: apps/bookcatalog-nd.pg.yaml
+  read_endpoint: "/api/books/{id}"
+  write_endpoint: "/api/books"
+  write_method: POST
+  write_payload: '{"title":"Book #{counter}","author":"Author #{counter}"}'
+  write_headers:
+    Content-Type: application/json
+  capture_host_port: 18081
+  replay_base_port: 33071

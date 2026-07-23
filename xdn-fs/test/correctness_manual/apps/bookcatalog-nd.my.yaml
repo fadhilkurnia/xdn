@@ -1,0 +1,37 @@
+---
+name: bookcatalog-nd
+components:
+  - mysql:
+      image: mysql:8.0.41-debian
+      stateful: true
+      environments:
+        - MYSQL_DATABASE: books
+        - MYSQL_ROOT_PASSWORD: root
+
+  - app:
+      image: bookcatalog-nd:4
+      stateful: false
+      entry: true
+      port: 80
+      environments:
+        - DB_TYPE: mysql
+        - DB_HOST: mysql
+      healthcheck:
+        path: /api/books
+
+
+state: mysql:/var/lib/mysql/
+deterministic: false
+#consistency: linearizability
+consistency: eventual
+
+requests:
+  - path_prefix: "/"
+    methods: "GET,OPTIONS,HEAD"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: write_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: monotonic

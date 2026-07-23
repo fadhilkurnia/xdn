@@ -164,6 +164,44 @@ jobs:
           if-no-files-found: ignore
 
   # ----------------------------------------------------------------------
+  # L4c: harvest-socket Tier-1 invariant -- every fid referenced by a
+  # statediff must resolve in that same harvested batch's own file table.
+  # Checked live, per-batch, over the real harvest socket wire protocol
+  # (complementary to concurrent-disjoint/-overlap's end-state tree diffs,
+  # not redundant with them).
+  # ----------------------------------------------------------------------
+  harvest-invariant:
+    name: "🧪 L4c harvest socket invariant"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: 📦 Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+      - name: 🏗️ Build fuselog
+        run: ./bin/build_xdn_fuselog.sh cpp
+      - name: 🧪 Run harness selftest (no real binary needed)
+        run: python3 xdn-fs/test/correctness_auto/test_harness_selftest.py
+      - name: 🧪 Run harvest-socket stress test
+        run: |
+          python3 xdn-fs/test/correctness_auto/run_stress_test.py \
+            --fuselog-binary /usr/local/bin/fuselog \
+            --num-hot-threads 4 \
+            --duration 10 \
+            --work-root ${{ runner.temp }}/fuselog-harvest-invariant
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harvest-invariant-failure
+          path: ${{ runner.temp }}/fuselog-harvest-invariant
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------------
   # L5: SQLite (in-process, no Docker). Fastest of the DB integration
   # tests; kept separate so it doesn't share runner time with the heavier
   # Docker-based DBs.
@@ -257,6 +295,7 @@ jobs:
       - differential
       - concurrent-disjoint
       - concurrent-overlap
+      - harvest-invariant
       - db-sqlite
       - db-docker
     if: always()

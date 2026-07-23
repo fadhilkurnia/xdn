@@ -1,0 +1,4 @@
+runs/*
+replays/*
+*.png
+__pycache__

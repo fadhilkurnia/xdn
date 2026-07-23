@@ -1,0 +1,36 @@
+---
+name: bookcatalog-nd
+components:
+  - postgres:
+      image: postgres:17.4-bookworm
+      stateful: true
+      environments:
+        - POSTGRES_DB: books
+        - POSTGRES_PASSWORD: root
+
+  - app:
+      image: bookcatalog-nd:4
+      stateful: false
+      entry: true
+      port: 80
+      environments:
+        - DB_TYPE: postgres
+        - DB_HOST: postgres
+      healthcheck:
+        path: /api/books
+
+state: postgres:/var/lib/postgresql/data/
+deterministic: false
+#consistency: linearizability
+consistency: eventual
+
+requests:
+  - path_prefix: "/"
+    methods: "GET,OPTIONS,HEAD"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: write_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: monotonic
