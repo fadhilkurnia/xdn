@@ -165,6 +165,55 @@ def drive_cassandra(host, port, phase, dur):
     return n
 
 
+def _exec_phase_loop(cmd, dur):
+    """Run one in-container timed loop for a whole phase; parse OPS=N."""
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=dur + 90, text=True)
+    except subprocess.TimeoutExpired:
+        return 0
+    for line in (out.stdout or "").splitlines():
+        if line.startswith("OPS="):
+            return int(line[4:])
+    print(f"[warn] no OPS= in driver output: {out.stdout[-200:]!r} {out.stderr[-200:]!r}",
+          flush=True)
+    return 0
+
+
+def drive_antidote(container, phase, dur):
+    """Antidote has no CLI protocol client, and the release's nodetool reads
+    the unsubstituted vm.args (wrong node name), so drive load through the
+    xdnlink.escript helper pushed into the container at DC-link time (see
+    services/antidote-cluster/xdnlink.escript). Its rpc dist connection dials
+    the node's own overlay alias, so it appears as a self-edge in the
+    bandwidth profile; analysis must ignore self-edges for antidote."""
+    ms = dur * 1000 - 2000
+    cmd = ["docker", "exec", container, "sh", "-c",
+           f"/antidote/erts-*/bin/escript /tmp/xdnlink.escript load {phase} {ms}"]
+    return _exec_phase_loop(cmd, dur)
+
+
+def drive_mongo(container, phase, dur):
+    """Timed mongosh loop on the primary's container; majority writes,
+    majority reads (served locally — the pull-based oplog is the signal)."""
+    ms = dur * 1000 - 2000
+    if phase == "write":
+        op = (
+            "c.replaceOne({_id: n % 64}, {_id: n % 64, v: 'x'.repeat(256)}, "
+            "{upsert: true, writeConcern: {w: 'majority'}}); n++;"
+        )
+    else:
+        op = "c.find({_id: {$lt: 64}}).readConcern('majority').toArray(); n++;"
+    js = (
+        f"const d = Date.now() + {ms}; let n = 0; "
+        "const c = db.getSiblingDB('bw').kv; "
+        "while (Date.now() < d) { "
+        f"try {{ {op} }} catch (e) {{}} sleep(100); }} "
+        "print('OPS=' + n);"
+    )
+    return _exec_phase_loop(
+        ["docker", "exec", container, "mongosh", "--quiet", "--eval", js], dur)
+
+
 def drive_mysql(host, port, password, phase, dur):
     def sql(stmt, timeout=10):
         return subprocess.run(
@@ -193,7 +242,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--service", required=True)
     ap.add_argument(
-        "--kind", required=True, choices=["etcd", "rqlite", "mysql", "redis", "cassandra"])
+        "--kind", required=True,
+        choices=["etcd", "rqlite", "mysql", "redis", "cassandra", "antidote", "mongo"])
     ap.add_argument("--ars", required=True, help="comma-separated AR addresses")
     ap.add_argument("--frontend-port", type=int, default=2300)
     ap.add_argument("--phases", default="idle:30,write:60,read:30")
@@ -204,6 +254,8 @@ def main():
     ap.add_argument("--mysql-password")
     ap.add_argument("--direct-host", help="service host for direct-protocol kinds")
     ap.add_argument("--direct-port", type=int, help="published port for direct-protocol kinds")
+    ap.add_argument("--direct-container",
+                    help="local container name for docker-exec kinds (antidote, mongo)")
     args = ap.parse_args()
 
     ars = args.ars.split(",")
@@ -227,6 +279,10 @@ def main():
             ops = drive_redis(args.direct_host, args.direct_port, name, dur)
         elif args.kind == "cassandra":
             ops = drive_cassandra(args.direct_host, args.direct_port, name, dur)
+        elif args.kind == "antidote":
+            ops = drive_antidote(args.direct_container, name, dur)
+        elif args.kind == "mongo":
+            ops = drive_mongo(args.direct_container, name, dur)
         else:
             ops = drive_mysql(args.mysql_host, args.mysql_port, args.mysql_password,
                               name, dur)
