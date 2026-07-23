@@ -264,14 +264,19 @@ dial; with the hostname decoupled, `replica-N` resolves through embedded DNS
 to the overlay IP from everywhere. On Linux both paths worked
 pre-dual-homing; dual-homing makes macOS local dev work too.
 
-After start, the AR gates on the entry port actually answering HTTP (any
-status) before registering the service — a TCP accept is not enough, because
-Docker Desktop's port forwarder accepts on a published port even when nothing
-is bound inside, and a request forwarded into such a half-open port hangs the
-serial batch pipeline. If the port stays dead for 30s the AR restarts the
-container (then sidecars) once to re-program the forward — a known
-Docker Desktop flake where a freshly published port never gets wired; both
-the gate and the restart are no-ops on Linux. Two further Docker Desktop
+After start, the AR gates on the entry port actually answering (any bytes or
+an orderly close) before registering the service — a TCP accept is not
+enough, because Docker Desktop's port forwarder accepts on a published port
+even when nothing is bound inside, and a request forwarded into such a
+half-open port hangs the serial batch pipeline. **On macOS only**, if the
+port stays dead for 30s the AR restarts the container (then sidecars) once
+to re-program the forward — a known Docker Desktop flake where a freshly
+published port never gets wired. On Linux the AR waits the same total 60s
+budget in one stretch and never restarts: a dead port there just means a
+slow boot, and restarting a self-clustering member mid-formation is
+destructive (a restarted MySQL GR joiner never re-joins — the cause of the
+"GR never reached 3 ONLINE (last seen: 1)" CI failures on slow runners —
+and a memory-mode corfu member loses its bootstrapped layout). Two further Docker Desktop
 gotchas encoded in `startClusterContainer`: the bind-mount source dir is
 pre-created with Java NIO before `docker create` (the daemon caches a failed
 bind-source lookup, so a later mkdir cannot heal it — only a fresh path

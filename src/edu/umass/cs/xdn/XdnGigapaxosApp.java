@@ -1248,13 +1248,17 @@ public class XdnGigapaxosApp
     // a request that never completes. Best-effort on timeout: a slow-booting image keeps
     // today's behavior instead of failing the epoch start.
     long readinessStartMs = System.currentTimeMillis();
-    boolean entryReady = waitForEntryPortReadiness(allocatedPort, 30_000);
-    if (!entryReady) {
-      // Docker Desktop's port forwarder occasionally never wires a freshly published port:
-      // the container is healthy inside, the host port accepts TCP, but no bytes ever flow.
-      // A container restart re-programs the forward. Linux never takes this branch — a bound
-      // port there answers within the first wait. Sidecars restart after the member so they
-      // re-join its fresh network namespace.
+    // The restart heal below exists for Docker Desktop only: its port forwarder occasionally
+    // never wires a freshly published port (container healthy inside, host port accepts TCP,
+    // no bytes ever flow) and a container restart re-programs the forward. On Linux a dead
+    // port just means the app is still booting, and restarting a self-clustering member
+    // mid-formation is destructive (a restarted MySQL GR joiner never re-joins its group;
+    // a memory-mode corfu member loses its bootstrapped layout), so Linux waits the same
+    // total budget in one stretch and never restarts.
+    boolean healEnabled = System.getProperty("os.name", "").toLowerCase().contains("mac");
+    boolean entryReady = waitForEntryPortReadiness(allocatedPort, healEnabled ? 30_000 : 60_000);
+    if (!entryReady && healEnabled) {
+      // Sidecars restart after the member so they re-join its fresh network namespace.
       logger.log(
           Level.WARNING,
           "{0}:{1} cluster service {2} entry port {3} dead after 30s; restarting container(s)"
