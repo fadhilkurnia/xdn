@@ -78,7 +78,14 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if err := client.Ping(ctx, readpref.Nearest()); err != nil {
+		// Ready only when the local member belongs to an initialized replica
+		// set (PRIMARY or SECONDARY) — a bare ping succeeds before
+		// rs.initiate has reached this member, which is too early.
+		var hello bson.M
+		err := client.Database("admin").
+			RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello)
+		if err != nil || hello["setName"] == nil ||
+			(hello["isWritablePrimary"] != true && hello["secondary"] != true) {
 			http.Error(w, "warming up", http.StatusServiceUnavailable)
 			return
 		}
