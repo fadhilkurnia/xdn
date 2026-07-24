@@ -41,14 +41,15 @@ INK = "#333333"
 INK_MUTED = "#767676"
 GRID = "#e5e5e2"
 
-# Fixed node layout: replicas in a triangle, client offset upper-left.
-POS = {
-    "replica-0": (0.50, 0.86),
-    "replica-1": (0.13, 0.16),
-    "replica-2": (0.87, 0.16),
-    "client": (0.04, 0.88),
-}
-NODE_LABEL = {"replica-0": "R0", "replica-1": "R1", "replica-2": "R2", "client": "C"}
+def make_pos(n):
+    """Fixed layout for n replicas: a circle with replica-0 at the top,
+    ordinals clockwise, and the client offset at the upper left. Identical
+    across panels so protocol shape is comparable."""
+    pos = {"client": (0.03, 0.90)}
+    for i in range(n):
+        theta = math.pi / 2 - 2 * math.pi * i / n
+        pos[f"replica-{i}"] = (0.5 + 0.38 * math.cos(theta), 0.51 + 0.38 * math.sin(theta))
+    return pos
 
 
 def phase_edges(d, t0, t1, floor):
@@ -98,25 +99,30 @@ def human(rate):
     return f"{rate:.0f} B/s"
 
 
-def draw_panel(ax, edges, floor):
+def draw_panel(ax, edges, floor, pos):
     ax.set_xlim(-0.08, 1.08)
     ax.set_ylim(-0.06, 1.06)
     ax.set_aspect("equal")
     ax.axis("off")
     used = {n for e in edges for n in e}
-    for name, (x, y) in POS.items():
+    node_size = 340 if len(pos) <= 5 else 230
+    node_font = 8 if len(pos) <= 5 else 6.5
+    for name, (x, y) in pos.items():
         if name == "client" and "client" not in used:
             continue
         face = "#ffffff"
         edge_color = INK_MUTED if name != "client" else COLOR_CLIENT
-        ax.scatter([x], [y], s=340, zorder=3, facecolor=face, edgecolor=edge_color, linewidth=1.2)
-        ax.text(x, y, NODE_LABEL[name], ha="center", va="center", fontsize=8, color=INK, zorder=4)
+        label = "C" if name == "client" else "R" + name.rsplit("-", 1)[1]
+        ax.scatter([x], [y], s=node_size, zorder=3, facecolor=face,
+                   edgecolor=edge_color, linewidth=1.2)
+        ax.text(x, y, label, ha="center", va="center", fontsize=node_font,
+                color=INK, zorder=4)
     peak = max(edges.values(), default=0)
     for (src, dst), rate in sorted(edges.items(), key=lambda kv: kv[1]):
         color = COLOR_CLIENT if "client" in (src, dst) else COLOR_COORD
         arrow = FancyArrowPatch(
-            POS[src],
-            POS[dst],
+            pos[src],
+            pos[dst],
             connectionstyle="arc3,rad=0.14",
             arrowstyle="-|>,head_length=4,head_width=2.4",
             mutation_scale=1.0,
@@ -156,11 +162,12 @@ def main():
 
     for r, d in enumerate(rows):
         by_name = {p["name"]: p for p in d["phases"]}
+        pos = make_pos(len(d["ars"]))
         for c, phname in enumerate(phases):
             ax = axes[r][c]
             ph = by_name.get(phname)
             edges = phase_edges(d, ph["t0"], ph["t1"], args.floor) if ph else {}
-            draw_panel(ax, edges, args.floor)
+            draw_panel(ax, edges, args.floor, pos)
             if r == 0:
                 ax.set_title(phname, fontsize=9, color=INK, pad=6)
             if c == 0:

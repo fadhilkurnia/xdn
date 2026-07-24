@@ -35,23 +35,28 @@ def http(url, headers=None, data=None, timeout=5):
 
 
 class Sampler(threading.Thread):
-    """Polls every AR's replica-info bandwidth section on a fixed cadence."""
+    """Polls every AR's replica-info bandwidth section on a fixed cadence.
 
-    def __init__(self, service, ars, frontend_port, interval_s=2.0):
+    Each AR is addressed as host:frontend_port so co-located ARs (two ARs on
+    one machine, distinct HTTP ports) sample independently; sample rows keep
+    the full "host:port" string as the AR identity.
+    """
+
+    def __init__(self, service, ars, interval_s=2.0):
         super().__init__(daemon=True)
-        self.service, self.ars, self.port = service, ars, frontend_port
+        self.service, self.ars = service, ars
         self.interval = interval_s
         self.samples = []
         self.stop_flag = threading.Event()
 
     def run(self):
-        url_tpl = "http://{ar}:{port}/api/v2/services/{svc}/replica/info"
+        url_tpl = "http://{ar}/api/v2/services/{svc}/replica/info"
         while not self.stop_flag.is_set():
             t = time.time()
             for ar in self.ars:
                 try:
                     _, body = http(
-                        url_tpl.format(ar=ar, port=self.port, svc=self.service),
+                        url_tpl.format(ar=ar, svc=self.service),
                         headers={"XDN": self.service},
                     )
                     bw = json.loads(body).get("bandwidth")
@@ -65,7 +70,7 @@ class Sampler(threading.Thread):
 # ---------------------------------------------------------------- load drivers
 
 
-def drive_httpkv(ars, port, service, phase, dur):
+def drive_httpkv(ars, service, phase, dur):
     """Uniform driver for services behind the HTTP KV shim (PUT/GET /kv/k
     via XDN's frontend). This is the canonical vantage point: every request
     crosses XDN's proxy, so request boundaries (and thus the coordinated vs
@@ -82,7 +87,7 @@ def drive_httpkv(ars, port, service, phase, dur):
     def put(ar, n):
         body = f"value-{n}-".encode().ljust(256, b"x")
         req = urllib.request.Request(
-            f"http://{ar}:{port}/kv/bw-measure-key", data=body, method="PUT",
+            f"http://{ar}/kv/bw-measure-key", data=body, method="PUT",
             headers={"XDN": service})
         with urllib.request.urlopen(req, timeout=10):
             pass
@@ -104,7 +109,7 @@ def drive_httpkv(ars, port, service, phase, dur):
             if phase == "write":
                 put(write_ar, n)
             else:
-                http(f"http://{ars[0]}:{port}/kv/bw-measure-key",
+                http(f"http://{ars[0]}/kv/bw-measure-key",
                      headers={"XDN": service})
             n += 1
             time.sleep(0.1)
@@ -113,8 +118,8 @@ def drive_httpkv(ars, port, service, phase, dur):
     return n
 
 
-def drive_etcd(ars, port, service, phase, dur):
-    url = f"http://{ars[0]}:{port}/v3/kv/" + ("put" if phase == "write" else "range")
+def drive_etcd(ars, service, phase, dur):
+    url = f"http://{ars[0]}/v3/kv/" + ("put" if phase == "write" else "range")
     key = base64.b64encode(b"bw-measure-key").decode()
     deadline = time.time() + dur
     n = 0
@@ -132,9 +137,9 @@ def drive_etcd(ars, port, service, phase, dur):
     return n
 
 
-def drive_rqlite(ars, port, service, phase, dur):
+def drive_rqlite(ars, service, phase, dur):
     hdrs = {"XDN": service, "Content-Type": "application/json"}
-    base = f"http://{ars[0]}:{port}/db/"
+    base = f"http://{ars[0]}/db/"
     http(
         base + "execute",
         headers=hdrs,
@@ -311,7 +316,9 @@ def main():
         "--kind", required=True,
         choices=["httpkv", "etcd", "rqlite", "mysql", "redis", "cassandra", "antidote",
                  "mongo", "corfu"])
-    ap.add_argument("--ars", required=True, help="comma-separated AR addresses")
+    ap.add_argument("--ars", required=True,
+                    help="comma-separated AR frontends, host or host:port"
+                         " (bare hosts get --frontend-port appended)")
     ap.add_argument("--frontend-port", type=int, default=2300)
     ap.add_argument("--phases", default="idle:30,write:60,read:30")
     ap.add_argument("--sample-interval", type=float, default=2.0)
@@ -327,8 +334,8 @@ def main():
                     help="overlay network name for client-container kinds (corfu)")
     args = ap.parse_args()
 
-    ars = args.ars.split(",")
-    sampler = Sampler(args.service, ars, args.frontend_port, args.sample_interval)
+    ars = [a if ":" in a else f"{a}:{args.frontend_port}" for a in args.ars.split(",")]
+    sampler = Sampler(args.service, ars, args.sample_interval)
     sampler.start()
 
     phase_log = []
@@ -341,11 +348,11 @@ def main():
             time.sleep(dur)
             ops = 0
         elif args.kind == "httpkv":
-            ops = drive_httpkv(ars, args.frontend_port, args.service, name, dur)
+            ops = drive_httpkv(ars, args.service, name, dur)
         elif args.kind == "etcd":
-            ops = drive_etcd(ars, args.frontend_port, args.service, name, dur)
+            ops = drive_etcd(ars, args.service, name, dur)
         elif args.kind == "rqlite":
-            ops = drive_rqlite(ars, args.frontend_port, args.service, name, dur)
+            ops = drive_rqlite(ars, args.service, name, dur)
         elif args.kind == "redis":
             ops = drive_redis(args.direct_host, args.direct_port, name, dur)
         elif args.kind == "cassandra":

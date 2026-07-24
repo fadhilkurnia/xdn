@@ -161,8 +161,10 @@ if [ "$state" != "ONLINE" ] && [ "$state" != "RECOVERING" ]; then
       echo "[xdn-mysql] WARNING: app db not created (member never became writable)" >&2
   else
     echo "[xdn-mysql] joining the group (retrying until the seed is reachable)"
+    # 6 min: at larger cluster sizes many joiners race distributed recovery
+    # against the same donors and later ordinals wait through several rounds.
     joined=0
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 120); do
       if mysql_tcp "START GROUP_REPLICATION;" 2>/dev/null; then joined=1; break; fi
       sleep 3
     done

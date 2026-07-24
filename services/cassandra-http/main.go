@@ -24,6 +24,15 @@ import (
 )
 
 func connect() *gocql.Session {
+	// Replication factor defaults to the cluster size (full fan-out); set
+	// XDN_CASS_RF for partial-quorum shapes (e.g. RF 3 on a 5-node ring).
+	rf := os.Getenv("XDN_CASS_RF")
+	if rf == "" {
+		rf = os.Getenv("XDN_CLUSTER_SIZE")
+	}
+	if rf == "" {
+		rf = "3"
+	}
 	for {
 		c := gocql.NewCluster("127.0.0.1")
 		c.Port = 9042
@@ -34,7 +43,7 @@ func connect() *gocql.Session {
 		s, err := c.CreateSession()
 		if err == nil {
 			if err = s.Query("CREATE KEYSPACE IF NOT EXISTS bw WITH replication =" +
-				" {'class':'NetworkTopologyStrategy','dc1':3}").Exec(); err == nil {
+				" {'class':'NetworkTopologyStrategy','dc1':" + rf + "}").Exec(); err == nil {
 				if err = s.Query("CREATE TABLE IF NOT EXISTS bw.kv" +
 					" (k text PRIMARY KEY, v blob)").Exec(); err == nil {
 					return s

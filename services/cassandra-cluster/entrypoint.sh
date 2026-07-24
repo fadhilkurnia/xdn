@@ -27,6 +27,17 @@ SELF_IP=$(resolve "$XDN_CLUSTER_SELF")
 SEED_NAME=$(echo "$XDN_CLUSTER_PEERS" | cut -d, -f1)
 SEED_IP=$(resolve "$SEED_NAME")
 
+# At larger cluster sizes, simultaneous non-seed bootstraps can collide
+# ("other bootstrapping nodes detected"); stagger joins by ordinal once the
+# cluster is bigger than a triple. No-op for the seed and at size <= 3.
+ORD="${XDN_CLUSTER_ORDINAL:-0}"
+SIZE="${XDN_CLUSTER_SIZE:-3}"
+if [ "$ORD" != "0" ] && [ "$SIZE" -gt 3 ]; then
+  STAGGER=$(( ORD * ${XDN_CASS_JOIN_STAGGER_S:-15} ))
+  echo "xdn-cassandra: staggering join by ${STAGGER}s (ordinal $ORD of $SIZE)"
+  sleep "$STAGGER"
+fi
+
 export CASSANDRA_CLUSTER_NAME="xdn-cassandra"
 export CASSANDRA_LISTEN_ADDRESS="$SELF_IP"
 export CASSANDRA_BROADCAST_ADDRESS="$SELF_IP"
