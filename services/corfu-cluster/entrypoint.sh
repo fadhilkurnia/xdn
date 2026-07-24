@@ -42,6 +42,9 @@ EOF
   ) &
 fi
 
+# -a binds AND advertises the replica-N overlay alias (this corfu build has
+# no separate bind-all option), so the server does NOT listen on loopback —
+# in-pod clients must dial the member's own alias, not 127.0.0.1.
 cd /app
 exec java -cp "/app/*" $JAVA_OPTS \
     -Dlogback.configurationFile=/usr/share/corfu/conf/logback.prod.xml \

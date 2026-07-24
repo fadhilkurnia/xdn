@@ -33,13 +33,18 @@ public class Frontend {
 
   public static void main(String[] args) throws Exception {
     String port = env("XDN_CLUSTER_PEER_PORT", "9000");
+    // The co-located member binds (and advertises) its replica-N overlay
+    // alias, not loopback (see services/corfu-cluster/entrypoint.sh), so
+    // the local member is dialed by its own canonical name from the env
+    // contract. Still zero discovery: XDN_CLUSTER_SELF IS this pod's member.
+    String self = env("XDN_CLUSTER_SELF", "127.0.0.1");
     streamId = CorfuRuntime.getStreamID("bw");
 
     Thread connector =
         new Thread(
             () -> {
               CorfuRuntime rt =
-                  new CorfuRuntime("127.0.0.1:" + port).setCacheDisabled(true).connect();
+                  new CorfuRuntime(self + ":" + port).setCacheDisabled(true).connect();
               RT.set(rt);
               System.out.println("corfu-http: runtime connected");
             });
