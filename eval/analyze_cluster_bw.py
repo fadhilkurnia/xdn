@@ -36,16 +36,29 @@ def main(paths):
                     tag = " (self)" if peer == self_name else ""
                     print(f"{ar:<12}{peer + tag:<12}{tx:>12,}{rx:>12,}{tx/dur:>10,.0f}{rx/dur:>10,.0f}")
             if ph["name"] == "write" and ph["ops"]:
-                # coordination cost per write op: sum of peer-edge tx across ARs
-                # / ops; self-edges (in-container control clients, e.g. the
-                # antidote rpc driver) are excluded
-                tot = 0
-                for ar in d["ars"]:
-                    self_name = f"replica-{d['ars'].index(ar)}"
-                    for peer, (tx, _) in phase_delta(d["samples"], ar, ph["t0"], ph["t1"]).items():
-                        if peer.startswith("replica") and peer != self_name:
-                            tot += tx
-                print(f"   coordination tx per write op: {tot / ph['ops']:,.0f} B")
+                # Coordination cost per write op: sum of peer-edge tx across
+                # ARs / ops, MINUS the idle-phase baseline (heartbeats and
+                # gossip continue during the write phase; at low op rates the
+                # baseline otherwise dominates the per-op figure). Self-edges
+                # (in-pod control clients hairpinning the member's own
+                # overlay address) are excluded.
+                idle = next((p for p in d["phases"] if p["name"] == "idle"), None)
+
+                def peer_tx_rate(t0, t1):
+                    tot = 0.0
+                    for ar in d["ars"]:
+                        self_name = f"replica-{d['ars'].index(ar)}"
+                        for peer, (tx, _) in phase_delta(d["samples"], ar, t0, t1).items():
+                            if peer.startswith("replica") and peer != self_name:
+                                tot += tx
+                    return tot / max(t1 - t0, 1e-9)
+
+                w_rate = peer_tx_rate(ph["t0"], ph["t1"])
+                base = peer_tx_rate(idle["t0"], idle["t1"]) if idle else 0.0
+                raw = w_rate * dur / ph["ops"]
+                net = max(w_rate - base, 0.0) * dur / ph["ops"]
+                print(f"   coordination tx per write op: {net:,.0f} B"
+                      f" (raw {raw:,.0f} B, idle baseline {base:,.0f} B/s)")
 
 
 if __name__ == "__main__":
