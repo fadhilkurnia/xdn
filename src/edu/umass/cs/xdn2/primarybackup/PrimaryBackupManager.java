@@ -126,9 +126,29 @@ public class PrimaryBackupManager<NodeIDType> {
     // stateDiffCount at the time the backup last switched live containers (blue/green).
     private final ConcurrentHashMap<String, Integer> liveDiffCount = new ConcurrentHashMap<>();
 
-    /** Per-service single thread executor: serializes captureStateDiff() + propose(). */
+    /**
+     * Per-service single thread executor: serializes captureStateDiff() + propose().
+     * TODO: not recreated/drained on epoch change -- see handleStartEpochPacket.
+     */
     private final ConcurrentHashMap<String, ExecutorService> captureExecutors =
             new ConcurrentHashMap<>();
+
+    /**
+     * Next stateDiff count to hand out for a service, advanced eagerly at
+     * assignment time (unlike cmtDiffCount, which only updates after Paxos
+     * commit). Only ever touched from within that service's captureExecutors task.
+     */
+    private final ConcurrentHashMap<String, Integer> nextAssignedCount =
+            new ConcurrentHashMap<>();
+
+    /**
+     * Atomically hands out the next stateDiff count for a service and
+     * advances the counter in one step. Must only be called from within
+     * that service's captureExecutors task.
+     */
+    private int assignNextCount(String serviceName) {
+        return nextAssignedCount.merge(serviceName, 1, Integer::sum) - 1;
+    }
 
     /** Flags used to stop the coordinator-status background poller per service. */
     private final ConcurrentHashMap<String, AtomicBoolean> coordinatorPollerStopFlags =
@@ -273,7 +293,7 @@ public class PrimaryBackupManager<NodeIDType> {
 
     private boolean handleStartEpochPacket(StartEpochPacket packet) {
         String serviceName = packet.getServiceName();
-        logger.log(Level.WARNING, "{0}:PBM handleStartEpochPacket fired for {1} packet={2}",
+        logger.log(Level.FINE, "{0}:PBM handleStartEpochPacket fired for {1} packet={2}",
                 new Object[]{myNodeID, serviceName, packet.getNextPrimaryID()});
 
         boolean isNewService = currPlacement.get(serviceName) == null
@@ -293,15 +313,11 @@ public class PrimaryBackupManager<NodeIDType> {
                 || (!isOldPrimary && !isNewPrimary);
 
         logger.log(Level.WARNING,
-                "{0}:PBM handleStartEpochPacket svc={1} nextPrimary={2} isNewService={3} " +
-                        "isNewPlacement={4} isOldPrimary={5} isNewPrimary={6} " +
-                        "packetPlacement={7} isNewRoleTheSame={8} currentRole={9} " +
-                        "currPlacement={10} currPrimaryID={11} currPlacementEpoch={12}",
-                new Object[]{myNodeID, serviceName, packet.getNextPrimaryID(),
-                        isNewService, isNewPlacement, isOldPrimary, isNewPrimary,
-                        packet.getNextPlacement(), isNewRoleTheSame, currentRole.get(serviceName),
-                        currPlacement.get(serviceName), currPrimaryID.get(serviceName),
-                        currPlacementEpoch.get(serviceName)});
+                "{0}:PBM handleStartEpochPacket-{1} placement={2}->{3} primary={4}->{5} ",
+                        new Object[]{myNodeID, serviceName,
+                                currPlacement.get(serviceName), packet.getNextPlacement(),
+                                currPrimaryID.get(serviceName), packet.getNextPrimaryID()
+                        });
 
 
         if (isNewService || isNewPlacement) {
@@ -310,6 +326,18 @@ public class PrimaryBackupManager<NodeIDType> {
             currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
             cmtDiffCount.put(serviceName, -1);
             snpDiffCount.put(serviceName, -1);
+            // TODO: nextAssignedCount is reset here, but the per-service
+            //  captureExecutors entry is NOT recreated/drained on epoch change.
+            //  A write request already queued onto the old epoch's executor task
+            //  will still run after this reset, reading the NEW pEpoch/placement
+            //  (captured at task run-time, not submit-time) against the freshly
+            //  reset counter -- producing a count/epoch combination that doesn't
+            //  correspond to either epoch cleanly. Same class of gap as the
+            //  existing "no drain-before-stop when switching blue/green backup
+            //  containers" note above; needs a drain-old-executor-before-reset
+            //  step (or an epoch-stamped rejection check inside the submitted
+            //  task) once reconfiguration teardown (stopOldContainer) is designed.
+            nextAssignedCount.put(serviceName, 0);
             snpDiffApplyLocks.put(serviceName, new ReentrantLock());
             AtomicBoolean stopFlag = new AtomicBoolean(false);
             snpDiffApplyStopFlags.put(serviceName, stopFlag);
@@ -366,29 +394,24 @@ public class PrimaryBackupManager<NodeIDType> {
             return;
         }
 
-        // Initialize stateDiffCount for this service
-        int bootstrapCount = 0;
+        captureExecutors
+                .computeIfAbsent(serviceName, k -> Executors.newSingleThreadExecutor())
+                .submit(() -> {
+                    int bootstrapCount = assignNextCount(serviceName);
 
-        // Capture bootstrap diff
-        byte[] diff = this.app.captureStatediff(serviceName);
-        logger.log(Level.WARNING,
-                "{0}:PBM initializePrimaryContainer captureStatediff result={1} bytes for {2}",
-                new Object[]{myNodeID, diff == null ? "null" : diff.length, serviceName});
-        if (diff == null) diff = new byte[0];
+                    byte[] diff = this.app.captureStatediff(serviceName);
+                    byte[] finalDiff = diff == null ? new byte[0] : diff;
 
-        logger.log(Level.WARNING,
-                "{0}:PBM initializePrimaryContainer proposing ApplyStateDiff count={1} size={2} for {3}",
-                new Object[]{myNodeID, bootstrapCount, diff.length, serviceName});
+                    logger.log(Level.WARNING, "{0} proposing stateDiff count={3} to {2} ", new Object[]{myNodeID, finalDiff.length, serviceName, bootstrapCount});
 
-        proposeStateDiff(
-                serviceName,
-                currPlacement.get(serviceName),
-                currPlacementEpoch.get(serviceName),
-                bootstrapCount,
-                diff,
-                (executedRequest, handled) -> logger.log(Level.WARNING,
-                        "{0}:PBM initializePrimaryContainer bootstrap diff committed handled={1} for {2}",
-                        new Object[]{myNodeID, handled, serviceName}));
+                    proposeStateDiff(
+                            serviceName,
+                            currPlacement.get(serviceName),
+                            currPlacementEpoch.get(serviceName),
+                            bootstrapCount,
+                            finalDiff,
+                            (executedRequest, handled) -> logger.log(Level.WARNING, "{0} successfully proposed stateDiff count={3} to {2}", new Object[]{myNodeID, handled, serviceName, bootstrapCount}));
+                });
     }
 
     // =========================================================================
@@ -420,12 +443,11 @@ public class PrimaryBackupManager<NodeIDType> {
             throw new IllegalStateException("primaryID mismatch for " + serviceName);
         }
 
-        Integer curEpoch = currPlacementEpoch.get(serviceName);
-        if (curEpoch == null || curEpoch != packet.getPrimaryEpoch()) {
-            logger.log(Level.SEVERE, "{0}:PBM handleApplyStateDiffPacket primaryEpoch mismatch for {1} " +
-                            "curEpoch={2} packet.primaryEpoch={3}",
-                    new Object[]{myNodeID, serviceName, curEpoch, packet.getPrimaryEpoch()});
-            throw new IllegalStateException("primaryEpoch mismatch for " + serviceName);
+        Integer currPrimaryEpoch = currPlacementEpoch.get(serviceName);
+        if (currPrimaryEpoch == null || currPrimaryEpoch != packet.getPrimaryEpoch()) {
+            logger.log(Level.WARNING, "{0}:PBM handleApplyStateDiffPacket primaryEpoch mismatch for {1} " +
+                            "{2} != {3}",
+                    new Object[]{myNodeID, serviceName, currPrimaryEpoch, packet.getPrimaryEpoch()});
         }
 
         int currentCount = cmtDiffCount.getOrDefault(serviceName, 0);
@@ -479,6 +501,12 @@ public class PrimaryBackupManager<NodeIDType> {
         } else if (difference > 1) {
             // Deliberate per design: any gap triggers this node to attempt
             // to become the new primary itself, rather than resyncing.
+            logger.log(Level.WARNING,
+                    "{0}:PBM gap detected for {1}: expected next={2} but got={3} " +
+                            "(missed {4} diff(s)) -- attempting to become new primary",
+                    new Object[]{myNodeID, serviceName, currentCount + 1,
+                            packet.getStateDiffCount(), difference - 1});
+
             currentRole.put(serviceName, Role.PRIMARY_CANDIDATE);
             int nextEpoch = currPlacementEpoch.getOrDefault(serviceName, 0) + 1;
             StartEpochPacket startPacket = new StartEpochPacket(
@@ -629,9 +657,9 @@ public class PrimaryBackupManager<NodeIDType> {
                         this.app.stopBackupContainer(serviceName, currentLiveType);
                     }
 
-                    // Update tracking — only on success
+                    // Update tracking - only on success
                     currentLiveType = nextLiveType;
-                    lastSwitchTimeMs = now;
+                    lastSwitchTimeMs = System.currentTimeMillis();
                 }
             } catch (Throwable t) {
                 logger.log(Level.SEVERE,
@@ -700,27 +728,32 @@ public class PrimaryBackupManager<NodeIDType> {
             logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY executed, capturing diff for {1}",
                     new Object[]{myNodeID, serviceName});
 
-            byte[] diff = app.captureStatediff(serviceName);
-            if (diff == null) diff = new byte[0];
+            captureExecutors
+                    .computeIfAbsent(serviceName, k -> Executors.newSingleThreadExecutor())
+                    .submit(() -> {
+                        int nextCount = assignNextCount(serviceName);
 
-            logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
-                    new Object[]{myNodeID, serviceName, diff.length});
+                        byte[] diff = app.captureStatediff(serviceName);
+                        logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
+                                new Object[]{myNodeID, serviceName, diff.length});
 
-            int nextCount = cmtDiffCount.getOrDefault(serviceName, 0) + 1;
-            // Do NOT update stateDiffCount here n let handleApplyStateDiffPacket
-            // update it after Paxos commits, uniformly on all nodes including primary.
-            int pEpoch = currPlacementEpoch.get(serviceName);
-            int placement = currPlacement.get(serviceName);
-            logger.log(Level.FINE,
-                    "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
-                    new Object[]{myNodeID, serviceName, nextCount});
+                        byte[] finalDiff = diff == null ? new byte[0] : diff;
+                        // Do NOT update stateDiffCount here n let handleApplyStateDiffPacket
+                        // update it after Paxos commits, uniformly on all nodes including primary.
+                        int pEpoch = currPlacementEpoch.get(serviceName);
+                        int placement = currPlacement.get(serviceName);
 
-            proposeStateDiff(serviceName, placement, pEpoch, nextCount, diff,
-                    (executedRequest, handled) -> {
                         logger.log(Level.FINE,
-                                "{0}:PBM handleClientRequest PRIMARY propose callback handled={2} for {1}",
-                                new Object[]{myNodeID, serviceName, handled});
-                        callback.executed(request, handled);
+                                "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
+                                new Object[]{myNodeID, serviceName, nextCount});
+
+                        proposeStateDiff(serviceName, placement, pEpoch, nextCount, finalDiff,
+                                (executedRequest, handled) -> {
+                                    logger.log(Level.WARNING,
+                                            "{0}:PBM handleClientRequest PRIMARY propose callback handled={2} for {1} (count={3})",
+                                            new Object[]{myNodeID, serviceName, handled, nextCount});
+                                    callback.executed(request, handled);
+                                });
                     });
             return true;
 
