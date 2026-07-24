@@ -64,12 +64,12 @@ public final class XdnHttpForwarderClient implements Closeable {
 
   /**
    * Force Connection: keep-alive on all outgoing requests. On by default: Connection is a
-   * hop-by-hop header (RFC 7230 §6.1), so the client's value must not ride through to the origin
-   * — a client sending Connection: close (python urllib does, per request) would otherwise make
-   * the origin tear down a pooled connection after every response, defeating the pool and making
-   * client traffic invisible to the per-connection tcp_info bandwidth profiler (connections die
-   * between polls). The AR->client leg negotiates its own Connection semantics separately.
-   * Disable with -DHTTP_FORCE_KEEPALIVE=false to restore pass-through.
+   * hop-by-hop header (RFC 7230 §6.1), so the client's value must not ride through to the origin —
+   * a client sending Connection: close (python urllib does, per request) would otherwise make the
+   * origin tear down a pooled connection after every response, defeating the pool and making client
+   * traffic invisible to the per-connection tcp_info bandwidth profiler (connections die between
+   * polls). The AR->client leg negotiates its own Connection semantics separately. Disable with
+   * -DHTTP_FORCE_KEEPALIVE=false to restore pass-through.
    */
   private static final boolean FORCE_KEEPALIVE =
       Boolean.parseBoolean(System.getProperty("HTTP_FORCE_KEEPALIVE", "true"));
