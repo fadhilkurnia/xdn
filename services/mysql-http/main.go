@@ -40,21 +40,20 @@ func main() {
 	ready := false
 	var readyMu sync.Mutex
 	go func() {
-		// Ready = this member is ONLINE and locally writable (schema DDL
-		// succeeds). CREATE ... IF NOT EXISTS from several members races
-		// through certification; retry absorbs the losers.
+		// Ready = the replicated KV schema is visible on the local member.
+		// STRICTLY read-only: the schema is created in-group by the member
+		// entrypoint (ordinal 0, XDN_MYSQL_KV_TABLE=1) — a shim issuing DDL
+		// here races group configuration and can permanently diverge a
+		// joiner's GTID history (writable window before START
+		// GROUP_REPLICATION engages super_read_only).
 		for {
-			if err := local.Ping(); err == nil {
-				_, err1 := local.Exec("CREATE DATABASE IF NOT EXISTS bw")
-				_, err2 := local.Exec(
-					"CREATE TABLE IF NOT EXISTS bw.kv (k VARCHAR(190) PRIMARY KEY, v BLOB)")
-				if err1 == nil && err2 == nil {
-					readyMu.Lock()
-					ready = true
-					readyMu.Unlock()
-					log.Printf("%s: backend ready (locally writable)", self)
-					return
-				}
+			var n int
+			if err := local.QueryRow("SELECT COUNT(*) FROM bw.kv").Scan(&n); err == nil {
+				readyMu.Lock()
+				ready = true
+				readyMu.Unlock()
+				log.Printf("%s: backend ready (schema replicated)", self)
+				return
 			}
 			time.Sleep(2 * time.Second)
 		}

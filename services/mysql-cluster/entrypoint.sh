@@ -142,6 +142,17 @@ if [ "$state" != "ONLINE" ] && [ "$state" != "RECOVERING" ]; then
     created=0
     for _ in $(seq 1 90); do
       if mysql_tcp "CREATE DATABASE IF NOT EXISTS \`${APP_DB}\`;" 2>/dev/null; then
+        # Optional KV schema for the measurement pods (XDN_MYSQL_KV_TABLE=1).
+        # Schema is the SERVICE's job, created once here in-group: a sidecar
+        # issuing DDL races group configuration — a joiner is briefly
+        # writable before START GROUP_REPLICATION engages super_read_only,
+        # and DDL landing in that window becomes a local GTID that diverges
+        # the member from the group forever (ER "contains transactions not
+        # present in the group").
+        if [ "${XDN_MYSQL_KV_TABLE:-0}" = "1" ]; then
+          mysql_tcp "CREATE TABLE IF NOT EXISTS \`${APP_DB}\`.kv
+                     (k VARCHAR(190) PRIMARY KEY, v BLOB);" 2>/dev/null || continue
+        fi
         created=1; break
       fi
       sleep 2

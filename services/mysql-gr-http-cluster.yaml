@@ -22,6 +22,7 @@ components:
         - MYSQL_ROOT_PASSWORD: xdnpass123
         - XDN_MYSQL_DATABASE: bw
         - XDN_MYSQL_MULTI_PRIMARY: "1"
+        - XDN_MYSQL_KV_TABLE: "1"
   - frontend:
       image: xdn-mysql-http:test
       port: 8080
