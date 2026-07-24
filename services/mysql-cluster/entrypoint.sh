@@ -133,8 +133,21 @@ if [ "$state" != "ONLINE" ] && [ "$state" != "RECOVERING" ]; then
     mysql_tcp "SET GLOBAL group_replication_bootstrap_group=ON;
                START GROUP_REPLICATION;
                SET GLOBAL group_replication_bootstrap_group=OFF;"
-    # Create the app database once, on the primary, so it replicates to the joiners.
-    mysql_tcp "CREATE DATABASE IF NOT EXISTS \`${APP_DB}\`;"
+    # Create the app database once, on the bootstrap node, so it replicates
+    # out. The member stays super-read-only until it reaches ONLINE (the
+    # window is longest in multi-primary mode); a premature CREATE dies with
+    # ER 1290 and, under set -e, would kill this entrypoint and restart the
+    # container mid-formation — which also strands the netns-sharing
+    # sidecars in the dead namespace. Retry until writable instead.
+    created=0
+    for _ in $(seq 1 90); do
+      if mysql_tcp "CREATE DATABASE IF NOT EXISTS \`${APP_DB}\`;" 2>/dev/null; then
+        created=1; break
+      fi
+      sleep 2
+    done
+    [ "$created" = 1 ] || \
+      echo "[xdn-mysql] WARNING: app db not created (member never became writable)" >&2
   else
     echo "[xdn-mysql] joining the group (retrying until the seed is reachable)"
     joined=0
