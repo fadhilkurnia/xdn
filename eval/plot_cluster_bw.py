@@ -135,7 +135,7 @@ def draw_panel(ax, edges, floor, pos):
         )
         ax.add_patch(arrow)
     if peak > 0:
-        ax.text(0.98, -0.04, f"peak {human(peak)}", ha="right", va="bottom",
+        ax.text(0.99, 0.99, f"peak {human(peak)}", ha="right", va="top",
                 fontsize=6.5, color=INK_MUTED, transform=ax.transAxes)
 
 
