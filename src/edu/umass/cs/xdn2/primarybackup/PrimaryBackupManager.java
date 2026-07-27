@@ -1095,14 +1095,21 @@ public class PrimaryBackupManager<NodeIDType> {
             futures.add(scpPool.submit(() -> {
                 String cmd;
                 if (ip.equals("127.0.0.1") || ip.equals("localhost")) {
-                    // Same machine — use cp
+                    // Same machine: use cp
                     Shell.runCommand("mkdir -p " + destDir);
                     cmd = String.format("cp %s %s", localPath, destPath);
                 } else {
-                    // Remote machine — use scp
+                    // Remote machine: use scp
                     String scpOpts = (sshKey != null && !sshKey.isBlank())
                             ? "-i " + sshKey + " -o StrictHostKeyChecking=no"
                             : "-o StrictHostKeyChecking=no";
+                    String mkdirCmd = String.format("ssh %s %s mkdir -p %s", scpOpts, ip, destDir);
+                    int mkdirCode = Shell.runCommand(mkdirCmd);
+                    if (mkdirCode != 0) {
+                        logger.log(Level.WARNING,
+                                "{0}:PBM scpToBackups remote mkdir failed exit={1} cmd={2}",
+                                new Object[]{myNodeID, mkdirCode, mkdirCmd});
+                    }
                     cmd = String.format("scp %s %s %s:%s", scpOpts, localPath, ip, destPath);
                 }
                 logger.log(Level.WARNING,
