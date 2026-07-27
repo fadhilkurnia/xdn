@@ -429,6 +429,7 @@ $REMOTE_SSL_KEYFILES \
 -Djava.util.logging.config.file=$(get_simple_name $LOG_PROPERTIES) \
 -Dlog4j.configuration=$(get_simple_name $LOG4J_PROPERTIES) \
 -DgigapaxosConfig=$(get_simple_name $DEFAULT_GP_PROPERTIES) \
+-DSSH_KEY_PATH=/users/$username/.ssh/xdn_ssh_key \
 -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host \
 --add-opens java.base/sun.nio.ch=ALL-UNNAMED \
 --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED"
