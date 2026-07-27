@@ -26,6 +26,12 @@ REMOTE=${XDN_REMOTE_DIR:-$HOME/xdn}
 # and the node list below (co-located ARs get distinct base ports; the HTTP
 # frontend is always base + 300).
 N=${XDN_CLUSTER_N:-3}
+# Full override for other sites/layouts: XDN_CLUSTER_CFG names the properties
+# file and XDN_CLUSTER_NODES lists "ip:nodeid:httpport" triples (RC included).
+if [ -n "${XDN_CLUSTER_CFG:-}" ] && [ -n "${XDN_CLUSTER_NODES:-}" ]; then
+  CFG=$XDN_CLUSTER_CFG
+  NODES=$XDN_CLUSTER_NODES
+else
 case "$N" in
   3) CFG=conf/gigapaxos.xdn.cluster-launch.cloudlab.properties
      NODES="10.10.1.4:0:3300 10.10.1.1:1:2300 10.10.1.2:2:2300 10.10.1.3:3:2300" ;;
@@ -35,6 +41,7 @@ case "$N" in
      NODES="10.10.1.4:0:3300 10.10.1.1:1:2300 10.10.1.2:2:2300 10.10.1.3:3:2300 10.10.1.4:4:2300 10.10.1.5:5:2300 10.10.1.1:6:2310 10.10.1.2:7:2310" ;;
   *) echo "unsupported XDN_CLUSTER_N=$N"; exit 1 ;;
 esac
+fi
 JF='-ea -Djavax.net.ssl.keyStorePassword=qwerty -Djavax.net.ssl.trustStorePassword=qwerty -Djavax.net.ssl.keyStore=conf/keyStore.jks -Djavax.net.ssl.trustStore=conf/trustStore.jks -Djava.util.logging.config.file=conf/logging.properties -Dlog4j.configuration=conf/log4j.properties -DgigapaxosConfig='"$CFG"' -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED'
 
 echo "[1/3] starting RC (node 0) and $((N)) ARs per $CFG ..."
