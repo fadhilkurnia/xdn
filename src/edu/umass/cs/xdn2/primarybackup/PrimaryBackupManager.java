@@ -1089,7 +1089,7 @@ public class PrimaryBackupManager<NodeIDType> {
 
             java.net.InetAddress addr = nodeConfig.getNodeAddress(node);
             String ip = addr.getHostAddress();
-            String destPath = app.getPrpDiffFilePath(node.toString(), serviceName, filename);
+            String destPath = app.getPrpDiffFilePath(node.toString().toLowerCase(), serviceName, filename);
             String destDir = destPath.substring(0, destPath.lastIndexOf('/') + 1);
 
             futures.add(scpPool.submit(() -> {
