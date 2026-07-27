@@ -54,4 +54,14 @@ export MAX_HEAP_SIZE="${MAX_HEAP_SIZE:-1G}"
 export HEAP_NEWSIZE="${HEAP_NEWSIZE:-200M}"
 
 echo "xdn-cassandra: self=$XDN_CLUSTER_SELF ($SELF_IP) seed=$SEED_NAME ($SEED_IP)"
-exec /usr/local/bin/docker-entrypoint.sh cassandra -f
+# Supervise IN-CONTAINER instead of exec'ing: on slow disks a joiner can hit
+# cassandra's gossip-with-seeds startup deadline and exit; letting docker's
+# restart policy revive the CONTAINER recreates the netns, stranding the
+# netns-sharing sidecars (frontend, probe) in the dead namespace and churning
+# the overlay IP peers have gossiped. Restarting only the PROCESS keeps the
+# namespace and IP stable.
+while true; do
+  /usr/local/bin/docker-entrypoint.sh cassandra -f && exit 0
+  echo "xdn-cassandra: cassandra exited ($?); retrying in 10s"
+  sleep 10
+done
