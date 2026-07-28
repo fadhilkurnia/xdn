@@ -720,7 +720,7 @@ public class PrimaryBackupManager<NodeIDType> {
 
             app.execute(request);
 
-            if (!isWriteRequest) {
+            if (isEventualConsistency(serviceName) && !isWriteRequest) {
                 callback.executed(request, true);
                 return true;
             }
