@@ -715,9 +715,8 @@ public class PrimaryBackupManager<NodeIDType> {
             }
             return true;
         } else if (role == Role.PRIMARY) {
-            logger.log(Level.WARNING, "{0}:PBM handleClientRequest PRIMARY executing request for {1} {2}",
-                    new Object[]{myNodeID, serviceName,
-                            this.app.getServiceInstance(serviceName).property.getConsistencyModel()});
+            logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY executing request for {1}",
+                    new Object[]{myNodeID, serviceName});
 
             app.execute(request);
 
