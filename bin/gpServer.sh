@@ -154,7 +154,9 @@ for arg in "$@"; do
     value=`echo $arg|grep "\-D.*="|sed s/-D//g|sed s/.*=//g`
     if [[ $key == "gigapaxosConfig" ]]; then
       GP_PROPERTIES=$value
-    elif [[ ! -z `echo $arg|grep "\-D$APP_RESOURCES_KEY="` ]]; 
+    elif [[ $key == "xdnConfig" ]]; then
+      XDN_CONFIG_SET=true
+    elif [[ ! -z `echo $arg|grep "\-D$APP_RESOURCES_KEY="` ]];
     then
       # app args
       APP_RESOURCES="`echo $arg|grep "\-D$APP_RESOURCES_KEY="|\
@@ -489,18 +491,24 @@ function start_server {
       $jar_files $username@$address:$INSTALL_PATH/jars/
     rsync_symlink $address
 
+    # after
+    REMOTE_APP_ARGS="$APP_ARGS"
+    if [[ $XDN_CONFIG_SET == true ]]; then
+      REMOTE_APP_ARGS="$REMOTE_APP_ARGS SSH_KEY_PATH=/users/$username/.ssh/xdn_ssh_key"
+    fi
+
     # then start remote server
     print 2 "$SSH $username@$address \"cd $INSTALL_PATH; nohup \
       $JAVA $DEBUG_ARGS $REMOTE_JVMARGS \
       -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
       edu.umass.cs.reconfiguration.ReconfigurableNode \
-      $APP_ARGS SSH_KEY_PATH=/users/$username/.ssh/xdn_ssh_key $server \""
+      $REMOTE_APP_ARGS $server \""
     
     $SSH $username@$address "cd $INSTALL_PATH; sudo \
       $JAVA $DEBUG_ARGS $REMOTE_JVMARGS \
       -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
       edu.umass.cs.reconfiguration.ReconfigurableNode \
-      $APP_ARGS SSH_KEY_PATH=/users/$username/.ssh/xdn_ssh_key $server "&
+      $REMOTE_APP_ARGS $server "&
   fi
 }
 
