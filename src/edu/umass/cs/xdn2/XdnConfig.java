@@ -86,6 +86,7 @@ public class XdnConfig {
         this.healthcheckConsecutiveSuccesses = parseOptionalInt(
                 props, KEY_HC_CONSECUTIVE, DEFAULT_HC_CONSECUTIVE);
         this.fuselogBaseDir = props.getProperty(
+                KEY_FUSELOG_BASE_DIR, DEFAULT_FUSELOG_BASE_DIR);
     }
 
     public SandboxType getSandboxType() {
