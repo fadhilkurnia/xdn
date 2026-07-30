@@ -429,6 +429,112 @@ function do_clear_all() {
   exit $gp_exit
 }
 
+# do_set_latency injects a uniform, static netem delay on every node's
+# experiment-subnet interface (auto-detected per node), before start-all.
+function do_set_latency() {
+  echo "Injecting uniform network latency on all nodes defined in the config ..."
+
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
+
+  local DELAY_MS=""
+  for ARG in "$@"; do
+    case $ARG in
+    -delay-ms=*)
+      DELAY_MS="${ARG#*=}"
+      ;;
+    esac
+  done
+  if [ -z "$DELAY_MS" ]; then
+    echo "Please specify the delay with '-delay-ms=<value>' argument." >&2
+    exit 1
+  fi
+
+  local ssh_key_expanded="${SSH_KEY/#\~/$HOME}"
+  local unique_ips=()
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
+
+  echo " - config file : ${CONFIG}"
+  echo " - ssh key     : ${SSH_KEY}"
+  echo " - username    : ${USERNAME}"
+  echo " - delay       : ${DELAY_MS}ms"
+  echo " - machines    :"
+  for ip in "${unique_ips[@]}"; do
+    echo "   - $ip"
+  done
+  echo ""
+
+  local failed=0
+  for ip in "${unique_ips[@]}"; do
+    local iface
+    iface=$(ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "ip -4 -o addr show | grep -F '$ip/' | awk '{print \$2}'")
+    if [ -z "$iface" ]; then
+      echo "[latency] $ip: could not detect interface for $ip" >&2
+      failed=1
+      continue
+    fi
+    echo "[latency] $ip: iface=$iface, setting delay=${DELAY_MS}ms"
+    if ! ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "sudo tc qdisc replace dev $iface root netem delay ${DELAY_MS}ms"; then
+      echo "[latency] $ip: failed to set qdisc" >&2
+      failed=1
+    fi
+  done
+
+  if [ $failed -ne 0 ]; then
+    echo ""
+    echo "[set-latency] completed with failures." >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "[set-latency] ${DELAY_MS}ms delay set on all nodes."
+  exit 0
+}
+
+function do_clear_latency() {
+  echo "Clearing injected network latency on all nodes defined in the config ..."
+
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
+
+  local ssh_key_expanded="${SSH_KEY/#\~/$HOME}"
+  local unique_ips=()
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
+
+  for ip in "${unique_ips[@]}"; do
+    local iface
+    iface=$(ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "ip -4 -o addr show | grep -F '$ip/' | awk '{print \$2}'")
+    if [ -z "$iface" ]; then
+      echo "[latency] $ip: could not detect interface, skipping" >&2
+      continue
+    fi
+    echo "[latency] $ip: clearing qdisc on $iface"
+    ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "sudo tc qdisc del dev $iface root" 2>/dev/null
+  done
+
+  echo ""
+  echo "[clear-latency] done."
+  exit 0
+}
+
 function do_start_ar_instance() {
   echo "unimplemented"
 }
@@ -829,6 +935,12 @@ function print_usage() {
   echo ""
   echo " To force-clear all gigapaxos servers using gpServer:"
   echo "   xdnd clear-all -config=gigapaxos.properties -xdn-config=xdn.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To inject uniform network latency on all nodes:"
+  echo "   xdnd set-latency -config=gigapaxos.properties -ssh-key=/ssh/key -username=user -delay-ms=50"
+  echo ""
+  echo " To clear injected network latency on all nodes:"
+  echo "   xdnd clear-latency -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
   echo " To initialize distributed observability:"
   echo "   xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
@@ -1257,7 +1369,7 @@ function main() {
 
   # parse the second param, i.e., the action.
   local SECOND_PARAM=$1
-  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "clear-all" "init-driver" "start" "help" "check")
+  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "clear-all" "set-latency" "clear-latency" "init-driver" "start" "help" "check")
   if ! is_in_list "$SECOND_PARAM" "${VALID_ACTIONS[@]}"; then
     echo "Action '$SECOND_PARAM' is not a valid actions."
     echo "Valid actions are: start, check, dist-init, help."
@@ -1279,6 +1391,12 @@ function main() {
     ;;
   "clear-all")
     do_clear_all "$@"
+    ;;
+  "set-latency")
+    do_set_latency "$@"
+    ;;
+  "clear-latency")
+    do_clear_latency "$@"
     ;;
   "init-driver")
     do_init_driver "$@"
