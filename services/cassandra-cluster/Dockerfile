@@ -10,5 +10,8 @@
 # Build: docker build -t xdn-cassandra-cluster:test services/cassandra-cluster/
 FROM cassandra:4.1
 COPY entrypoint.sh /xdn-entrypoint.sh
-RUN chmod +x /xdn-entrypoint.sh
+# The entrypoint patches initial_token into cassandra.yaml, and XDN starts
+# cluster containers under a non-root --user, so the conf tree must be
+# writable.
+RUN chmod +x /xdn-entrypoint.sh && chmod -R a+w /etc/cassandra
 ENTRYPOINT ["/xdn-entrypoint.sh"]
