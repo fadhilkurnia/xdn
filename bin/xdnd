@@ -375,9 +375,12 @@ function do_clear_all() {
   CONFIG_DIR=$(cd "$(dirname "$CONFIG")" && pwd)
   local CONFIG_ABS="$CONFIG_DIR/$(basename "$CONFIG")"
 
-  local XDN_CONFIG_DIR
-  XDN_CONFIG_DIR=$(cd "$(dirname "$XDN_CONFIG")" && pwd)
-  local XDN_CONFIG_ABS="$XDN_CONFIG_DIR/$(basename "$XDN_CONFIG")"
+  local XDN_CONFIG_ABS=""
+  if [ -n "$XDN_CONFIG" ]; then
+    local XDN_CONFIG_DIR
+    XDN_CONFIG_DIR=$(cd "$(dirname "$XDN_CONFIG")" && pwd)
+    XDN_CONFIG_ABS="$XDN_CONFIG_DIR/$(basename "$XDN_CONFIG")"
+  fi
 
   local GPSERVER="$XDN_SRC_PATH/bin/gpServer.sh"
   if [ ! -x "$GPSERVER" ]; then
@@ -386,14 +389,19 @@ function do_clear_all() {
   fi
 
   echo " - config file     : ${CONFIG_ABS}"
-  echo " - xdn config file : ${XDN_CONFIG_ABS}"
+  echo " - xdn config file : ${XDN_CONFIG_ABS:-<none>}"
   echo " - ssh key         : ${SSH_KEY}"
   echo " - username        : ${USERNAME}"
   echo ""
   echo "Invoking gpServer to force-clear all nodes ..."
 
+  local GP_ARGS=("-DgigapaxosConfig=$CONFIG_ABS")
+  if [ -n "$XDN_CONFIG_ABS" ]; then
+    GP_ARGS+=("-DxdnConfig=$XDN_CONFIG_ABS")
+  fi
+
   SSH_KEY_PATH="$SSH_KEY" GP_USERNAME="$USERNAME" "$GPSERVER" \
-    "-DgigapaxosConfig=$CONFIG_ABS" "-DxdnConfig=$XDN_CONFIG_ABS" forceclear all
+    "${GP_ARGS[@]}" forceclear all
   local gp_exit=$?
 
   # wipe leftover fuselog/state directories on every node after forceclear,
@@ -407,7 +415,7 @@ function do_clear_all() {
   for ip in "${unique_ips[@]}"; do
     if ! ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" '
         mount | awk "\$5 == \"fuse.fuselog\" {print \$3}" | xargs -r -n1 sudo fusermount3 -u
-        sudo rm -rf /tmp/xdn /tmp/xdn2 ~/XdnApp
+        sudo rm -rf /tmp/xdn /tmp/xdn2 ~/XdnApp ~/XdnGigapaxosApp
       '; then
       echo " - $ip: failed to clean up (mount/state/XdnApp)" >&2
     fi
