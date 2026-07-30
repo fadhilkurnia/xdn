@@ -61,6 +61,7 @@ public class DockerSandboxManager extends SandboxManager {
     private final int healthcheckIntervalSeconds;
     private final int healthcheckTimeoutSeconds;
     private final int healthcheckRetries;
+    private final int healthcheckConsecutiveSuccesses;
 
     // LargeCheckpointer for transferring state > 500KB between ARs
     private final LargeCheckpointer largeCheckpointer;
@@ -73,11 +74,13 @@ public class DockerSandboxManager extends SandboxManager {
     public DockerSandboxManager(String nodeId,
                                 int healthcheckIntervalSeconds,
                                 int healthcheckTimeoutSeconds,
-                                int healthcheckRetries) {
+                                int healthcheckRetries,
+                                int healthcheckConsecutiveSuccesses) {
         super(nodeId);
         this.healthcheckIntervalSeconds = healthcheckIntervalSeconds;
         this.healthcheckTimeoutSeconds  = healthcheckTimeoutSeconds;
         this.healthcheckRetries         = healthcheckRetries;
+        this.healthcheckConsecutiveSuccesses = healthcheckConsecutiveSuccesses;
         this.largeCheckpointer = new LargeCheckpointer(
                 String.format("%s%s/", BASE_FINAL_PATH, nodeId), nodeId);
     }
@@ -180,7 +183,9 @@ public class DockerSandboxManager extends SandboxManager {
                 return false;
             }
 
-            boolean ready = waitUntilReady(containerName, healthcheckCmd);
+            boolean requireConsecutive = ServiceComponent.requiresConsecutiveHealthyCheck(imageName);
+            boolean ready = waitUntilReady(containerName, healthcheckCmd, requireConsecutive);
+
             if (!ready) {
                 logger.log(Level.SEVERE,
                         "{0}:DockerSandboxManager stateful container {1} failed healthcheck for {2}",
@@ -462,8 +467,10 @@ public class DockerSandboxManager extends SandboxManager {
      * Returns true immediately if healthcheckCmd is null (no healthcheck defined).
      * Uses healthcheck parameters set at construction time from XdnConfig.
      */
+    // new
     @Override
-    public boolean waitUntilReady(String containerName, String healthcheckCmd) {
+    public boolean waitUntilReady(String containerName, String healthcheckCmd,
+                                  boolean requireConsecutiveHealthy) {
         if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
             return true;
         }
@@ -471,6 +478,9 @@ public class DockerSandboxManager extends SandboxManager {
         String inspectCmd = String.format(
                 "docker inspect --format='{{.State.Health.Status}}' %s",
                 containerName);
+
+        int consecutiveHealthy = 0;
+        int requiredConsecutive = requireConsecutiveHealthy ? healthcheckConsecutiveSuccesses : 1;
 
         for (int attempt = 1; attempt <= healthcheckRetries; attempt++) {
             try {
@@ -484,12 +494,20 @@ public class DockerSandboxManager extends SandboxManager {
             String status = result.stdout.trim().replace("'", "");
 
             if ("healthy".equals(status)) {
+                consecutiveHealthy++;
                 logger.log(Level.INFO,
-                        "{0}:DockerSandboxManager container {1} is healthy after {2} attempts",
-                        new Object[]{nodeId, containerName, attempt});
-                return true;
+                        "{0}:DockerSandboxManager container {1} healthy read {2}/{3} (attempt {4})",
+                        new Object[]{nodeId, containerName, consecutiveHealthy, requiredConsecutive, attempt});
+                if (consecutiveHealthy >= requiredConsecutive) {
+                    logger.log(Level.INFO,
+                            "{0}:DockerSandboxManager container {1} is ready after {2} attempts",
+                            new Object[]{nodeId, containerName, attempt});
+                    return true;
+                }
+                continue;
             }
 
+            consecutiveHealthy = 0;
             logger.log(Level.INFO,
                     "{0}:DockerSandboxManager waiting for {1}: status={2} attempt={3}/{4}",
                     new Object[]{nodeId, containerName, status, attempt, healthcheckRetries});

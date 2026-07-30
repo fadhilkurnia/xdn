@@ -44,7 +44,8 @@ public abstract class SandboxManager {
                     nodeId,
                     config.getHealthcheckIntervalSeconds(),
                     config.getHealthcheckTimeoutSeconds(),
-                    config.getHealthcheckRetries());
+                    config.getHealthcheckRetries(),
+                    config.getHealthcheckConsecutiveSuccesses());
 
             // future: case PODMAN -> new PodmanSandboxManager(nodeId, ...);
             // future: case GVISOR -> new GVisorSandboxManager(nodeId, ...);
@@ -195,8 +196,19 @@ public abstract class SandboxManager {
      * @param healthcheckCmd command to run inside the container, or null to skip
      * @return true iff the container became ready within the configured retries
      */
-    public abstract boolean waitUntilReady(String containerName, String healthcheckCmd);
+    public boolean waitUntilReady(String containerName, String healthcheckCmd) {
+        return waitUntilReady(containerName, healthcheckCmd, false);
+    }
 
+    /**
+     * Same as waitUntilReady(containerName, healthcheckCmd), but if
+     * requireConsecutiveHealthy is true, requires multiple consecutive
+     * "healthy" reads (per XdnConfig's DEFAULT_HEALTHCHECK_CONSECUTIVE_SUCCESSES)
+     * before returning true, rather than trusting the first successful read.
+     * Used for images with a known startup false-positive window (Postgres/MySQL).
+     */
+    public abstract boolean waitUntilReady(String containerName, String healthcheckCmd,
+                                           boolean requireConsecutiveHealthy);
     /**
      * Polls an HTTP endpoint on the given host-published port until it
      * responds with a 2xx status, or returns true immediately if path is

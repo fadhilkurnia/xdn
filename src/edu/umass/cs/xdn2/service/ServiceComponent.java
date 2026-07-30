@@ -111,6 +111,20 @@ public class ServiceComponent {
     return null;
   }
 
+  /**
+   * Returns true if this image's healthcheck is known to have a false-positive
+   * window during startup (e.g. Postgres/MySQL's bootstrap-then-restart
+   * entrypoint sequence), where a single successful healthcheck run can
+   * report ready before the real long-running server process is up.
+   * Such images require multiple consecutive healthy reads before being
+   * trusted, rather than a single success.
+   */
+  public static boolean requiresConsecutiveHealthyCheck(String imageName) {
+    if (imageName == null) return false;
+    String lower = imageName.toLowerCase();
+    return lower.contains("mysql") || lower.contains("mariadb") || lower.contains("postgres");
+  }
+
   public final JSONObject toJsonObject() {
     JSONObject jsonObject = new JSONObject();
     try {

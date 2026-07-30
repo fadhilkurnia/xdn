@@ -42,16 +42,19 @@ public class XdnConfig {
     private static final String KEY_HC_INTERVAL   = "DEFAULT_HEALTHCHECK_INTERVAL_SECONDS";
     private static final String KEY_HC_TIMEOUT    = "DEFAULT_HEALTHCHECK_TIMEOUT_SECONDS";
     private static final String KEY_HC_RETRIES    = "DEFAULT_HEALTHCHECK_RETRIES";
+    private static final String KEY_HC_CONSECUTIVE = "DEFAULT_HEALTHCHECK_CONSECUTIVE_SUCCESSES";
 
     private static final int DEFAULT_HC_INTERVAL = 2;
     private static final int DEFAULT_HC_TIMEOUT  = 5;
     private static final int DEFAULT_HC_RETRIES  = 30;
+    private static final int DEFAULT_HC_CONSECUTIVE = 5;
 
     private final SandboxType sandboxType;
     private final RecorderType recorderType;
     private final int healthcheckIntervalSeconds;
     private final int healthcheckTimeoutSeconds;
     private final int healthcheckRetries;
+    private final int healthcheckConsecutiveSuccesses;
     private final String fuselogBaseDir;
 
     private static final Logger logger = Logger.getLogger(XdnConfig.class.getName());
@@ -80,8 +83,9 @@ public class XdnConfig {
                 props, KEY_HC_TIMEOUT, DEFAULT_HC_TIMEOUT);
         this.healthcheckRetries         = parseOptionalInt(
                 props, KEY_HC_RETRIES, DEFAULT_HC_RETRIES);
+        this.healthcheckConsecutiveSuccesses = parseOptionalInt(
+                props, KEY_HC_CONSECUTIVE, DEFAULT_HC_CONSECUTIVE);
         this.fuselogBaseDir = props.getProperty(
-                KEY_FUSELOG_BASE_DIR, DEFAULT_FUSELOG_BASE_DIR);
     }
 
     public SandboxType getSandboxType() {
@@ -102,6 +106,10 @@ public class XdnConfig {
 
     public int getHealthcheckRetries() {
         return healthcheckRetries;
+    }
+
+    public int getHealthcheckConsecutiveSuccesses() {
+        return healthcheckConsecutiveSuccesses;
     }
 
     public String getFuselogBaseDir() {
