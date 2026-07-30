@@ -47,6 +47,16 @@ export CASSANDRA_SEEDS="$SEED_IP"
 # Single token keeps the ring layout deterministic and small-cluster friendly.
 export CASSANDRA_NUM_TOKENS=1
 
+# Work on a conf tree WE own: /etc/cassandra in the stock image is a
+# sticky-bit (1777) directory whose files belong to the cassandra user, and
+# under a non-root --user the in-place sed renames (ours AND the stock
+# entrypoint's) hit EPERM on hosts with strict sticky/rename policies. The
+# stock docker-entrypoint.sh honors CASSANDRA_CONF, so a private copy makes
+# every config edit host-independent.
+export CASSANDRA_CONF=/tmp/xdn-cassconf
+mkdir -p "$CASSANDRA_CONF"
+cp -a /etc/cassandra/. "$CASSANDRA_CONF"/
+
 # Deterministic, evenly spaced Murmur3 token per ordinal. With num_tokens=1
 # each joiner otherwise picks ONE RANDOM token, and at larger cluster sizes
 # two simultaneous joiners can collide ("Bootstrap Token collision"), which
@@ -55,8 +65,8 @@ export CASSANDRA_NUM_TOKENS=1
 # step ~= 2^63/SIZE; token_i = -(2^63-1) + (2i+1)*step stays in signed range.
 STEP=$(( 9223372036854775807 / SIZE ))
 TOKEN=$(( -9223372036854775807 + (2 * ORD + 1) * STEP ))
-sed -ri "s/^# initial_token:.*/initial_token: ${TOKEN}/" /etc/cassandra/cassandra.yaml
-echo "xdn-cassandra: ordinal $ORD/$SIZE initial_token=$TOKEN"
+sed -ri "s/^# initial_token:.*/initial_token: ${TOKEN}/" "$CASSANDRA_CONF/cassandra.yaml"
+echo "xdn-cassandra: ordinal $ORD/$SIZE initial_token=$TOKEN conf=$CASSANDRA_CONF"
 export CASSANDRA_ENDPOINT_SNITCH="GossipingPropertyFileSnitch"
 export CASSANDRA_DC="dc1"
 export CASSANDRA_RACK="rack1"
