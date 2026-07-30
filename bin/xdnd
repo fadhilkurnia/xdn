@@ -331,6 +331,7 @@ function do_clear_all() {
   local DEFAULT_XDN_CONFIG="./conf/xdn.properties"
   local CONFIG=$DEFAULT_CONFIG
   local XDN_CONFIG=$DEFAULT_XDN_CONFIG
+  local XDN_CONFIG_SET=0
   local SSH_KEY=""
   local USERNAME=""
 
@@ -341,6 +342,7 @@ function do_clear_all() {
       ;;
     -xdn-config=*)
       XDN_CONFIG="${ARG#*=}"
+      XDN_CONFIG_SET=1
       ;;
     -ssh-key=*)
       SSH_KEY="${ARG#*=}"
@@ -356,9 +358,12 @@ function do_clear_all() {
     exit 1
   fi
 
-  if [ ! -f "$XDN_CONFIG" ]; then
+  if [ "$XDN_CONFIG_SET" -eq 1 ] && [ ! -f "$XDN_CONFIG" ]; then
     echo "XDN config file '$XDN_CONFIG' can not be found!"
     exit 1
+  fi
+  if [ "$XDN_CONFIG_SET" -eq 0 ] && [ ! -f "$XDN_CONFIG" ]; then
+    XDN_CONFIG=""
   fi
 
   if [ -z "$SSH_KEY" ]; then
