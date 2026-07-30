@@ -35,6 +35,27 @@ The redis vs corfu pair is the protocol-name-vs-wire-shape exhibit: both are
 "chain replication", one relays sequentially through the members, the other
 fans out from wherever the (embedded) client sits.
 
+## `scaling/n5/`, `scaling/n7/` — cluster-size sweep (2026-07-27/30)
+
+The proxied methodology at N=5 and N=7 (with `proxied/` as the N=3 points):
+8 protocols x 3 sizes on CloudLab Mass rs620s, each replica on its own host
+(7 ARs at N=7, RC co-located with AR1, driver outside the fleet). Same specs
+launched at every size via `xdn cluster launch <name> -f <spec> -n <N>`.
+Render growth curves with `eval/plot_scaling.py`. Headline
+(baseline-corrected B/write at N=3 -> 5 -> 7): stars and chains grow O(N)
+(etcd 503/1,087/1,571 at ~260 B per follower; redis 575/1,140/1,618 at
+~280 B per hop; corfu 511/1,091/1,563; rqlite 703/1,458/2,048; cassandra
+476/1,345/1,632 with RF=N), while certification/CRDT meshes grow
+superlinearly (mysql-gr 3,866/10,138/15,792; mongo 5,463/10,818/18,285;
+antidote 3,585/8,610/13,624) and their standing idle meshes track the
+directed-pair count (mysql-gr 4.6 -> 14.9 -> 58.4 KB/s). Formation lessons
+encoded in the service images along the way: cassandra needs deterministic
+per-ordinal tokens (random single tokens collide at larger N), a private
+conf tree (sticky-dir renames EPERM under a non-root user on some hosts),
+in-container supervision (a crash-restarted member strands netns sidecars),
+and no bootstrap streaming on fresh rings (simultaneous joiners race and
+wedge).
+
 ## `native/` — first round (2026-07-22/23, older pod)
 
 Same protocols driven through their native interfaces from mixed vantage
