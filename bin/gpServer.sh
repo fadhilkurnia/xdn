@@ -154,7 +154,9 @@ for arg in "$@"; do
     value=`echo $arg|grep "\-D.*="|sed s/-D//g|sed s/.*=//g`
     if [[ $key == "gigapaxosConfig" ]]; then
       GP_PROPERTIES=$value
-    elif [[ ! -z `echo $arg|grep "\-D$APP_RESOURCES_KEY="` ]]; 
+    elif [[ $key == "xdnConfig" ]]; then
+      XDN_CONFIG_SET=true
+    elif [[ ! -z `echo $arg|grep "\-D$APP_RESOURCES_KEY="` ]];
     then
       # app args
       APP_RESOURCES="`echo $arg|grep "\-D$APP_RESOURCES_KEY="|\
@@ -324,10 +326,10 @@ trim_file_list "$conf_transferrables"
 
 # prepare ssh args if `SSH_KEY_PATH` envvar is set
 SSH_KEY_PATH_ARG=""
-RSYNC_SSH_KEY_PATH_ARG=""
+RSYNC_SSH_KEY_PATH_ARG=()
 if [[ ! -z $SSH_KEY_PATH ]]; then
   SSH_KEY_PATH_ARG="-i $SSH_KEY_PATH"
-  RSYNC_SSH_KEY_PATH_ARG="-e 'ssh -x -i $SSH_KEY_PATH -o StrictHostKeyChecking=no'"
+  RSYNC_SSH_KEY_PATH_ARG=(-e "ssh -x -i $SSH_KEY_PATH -o StrictHostKeyChecking=no")
 fi
 
 # disabling warnings to prevent manual override; can supply ssh keys
@@ -336,7 +338,7 @@ fi
 SSH="ssh $SSH_KEY_PATH_ARG -x -o StrictHostKeyChecking=no"
 
 RSYNC_PATH="mkdir -p $INSTALL_PATH $INSTALL_PATH/$CONF"
-RSYNC="rsync --force -aL $RSYNC_SSH_KEY_PATH_ARG "
+RSYNC=(rsync --force -aL "${RSYNC_SSH_KEY_PATH_ARG[@]}")
 
 # get username from (1) environment variable GP_USERNAME, (2) from
 # gigapaxos properties file, or (3) from whoami
@@ -393,9 +395,9 @@ function rsync_symlink {
   address=$1
   print 1 "Transferring conf files to $address:$INSTALL_PATH"
 
-  print 2 "$RSYNC --rsync-path=\"$RSYNC_PATH $LINK_CMD && rsync\" \
+  print 2 "${RSYNC[*]} --rsync-path=\"$RSYNC_PATH $LINK_CMD && rsync\" \
     $conf_transferrables $username@$address:$INSTALL_PATH/$CONF/"
-  $RSYNC --rsync-path="$RSYNC_PATH $LINK_CMD && rsync" \
+  "${RSYNC[@]}" --rsync-path="$RSYNC_PATH $LINK_CMD && rsync" \
     $conf_transferrables $username@$address:$INSTALL_PATH/$CONF/
 }
 
@@ -483,24 +485,30 @@ function start_server {
     non_local="$server=$addressport $non_local"
     echo "Starting remote server $server"
     print 1 "Transferring jar files $jar_files to $address:$INSTALL_PATH"
-    print 2 "$RSYNC --rsync-path=\"$RSYNC_PATH && rsync\" \
+    print 2 "${RSYNC[*]} --rsync-path=\"$RSYNC_PATH && rsync\" \
       $jar_files $username@$address:$INSTALL_PATH/jars/ "
-    $RSYNC --rsync-path="$RSYNC_PATH && rsync" \
-      $jar_files $username@$address:$INSTALL_PATH/jars/ 
+    "${RSYNC[@]}" --rsync-path="$RSYNC_PATH && rsync" \
+      $jar_files $username@$address:$INSTALL_PATH/jars/
     rsync_symlink $address
+
+    # after
+    REMOTE_APP_ARGS="$APP_ARGS"
+    if [[ $XDN_CONFIG_SET == true ]]; then
+      REMOTE_APP_ARGS="$REMOTE_APP_ARGS SSH_KEY_PATH=/users/$username/.ssh/xdn_ssh_key"
+    fi
 
     # then start remote server
     print 2 "$SSH $username@$address \"cd $INSTALL_PATH; nohup \
       $JAVA $DEBUG_ARGS $REMOTE_JVMARGS \
       -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
       edu.umass.cs.reconfiguration.ReconfigurableNode \
-      $APP_ARGS $server \""
+      $REMOTE_APP_ARGS $server \""
     
     $SSH $username@$address "cd $INSTALL_PATH; sudo \
       $JAVA $DEBUG_ARGS $REMOTE_JVMARGS \
       -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
       edu.umass.cs.reconfiguration.ReconfigurableNode \
-      $APP_ARGS $server "&
+      $REMOTE_APP_ARGS $server "&
   fi
 }
 
