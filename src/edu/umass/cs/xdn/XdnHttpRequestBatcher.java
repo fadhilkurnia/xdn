@@ -2,9 +2,9 @@ package edu.umass.cs.xdn;
 
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
-import edu.umass.cs.xdn2.http.XdnHttpActiveReplica;
 import edu.umass.cs.reconfiguration.interfaces.ActiveReplicaFunctions;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
+import edu.umass.cs.xdn2.http.XdnHttpActiveReplica;
 import edu.umass.cs.xdn2.request.XdnHttpRequest;
 import edu.umass.cs.xdn2.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn2.service.RequestMatcher;

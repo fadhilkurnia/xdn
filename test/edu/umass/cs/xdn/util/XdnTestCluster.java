@@ -2,12 +2,12 @@ package edu.umass.cs.xdn.util;
 
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.reconfiguration.ReconfigurableNode;
-import edu.umass.cs.xdn2.http.XdnHttpActiveReplica;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableNodeConfig;
 import edu.umass.cs.reconfiguration.reconfigurationutils.DefaultNodeConfig;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.utils.Shell;
 import edu.umass.cs.xdn.utils.ShellOutput;
+import edu.umass.cs.xdn2.http.XdnHttpActiveReplica;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
