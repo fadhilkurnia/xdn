@@ -63,7 +63,7 @@ class XdnDockerSandboxManagerTest {
               + image
               + ". Ensure Docker is running and the image is accessible.");
     }
-    sandbox = new DockerSandboxManager(NODE_ID, 2, 5, 30);
+    sandbox = new DockerSandboxManager(NODE_ID, 2, 5, 30, 3);
   }
 
   @AfterEach
