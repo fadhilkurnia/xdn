@@ -94,7 +94,8 @@ public class PrimaryBackupManager<NodeIDType> {
     private final ConcurrentHashMap<String, AtomicBoolean> snpDiffApplyStopFlags =
             new ConcurrentHashMap<>();
 
-    private record RequestAndCallback(Request request, ExecutedCallback callback) {}
+    private record RequestAndCallback(Request request, ExecutedCallback callback,
+                                      long forwardStartNanos, boolean isWriteRequest) {}
 
     private final Logger logger =
             Logger.getLogger(PrimaryBackupManager.class.getSimpleName());
@@ -718,9 +719,20 @@ public class PrimaryBackupManager<NodeIDType> {
             logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY executing request for {1}",
                     new Object[]{myNodeID, serviceName});
 
+            long reqId = (request instanceof XdnHttpRequest xdnHttpRequest)
+                    ? xdnHttpRequest.getRequestID() : -1L;
+
+            long tExecuteStart = System.nanoTime();
             app.execute(request);
+            long tExecuteEnd = System.nanoTime();
 
             if (isEventualConsistency(serviceName) && !isWriteRequest) {
+                double dockerExecuteMs = (tExecuteEnd - tExecuteStart) / 1_000_000.0;
+                logger.log(Level.WARNING,
+                        "LATENCY_BREAKDOWN reqId={0} service={1} isWrite={2} count={3} "
+                                + "dockerExecuteMs={4} captureMs={5} proposeAckMs={6}",
+                        new Object[]{reqId, serviceName, isWriteRequest, -1,
+                                dockerExecuteMs, 0.0, 0.0});
                 callback.executed(request, true);
                 return true;
             }
@@ -733,7 +745,9 @@ public class PrimaryBackupManager<NodeIDType> {
                     .submit(() -> {
                         int nextCount = assignNextCount(serviceName);
 
+                        long tCaptureStart = System.nanoTime();
                         byte[] diff = app.captureStatediff(serviceName);
+                        long tCaptureEnd = System.nanoTime();
                         logger.log(Level.INFO, "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
                                 new Object[]{myNodeID, serviceName, diff.length});
 
@@ -747,11 +761,23 @@ public class PrimaryBackupManager<NodeIDType> {
                                 "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for {1}",
                                 new Object[]{myNodeID, serviceName, nextCount});
 
+                        long tProposeStart = System.nanoTime();
                         proposeStateDiff(serviceName, placement, pEpoch, nextCount, finalDiff,
                                 (executedRequest, handled) -> {
-                                    logger.log(Level.WARNING,
+                                    long tProposeEnd = System.nanoTime();
+                                    logger.log(Level.INFO,
                                             "{0}:PBM handleClientRequest PRIMARY propose callback handled={2} for {1} (count={3})",
                                             new Object[]{myNodeID, serviceName, handled, nextCount});
+
+                                    double dockerExecuteMs = (tExecuteEnd - tExecuteStart) / 1_000_000.0;
+                                    double captureMs = (tCaptureEnd - tCaptureStart) / 1_000_000.0;
+                                    double proposeAckMs = (tProposeEnd - tProposeStart) / 1_000_000.0;
+                                    logger.log(Level.WARNING,
+                                            "LATENCY_BREAKDOWN reqId={0} service={1} isWrite={2} count={3} "
+                                                    + "dockerExecuteMs={4} captureMs={5} proposeAckMs={6}",
+                                            new Object[]{reqId, serviceName, isWriteRequest,
+                                                    nextCount, dockerExecuteMs, captureMs, proposeAckMs});
+
                                     callback.executed(request, handled);
                                 });
                     });
@@ -759,13 +785,13 @@ public class PrimaryBackupManager<NodeIDType> {
 
         } else if (role == Role.BACKUP) {
             if (!isEventualConsistency(serviceName) || isWriteRequest) {
-                return forwardRequestToPrimary(serviceName, request, callback);
+                return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
             }
 
             Integer liveCount = liveDiffCount.get(serviceName);
             if (liveCount == null
                     || (clientStateDiffCount != null && clientStateDiffCount > liveCount)) {
-                return forwardRequestToPrimary(serviceName, request, callback);
+                return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
             }
 
             AbstractStateDiffRecorder.LiveDirType liveType = currentLiveDirType.get(serviceName);
@@ -790,7 +816,7 @@ public class PrimaryBackupManager<NodeIDType> {
                 logger.log(Level.SEVERE,
                         "{0}:PBM handleClientRequest backup port not found for {1} type={2}",
                         new Object[]{myNodeID, serviceName, liveType});
-                return forwardRequestToPrimary(serviceName, request, callback);
+                return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
             }
 
             return app.forwardToBackupContainer(serviceName, backupPort, request, callback);
@@ -937,7 +963,7 @@ public class PrimaryBackupManager<NodeIDType> {
     }
 
     private boolean forwardRequestToPrimary(String serviceName, Request request,
-                                            ExecutedCallback callback) {
+                                            ExecutedCallback callback, boolean isWriteRequest) {
         NodeIDType primaryID = currPrimaryID.get(serviceName);
         if (primaryID == null) {
             logger.log(Level.WARNING,
@@ -950,8 +976,9 @@ public class PrimaryBackupManager<NodeIDType> {
         ForwardedRequestPacket forwardPacket = new ForwardedRequestPacket(
                 serviceName, myNodeID.toString(), encodedRequest);
 
+        long forwardStartNanos = System.nanoTime();
         forwardedRequests.put(forwardPacket.getRequestID(),
-                new RequestAndCallback(request, callback));
+                new RequestAndCallback(request, callback, forwardStartNanos, isWriteRequest));
 
         logger.log(Level.INFO,
                 "{0}:PBM forwardRequestToPrimary forwarding to {1} for {2}",
@@ -989,6 +1016,12 @@ public class PrimaryBackupManager<NodeIDType> {
                     new Object[]{myNodeID, serviceName});
             return false;
         }
+
+        long localReqId = (request instanceof XdnHttpRequest xdnHttpRequest)
+                ? xdnHttpRequest.getRequestID() : -1L;
+        logger.log(Level.WARNING,
+                "FORWARD_MAP forwardId={0} localReqId={1} service={2}",
+                new Object[]{packet.getRequestID(), localReqId, serviceName});
 
         NodeIDType entryNodeID = unstringer.valueOf(packet.getEntryNodeId());
         long originalRequestId = packet.getRequestID();
@@ -1034,6 +1067,12 @@ public class PrimaryBackupManager<NodeIDType> {
                     new Object[]{myNodeID, packet.getRequestID(), packet.getServiceName()});
             return false;
         }
+
+        double forwardRoundTripMs = (System.nanoTime() - rc.forwardStartNanos()) / 1_000_000.0;
+        logger.log(Level.WARNING,
+                "LATENCY_FORWARD forwardId={0} service={1} isWrite={2} forwardRoundTripMs={3}",
+                new Object[]{packet.getRequestID(), packet.getServiceName(),
+                        rc.isWriteRequest(), forwardRoundTripMs});
 
         String encodedResponseStr = new String(
                 packet.getEncodedResponse(), StandardCharsets.ISO_8859_1);

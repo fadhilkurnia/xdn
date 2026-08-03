@@ -739,6 +739,7 @@ public class NonDeterministicService {
                 original.uri(),
                 content.content().copy());
         copy.headers().setAll(original.headers());
+        copy.headers().set("X-XDN-ReqId", String.valueOf(xdnRequest.getRequestID()));
         return copy;
     }
 

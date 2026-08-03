@@ -259,7 +259,7 @@ public class DockerSandboxManager extends SandboxManager {
 
     @Override
     public boolean stopContainer(String containerName) {
-        logger.log(Level.WARNING,
+        logger.log(Level.FINE,
                 "{0}:DockerSandboxManager stopContainer running: docker rm --force {1}",
                 new Object[]{nodeId, containerName});
         int code = Shell.runCommand(
@@ -513,7 +513,7 @@ public class DockerSandboxManager extends SandboxManager {
                     new Object[]{nodeId, containerName, status, attempt, healthcheckRetries});
         }
 
-        logger.log(Level.WARNING,
+        logger.log(Level.SEVERE,
                 "{0}:DockerSandboxManager container {1} did not become healthy after {2} retries",
                 new Object[]{nodeId, containerName, healthcheckRetries});
         return false;
@@ -570,7 +570,7 @@ public class DockerSandboxManager extends SandboxManager {
             }
         }
 
-        logger.log(Level.WARNING,
+        logger.log(Level.SEVERE,
                 "{0}:DockerSandboxManager {1} did not become healthy after {2} retries",
                 new Object[]{nodeId, urlStr, healthcheckRetries});
         return false;
@@ -691,9 +691,8 @@ public class DockerSandboxManager extends SandboxManager {
         }
 
         // Environment variables
-        // Environment variables
         if (env != null && !env.isEmpty()) {
-            logger.log(Level.WARNING,
+            logger.log(Level.FINE,
                     "{0}:DockerSandboxManager container={1} env vars: {2}",
                     new Object[]{nodeId, containerName, env});
             for (Map.Entry<String, String> entry : env.entrySet()) {
