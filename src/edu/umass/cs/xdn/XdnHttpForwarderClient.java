@@ -11,10 +11,24 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.Future;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
+import java.nio.channels.Channels;
+import java.nio.channels.SocketChannel;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -50,9 +64,13 @@ public final class XdnHttpForwarderClient implements Closeable {
   private final boolean manageEventLoopGroup;
   private final ConcurrentMap<Origin, FixedChannelPool> pools = new ConcurrentHashMap<>();
 
-  /** Creates a client backed by its own event loop group. */
+  /**
+   * Creates a client backed by its own event loop group. The thread count defaults to Netty's 2 x
+   * cores; on many-core boxes that is a lot of mostly-idle selector threads, so -DXDN_HTTP_EVENT_LOOP_THREADS
+   * caps it (fewer, warmer loops can lower single-request wakeup latency).
+   */
   public XdnHttpForwarderClient() {
-    this(new NioEventLoopGroup(0), true);
+    this(new NioEventLoopGroup(Integer.getInteger("XDN_HTTP_EVENT_LOOP_THREADS", 0)), true);
   }
 
   private XdnHttpForwarderClient(EventLoopGroup group, boolean manageGroup) {
@@ -69,6 +87,252 @@ public final class XdnHttpForwarderClient implements Closeable {
   private static final boolean FORCE_KEEPALIVE =
       Boolean.parseBoolean(System.getProperty("HTTP_FORCE_KEEPALIVE", "false"));
 
+  // ── Blocking keep-alive fast path (kills the worker<->event-loop handoff) ──
+  //
+  // The default Netty path makes the calling (PB worker) thread submit to the
+  // event loop via pool.acquire(), dispatch writeAndFlush on the loop, and then
+  // block on a CompletableFuture that the loop completes on response — a
+  // worker->loop->worker round trip plus pool bookkeeping per request. At low
+  // load (one request in flight) that scheduling overhead dominates a local
+  // container forward: measured ~2ms of the ~2.8ms exec stage is this plumbing,
+  // not the container (which answers a 4KB PUT in <1ms directly).
+  //
+  // With -DPB_FORWARD_BLOCKING=true the single-request forward does the whole
+  // HTTP/1.1 exchange on the CALLING thread over a per-thread pinned keep-alive
+  // socket: no pool acquire, no event-loop dispatch, no cross-thread wakeup.
+  // Any I/O or parse error refreshes the pinned socket and rethrows so execute()
+  // transparently falls back to the robust Netty path. Only single requests take
+  // this path; batches keep the pipelined Netty path.
+  private static final boolean FORWARD_BLOCKING = Boolean.getBoolean("PB_FORWARD_BLOCKING");
+
+  // Per-request forward-timing samples (Netty vs blocking) appended here when
+  // -DXDN_TIMING_HEADERS=true, so the two paths can be compared directly.
+  private static final boolean FWD_TRACE = XdnGigapaxosApp.TIMING_HEADERS_ENABLED;
+  private static final Path FWD_TRACE_FILE = Path.of("/tmp/xdn_fwd.log");
+
+  // One pinned keep-alive connection per (thread, origin) for the blocking path.
+  private static final ThreadLocal<Map<Origin, PinnedConn>> PINNED =
+      ThreadLocal.withInitial(HashMap::new);
+
+  private static void fwdTrace(String line) {
+    try {
+      Files.writeString(
+          FWD_TRACE_FILE, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    } catch (Exception ignored) {
+    }
+  }
+
+  /**
+   * Blocking single-request forward on the calling thread over a per-thread pinned keep-alive
+   * socket. Throws on any I/O or parse failure (after discarding the pinned socket), letting the
+   * caller fall back to the Netty path.
+   */
+  private FullHttpResponse executeBlocking(String host, int port, FullHttpRequest request)
+      throws Exception {
+    long t0 = System.nanoTime();
+    Origin origin = new Origin(host, port);
+    Map<Origin, PinnedConn> map = PINNED.get();
+    PinnedConn conn = map.get(origin);
+    try {
+      if (conn == null || !conn.ch.isOpen() || !conn.ch.isConnected()) {
+        conn = new PinnedConn(openPinned(host, port));
+        map.put(origin, conn);
+      }
+      FullHttpResponse resp = blockingExchange(conn, host, port, request);
+      if (FWD_TRACE) {
+        fwdTrace(String.format("FWD_BLOCK total=%.3f%n", (System.nanoTime() - t0) / 1e6));
+      }
+      return resp;
+    } catch (Exception e) {
+      if (conn != null) {
+        conn.closeQuietly();
+        map.remove(origin);
+      }
+      throw e;
+    }
+  }
+
+  private static SocketChannel openPinned(String host, int port) throws IOException {
+    SocketChannel ch = SocketChannel.open();
+    ch.setOption(StandardSocketOptions.TCP_NODELAY, true);
+    ch.setOption(StandardSocketOptions.SO_KEEPALIVE, true);
+    trySetQuickAck(ch);
+    ch.connect(new InetSocketAddress(host, port));
+    return ch;
+  }
+
+  private static void trySetQuickAck(SocketChannel ch) {
+    try {
+      ch.setOption(jdk.net.ExtendedSocketOptions.TCP_QUICKACK, true);
+    } catch (Exception ignored) {
+      // Not supported off Linux; harmless.
+    }
+  }
+
+  /** Serialize {@code request} to HTTP/1.1, write it, and parse one response. */
+  private FullHttpResponse blockingExchange(
+      PinnedConn conn, String host, int port, FullHttpRequest request) throws Exception {
+    trySetQuickAck(conn.ch);
+    ByteBuf content = request.content();
+    int bodyLen = content != null ? content.readableBytes() : 0;
+
+    StringBuilder head = new StringBuilder(256);
+    head.append(request.method().name())
+        .append(' ')
+        .append(request.uri())
+        .append(" HTTP/1.1\r\n");
+    boolean hasHost = false;
+    for (Map.Entry<String, String> h : request.headers()) {
+      String name = h.getKey();
+      // Connection/Content-Length/Transfer-Encoding are set by us below.
+      if (name.equalsIgnoreCase(HttpHeaderNames.CONNECTION.toString())
+          || name.equalsIgnoreCase(HttpHeaderNames.CONTENT_LENGTH.toString())
+          || name.equalsIgnoreCase(HttpHeaderNames.TRANSFER_ENCODING.toString())) {
+        continue;
+      }
+      if (name.equalsIgnoreCase(HttpHeaderNames.HOST.toString())) {
+        hasHost = true;
+      }
+      head.append(name).append(": ").append(h.getValue()).append("\r\n");
+    }
+    if (!hasHost) {
+      head.append("Host: ").append(host).append(':').append(port).append("\r\n");
+    }
+    head.append("Connection: keep-alive\r\n");
+    head.append("Content-Length: ").append(bodyLen).append("\r\n\r\n");
+
+    byte[] headBytes = head.toString().getBytes(StandardCharsets.ISO_8859_1);
+    conn.out.write(headBytes);
+    if (bodyLen > 0) {
+      byte[] body = new byte[bodyLen];
+      content.getBytes(content.readerIndex(), body); // absolute read: readerIndex unchanged
+      conn.out.write(body);
+    }
+    conn.out.flush();
+
+    return readResponse(conn.in);
+  }
+
+  private static FullHttpResponse readResponse(InputStream in) throws IOException {
+    String statusLine = readLine(in);
+    if (statusLine == null || statusLine.isEmpty()) {
+      throw new IOException("empty response (stale keep-alive socket)");
+    }
+    int sp1 = statusLine.indexOf(' ');
+    int sp2 = statusLine.indexOf(' ', sp1 + 1);
+    HttpVersion version = HttpVersion.valueOf(statusLine.substring(0, sp1));
+    int code = Integer.parseInt(statusLine.substring(sp1 + 1, sp2 < 0 ? statusLine.length() : sp2));
+    String reason = sp2 < 0 ? "" : statusLine.substring(sp2 + 1);
+    HttpResponseStatus status = new HttpResponseStatus(code, reason);
+
+    HttpHeaders headers = new DefaultHttpHeaders(false);
+    while (true) {
+      String line = readLine(in);
+      if (line == null) {
+        throw new IOException("EOF in response headers");
+      }
+      if (line.isEmpty()) {
+        break;
+      }
+      int colon = line.indexOf(':');
+      if (colon > 0) {
+        headers.add(line.substring(0, colon).trim(), line.substring(colon + 1).trim());
+      }
+    }
+
+    byte[] body;
+    String te = headers.get(HttpHeaderNames.TRANSFER_ENCODING);
+    if (te != null && te.toLowerCase().contains("chunked")) {
+      body = readChunked(in);
+      headers.remove(HttpHeaderNames.TRANSFER_ENCODING);
+    } else {
+      String cl = headers.get(HttpHeaderNames.CONTENT_LENGTH);
+      body = readN(in, cl != null ? Integer.parseInt(cl.trim()) : 0);
+    }
+
+    ByteBuf buf = body.length == 0 ? Unpooled.EMPTY_BUFFER : Unpooled.wrappedBuffer(body);
+    DefaultFullHttpResponse resp = new DefaultFullHttpResponse(version, status, buf);
+    resp.headers().set(headers);
+    HttpUtil.setContentLength(resp, body.length);
+    return resp;
+  }
+
+  /** Read one CRLF-terminated line (CR/LF stripped) as ISO-8859-1; null on immediate EOF. */
+  private static String readLine(InputStream in) throws IOException {
+    ByteArrayOutputStream buf = new ByteArrayOutputStream(64);
+    int c;
+    boolean any = false;
+    while ((c = in.read()) != -1) {
+      any = true;
+      if (c == '\n') {
+        break;
+      }
+      if (c != '\r') {
+        buf.write(c);
+      }
+    }
+    if (!any) {
+      return null;
+    }
+    return buf.toString(StandardCharsets.ISO_8859_1);
+  }
+
+  private static byte[] readN(InputStream in, int n) throws IOException {
+    byte[] out = new byte[n];
+    int off = 0;
+    while (off < n) {
+      int r = in.read(out, off, n - off);
+      if (r < 0) {
+        throw new IOException("EOF at " + off + "/" + n + " body bytes");
+      }
+      off += r;
+    }
+    return out;
+  }
+
+  private static byte[] readChunked(InputStream in) throws IOException {
+    ByteArrayOutputStream body = new ByteArrayOutputStream();
+    while (true) {
+      String sizeLine = readLine(in);
+      if (sizeLine == null) {
+        throw new IOException("EOF in chunk size");
+      }
+      int semi = sizeLine.indexOf(';');
+      int size = Integer.parseInt((semi < 0 ? sizeLine : sizeLine.substring(0, semi)).trim(), 16);
+      if (size == 0) {
+        // Consume trailer headers up to the blank line.
+        String trailer;
+        while ((trailer = readLine(in)) != null && !trailer.isEmpty()) {
+          // discard
+        }
+        break;
+      }
+      body.write(readN(in, size));
+      readLine(in); // trailing CRLF after chunk data
+    }
+    return body.toByteArray();
+  }
+
+  /** A pinned blocking keep-alive connection: channel plus buffered I/O streams. */
+  private static final class PinnedConn {
+    final SocketChannel ch;
+    final InputStream in;
+    final OutputStream out;
+
+    PinnedConn(SocketChannel ch) {
+      this.ch = ch;
+      this.in = new BufferedInputStream(Channels.newInputStream(ch), 32 * 1024);
+      this.out = Channels.newOutputStream(ch);
+    }
+
+    void closeQuietly() {
+      try {
+        ch.close();
+      } catch (Exception ignored) {
+      }
+    }
+  }
+
   /**
    * Sends the given HTTP request and returns a detached response. The caller is responsible for
    * releasing the returned {@link FullHttpResponse} to avoid leaking pooled buffers.
@@ -80,6 +344,16 @@ public final class XdnHttpForwarderClient implements Closeable {
   public FullHttpResponse execute(String host, int port, FullHttpRequest request) throws Exception {
     Objects.requireNonNull(host, "host");
     Objects.requireNonNull(request, "request");
+    if (FORWARD_BLOCKING) {
+      try {
+        return executeBlocking(host, port, request);
+      } catch (Exception e) {
+        // Blocking fast path failed (stale socket, parse issue): fall through to
+        // the robust Netty path, which reconnects via the pool. The request
+        // ByteBuf is untouched (absolute reads), so it is safe to reuse here.
+        LOG.log(Level.FINE, "blocking forward fell back to netty: {0}", e.getMessage());
+      }
+    }
     if (MAX_RETRIES <= 0) {
       return executeOnce(host, port, request);
     }
@@ -334,16 +608,23 @@ public final class XdnHttpForwarderClient implements Closeable {
 
     try {
       FullHttpResponse response = responseFuture.get();
-      if (reqNum % LOG_SAMPLE_INTERVAL == 0) {
+      if (FWD_TRACE || reqNum % LOG_SAMPLE_INTERVAL == 0) {
         long tEnd = System.nanoTime();
         double totalMs = (tEnd - t0) / 1_000_000.0;
         double acqMs = (ts[0] - t0) / 1_000_000.0;
         double writeMs = (ts[1] - ts[0]) / 1_000_000.0;
         double respMs = (tEnd - ts[1]) / 1_000_000.0;
-        LOG.info(
-            String.format(
-                "HTTP fwd: total=%.2fms acq=%.2fms write=%.2fms resp=%.2fms",
-                totalMs, acqMs, writeMs, respMs));
+        if (FWD_TRACE) {
+          fwdTrace(
+              String.format(
+                  "FWD_NETTY total=%.3f acq=%.3f write=%.3f resp=%.3f%n",
+                  totalMs, acqMs, writeMs, respMs));
+        } else {
+          LOG.info(
+              String.format(
+                  "HTTP fwd: total=%.2fms acq=%.2fms write=%.2fms resp=%.2fms",
+                  totalMs, acqMs, writeMs, respMs));
+        }
       }
       return response;
     } catch (ExecutionException e) {
