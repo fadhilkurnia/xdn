@@ -126,9 +126,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // stragglers. At low load this removes the ~CAPTURE_ACCUMULATION_MIN_US of
     // dead wait from captureWait (the window has nothing to amortize when a
     // single request is in flight). Under real backlog the window still runs, so
-    // batching/throughput under load is unchanged. Off by default.
+    // batching/throughput under load is unchanged — this is strictly dominant, so
+    // it is ON by default (a latency win with no throughput cost). Set
+    // -DPB_CAPTURE_SKIP_IDLE_ACCUM=false to restore the always-wait behavior.
     private static final boolean SKIP_IDLE_ACCUM =
-        Boolean.getBoolean("PB_CAPTURE_SKIP_IDLE_ACCUM");
+        Boolean.parseBoolean(System.getProperty("PB_CAPTURE_SKIP_IDLE_ACCUM", "true"));
 
     // Debug flag: skip captureStateDiff + Paxos propose in the capture thread.
     // When enabled, callbacks fire immediately after workers finish execution,

@@ -139,6 +139,13 @@ public class XdnGigapaxosApp
   // with per-request latency breakdown. Enable via -DXDN_TIMING_HEADERS=true.
   public static final boolean TIMING_HEADERS_ENABLED = Boolean.getBoolean("XDN_TIMING_HEADERS");
 
+  // XDN-layer request headers stripped from the outbound request so the
+  // containerized service never sees them (parity with copyHttpRequest, which
+  // the Netty path uses). The blocking forward path skips these during
+  // serialization instead of copying-then-removing.
+  private static final java.util.List<String> HEADERS_TO_STRIP =
+      java.util.List.of(XdnHttpRequest.X_CLIENT_LOCATION_HEADER);
+
   // Maximum number of requests forwarded to the container in parallel within a single
   // batch execution. Limits tail-latency amplification when the backend serializes writes
   // (e.g., SQLite WAL). Requests beyond this limit are processed in sequential chunks.
@@ -3069,16 +3076,31 @@ public class XdnGigapaxosApp
           });
     }
 
-    FullHttpRequest forwardedHttpRequest = copyHttpRequest(xdnRequest);
-    long endRequestCreationTime = System.nanoTime();
+    long endRequestCreationTime = startTime;
 
     long endRequestResponseTime;
     long endConversionTime;
     long endResponseStoreTime;
     try {
-      // forward request to the underlying containerized service
-      FullHttpResponse httpResponse =
-          httpForwarderClient.execute("127.0.0.1", targetPort, forwardedHttpRequest);
+      // Forward to the containerized service. In latency mode (default) the
+      // blocking fast path serializes directly from the parsed request + body,
+      // avoiding the copyHttpRequest deep-copy; the Netty pool path (throughput
+      // mode) needs the assembled FullHttpRequest.
+      FullHttpResponse httpResponse;
+      if (XdnHttpForwarderClient.isBlocking()) {
+        endRequestCreationTime = System.nanoTime();
+        httpResponse =
+            httpForwarderClient.executeBlocking(
+                "127.0.0.1",
+                targetPort,
+                xdnRequest.getHttpRequest(),
+                xdnRequest.getHttpRequestContent().content(),
+                HEADERS_TO_STRIP);
+      } else {
+        FullHttpRequest forwardedHttpRequest = copyHttpRequest(xdnRequest);
+        endRequestCreationTime = System.nanoTime();
+        httpResponse = httpForwarderClient.execute("127.0.0.1", targetPort, forwardedHttpRequest);
+      }
       endRequestResponseTime = System.nanoTime();
 
       // store the response

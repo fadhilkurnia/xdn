@@ -26,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +88,17 @@ public final class XdnHttpForwarderClient implements Closeable {
   private static final boolean FORCE_KEEPALIVE =
       Boolean.parseBoolean(System.getProperty("HTTP_FORCE_KEEPALIVE", "false"));
 
+  // ── Latency vs throughput mode ─────────────────────────────────────────────
+  //
+  // XDN defaults to LATENCY-optimal behavior; features that trade per-request
+  // latency for higher throughput are opt-in behind -DXDN_THROUGHPUT_MODE=true.
+  // For the forwarder this selects the Netty connection pool (pipelining, many
+  // in-flight per connection) over the blocking pinned-socket path. Other
+  // throughput features gated by the same switch live in their own classes
+  // (e.g. the PB capture-accumulation window, the HTTP request batcher).
+  // Individual -D flags always override the mode-derived default.
+  private static final boolean THROUGHPUT_MODE = Boolean.getBoolean("XDN_THROUGHPUT_MODE");
+
   // ── Blocking keep-alive fast path (kills the worker<->event-loop handoff) ──
   //
   // The default Netty path makes the calling (PB worker) thread submit to the
@@ -97,13 +109,24 @@ public final class XdnHttpForwarderClient implements Closeable {
   // container forward: measured ~2ms of the ~2.8ms exec stage is this plumbing,
   // not the container (which answers a 4KB PUT in <1ms directly).
   //
-  // With -DPB_FORWARD_BLOCKING=true the single-request forward does the whole
-  // HTTP/1.1 exchange on the CALLING thread over a per-thread pinned keep-alive
-  // socket: no pool acquire, no event-loop dispatch, no cross-thread wakeup.
-  // Any I/O or parse error refreshes the pinned socket and rethrows so execute()
-  // transparently falls back to the robust Netty path. Only single requests take
-  // this path; batches keep the pipelined Netty path.
-  private static final boolean FORWARD_BLOCKING = Boolean.getBoolean("PB_FORWARD_BLOCKING");
+  // The single-request forward does the whole HTTP/1.1 exchange on the CALLING
+  // thread over a per-thread pinned keep-alive socket: no pool acquire, no
+  // event-loop dispatch, no cross-thread wakeup. Any I/O or parse error refreshes
+  // the pinned socket and falls back to the robust Netty path. Only single
+  // requests take this path; batches keep the pipelined Netty path.
+  //
+  // This is a LATENCY optimization and the DEFAULT. The Netty connection pool is
+  // a THROUGHPUT feature (pipelining, many in-flight per connection) that costs
+  // per-request latency, so it is opt-in via XDN_THROUGHPUT_MODE. -DPB_FORWARD_BLOCKING
+  // explicitly overrides either way. See XDN_THROUGHPUT_MODE below.
+  private static final boolean FORWARD_BLOCKING =
+      Boolean.parseBoolean(
+          System.getProperty("PB_FORWARD_BLOCKING", String.valueOf(!THROUGHPUT_MODE)));
+
+  /** True when single-request forwards use the blocking pinned-socket fast path. */
+  public static boolean isBlocking() {
+    return FORWARD_BLOCKING;
+  }
 
   // Per-request forward-timing samples (Netty vs blocking) appended here when
   // -DXDN_TIMING_HEADERS=true, so the two paths can be compared directly.
@@ -123,11 +146,33 @@ public final class XdnHttpForwarderClient implements Closeable {
   }
 
   /**
-   * Blocking single-request forward on the calling thread over a per-thread pinned keep-alive
-   * socket. Throws on any I/O or parse failure (after discarding the pinned socket), letting the
-   * caller fall back to the Netty path.
+   * Blocking single-request forward on the calling (worker) thread over a per-thread pinned
+   * keep-alive socket, serialized directly from the parsed request metadata and body — no
+   * pre-copied FullHttpRequest, no pool acquire, no event-loop hop. {@code stripHeaders} names
+   * request headers the container must not see (XDN-layer signals like X-Client-Location). On any
+   * I/O or parse failure it discards the pinned socket and falls back to the robust Netty pool
+   * path (assembling a FullHttpRequest — the only place the body is copied — only then).
    */
-  private FullHttpResponse executeBlocking(String host, int port, FullHttpRequest request)
+  public FullHttpResponse executeBlocking(
+      String host, int port, HttpRequest meta, ByteBuf body, Collection<String> stripHeaders)
+      throws Exception {
+    try {
+      return blockingOverPinned(
+          host, port, meta.method(), meta.uri(), meta.headers(), body, stripHeaders);
+    } catch (Exception e) {
+      LOG.log(Level.FINE, "blocking forward fell back to netty: {0}", e.getMessage());
+      return execute(host, port, buildFullRequest(meta, body, stripHeaders));
+    }
+  }
+
+  private FullHttpResponse blockingOverPinned(
+      String host,
+      int port,
+      HttpMethod method,
+      String uri,
+      HttpHeaders headers,
+      ByteBuf body,
+      Collection<String> stripHeaders)
       throws Exception {
     long t0 = System.nanoTime();
     Origin origin = new Origin(host, port);
@@ -138,7 +183,8 @@ public final class XdnHttpForwarderClient implements Closeable {
         conn = new PinnedConn(openPinned(host, port));
         map.put(origin, conn);
       }
-      FullHttpResponse resp = blockingExchange(conn, host, port, request);
+      FullHttpResponse resp =
+          serializeAndRead(conn, host, port, method, uri, headers, body, stripHeaders);
       if (FWD_TRACE) {
         fwdTrace(String.format("FWD_BLOCK total=%.3f%n", (System.nanoTime() - t0) / 1e6));
       }
@@ -169,25 +215,34 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
-  /** Serialize {@code request} to HTTP/1.1, write it, and parse one response. */
-  private FullHttpResponse blockingExchange(
-      PinnedConn conn, String host, int port, FullHttpRequest request) throws Exception {
+  /**
+   * Serialize the request to HTTP/1.1 (skipping {@code stripHeaders} plus the hop-by-hop headers we
+   * set ourselves), write it over the pinned socket, and parse one response. The body is written
+   * straight from the ByteBuf's backing array when it is heap-backed, avoiding an intermediate copy.
+   */
+  private FullHttpResponse serializeAndRead(
+      PinnedConn conn,
+      String host,
+      int port,
+      HttpMethod method,
+      String uri,
+      HttpHeaders headers,
+      ByteBuf body,
+      Collection<String> stripHeaders)
+      throws Exception {
     trySetQuickAck(conn.ch);
-    ByteBuf content = request.content();
-    int bodyLen = content != null ? content.readableBytes() : 0;
+    int bodyLen = body != null ? body.readableBytes() : 0;
 
     StringBuilder head = new StringBuilder(256);
-    head.append(request.method().name())
-        .append(' ')
-        .append(request.uri())
-        .append(" HTTP/1.1\r\n");
+    head.append(method.name()).append(' ').append(uri).append(" HTTP/1.1\r\n");
     boolean hasHost = false;
-    for (Map.Entry<String, String> h : request.headers()) {
+    for (Map.Entry<String, String> h : headers) {
       String name = h.getKey();
       // Connection/Content-Length/Transfer-Encoding are set by us below.
       if (name.equalsIgnoreCase(HttpHeaderNames.CONNECTION.toString())
           || name.equalsIgnoreCase(HttpHeaderNames.CONTENT_LENGTH.toString())
-          || name.equalsIgnoreCase(HttpHeaderNames.TRANSFER_ENCODING.toString())) {
+          || name.equalsIgnoreCase(HttpHeaderNames.TRANSFER_ENCODING.toString())
+          || containsIgnoreCase(stripHeaders, name)) {
         continue;
       }
       if (name.equalsIgnoreCase(HttpHeaderNames.HOST.toString())) {
@@ -201,16 +256,52 @@ public final class XdnHttpForwarderClient implements Closeable {
     head.append("Connection: keep-alive\r\n");
     head.append("Content-Length: ").append(bodyLen).append("\r\n\r\n");
 
-    byte[] headBytes = head.toString().getBytes(StandardCharsets.ISO_8859_1);
-    conn.out.write(headBytes);
+    conn.out.write(head.toString().getBytes(StandardCharsets.ISO_8859_1));
     if (bodyLen > 0) {
-      byte[] body = new byte[bodyLen];
-      content.getBytes(content.readerIndex(), body); // absolute read: readerIndex unchanged
-      conn.out.write(body);
+      if (body.hasArray()) {
+        // Zero-copy: write straight from the ByteBuf's backing array.
+        conn.out.write(body.array(), body.arrayOffset() + body.readerIndex(), bodyLen);
+      } else {
+        byte[] tmp = new byte[bodyLen];
+        body.getBytes(body.readerIndex(), tmp); // absolute read: readerIndex unchanged
+        conn.out.write(tmp);
+      }
     }
     conn.out.flush();
 
     return readResponse(conn.in);
+  }
+
+  private static boolean containsIgnoreCase(Collection<String> names, String name) {
+    if (names == null || names.isEmpty()) {
+      return false;
+    }
+    for (String n : names) {
+      if (n.equalsIgnoreCase(name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Assemble a FullHttpRequest (the one place the body is deep-copied) for the Netty fallback. */
+  private static FullHttpRequest buildFullRequest(
+      HttpRequest meta, ByteBuf body, Collection<String> stripHeaders) {
+    ByteBuf copied = (body != null && body.isReadable()) ? body.copy() : Unpooled.EMPTY_BUFFER;
+    DefaultFullHttpRequest full =
+        new DefaultFullHttpRequest(meta.protocolVersion(), meta.method(), meta.uri(), copied);
+    full.headers().set(meta.headers());
+    if (stripHeaders != null) {
+      for (String s : stripHeaders) {
+        full.headers().remove(s);
+      }
+    }
+    if (copied != Unpooled.EMPTY_BUFFER) {
+      HttpUtil.setContentLength(full, copied.readableBytes());
+    } else {
+      full.headers().remove(HttpHeaderNames.CONTENT_LENGTH);
+    }
+    return full;
   }
 
   private static FullHttpResponse readResponse(InputStream in) throws IOException {
@@ -344,16 +435,6 @@ public final class XdnHttpForwarderClient implements Closeable {
   public FullHttpResponse execute(String host, int port, FullHttpRequest request) throws Exception {
     Objects.requireNonNull(host, "host");
     Objects.requireNonNull(request, "request");
-    if (FORWARD_BLOCKING) {
-      try {
-        return executeBlocking(host, port, request);
-      } catch (Exception e) {
-        // Blocking fast path failed (stale socket, parse issue): fall through to
-        // the robust Netty path, which reconnects via the pool. The request
-        // ByteBuf is untouched (absolute reads), so it is safe to reuse here.
-        LOG.log(Level.FINE, "blocking forward fell back to netty: {0}", e.getMessage());
-      }
-    }
     if (MAX_RETRIES <= 0) {
       return executeOnce(host, port, request);
     }
