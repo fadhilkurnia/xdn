@@ -66,7 +66,8 @@ public abstract class AbstractDemandProfile {
 
 	public static enum Keys {
 		SERVICE_NAME,
-		PREFERRED_COORDINATOR
+		PREFERRED_COORDINATOR,
+		REPLICATION_MODE
 	};
 
 	protected final String name;

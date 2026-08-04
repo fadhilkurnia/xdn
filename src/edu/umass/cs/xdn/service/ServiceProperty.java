@@ -47,6 +47,15 @@ public class ServiceProperty {
    */
   private Map<String, Integer> ordinalMap;
 
+  /**
+   * Optional replication-mode override: "active" (replicate the request, every replica executes) or
+   * "primary-backup" (execute once, replicate the statediff). Null means infer from determinism and
+   * consistency as before. Mutable so a dynamic protocol switch can flip it between placement
+   * epochs (it rides the placement metadata into the next epoch and then round-trips through the
+   * epoch final state like the ordinal map).
+   */
+  private String replicationMode;
+
   private ServiceProperty(
       String serviceName,
       boolean isDeterministic,
@@ -276,6 +285,12 @@ public class ServiceProperty {
             deploymentMode,
             peerPort,
             ordinalMap);
+
+    // parsing the optional replication-mode override ("active" | "primary-backup"),
+    // carried across epochs like the ordinal map
+    if (json.has("replication") && !json.isNull("replication")) {
+      prop.setReplicationMode(json.getString("replication"));
+    }
 
     // automatically infer is-stateful of component via the state directory
     if (stateDirectory != null && stateDirectory.split(":").length == 2) {
@@ -730,6 +745,23 @@ public class ServiceProperty {
     if (this.maxReplicas != null) {
       target.put("max_replicas", this.maxReplicas.intValue());
     }
+    if (this.replicationMode != null) {
+      target.put("replication", this.replicationMode);
+    }
+  }
+
+  public String getReplicationMode() {
+    return this.replicationMode;
+  }
+
+  public void setReplicationMode(String replicationMode) {
+    if (replicationMode != null
+        && !replicationMode.equals("active")
+        && !replicationMode.equals("primary-backup")) {
+      throw new IllegalStateException(
+          "replication must be 'active' or 'primary-backup' (got " + replicationMode + ")");
+    }
+    this.replicationMode = replicationMode;
   }
 
   /**
