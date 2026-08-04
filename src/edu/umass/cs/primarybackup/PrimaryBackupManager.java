@@ -120,6 +120,16 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private static final long CAPTURE_ACCUMULATION_MAX_US =
         Long.getLong("PB_CAPTURE_ACCUMULATION_MAX_US", 5_000); // 5ms default
 
+    // When true, the capture thread skips the timed accumulation window whenever
+    // no backlog is queued (low load): it drains what is already there and, only
+    // if that reveals more than the first completion, waits the window for
+    // stragglers. At low load this removes the ~CAPTURE_ACCUMULATION_MIN_US of
+    // dead wait from captureWait (the window has nothing to amortize when a
+    // single request is in flight). Under real backlog the window still runs, so
+    // batching/throughput under load is unchanged. Off by default.
+    private static final boolean SKIP_IDLE_ACCUM =
+        Boolean.getBoolean("PB_CAPTURE_SKIP_IDLE_ACCUM");
+
     // Debug flag: skip captureStateDiff + Paxos propose in the capture thread.
     // When enabled, callbacks fire immediately after workers finish execution,
     // isolating the PBM worker pipeline from the Paxos consensus overhead.
@@ -643,22 +653,42 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 drained = new ArrayList<>();
                 drained.add(first);
 
-                // Adaptive accumulation window: wait up to currentAccumulationUs
-                // for more completions to batch into a single captureStateDiff + propose.
-                if (currentAccumulationUs > 0) {
-                    long deadlineNs = System.nanoTime()
-                            + currentAccumulationUs * 1_000L;
-                    CompletedBatch next;
-                    while ((next = doneQueue.poll(
-                            Math.max(0, deadlineNs - System.nanoTime()),
-                            TimeUnit.NANOSECONDS)) != null) {
-                        drained.add(next);
+                if (SKIP_IDLE_ACCUM) {
+                    // Grab anything already queued without blocking. At low load
+                    // this is empty and we proceed straight to capture; only when
+                    // it reveals a backlog do we spend the timed window waiting
+                    // for stragglers (nothing to amortize otherwise).
+                    doneQueue.drainTo(drained);
+                    if (currentAccumulationUs > 0 && drained.size() > 1) {
+                        long deadlineNs = System.nanoTime()
+                                + currentAccumulationUs * 1_000L;
+                        CompletedBatch next;
+                        while ((next = doneQueue.poll(
+                                Math.max(0, deadlineNs - System.nanoTime()),
+                                TimeUnit.NANOSECONDS)) != null) {
+                            drained.add(next);
+                        }
+                        // Catch any that landed during the wait.
+                        doneQueue.drainTo(drained);
                     }
-                }
+                } else {
+                    // Adaptive accumulation window: wait up to currentAccumulationUs
+                    // for more completions to batch into a single captureStateDiff + propose.
+                    if (currentAccumulationUs > 0) {
+                        long deadlineNs = System.nanoTime()
+                                + currentAccumulationUs * 1_000L;
+                        CompletedBatch next;
+                        while ((next = doneQueue.poll(
+                                Math.max(0, deadlineNs - System.nanoTime()),
+                                TimeUnit.NANOSECONDS)) != null) {
+                            drained.add(next);
+                        }
+                    }
 
-                // Non-blocking drain of any additional completions that
-                // arrived while we were processing the previous cycle.
-                doneQueue.drainTo(drained);
+                    // Non-blocking drain of any additional completions that
+                    // arrived while we were processing the previous cycle.
+                    doneQueue.drainTo(drained);
+                }
 
                 // Adapt accumulation window based on load pressure.
                 // If the queue still has items after draining, we're under
