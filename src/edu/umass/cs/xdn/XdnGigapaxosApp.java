@@ -146,6 +146,17 @@ public class XdnGigapaxosApp
   private static final java.util.List<String> HEADERS_TO_STRIP =
       java.util.List.of(XdnHttpRequest.X_CLIENT_LOCATION_HEADER);
 
+  // Wall-clock timing of the AR->PB switch phases. Enable via -DXDN_SWITCH_TIMING=true.
+  // Each call prints "SWTIMING <epoch-ms> <event>" to stdout; grep across all node
+  // logs and sort by timestamp (NTP-synced clocks) to break down the switch gap.
+  public static final boolean SW_TIMING = Boolean.getBoolean("XDN_SWITCH_TIMING");
+
+  public static void swTiming(String event) {
+    if (SW_TIMING) {
+      System.out.printf("SWTIMING %d %s%n", System.currentTimeMillis(), event);
+    }
+  }
+
   // Maximum number of requests forwarded to the container in parallel within a single
   // batch execution. Limits tail-latency amplification when the backend serializes writes
   // (e.g., SQLite WAL). Requests beyond this limit are processed in sequential chunks.
@@ -734,6 +745,7 @@ public class XdnGigapaxosApp
    *     prefix.
    */
   private boolean createServiceInstance(String serviceName, String initialState) {
+    swTiming("ar-create-instance " + serviceName);
     // The PBM prefixes its create/restore calls, so the prefix (not the service's
     // determinism flag) is the authoritative signal that this instance is
     // primary-backup-managed and needs the statediff recorder. A deterministic service
@@ -1009,8 +1021,10 @@ public class XdnGigapaxosApp
     // must use the recorder's preserve-aware initialization: the raw wipe below would
     // destroy state that a reconfiguration just restored into the mount dir.
     if (needsStateDiffRecorder(service.property)) {
+      swTiming("ar-create-preinit-start " + serviceName);
       stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
       stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+      swTiming("ar-create-preinit-done " + serviceName);
     } else {
       Shell.runCommand("rm -rf " + stateDirMountSource);
       Shell.runCommand("mkdir -p " + stateDirMountSource);
@@ -1418,7 +1432,9 @@ public class XdnGigapaxosApp
     String stateDirMountSource = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
     String stateDirMountTarget = property.getStatefulComponentDirectory();
     if (needsStateDiffRecorder(property)) {
+      swTiming("ar-revive-preinit-start " + serviceName);
       stateDiffRecorder.preInitialization(serviceName, placementEpoch);
+      swTiming("ar-revive-preinit-done " + serviceName);
     }
 
     // Validates the previous epoch final state, then put it into the to-be-mounted dir.
@@ -1645,6 +1661,7 @@ public class XdnGigapaxosApp
   private boolean stopContainerizedServiceInstance(String serviceName, int placementEpoch) {
     assert serviceName != null && !serviceName.isEmpty();
     assert placementEpoch >= 0;
+    swTiming("ar-stop-instance " + serviceName + " e" + placementEpoch);
 
     System.out.printf(
         ">> %s:XdnGigapaxosApp stopServiceInstance name=%s epoch=%d\n",
@@ -2663,6 +2680,7 @@ public class XdnGigapaxosApp
 
   @Override
   public String getFinalState(String name, int epoch) {
+    swTiming("ar-finalstate-start " + name + " e" + epoch);
     // TODO: validate whether this works with PrimaryBackup or not
     System.out.println(
         ">>> "
@@ -2793,6 +2811,7 @@ public class XdnGigapaxosApp
       String mountDirSource,
       String mountDirTarget,
       Map<String, String> env) {
+    swTiming("ar-container-start " + containerName);
 
     String publishPortSubCmd = "";
     if (publishedPort != null && allocatedHttpPort != null) {

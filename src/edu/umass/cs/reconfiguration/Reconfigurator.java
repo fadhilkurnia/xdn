@@ -1217,6 +1217,11 @@ public class Reconfigurator<NodeIDType> implements
             Callback<Request, ReconfiguratorRequest> callback) {
         // get service metadata based on the provided name
         String serviceName = request.getServiceName();
+        if (Boolean.getBoolean("XDN_SWITCH_TIMING")) {
+            System.out.printf(
+                    "SWTIMING %d rc-placement-request %s%n",
+                    System.currentTimeMillis(), serviceName);
+        }
         ReconfigurationRecord<NodeIDType> record = this.DB.getReconfigurationRecord(serviceName);
         if (record == null) {
             request.setFailed(ClientReconfigurationPacket.ResponseCodes.NONEXISTENT_NAME_ERROR);

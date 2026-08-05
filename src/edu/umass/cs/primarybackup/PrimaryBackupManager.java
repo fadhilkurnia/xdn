@@ -1792,11 +1792,55 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         return true;
     }
 
+    // Poll/retry cadence for becoming the paxos coordinator during a primary
+    // election. The old code slept a fixed 3s between attempts, so even though
+    // winning the ballot takes ~1 RTT the election window was padded to ~15s
+    // (several 3s naps). We instead poll frequently -- so we proceed the instant
+    // we win -- while re-issuing the ballot preemption only occasionally, so we
+    // do not cause a ballot storm.
+    private static final long COORD_POLL_MS =
+        Long.getLong("PB_COORD_POLL_MS", 150);
+    private static final long COORD_RETRY_MS =
+        Long.getLong("PB_COORD_RETRY_MS", 2000);
+    private static final long COORD_WAIT_BUDGET_MS =
+        Long.getLong("PB_COORD_WAIT_BUDGET_MS", 30_000);
+
+    /**
+     * Block until this node is the paxos coordinator for {@code groupName}. Polls
+     * every COORD_POLL_MS and re-issues tryToBePaxosCoordinator every
+     * COORD_RETRY_MS, up to COORD_WAIT_BUDGET_MS. Null coordinator (instance not
+     * ready yet) is treated as "not us" and keeps polling.
+     */
+    private void waitToBecomeCoordinator(String groupName, String context) {
+        long start = System.currentTimeMillis();
+        long lastTry = -COORD_RETRY_MS; // force a try on the first iteration
+        while (!this.myNodeID.equals(this.paxosManager.getPaxosCoordinator(groupName))) {
+            long now = System.currentTimeMillis();
+            if (now - start > COORD_WAIT_BUDGET_MS) {
+                throw new RuntimeException(String.format(
+                        "%s:%s - unable to become paxos coordinator for %s (%s) after %dms",
+                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
+                        groupName, context, now - start));
+            }
+            if (now - lastTry >= COORD_RETRY_MS) {
+                this.paxosManager.tryToBePaxosCoordinator(groupName);
+                lastTry = now;
+            }
+            try {
+                Thread.sleep(COORD_POLL_MS);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
     private boolean initializePrimaryEpoch(String groupName, Set<NodeIDType> nodes,
                                            String placementMetadata, int placementEpoch) {
         assert groupName != null && !groupName.isEmpty();
         assert placementMetadata != null && !placementMetadata.isEmpty();
 
+        final long epochInitStartMs = System.currentTimeMillis();
+        edu.umass.cs.xdn.XdnGigapaxosApp.swTiming("pb-epoch-init " + groupName);
         logger.log(Level.INFO,
                 String.format("%s:%s:initializePrimaryEpoch - name=%s placement=%s epoch=%d",
                         this.myNodeID, PrimaryBackupManager.class.getSimpleName(),
@@ -1824,27 +1868,10 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
 
             // try to be Paxos' coordinator since we try to co-locate
             // the Primary and Paxos' coordinator.
-            int maxAttempt = 10;
-            int currAttempt = 0;
-            int attemptWaitTimeMs = 3000;
-            while (!this.paxosManager.getPaxosCoordinator(groupName).equals(this.myNodeID)) {
-                if (++currAttempt > maxAttempt) {
-                    String errorMsg = String.format("%s:%s:initializePrimaryEpoch - " +
-                                    "unable to become paxos' coordinator for " +
-                                    "name=%s:%d after %d trials",
-                            this.myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                            groupName, placementEpoch, currAttempt);
-                    logger.log(Level.WARNING, errorMsg);
-                    throw new RuntimeException(errorMsg);
-                }
-
-                this.paxosManager.tryToBePaxosCoordinator(groupName);
-                try {
-                    Thread.sleep(attemptWaitTimeMs);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-            }
+            long coordStartMs = System.currentTimeMillis();
+            waitToBecomeCoordinator(groupName, "initializePrimaryEpoch:" + placementEpoch);
+            System.out.printf(">> %s became paxos coordinator for %s in %dms%n",
+                    myNodeID, groupName, System.currentTimeMillis() - coordStartMs);
 
             // FIXME: we might need to wait for other replicas (majority) to active first,
             //  before we can propose something.
@@ -1877,8 +1904,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     groupName,
                     startPacket,
                     (proposedPacket, isHandled) -> {
-                        System.out.printf("\n\n>> %s I'M THE PRIMARY NOW FOR %s!!\n\n",
-                                myNodeID, groupName);
+                        edu.umass.cs.xdn.XdnGigapaxosApp.swTiming("pb-primary " + groupName);
+                        System.out.printf(
+                                "\n\n>> %s I'M THE PRIMARY NOW FOR %s (epoch-init->primary %dms)!!\n\n",
+                                myNodeID, groupName,
+                                System.currentTimeMillis() - epochInitStartMs);
                         currentRole.put(groupName, Role.PRIMARY);
                         currentPrimary.put(groupName, this.myNodeID);
                         currentPrimaryEpoch.put(groupName, zero);
@@ -1908,18 +1938,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         if (ENABLE_NON_DETERMINISTIC_INIT) {
                             xdnApp.nonDeterministicInitialization(groupName, ipAddresses, sshKey);
 
-                            while (!this.paxosManager.getPaxosCoordinator(groupName).equals(this.myNodeID)) {
-                                logger.log(Level.INFO, String.format(
-                                        "%s:%s - PRIMARY re-electing itself due to coordinator issues %s:%d",
-                                        myNodeID, PrimaryBackupManager.class.getSimpleName(),
-                                        groupName, placementEpoch));
-                                this.paxosManager.tryToBePaxosCoordinator(groupName);
-                                try {
-                                    Thread.sleep(3000);
-                                } catch (InterruptedException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            }
+                            waitToBecomeCoordinator(
+                                    groupName, "post-primary-reelect:" + placementEpoch);
                         }
 
                         // TODO: Move fuselog-apply startup to executeStartEpochPacket

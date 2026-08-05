@@ -230,6 +230,7 @@ public final class XdnHttpForwarderClient implements Closeable {
       ByteBuf body,
       Collection<String> stripHeaders)
       throws Exception {
+    long t0 = System.nanoTime();
     trySetQuickAck(conn.ch);
     int bodyLen = body != null ? body.readableBytes() : 0;
 
@@ -268,8 +269,22 @@ public final class XdnHttpForwarderClient implements Closeable {
       }
     }
     conn.out.flush();
+    long tFlush = System.nanoTime();
 
-    return readResponse(conn.in);
+    long[] tFirstByte = new long[1];
+    FullHttpResponse resp = readResponse(conn.in, tFirstByte);
+    if (FWD_TRACE) {
+      long tDone = System.nanoTime();
+      // ser = serialize + write; wait = flush -> first response byte (container
+      // processing); parse = read + parse the response (XDN-side).
+      fwdTrace(
+          String.format(
+              "FWD_SPLIT ser=%.3f wait=%.3f parse=%.3f%n",
+              (tFlush - t0) / 1e6,
+              (tFirstByte[0] - tFlush) / 1e6,
+              (tDone - tFirstByte[0]) / 1e6));
+    }
+    return resp;
   }
 
   private static boolean containsIgnoreCase(Collection<String> names, String name) {
@@ -304,8 +319,12 @@ public final class XdnHttpForwarderClient implements Closeable {
     return full;
   }
 
-  private static FullHttpResponse readResponse(InputStream in) throws IOException {
+  private static FullHttpResponse readResponse(InputStream in, long[] tFirstByte)
+      throws IOException {
     String statusLine = readLine(in);
+    if (tFirstByte != null) {
+      tFirstByte[0] = System.nanoTime();
+    }
     if (statusLine == null || statusLine.isEmpty()) {
       throw new IOException("empty response (stale keep-alive socket)");
     }
