@@ -1258,14 +1258,21 @@ public class Reconfigurator<NodeIDType> implements
             newActives.add(nodeIdDeserialized.valueOf(nodeId));
         }
 
-        // parse the preferred coordinator as metadata within initial state
-        // checkout XdnGeoDemandProfiler for the similar placement metadata
+        // parse the preferred coordinator and/or replication mode as metadata within
+        // initial state; checkout XdnGeoDemandProfiler for the similar placement metadata
         String placementMetadata = null;
-        if (preferredCoordinatorId != null) {
+        String replicationMode = request.getReplicationMode();
+        if (preferredCoordinatorId != null || replicationMode != null) {
             JSONObject metadataJson = new JSONObject();
             try {
-                metadataJson.put(AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString(),
-                        preferredCoordinatorId);
+                if (preferredCoordinatorId != null) {
+                    metadataJson.put(AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString(),
+                            preferredCoordinatorId);
+                }
+                if (replicationMode != null) {
+                    metadataJson.put(AbstractDemandProfile.Keys.REPLICATION_MODE.toString(),
+                            replicationMode);
+                }
             } catch (JSONException e) {
                 throw new RuntimeException(e);
             }

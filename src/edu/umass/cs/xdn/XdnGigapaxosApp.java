@@ -577,8 +577,11 @@ public class XdnGigapaxosApp
     }
 
     // Case-6: handle create service for non-deterministic initialization in primary-backup.
+    // Keep the prefix intact: createServiceInstance() strips it itself and uses it as the
+    // signal that this instance is primary-backup-managed (recorder setup + sticky
+    // replication mode). Stripping here made a switched deterministic service look like a
+    // plain active-replication create, whose raw mount wipe destroyed the restored state.
     if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX)) {
-      state = state.substring(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX.length());
       boolean isServiceCreated = createServiceInstance(name, state);
       if (!isServiceCreated) {
         throw new RuntimeException(
@@ -590,7 +593,10 @@ public class XdnGigapaxosApp
     // Case-7: handle start Fuselog in backup (non-deterministic init)
     if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
       System.out.println("Running postInitialization() in backup");
-      int placementEpoch = 0;
+      // Use the instance's actual placement epoch: after a reconfiguration (or a
+      // protocol switch) the backup's recorder lives at e<epoch>, not e0.
+      Integer currentEpoch = this.getEpoch(name);
+      int placementEpoch = currentEpoch != null ? currentEpoch : 0;
 
       return this.stateDiffRecorder.postInitialization(name, placementEpoch);
     }
@@ -721,14 +727,22 @@ public class XdnGigapaxosApp
    *     prefix.
    */
   private boolean createServiceInstance(String serviceName, String initialState) {
+    // The PBM prefixes its create/restore calls, so the prefix (not the service's
+    // determinism flag) is the authoritative signal that this instance is
+    // primary-backup-managed and needs the statediff recorder. A deterministic service
+    // switched onto primary-backup via a replication-mode override arrives here with
+    // deterministic=true but still requires recorder initialization.
+    boolean isPrimaryBackupManaged = false;
     if (initialState.startsWith(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX)) {
       initialState =
           initialState.substring(ServiceProperty.NON_DETERMINISTIC_CREATE_PREFIX.length());
+      isPrimaryBackupManaged = true;
     }
 
     if (initialState.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
       initialState =
           initialState.substring(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX.length());
+      isPrimaryBackupManaged = true;
     }
 
     // validate the initial state
@@ -765,6 +779,11 @@ public class XdnGigapaxosApp
       } catch (JSONException e) {
         throw new RuntimeException(e);
       }
+      if (isPrimaryBackupManaged) {
+        // Record the mode on the property so every downstream recorder guard sees it and
+        // so getFinalState() embeds it, making a protocol switch sticky across epochs.
+        property.setReplicationMode("primary-backup");
+      }
 
       // Cluster reconfiguration is deferred (Component 6): the xdn:final: branch needs to
       // recompute the persistent ordinal map, signal XDN_CLUSTER_PHASE=join for fresh
@@ -779,17 +798,19 @@ public class XdnGigapaxosApp
                 + " — pin placement at launch (Component 6 follow-up)");
       }
 
-      // prepare statediff directory, if required
+      // prepare statediff directory, if required (a PB-managed instance needs the
+      // recorder regardless of determinism -- see isPrimaryBackupManaged above)
+      boolean needsRecorder = needsStateDiffRecorder(property);
       String stateDirMountSource =
           stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
       String stateDirMountTarget = property.getStatefulComponentDirectory();
-      if (!property.isDeterministic()) {
+      if (needsRecorder) {
         stateDiffRecorder.preInitialization(serviceName, newPlacementEpoch);
       }
 
       // Validates the previous epoch final state, then put it into the to-be-mounted dir.
       // First, prepare the mounted dir.
-      if (!property.isDeterministic()) {
+      if (needsRecorder) {
         stateDiffRecorder.removeServiceRecorder(serviceName, newPlacementEpoch);
       }
       String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
@@ -848,6 +869,9 @@ public class XdnGigapaxosApp
         property = ServiceProperty.createFromJsonString(initialState);
       } catch (JSONException e) {
         throw new RuntimeException("Invalid initial state as JSON: " + e);
+      }
+      if (isPrimaryBackupManaged) {
+        property.setReplicationMode("primary-backup");
       }
 
       // Cluster services share a swarm overlay so peers see each other at replica-N;
@@ -974,7 +998,10 @@ public class XdnGigapaxosApp
 
     // TODO: Fix ordering. Must be:
     // preInitialization -> startContainer -> postInitialization
-    if (!service.property.isDeterministic()) {
+    // A PB-managed instance (non-deterministic, or deterministic after a protocol switch)
+    // must use the recorder's preserve-aware initialization: the raw wipe below would
+    // destroy state that a reconfiguration just restored into the mount dir.
+    if (needsStateDiffRecorder(service.property)) {
       stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
       stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
     } else {
@@ -1338,6 +1365,16 @@ public class XdnGigapaxosApp
    * @param placementEpoch
    * @return
    */
+  /**
+   * True when this instance requires the statediff recorder: either the service is
+   * non-deterministic (primary-backup is the only strong-consistency option) or its replication
+   * mode was explicitly set to primary-backup (e.g., a deterministic service switched off active
+   * replication).
+   */
+  private static boolean needsStateDiffRecorder(ServiceProperty property) {
+    return !property.isDeterministic() || "primary-backup".equals(property.getReplicationMode());
+  }
+
   private boolean reviveContainerizedService(
       String serviceName,
       String encodedServiceProperty,
@@ -1363,18 +1400,24 @@ public class XdnGigapaxosApp
     } catch (JSONException e) {
       throw new RuntimeException(e);
     }
+    // This revive path is only ever entered from the PrimaryBackupManager (the
+    // nondeter-prefixed restore), so the instance is primary-backup-managed regardless of
+    // the service's determinism flag -- a deterministic service arrives here after a
+    // replication-mode switch. Recording the mode on the property makes every recorder
+    // guard below correct and makes getFinalState() embed it (sticky across epochs).
+    property.setReplicationMode("primary-backup");
 
     // prepare statediff directory, if required
     String stateDirMountSource = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
     String stateDirMountTarget = property.getStatefulComponentDirectory();
-    if (!property.isDeterministic()) {
+    if (needsStateDiffRecorder(property)) {
       stateDiffRecorder.preInitialization(serviceName, placementEpoch);
     }
 
     // Validates the previous epoch final state, then put it into the to-be-mounted dir.
     // First, prepare the mounted dir.
     // TODO: test with fuse
-    if (!property.isDeterministic()) {
+    if (needsStateDiffRecorder(property)) {
       stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
     }
     String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
@@ -1504,7 +1547,7 @@ public class XdnGigapaxosApp
       System.err.println(
           "WARNING: non-deterministic service can generate different " + "initial state");
     }
-    if (!property.isDeterministic()) {
+    if (needsStateDiffRecorder(property)) {
       stateDiffRecorder.postInitialization(serviceName, placementEpoch);
     }
 
