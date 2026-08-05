@@ -46,3 +46,6 @@ docs/xdn/site/
 services/todo/
 # superseded root-level aws terraform (moved to deployment/aws/ in #56)
 /aws/
+
+# protocol-switch measurement datasets (results, not source)
+eval/datasets/protocol-switch/
