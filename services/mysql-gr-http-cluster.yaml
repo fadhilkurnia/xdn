@@ -1,0 +1,31 @@
+# MySQL Group Replication behind the uniform HTTP KV shim, as an XDN
+# cluster-mode pod: the stateful member runs GR (in MULTI-PRIMARY mode) on
+# the overlay, the entry frontend (services/mysql-http) shares its netns
+# and talks ONLY to the co-located member. All client traffic enters via
+# XDN's HTTP proxy so request boundaries are observable. Multi-primary
+# keeps the dumb-shim contract: every member accepts local writes under
+# certification, so no XDN-side component needs to know who the primary is.
+#
+# Build first:  docker build -t xdn-mysql-cluster:test services/mysql-cluster/
+#               docker build -t xdn-mysql-http:test services/mysql-http/
+# Launch:       xdn cluster launch mysqlkv -f services/mysql-gr-http-cluster.yaml
+mode: cluster
+peer_port: 33061              # GR group-communication port (not 3306)
+num_replicas: 3
+state: mysql:/var/lib/mysql/
+components:
+  - mysql:
+      image: xdn-mysql-cluster:test
+      stateful: true
+      expose: 3306
+      environments:
+        - MYSQL_ROOT_PASSWORD: xdnpass123
+        - XDN_MYSQL_DATABASE: bw
+        - XDN_MYSQL_MULTI_PRIMARY: "1"
+        - XDN_MYSQL_KV_TABLE: "1"
+  - frontend:
+      image: xdn-mysql-http:test
+      port: 8080
+      entry: true
+      environments:
+        - MYSQL_ROOT_PASSWORD: xdnpass123

@@ -1,0 +1,23 @@
+# AntidoteDB (CRDT, causal+) behind the uniform HTTP KV shim, as an XDN
+# cluster-mode pod. Each member is an independent antidote DC; the dumb
+# frontend (services/antidote-http) serves reads and writes on the LOCAL
+# DC only (zero synchronous coordination). The members self-link their DCs
+# from ordinal 0 (xdnselflink.escript in the member entrypoint), after
+# which updates replicate asynchronously over ZeroMQ pub/sub.
+#
+# Build first:  docker build -t xdn-antidote-cluster:test services/antidote-cluster/
+#               docker build -t xdn-antidote-http:test services/antidote-http/
+# Launch:       xdn cluster launch antikv -f services/antidote-http-cluster.yaml
+mode: cluster
+peer_port: 8086               # inter-DC pub/sub port (log reader is 8085)
+num_replicas: 3
+state: antidote:/antidote-data/
+components:
+  - antidote:
+      image: xdn-antidote-cluster:test
+      stateful: true
+      expose: 8087
+  - frontend:
+      image: xdn-antidote-http:test
+      port: 8080
+      entry: true

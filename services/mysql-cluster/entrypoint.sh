@@ -75,6 +75,17 @@ innodb_buffer_pool_size           = 128M
 performance_schema                = ON
 EOF
 
+# Optional multi-primary mode (XDN_MYSQL_MULTI_PRIMARY=1): every member
+# accepts writes under certification-based conflict detection. Used by the
+# dumb-frontend measurement pods, where each shim only ever talks to its
+# co-located member; default stays single-primary (the WordPress pod shape).
+if [ "${XDN_MYSQL_MULTI_PRIMARY:-0}" = "1" ]; then
+  cat >> /etc/mysql/conf.d/zz-xdn-group-replication.cnf <<EOF
+loose-group_replication_single_primary_mode          = OFF
+loose-group_replication_enforce_update_everywhere_checks = ON
+EOF
+fi
+
 echo "[xdn-mysql] ${XDN_CLUSTER_SELF} server_id=${SERVER_ID} phase=${PHASE} seeds=${SEEDS}"
 
 # Hand off to the stock entrypoint to initialize the datadir + root password, in the
@@ -122,12 +133,38 @@ if [ "$state" != "ONLINE" ] && [ "$state" != "RECOVERING" ]; then
     mysql_tcp "SET GLOBAL group_replication_bootstrap_group=ON;
                START GROUP_REPLICATION;
                SET GLOBAL group_replication_bootstrap_group=OFF;"
-    # Create the app database once, on the primary, so it replicates to the joiners.
-    mysql_tcp "CREATE DATABASE IF NOT EXISTS \`${APP_DB}\`;"
+    # Create the app database once, on the bootstrap node, so it replicates
+    # out. The member stays super-read-only until it reaches ONLINE (the
+    # window is longest in multi-primary mode); a premature CREATE dies with
+    # ER 1290 and, under set -e, would kill this entrypoint and restart the
+    # container mid-formation — which also strands the netns-sharing
+    # sidecars in the dead namespace. Retry until writable instead.
+    created=0
+    for _ in $(seq 1 90); do
+      if mysql_tcp "CREATE DATABASE IF NOT EXISTS \`${APP_DB}\`;" 2>/dev/null; then
+        # Optional KV schema for the measurement pods (XDN_MYSQL_KV_TABLE=1).
+        # Schema is the SERVICE's job, created once here in-group: a sidecar
+        # issuing DDL races group configuration — a joiner is briefly
+        # writable before START GROUP_REPLICATION engages super_read_only,
+        # and DDL landing in that window becomes a local GTID that diverges
+        # the member from the group forever (ER "contains transactions not
+        # present in the group").
+        if [ "${XDN_MYSQL_KV_TABLE:-0}" = "1" ]; then
+          mysql_tcp "CREATE TABLE IF NOT EXISTS \`${APP_DB}\`.kv
+                     (k VARCHAR(190) PRIMARY KEY, v BLOB);" 2>/dev/null || continue
+        fi
+        created=1; break
+      fi
+      sleep 2
+    done
+    [ "$created" = 1 ] || \
+      echo "[xdn-mysql] WARNING: app db not created (member never became writable)" >&2
   else
     echo "[xdn-mysql] joining the group (retrying until the seed is reachable)"
+    # 6 min: at larger cluster sizes many joiners race distributed recovery
+    # against the same donors and later ordinals wait through several rounds.
     joined=0
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 120); do
       if mysql_tcp "START GROUP_REPLICATION;" 2>/dev/null; then joined=1; break; fi
       sleep 3
     done

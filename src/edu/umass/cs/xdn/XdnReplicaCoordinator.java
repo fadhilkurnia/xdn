@@ -495,11 +495,41 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return true;
     }
 
-    throw new RuntimeException(
-        "Unknown coordinator for name="
-            + serviceName
-            + " with request type of "
-            + request.getClass().getSimpleName());
+    // Replica-info queries carry their own error channel; report the missing service as 404.
+    if (innerRequest instanceof XdnGetReplicaInfoRequest infoRequest) {
+      infoRequest.setHttpErrorCode(404);
+      infoRequest.setErrorMessage(errorMessage);
+      if (callback != null) {
+        callback.executed(infoRequest, true);
+      }
+      return true;
+    }
+
+    // The service is instantiated locally but its coordinator has not registered yet (a slow
+    // cluster restore is still inside createReplicaGroup). Acking an epoch message here would
+    // let the reconfigurator's retry/abort machinery advance against a half-created service;
+    // throwing makes it retry until registration completes.
+    if (this.xdnGigapaxosApp != null && this.xdnGigapaxosApp.hostsService(serviceName)) {
+      throw new RuntimeException(
+          "Coordinator not yet registered for name="
+              + serviceName
+              + " with request type of "
+              + request.getClass().getSimpleName());
+    }
+
+    // Non-HTTP requests (e.g. an XdnStopRequest delivered by a create/delete handshake for a
+    // name this replica never coordinated — a stale record from before a restart) must be
+    // ACKed, not thrown: an exception here never fires the callback, so the reconfigurator
+    // resends the epoch message forever and the reconfiguration wedges (same failure mode as
+    // the internal phantom groups handled above).
+    logger.log(
+        Level.INFO,
+        "{0} acking {1} for unknown service {2}",
+        new Object[] {this.myNodeID, request.getClass().getSimpleName(), serviceName});
+    if (callback != null) {
+      callback.executed(innerRequest, true);
+    }
+    return true;
   }
 
   private static HttpResponse buildNotFoundResponse(String errorMessage, HttpHeaders headers) {
@@ -614,6 +644,10 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     }
 
     request.setRequestBehaviors(currServiceProperty.getRequestMatchers());
+    if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>
+        && this.xdnGigapaxosApp != null) {
+      request.setBandwidth(this.xdnGigapaxosApp.getBandwidthSnapshot(serviceName));
+    }
     request.setResponse(
         this.myNodeID, protocolName, requestedConsistency, offeredConsistency, roleName);
     callback.executed(request, true);

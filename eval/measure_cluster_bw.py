@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""Phased bandwidth-graph measurement for XDN cluster-mode services.
+
+Runs from the driver machine against a launched cluster service. Samples every
+replica's `bandwidth` section (replica-info endpoint) on a fixed cadence while
+driving phased load (idle -> write -> read), and writes the full edge
+time-series to JSON for offline analysis. The interesting output is the
+per-phase, per-edge byte deltas: protocols leave distinct signatures (Raft's
+leader star, Group Replication's certification broadcast, ...).
+
+Examples (from the driver):
+  python3 eval/measure_cluster_bw.py --service etcd-demo --kind etcd \
+      --ars 10.10.1.1,10.10.1.2,10.10.1.3 --out /tmp/bw-etcd.json
+  python3 eval/measure_cluster_bw.py --service rqlite-demo --kind rqlite ...
+  python3 eval/measure_cluster_bw.py --service mysql-demo --kind mysql \
+      --mysql-host 10.10.1.1 --mysql-port 61234 --mysql-password xdnpass123 ...
+
+Only stdlib is used; MySQL load shells out to the `mysql` client binary.
+"""
+
+import argparse
+import base64
+import json
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+
+
+def http(url, headers=None, data=None, timeout=5):
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status, resp.read().decode()
+
+
+class Sampler(threading.Thread):
+    """Polls every AR's replica-info bandwidth section on a fixed cadence.
+
+    Each AR is addressed as host:frontend_port so co-located ARs (two ARs on
+    one machine, distinct HTTP ports) sample independently; sample rows keep
+    the full "host:port" string as the AR identity.
+    """
+
+    def __init__(self, service, ars, interval_s=2.0):
+        super().__init__(daemon=True)
+        self.service, self.ars = service, ars
+        self.interval = interval_s
+        self.samples = []
+        self.stop_flag = threading.Event()
+
+    def run(self):
+        url_tpl = "http://{ar}/api/v2/services/{svc}/replica/info"
+        while not self.stop_flag.is_set():
+            t = time.time()
+            for ar in self.ars:
+                try:
+                    _, body = http(
+                        url_tpl.format(ar=ar, svc=self.service),
+                        headers={"XDN": self.service},
+                    )
+                    bw = json.loads(body).get("bandwidth")
+                    if bw:
+                        self.samples.append({"t": t, "ar": ar, "edges": bw["edges"]})
+                except Exception as e:
+                    self.samples.append({"t": t, "ar": ar, "error": str(e)})
+            self.stop_flag.wait(self.interval)
+
+
+# ---------------------------------------------------------------- load drivers
+
+
+def drive_httpkv(ars, service, phase, dur):
+    """Uniform driver for services behind the HTTP KV shim (PUT/GET /kv/k
+    via XDN's frontend). This is the canonical vantage point: every request
+    crosses XDN's proxy, so request boundaries (and thus the coordinated vs
+    uncoordinated split) are observable; nothing talks to the backend's
+    native protocol port directly.
+
+    The shims are dumb (co-located member only), so some backends reject
+    writes at some replicas (redis sub-replicas, mongo secondaries,
+    single-primary GR). The write phase therefore probes the ARs in order
+    and sticks with the first frontend whose member accepts writes, which
+    is exactly the discovery a native client of those systems performs.
+    Reads always go to ars[0] (local read at that replica)."""
+
+    def put(ar, n):
+        body = f"value-{n}-".encode().ljust(256, b"x")
+        req = urllib.request.Request(
+            f"http://{ar}/kv/bw-measure-key", data=body, method="PUT",
+            headers={"XDN": service})
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+
+    write_ar = ars[0]
+    if phase == "write":
+        for ar in ars:
+            try:
+                put(ar, 0)
+                write_ar = ar
+                break
+            except Exception:
+                continue
+        print(f"[httpkv] write phase drives {write_ar}", flush=True)
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        try:
+            if phase == "write":
+                put(write_ar, n)
+            else:
+                http(f"http://{ars[0]}/kv/bw-measure-key",
+                     headers={"XDN": service})
+            n += 1
+            time.sleep(0.1)
+        except Exception:
+            time.sleep(0.2)
+    return n
+
+
+def drive_etcd(ars, service, phase, dur):
+    url = f"http://{ars[0]}/v3/kv/" + ("put" if phase == "write" else "range")
+    key = base64.b64encode(b"bw-measure-key").decode()
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        if phase == "write":
+            val = base64.b64encode(f"value-{n}-padding-for-measurement".encode()).decode()
+            payload = json.dumps({"key": key, "value": val}).encode()
+        else:
+            payload = json.dumps({"key": key}).encode()
+        try:
+            http(url, headers={"XDN": service}, data=payload)
+            n += 1
+        except Exception:
+            time.sleep(0.2)
+    return n
+
+
+def drive_rqlite(ars, service, phase, dur):
+    hdrs = {"XDN": service, "Content-Type": "application/json"}
+    base = f"http://{ars[0]}/db/"
+    http(
+        base + "execute",
+        headers=hdrs,
+        data=json.dumps(
+            ["CREATE TABLE IF NOT EXISTS bw (id INTEGER PRIMARY KEY, v TEXT)"]
+        ).encode(),
+    )
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        try:
+            if phase == "write":
+                http(
+                    base + "execute",
+                    headers=hdrs,
+                    data=json.dumps(
+                        [f"INSERT OR REPLACE INTO bw VALUES (1, 'value-{n}-padding')"]
+                    ).encode(),
+                )
+            else:
+                http(
+                    base + "query",
+                    headers=hdrs,
+                    data=json.dumps(["SELECT * FROM bw"]).encode(),
+                )
+            n += 1
+        except Exception:
+            time.sleep(0.2)
+    return n
+
+
+def drive_redis(host, port, phase, dur):
+    def cli(*args):
+        return subprocess.run(
+            ["redis-cli", "-h", host, "-p", str(port), *args],
+            capture_output=True, timeout=10,
+        ).returncode
+
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        if phase == "write":
+            rc = cli("SET", "bw-key", f"value-{n}-padding-for-measurement")
+        else:
+            rc = cli("GET", "bw-key")
+        if rc == 0:
+            n += 1
+        else:
+            time.sleep(0.2)
+    return n
+
+
+def drive_cassandra(host, port, phase, dur):
+    def cql(stmt, timeout=20):
+        return subprocess.run(
+            ["cqlsh", host, str(port), "-e", stmt],
+            capture_output=True, timeout=timeout,
+        ).returncode
+
+    cql(
+        "CREATE KEYSPACE IF NOT EXISTS bw WITH replication ="
+        " {'class':'NetworkTopologyStrategy','dc1':3}"
+    )
+    cql("CREATE TABLE IF NOT EXISTS bw.kv (id int PRIMARY KEY, v text)")
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        if phase == "write":
+            rc = cql(f"CONSISTENCY QUORUM; INSERT INTO bw.kv (id, v) VALUES (1, 'value-{n}')")
+        else:
+            rc = cql("CONSISTENCY QUORUM; SELECT * FROM bw.kv WHERE id = 1")
+        if rc == 0:
+            n += 1
+        else:
+            time.sleep(0.2)
+    return n
+
+
+def _exec_phase_loop(cmd, dur):
+    """Run one in-container timed loop for a whole phase; parse OPS=N."""
+    try:
+        out = subprocess.run(cmd, capture_output=True, timeout=dur + 90, text=True)
+    except subprocess.TimeoutExpired:
+        return 0
+    for line in (out.stdout or "").splitlines():
+        if line.startswith("OPS="):
+            return int(line[4:])
+    print(f"[warn] no OPS= in driver output: {out.stdout[-200:]!r} {out.stderr[-200:]!r}",
+          flush=True)
+    return 0
+
+
+def drive_antidote(container, phase, dur):
+    """Antidote has no CLI protocol client, and the release's nodetool reads
+    the unsubstituted vm.args (wrong node name), so drive load through the
+    xdnlink.escript helper pushed into the container at DC-link time (see
+    services/antidote-cluster/xdnlink.escript). Its rpc dist connection dials
+    the node's own overlay alias, so it appears as a self-edge in the
+    bandwidth profile; analysis must ignore self-edges for antidote."""
+    ms = dur * 1000 - 2000
+    cmd = ["docker", "exec", container, "sh", "-c",
+           f"/antidote/erts-*/bin/escript /tmp/xdnlink.escript load {phase} {ms}"]
+    return _exec_phase_loop(cmd, dur)
+
+
+def drive_mongo(container, phase, dur):
+    """Timed mongosh loop on the primary's container; majority writes,
+    majority reads (served locally — the pull-based oplog is the signal)."""
+    ms = dur * 1000 - 2000
+    if phase == "write":
+        op = (
+            "c.replaceOne({_id: n % 64}, {_id: n % 64, v: 'x'.repeat(256)}, "
+            "{upsert: true, writeConcern: {w: 'majority'}}); n++;"
+        )
+    else:
+        op = "c.find({_id: {$lt: 64}}).readConcern('majority').toArray(); n++;"
+    js = (
+        f"const d = Date.now() + {ms}; let n = 0; "
+        "const c = db.getSiblingDB('bw').kv; "
+        "while (Date.now() < d) { "
+        f"try {{ {op} }} catch (e) {{}} sleep(100); }} "
+        "print('OPS=' + n);"
+    )
+    return _exec_phase_loop(
+        ["docker", "exec", container, "mongosh", "--quiet", "--eval", js], dur)
+
+
+def drive_corfu(network, phase, dur):
+    """One JVM per phase: run corfu_load.clj (services/corfu-cluster/)
+    through ShellMain from a NON-member container attached to the service
+    overlay, so Corfu's client-driven chain (sequencer token, then a client
+    write to each log unit in chain order) classifies as client edges on
+    every member. Expects the script at /tmp/corfu_load.clj on this host."""
+    ms = dur * 1000 - 6000
+    cfg = "replica-0:9000,replica-1:9000,replica-2:9000"
+    cmd = ["docker", "run", "--rm", "-i", "--network", network,
+           "-v", "/tmp/corfu_load.clj:/tmp/corfu_load.clj:ro",
+           "corfudb/corfu-server:0.9.2.0-SNAPSHOT",
+           "java", "-cp", "/usr/share/corfu/lib/*",
+           "org.corfudb.shell.ShellMain", "run-script", "/tmp/corfu_load.clj",
+           "-c", cfg, "-i", "bw", "-d", str(ms),
+           "write" if phase == "write" else "read"]
+    return _exec_phase_loop(cmd, dur)
+
+
+def drive_mysql(host, port, password, phase, dur):
+    def sql(stmt, timeout=10):
+        return subprocess.run(
+            ["mysql", "--protocol=tcp", "-h", host, "-P", str(port), "-uroot",
+             f"-p{password}", "-e", stmt],
+            capture_output=True, timeout=timeout,
+        ).returncode
+
+    sql("CREATE DATABASE IF NOT EXISTS bwdb")
+    sql("CREATE TABLE IF NOT EXISTS bwdb.bw (id INT PRIMARY KEY, v VARCHAR(64))")
+    deadline = time.time() + dur
+    n = 0
+    while time.time() < deadline:
+        if phase == "write":
+            rc = sql(f"REPLACE INTO bwdb.bw VALUES (1, 'value-{n}-padding')")
+        else:
+            rc = sql("SELECT * FROM bwdb.bw")
+        if rc == 0:
+            n += 1
+        else:
+            time.sleep(0.2)
+    return n
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--service", required=True)
+    ap.add_argument(
+        "--kind", required=True,
+        choices=["httpkv", "etcd", "rqlite", "mysql", "redis", "cassandra", "antidote",
+                 "mongo", "corfu"])
+    ap.add_argument("--ars", required=True,
+                    help="comma-separated AR frontends, host or host:port"
+                         " (bare hosts get --frontend-port appended)")
+    ap.add_argument("--frontend-port", type=int, default=2300)
+    ap.add_argument("--phases", default="idle:30,write:60,read:30")
+    ap.add_argument("--sample-interval", type=float, default=2.0)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--mysql-host")
+    ap.add_argument("--mysql-port", type=int)
+    ap.add_argument("--mysql-password")
+    ap.add_argument("--direct-host", help="service host for direct-protocol kinds")
+    ap.add_argument("--direct-port", type=int, help="published port for direct-protocol kinds")
+    ap.add_argument("--direct-container",
+                    help="local container name for docker-exec kinds (antidote, mongo)")
+    ap.add_argument("--direct-network",
+                    help="overlay network name for client-container kinds (corfu)")
+    args = ap.parse_args()
+
+    ars = [a if ":" in a else f"{a}:{args.frontend_port}" for a in args.ars.split(",")]
+    sampler = Sampler(args.service, ars, args.sample_interval)
+    sampler.start()
+
+    phase_log = []
+    for spec in args.phases.split(","):
+        name, dur = spec.split(":")
+        dur = int(dur)
+        t0 = time.time()
+        print(f"[phase] {name} for {dur}s", flush=True)
+        if name == "idle":
+            time.sleep(dur)
+            ops = 0
+        elif args.kind == "httpkv":
+            ops = drive_httpkv(ars, args.service, name, dur)
+        elif args.kind == "etcd":
+            ops = drive_etcd(ars, args.service, name, dur)
+        elif args.kind == "rqlite":
+            ops = drive_rqlite(ars, args.service, name, dur)
+        elif args.kind == "redis":
+            ops = drive_redis(args.direct_host, args.direct_port, name, dur)
+        elif args.kind == "cassandra":
+            ops = drive_cassandra(args.direct_host, args.direct_port, name, dur)
+        elif args.kind == "antidote":
+            ops = drive_antidote(args.direct_container, name, dur)
+        elif args.kind == "mongo":
+            ops = drive_mongo(args.direct_container, name, dur)
+        elif args.kind == "corfu":
+            ops = drive_corfu(args.direct_network, name, dur)
+        else:
+            ops = drive_mysql(args.mysql_host, args.mysql_port, args.mysql_password,
+                              name, dur)
+        phase_log.append({"name": name, "t0": t0, "t1": time.time(), "ops": ops})
+        print(f"[phase] {name} done: {ops} ops", flush=True)
+
+    time.sleep(2 * args.sample_interval)  # capture the settled tail
+    sampler.stop_flag.set()
+    sampler.join()
+
+    out = {
+        "service": args.service,
+        "kind": args.kind,
+        "ars": ars,
+        "phases": phase_log,
+        "samples": sampler.samples,
+    }
+    with open(args.out, "w") as f:
+        json.dump(out, f)
+    ok = sum(1 for s in sampler.samples if "edges" in s)
+    print(f"[done] {ok} samples ({len(sampler.samples) - ok} errors) -> {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

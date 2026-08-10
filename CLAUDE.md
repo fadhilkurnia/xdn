@@ -264,14 +264,19 @@ dial; with the hostname decoupled, `replica-N` resolves through embedded DNS
 to the overlay IP from everywhere. On Linux both paths worked
 pre-dual-homing; dual-homing makes macOS local dev work too.
 
-After start, the AR gates on the entry port actually answering HTTP (any
-status) before registering the service — a TCP accept is not enough, because
-Docker Desktop's port forwarder accepts on a published port even when nothing
-is bound inside, and a request forwarded into such a half-open port hangs the
-serial batch pipeline. If the port stays dead for 30s the AR restarts the
-container (then sidecars) once to re-program the forward — a known
-Docker Desktop flake where a freshly published port never gets wired; both
-the gate and the restart are no-ops on Linux. Two further Docker Desktop
+After start, the AR gates on the entry port actually answering (any bytes or
+an orderly close) before registering the service — a TCP accept is not
+enough, because Docker Desktop's port forwarder accepts on a published port
+even when nothing is bound inside, and a request forwarded into such a
+half-open port hangs the serial batch pipeline. **On macOS only**, if the
+port stays dead for 30s the AR restarts the container (then sidecars) once
+to re-program the forward — a known Docker Desktop flake where a freshly
+published port never gets wired. On Linux the AR waits the same total 60s
+budget in one stretch and never restarts: a dead port there just means a
+slow boot, and restarting a self-clustering member mid-formation is
+destructive (a restarted MySQL GR joiner never re-joins — the cause of the
+"GR never reached 3 ONLINE (last seen: 1)" CI failures on slow runners —
+and a memory-mode corfu member loses its bootstrapped layout). Two further Docker Desktop
 gotchas encoded in `startClusterContainer`: the bind-mount source dir is
 pre-created with Java NIO before `docker create` (the daemon caches a failed
 bind-source lookup, so a later mkdir cannot heal it — only a fresh path
@@ -279,11 +284,14 @@ lookup or daemon restart can), and `docker create` validates bind sources
 eagerly while Linux dockerd would auto-create them as root (breaking
 `--user`).
 
-**Env contract** injected into every cluster container:
+**Env contract** injected into every container of the pod (the cluster
+member AND all sidecars — entry frontends need the topology too, e.g. to
+route writes to the chain head or name the local Erlang node):
 `XDN_CLUSTER_ORDINAL`, `XDN_CLUSTER_SIZE`, `XDN_CLUSTER_SELF`,
 `XDN_CLUSTER_PEERS`, `XDN_CLUSTER_PEER_PORT`, `XDN_CLUSTER_PHASE`
 (`bootstrap` at epoch 0; `join` reserved for the not-yet-wired
-reconfiguration path).
+reconfiguration path). A sidecar's declared env loses to the contract on
+key collision.
 
 **Single-image vs. multi-component.** A cluster service can be one image
 (e.g. etcd alone) or multiple components in a pod-style group (e.g.
@@ -305,6 +313,19 @@ are treated as success.
 replication, so XDN-side state-tar capture is a no-op and FUSE/rsync are
 skipped.
 
+**Bandwidth profiling** (`XdnBandwidthProfiler`, on by default via
+`XDN_CLUSTER_BW_TRACER_ENABLED`): each cluster member gets a tiny probe
+sidecar (`services/bw-probe/`, image `fadhilkurnia/xdn-bw-probe`) in its
+network namespace; the AR polls kernel TCP byte counters through it
+(`docker exec <probe> ss -tinH`) and folds per-connection deltas into
+directed per-peer edges, classified by peer address alone: overlay-alias IPs
+(resolved via embedded DNS `getent hosts replica-N`) are coordination
+traffic, loopback is intra-pod and skipped, everything else aggregates as
+`client`. Snapshots ride the replica-info endpoint as a `bandwidth` JSON
+section. All failures degrade gracefully (missing probe image just logs a
+warning and disables profiling). Tests: `XdnBwProbeParserTest` (unit),
+`XdnClusterBandwidthTest` (integration).
+
 **Reference images** under `services/`:
 - `services/etcd-cluster/` — single-image cluster (etcd), entrypoint maps
   `XDN_CLUSTER_*` → etcd's `--initial-cluster`, `--initial-cluster-state`, etc.
@@ -319,6 +340,63 @@ skipped.
 - `services/wordpress-mysql-cluster.yaml` — multi-component spec exercising the
   sidecar-netns path: `wordpress` (entry) + `mysql` (stateful GR member). Covered
   by `XdnWordPressClusterTest`.
+- `services/redis-chain/` — Redis sub-replica chaining: ordinal N>0 is a
+  `--replicaof` of ordinal N-1, giving a relay PATH topology (byte-identical
+  store-and-forward, no head↔tail edge) as the chain coordination pattern.
+- `services/cassandra-cluster/` — leaderless Dynamo-style quorum; the
+  entrypoint resolves the overlay IP from the replica-N alias for the
+  listen/broadcast address, with replica-0 as the gossip seed.
+- `services/antidote-cluster/` — CRDT store (causal+): each replica is an
+  independent antidote DC; writes commit locally and replicate asynchronously
+  over ZeroMQ pub/sub (no ack traffic at all). DC linking is a post-start
+  step driven through `xdnlink.escript` over raw distributed Erlang — the
+  release's nodetool reads the unsubstituted `vm.args` (the boot script
+  honors the `NODE_NAME` env but never rewrites the file) and so cannot find
+  the node. Image gotchas encoded in the Dockerfile: the release tree is
+  made world-writable (XDN starts cluster containers under a non-root
+  `--user`, and the relx script writes vm.args/sys.config at boot), and the
+  release runs `-sname` mode, forcing dotless `antidote@replica-N` names.
+- `services/mongo-cluster/` — MongoDB replica set (secondaries PULL the
+  oplog; acks return as `replSetUpdatePosition`); ordinal 0 initiates `rs0`
+  with replica-N member addresses. The primary can migrate after formation —
+  load drivers must find the current primary first.
+- `services/corfu-cluster/` — CorfuDB in memory mode: chain replication, but
+  CLIENT-driven (the client library writes each log unit in chain order), so
+  replica↔replica traffic is management-plane only while data fans out from
+  the client. Bootstrap = `corfu_bootstrap_cluster` with
+  `layout.json.template`; `corfu_load.clj` is the measurement load driver
+  (run through `ShellMain run-script` from a non-member overlay container).
+
+**Uniform HTTP KV shims** (`services/*-http/` + `services/*-http-cluster.yaml`
+pod specs): every non-HTTP reference service gets a thin entry frontend with
+the same surface — `GET /` health, `PUT /kv/{k}` write, `GET /kv/{k}` read —
+so ALL measurement traffic enters through XDN's HTTP proxy. Rationale:
+coordination inference needs request boundaries; a raw binary-protocol pipe
+has none, so coordinated vs uncoordinated demand cannot be attributed
+per-request. The shims are deliberately DUMB — pure protocol translation to
+the CO-LOCATED member at 127.0.0.1, zero topology awareness — because any
+shim-side routing/discovery would put coordination behavior in XDN-side
+code and contaminate the blackbox signal. Consequences per backend:
+`cassandra-http` (Go) and `antidote-http` (escript gen_tcp HTTP loop — the
+antidote release ships no inets — rpc to the local DC over raw dist) are
+naturally local-serving; `mysql-http` (Go) requires the member in GR
+MULTI-PRIMARY mode (`XDN_MYSQL_MULTI_PRIMARY=1` in the pod spec — a
+service-side config, secondaries in single-primary mode reject writes and
+mysqld never forwards); `redis-http` (Go) surfaces `-READONLY` on non-head
+replicas (redis sub-replicas never forward writes — writes only succeed at
+replica-0's frontend); `mongo-http` (Go, directConnection) surfaces
+NotWritablePrimary on secondaries (mongod pushes routing to clients by
+design — writes only succeed at the current primary's frontend);
+`corfu-http` (Java, compiled against the corfu image's shaded jars) is the
+irreducible case — corfu's replication logic lives IN the client library,
+so the shim embeds the corfu client seeded with the local member and its
+fan-out IS the protocol's shape. Cluster formation belongs to the members,
+not the shims: antidote self-links its DCs (ordinal 0,
+`xdnselflink.escript`) and corfu self-bootstraps its chain layout (ordinal
+0, member entrypoint) — both retry in the background until formation.
+Measurement clients probe which frontend accepts writes (the same
+discovery native clients perform). Launch e.g.
+`xdn cluster launch mysqlkv -f services/mysql-gr-http-cluster.yaml`.
 
 **Reconfiguration is deferred** (Component 6 in the design plan). The
 `xdn:final:` cluster path in `XdnGigapaxosApp.createServiceInstance` throws
@@ -327,6 +405,12 @@ at epoch 0. The design intent is that image-specific add/remove-replica
 hooks ship in the per-service YAML (e.g. `etcdctl member add` commands),
 *not* as Java adapter classes — see the deleted-but-documented adapter
 scaffolding history in commits `37b23c4f` → `79c90ace`.
+
+**Launch-time image check.** The CREATE validator
+(`XdnServiceInitialStateValidator`) runs on the **Reconfigurator host** and
+checks `docker image inspect` there first — a locally built image (e.g.
+`xdn-etcd-cluster:test`) must exist on the RC host too, not just the ARs, or
+the launch 409s with "Unknown container image".
 
 **Helper script.** `bin/xdn-cluster-up.sh` brings up XDN across the
 configured CloudLab hosts (1 RC + 3 ARs by default) and optionally launches

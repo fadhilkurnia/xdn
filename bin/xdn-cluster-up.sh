@@ -6,7 +6,7 @@
 #
 # Prerequisites — already done on this pod, only restate if rebuilding from
 # zero:
-#   - rsync'd repo at /users/fadhil/xdn-cl/ on each of .1/.2/.3/.4
+#   - repo at ~/xdn on each of .1/.2/.3/.4 (`bin/xdnd dist-init` uploads it)
 #   - Docker swarm initialized across .1-.4 (`bin/xdnd dist-init` does this)
 #   - xdn-etcd-cluster:test and xdn-rqlite-cluster:test images present
 #     on .1/.2/.3/.4 (`docker build` in services/<name>/ on each)
@@ -19,13 +19,34 @@
 
 set -euo pipefail
 
-REMOTE=/users/fadhil/xdn-cl
-CFG=conf/gigapaxos.xdn.cluster-launch.cloudlab.properties
+# Repo location on each host — dist-init uploads to ~/xdn; override for other layouts.
+REMOTE=${XDN_REMOTE_DIR:-$HOME/xdn}
+# Config + node placement are overridable for larger fleets: XDN_CLUSTER_N=5|7
+# selects the matching conf/gigapaxos.xdn.cluster-launch{,5,7}.cloudlab.properties
+# and the node list below (co-located ARs get distinct base ports; the HTTP
+# frontend is always base + 300).
+N=${XDN_CLUSTER_N:-3}
+# Full override for other sites/layouts: XDN_CLUSTER_CFG names the properties
+# file and XDN_CLUSTER_NODES lists "ip:nodeid:httpport" triples (RC included).
+if [ -n "${XDN_CLUSTER_CFG:-}" ] && [ -n "${XDN_CLUSTER_NODES:-}" ]; then
+  CFG=$XDN_CLUSTER_CFG
+  NODES=$XDN_CLUSTER_NODES
+else
+case "$N" in
+  3) CFG=conf/gigapaxos.xdn.cluster-launch.cloudlab.properties
+     NODES="10.10.1.4:0:3300 10.10.1.1:1:2300 10.10.1.2:2:2300 10.10.1.3:3:2300" ;;
+  5) CFG=conf/gigapaxos.xdn.cluster-launch5.cloudlab.properties
+     NODES="10.10.1.4:0:3300 10.10.1.1:1:2300 10.10.1.2:2:2300 10.10.1.3:3:2300 10.10.1.4:4:2300 10.10.1.5:5:2300" ;;
+  7) CFG=conf/gigapaxos.xdn.cluster-launch7.cloudlab.properties
+     NODES="10.10.1.4:0:3300 10.10.1.1:1:2300 10.10.1.2:2:2300 10.10.1.3:3:2300 10.10.1.4:4:2300 10.10.1.5:5:2300 10.10.1.1:6:2310 10.10.1.2:7:2310" ;;
+  *) echo "unsupported XDN_CLUSTER_N=$N"; exit 1 ;;
+esac
+fi
 JF='-ea -Djavax.net.ssl.keyStorePassword=qwerty -Djavax.net.ssl.trustStorePassword=qwerty -Djavax.net.ssl.keyStore=conf/keyStore.jks -Djavax.net.ssl.trustStore=conf/trustStore.jks -Djava.util.logging.config.file=conf/logging.properties -Dlog4j.configuration=conf/log4j.properties -DgigapaxosConfig='"$CFG"' -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED'
 
-echo "[1/3] starting RC (node 0) on 10.10.1.4 and ARs (nodes 1,2,3) on .1/.2/.3 ..."
-for pair in "10.10.1.4 0" "10.10.1.1 1" "10.10.1.2 2" "10.10.1.3 3"; do
-  read ip nid <<<"$pair"
+echo "[1/3] starting RC (node 0) and $((N)) ARs per $CFG ..."
+for triple in $NODES; do
+  IFS=: read ip nid _port <<<"$triple"
   ssh -fn -o BatchMode=yes "$ip" "
     cd $REMOTE && mkdir -p logs
     nohup java $JF -cp \$(ls jars/*.jar | tr '\n' ':') \
@@ -35,8 +56,8 @@ for pair in "10.10.1.4 0" "10.10.1.1 1" "10.10.1.2 2" "10.10.1.3 3"; do
 done
 
 echo "[2/3] waiting for HTTP frontends ..."
-for pair in "10.10.1.4 3300" "10.10.1.1 2300" "10.10.1.2 2300" "10.10.1.3 2300"; do
-  read ip port <<<"$pair"
+for triple in $NODES; do
+  IFS=: read ip _nid port <<<"$triple"
   until timeout 1 bash -c "</dev/tcp/$ip/$port" 2>/dev/null; do sleep 2; done
   echo "  $ip:$port up"
 done

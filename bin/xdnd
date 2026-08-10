@@ -182,8 +182,14 @@ function do_distributed_initialization() {
     local sanitized_machine="${machine//[^a-zA-Z0-9_.-]/_}"
     local log_file="$LOG_DIR/${sanitized_machine}.log"
     (
+      # Propagate each stage's failure: a stage that errors marks this host FAILED
+      # instead of silently printing ok (a broken apt mirror used to slip through and
+      # leave hosts without java while dist-init reported success).
       progress_line "$machine" "[ssh] start"
-      prepare_remote_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME"
+      prepare_remote_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME" || {
+        progress_line "$machine" "[ssh] FAILED"
+        exit 1
+      }
       progress_line "$machine" "[ssh] ok"
 
       progress_line "$machine" "[root-ssh] start"
@@ -191,11 +197,17 @@ function do_distributed_initialization() {
       progress_line "$machine" "[root-ssh] ok"
 
       progress_line "$machine" "[install] start"
-      install_dependencies "$machine" "$SSH_KEY" "$USERNAME"
+      install_dependencies "$machine" "$SSH_KEY" "$USERNAME" || {
+        progress_line "$machine" "[install] FAILED"
+        exit 1
+      }
       progress_line "$machine" "[install] ok"
 
       progress_line "$machine" "[upload] start"
-      upload_binaries "$machine" "$SSH_KEY" "$USERNAME"
+      upload_binaries "$machine" "$SSH_KEY" "$USERNAME" || {
+        progress_line "$machine" "[upload] FAILED"
+        exit 1
+      }
       progress_line "$machine" "[upload] ok"
     ) >"$log_file" 2>&1 &
     pid_to_host[$!]="$machine"
@@ -852,13 +864,21 @@ function install_dependencies() {
   CMD_DESC+=("update node version to latest stable")
   CMD+=("sudo npm install -g n && sudo n stable && hash -r && sudo npm install --save-dev wrangler@4")
 
+  # XDN hosts cannot run without these; assert their presence so a partially
+  # failed install (e.g. an unreachable Ubuntu mirror: docker comes from
+  # download.docker.com and still installs while openjdk does not) is caught
+  # here rather than at first java invocation.
+  # (bash -c because the runner wraps commands in nohup, which cannot exec the
+  # shell builtin `command`)
+  CMD_DESC+=("verify critical tools (java, ant, docker, rsync)")
+  CMD+=("bash -c 'command -v java && command -v ant && command -v docker && command -v rsync'")
+
   for i in "${!CMD_DESC[@]}"; do
     desc=${CMD_DESC[$i]}
     cmd=${CMD[$i]}
     echo "     $desc ..."
     ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "nohup $cmd" 2>&1 >/dev/null
     return_code=$?
-    ret=$?
     if [ $return_code -ne 0 ]; then
       echo " [ERROR] failed to run command '$cmd'."
       err=1
@@ -889,7 +909,10 @@ function upload_binaries() {
 
   CMD=()
   CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_cli.sh')
-  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_fuselog.sh')
+  # fuselog is an eval-only dependency (FUSE statediff recorders); cluster
+  # mode and rsync-recorder deployments run without it, so a failed build
+  # (e.g. xdn-fs absent from a lean checkout) must not fail the host init.
+  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && { ./bin/build_xdn_fuselog.sh || echo "[dist-init] WARNING: fuselog build failed (eval-only dependency); continuing"; }')
   CMD+=("sudo rm -rf /usr/local/bin/xdn")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog")
   CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
@@ -1307,12 +1330,12 @@ function do_init_driver() {
   grep -q "/usr/local/go/bin" /etc/environment || sudo sed -i 's|^PATH="\(.*\)"|PATH="\1:/usr/local/go/bin"|' /etc/environment
   curl https://sh.rustup.rs -sSf | sh -s -- -y
   source $HOME/.cargo/env
-  python -m pip install -U pip
-  python -m pip install -U matplotlib
-  python -m pip install -U scikit-learn
-  python -m pip install -U requests
-  python -m pip install -U pandas
-  python -m pip install -U basemap
+  python3 -m pip install -U pip
+  python3 -m pip install -U matplotlib
+  python3 -m pip install -U scikit-learn
+  python3 -m pip install -U requests
+  python3 -m pip install -U pandas
+  python3 -m pip install -U basemap
 
   # install docker
   echo "Installing Docker ..."
@@ -1329,9 +1352,22 @@ function do_init_driver() {
   sudo usermod -aG docker $USER
   newgrp docker
 
-  ant jar
-  ./bin/build_xdn_cli.sh
-  ./bin/build_xdn_fuselog.sh
+  # The apt phase above has no error handling (a broken mirror leaves the driver
+  # without java while the script runs to completion), so assert the critical
+  # tools before building anything.
+  local missing=""
+  for tool in java ant docker go; do
+    command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+  done
+  if [ -n "$missing" ]; then
+    echo "[init-driver] FAILED: missing tools after install:$missing"
+    echo "[init-driver] is the Ubuntu archive reachable from this node? (apt install output above)"
+    exit 1
+  fi
+
+  ant jar || { echo "[init-driver] FAILED: ant jar"; exit 1; }
+  ./bin/build_xdn_cli.sh || { echo "[init-driver] FAILED: xdn cli build"; exit 1; }
+  ./bin/build_xdn_fuselog.sh || echo "[init-driver] WARNING: fuselog build failed (eval-only dependency); continuing"
   sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
   mkdir -p eval/screen_logs
   sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results

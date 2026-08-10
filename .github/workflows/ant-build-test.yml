@@ -7,7 +7,7 @@ name: "XDN test workflow"
 #                           plus the Xdn*Test classes that don't use
 #                           XdnTestCluster (XdnHttpRequestTest,
 #                           XdnHttpRequestBatchTest, XdnGeoDemandProfilerTest,
-#                           XdnPortAllocatorTest).
+#                           XdnPortAllocatorTest, XdnBwProbeParserTest).
 #
 #   - xdn-integration     — Matrix, one entry per Xdn*Test class that drives
 #                           XdnTestCluster. Each entry runs on its own runner
@@ -82,6 +82,7 @@ jobs:
         bin/run_xdn_tests.sh XdnHttpRequestBatchTest
         bin/run_xdn_tests.sh XdnGeoDemandProfilerTest
         bin/run_xdn_tests.sh XdnPortAllocatorTest
+        bin/run_xdn_tests.sh XdnBwProbeParserTest
 
     - name: 📝 Reporting the test results ...
       uses: dorny/test-reporter@v2
@@ -115,7 +116,10 @@ jobs:
 
   xdn-integration:
     name: "${{ matrix.test_class }}"
-    runs-on: ubuntu-latest
+    # Pinned: the 20260720 ubuntu-latest runner image deterministically breaks MySQL
+    # Group Replication bootstrap (XdnWordPressClusterTest red 5/5 on it, green 3/3 on
+    # 20260714; verified by identical-code rerun). Re-evaluate once the image settles.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
 
     strategy:
@@ -130,6 +134,7 @@ jobs:
           - XdnSetCoordinatorNodeTest
           - XdnTaggedImageLaunchTest
           - XdnClusterLaunchTest
+          - XdnClusterBandwidthTest
           - XdnWordPressClusterTest
 
     steps:
@@ -227,6 +232,11 @@ jobs:
         done
         echo "=== docker ps ==="
         docker ps -a || true
+        echo "=== container logs (cluster services fail inside their containers) ==="
+        for c in $(docker ps -aq); do
+          echo "============ BEGIN docker logs $(docker inspect -f '{{.Name}}' $c) ============"
+          docker logs --tail 80 "$c" 2>&1 || true
+        done
         echo "=== dmesg tail ==="
         dmesg | tail -n 100 || true
 

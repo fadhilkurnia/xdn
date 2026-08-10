@@ -32,6 +32,7 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
   List<String> createdAtInfo;
   List<String> containerStatus;
   List<RequestMatcher> requestBehaviors;
+  JSONObject bandwidth; // per-peer traffic edges for profiled cluster services
 
   // fields for the error response
   Integer httpErrorCode;
@@ -108,6 +109,10 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
 
   public void setRequestBehaviors(List<RequestMatcher> requestBehaviors) {
     this.requestBehaviors = requestBehaviors;
+  }
+
+  public void setBandwidth(JSONObject bandwidth) {
+    this.bandwidth = bandwidth;
   }
 
   public String getErrorMessage() {
@@ -196,6 +201,10 @@ public class XdnGetReplicaInfoRequest extends XdnRequest implements ClientReques
           behaviors.put(matcherJson);
         }
         json.put("requestBehaviors", behaviors);
+      }
+
+      if (this.bandwidth != null) {
+        json.put("bandwidth", this.bandwidth);
       }
 
       return json.toString();

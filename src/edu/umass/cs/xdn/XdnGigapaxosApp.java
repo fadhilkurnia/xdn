@@ -78,6 +78,8 @@ public class XdnGigapaxosApp
 
   private final String myNodeId;
   private final Set<IntegerPacketType> packetTypes;
+  private final XdnBandwidthProfiler bandwidthProfiler;
+  private final ConcurrentHashMap<String, Object> serviceInitLocks = new ConcurrentHashMap<>();
 
   // TODO: remove this metadata as the port is already stored inside the ServiceInstance.
   private final HashMap<String, Integer> activeServicePorts;
@@ -156,6 +158,7 @@ public class XdnGigapaxosApp
         "{0}:{1} Initializing with args: {2}",
         new Object[] {myNodeId, XdnGigapaxosApp.class.getSimpleName(), Arrays.toString(args)});
 
+    this.bandwidthProfiler = new XdnBandwidthProfiler(this.myNodeId);
     this.serviceInstances = new ConcurrentHashMap<>();
     this.servicePlacementEpoch = new ConcurrentHashMap<>();
     this.activeServicePorts = new HashMap<>();
@@ -917,6 +920,20 @@ public class XdnGigapaxosApp
    * @return false if failed to initialize the service.
    */
   private boolean initContainerizedService2(String serviceName) {
+    // Serialize per-service initialization: the reconfigurator resends START_EPOCH when a
+    // slow first pass (image pull, MySQL first boot behind the readiness gate) outlives its
+    // ack timeout, and an unguarded re-entry would rm -rf the state dir and force-recreate
+    // containers mid-bootstrap -- destroying e.g. a forming Group Replication group and
+    // stranding the bandwidth probe in the old network namespace. Re-entries block here
+    // until the in-flight pass finishes, then get absorbed by the initializationSucceed
+    // check below.
+    Object initLock = this.serviceInitLocks.computeIfAbsent(serviceName, k -> new Object());
+    synchronized (initLock) {
+      return initContainerizedService2Locked(serviceName);
+    }
+  }
+
+  private boolean initContainerizedService2Locked(String serviceName) {
     int initialPlacementEpoch = this.servicePlacementEpoch.get(serviceName);
     assertNotNull("initialPlacementEpoch must not be null", initialPlacementEpoch);
 
@@ -1191,6 +1208,14 @@ public class XdnGigapaxosApp
           sidecar.getEnvironmentVariables() != null
               ? new LinkedHashMap<>(sidecar.getEnvironmentVariables())
               : new LinkedHashMap<>();
+      // The XDN_CLUSTER_* contract goes to every container in the pod, not just the cluster
+      // member: entry frontends need the topology too (route writes to the chain head or the
+      // GR primary, name the local Erlang node, bootstrap from ordinal 0).
+      for (Map.Entry<String, String> e : clusterEnv.entrySet()) {
+        if (e.getKey().startsWith("XDN_CLUSTER_")) {
+          sidecarEnv.put(e.getKey(), e.getValue());
+        }
+      }
       boolean ok =
           startClusterSidecar(
               sidecar.getImageName(),
@@ -1202,6 +1227,28 @@ public class XdnGigapaxosApp
       }
     }
 
+    // Attach the bandwidth probe sidecar and start profiling this member's traffic. Any
+    // failure here only disables profiling; the service itself is unaffected.
+    if (Config.getGlobalBoolean(ReconfigurationConfig.RC.XDN_CLUSTER_BW_TRACER_ENABLED)) {
+      String probeImage =
+          Config.getGlobalString(ReconfigurationConfig.RC.XDN_CLUSTER_BW_PROBE_IMAGE);
+      String probeName = "bwprobe." + clusterContainerName;
+      if (startClusterSidecar(probeImage, probeName, clusterContainerName, null)) {
+        this.bandwidthProfiler.register(
+            serviceName,
+            probeName,
+            topology.clusterSize(),
+            publishedContainerPort != null ? publishedContainerPort : 0);
+      } else {
+        logger.log(
+            Level.WARNING,
+            "{0}:{1} bandwidth probe failed to start; profiling disabled for {2}",
+            new Object[] {
+              this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName
+            });
+      }
+    }
+
     // Hold off marking the service live until the entry port answers HTTP. Without this, a
     // request can reach XdnHttpForwarderClient before the container binds its port; on Linux
     // that fails fast (RST) and the client retries, but Docker Desktop's port forwarder
@@ -1209,13 +1256,17 @@ public class XdnGigapaxosApp
     // a request that never completes. Best-effort on timeout: a slow-booting image keeps
     // today's behavior instead of failing the epoch start.
     long readinessStartMs = System.currentTimeMillis();
-    boolean entryReady = waitForHttpReadiness(allocatedPort, 30_000);
-    if (!entryReady) {
-      // Docker Desktop's port forwarder occasionally never wires a freshly published port:
-      // the container is healthy inside, the host port accepts TCP, but no bytes ever flow.
-      // A container restart re-programs the forward. Linux never takes this branch — a bound
-      // port there answers within the first wait. Sidecars restart after the member so they
-      // re-join its fresh network namespace.
+    // The restart heal below exists for Docker Desktop only: its port forwarder occasionally
+    // never wires a freshly published port (container healthy inside, host port accepts TCP,
+    // no bytes ever flow) and a container restart re-programs the forward. On Linux a dead
+    // port just means the app is still booting, and restarting a self-clustering member
+    // mid-formation is destructive (a restarted MySQL GR joiner never re-joins its group;
+    // a memory-mode corfu member loses its bootstrapped layout), so Linux waits the same
+    // total budget in one stretch and never restarts.
+    boolean healEnabled = System.getProperty("os.name", "").toLowerCase().contains("mac");
+    boolean entryReady = waitForEntryPortReadiness(allocatedPort, healEnabled ? 30_000 : 60_000);
+    if (!entryReady && healEnabled) {
+      // Sidecars restart after the member so they re-join its fresh network namespace.
       logger.log(
           Level.WARNING,
           "{0}:{1} cluster service {2} entry port {3} dead after 30s; restarting container(s)"
@@ -1232,7 +1283,7 @@ public class XdnGigapaxosApp
           Shell.runCommand("docker restart " + service.containerNames.get(i), true);
         }
       }
-      entryReady = waitForHttpReadiness(allocatedPort, 30_000);
+      entryReady = waitForEntryPortReadiness(allocatedPort, 30_000);
     }
     if (entryReady) {
       logger.log(
@@ -1568,6 +1619,12 @@ public class XdnGigapaxosApp
         assert exitCode == 0 : "failed to remove compose directory " + composeDir;
       }
     } else {
+      if (serviceInstance.property.isClusterManaged()) {
+        this.bandwidthProfiler.deregister(serviceName);
+        for (String containerName : toBeRemovedContainerNames) {
+          Shell.runCommand("docker container rm --force bwprobe." + containerName, true);
+        }
+      }
       for (String containerName : toBeRemovedContainerNames) {
         boolean isSuccess = this.removeContainer(containerName);
         assert isSuccess : "failed to remove container " + containerName;
@@ -2371,6 +2428,45 @@ public class XdnGigapaxosApp
   }
 
   /**
+   * Polls the entry port until the service behind it proves it is alive, or the timeout elapses.
+   *
+   * <p>A TCP accept alone does not count: Docker Desktop's port forwarder accepts connections on a
+   * published port even while nothing is bound inside the container. But requiring an HTTP response
+   * is too strict for cluster services speaking binary protocols (Redis RESP, MySQL, Cassandra
+   * CQL), which can never satisfy an HTTP probe and would burn the full gate plus a needless heal
+   * restart. So the probe sends a CRLF pair and accepts <em>any bytes back or an orderly close</em>
+   * as proof of life: an HTTP server answers 400, Redis answers -ERR, MySQL sends its greeting
+   * unprompted, Cassandra closes the bad frame -- while a dead forward hangs silently and an
+   * unbound Linux port refuses outright.
+   */
+  private boolean waitForEntryPortReadiness(int port, long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs;
+    byte[] probe = "\r\n\r\n".getBytes(StandardCharsets.US_ASCII);
+    while (System.currentTimeMillis() < deadline) {
+      try (java.net.Socket s = new java.net.Socket()) {
+        s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 500);
+        s.setSoTimeout(500);
+        s.getOutputStream().write(probe);
+        s.getOutputStream().flush();
+        // Any byte, or an orderly EOF (-1), means something live handled the connection.
+        s.getInputStream().read();
+        return true;
+      } catch (java.net.SocketTimeoutException e) {
+        // Accepted but silent: a half-open forward. Keep polling.
+      } catch (IOException e) {
+        // Connection refused or reset before proof of life. Keep polling.
+      }
+      try {
+        TimeUnit.MILLISECONDS.sleep(200);
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Polls {@code http://127.0.0.1:<httpPort>/} until any HTTP status is returned or the timeout
    * elapses. A TCP accept alone does not count: Docker Desktop's port forwarder accepts connections
    * on a published port even while nothing is bound inside the container yet, so only a completed
@@ -2722,6 +2818,14 @@ public class XdnGigapaxosApp
   public boolean hostsService(String serviceName) {
     Map<Integer, ServiceInstance> instances = this.serviceInstances.get(serviceName);
     return instances != null && !instances.isEmpty();
+  }
+
+  /**
+   * Returns this replica's bandwidth edge snapshot for a profiled cluster service, or null when the
+   * service is not profiled (tracer disabled, probe failed, or not cluster-managed).
+   */
+  public org.json.JSONObject getBandwidthSnapshot(String serviceName) {
+    return this.bandwidthProfiler.snapshot(serviceName);
   }
 
   /**********************************************************************************************
