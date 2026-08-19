@@ -1,0 +1,164 @@
+package edu.umass.cs.xdn2.service;
+
+import java.util.Map;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+public class ServiceComponent {
+  private final String componentName;
+  private final String imageName;
+
+  /**
+   * exposedPort is any tcp port this service component listen, e.g. 3306 for database connection in
+   * MySQL, or 5432 for database connection in PostgresSQL.
+   */
+  private final Integer exposedPort;
+
+  private boolean isStateful;
+  private final boolean isEntryComponent;
+
+  /** entryPort is the http port where this service component listen */
+  private final Integer entryPort;
+
+  private final Map<String, String> environmentVariables;
+
+  /** Optional healthcheck command for readiness signaling in multi-component services. */
+  private final String healthcheckCommand;
+
+  /** Optional HTTP path polled for readiness on entry (non-stateful) components. */
+  private final String healthEndpointPath;
+
+  protected ServiceComponent(
+          String componentName,
+          String imageName,
+          Integer exposedPort,
+          boolean isStateful,
+          boolean isEntryComponent,
+          Integer entryPort,
+          Map<String, String> environmentVariables,
+          String healthcheckCommand,
+          String healthEndpointPath) {
+    this.componentName = componentName;
+    this.imageName = imageName;
+    this.exposedPort = exposedPort;
+    this.isStateful = isStateful;
+    this.isEntryComponent = isEntryComponent;
+    this.entryPort = entryPort;
+    this.environmentVariables = environmentVariables;
+    this.healthcheckCommand = healthcheckCommand;
+    this.healthEndpointPath = healthEndpointPath;
+
+    if (this.isEntryComponent && entryPort == null) {
+      throw new RuntimeException("port is required for service's entry component");
+    }
+  }
+
+  public String getComponentName() {
+    return componentName;
+  }
+
+  public String getImageName() {
+    return imageName;
+  }
+
+  public Integer getExposedPort() {
+    return exposedPort;
+  }
+
+  public boolean isStateful() {
+    return isStateful;
+  }
+
+  protected void setIsStateful(boolean isStateful) {
+    this.isStateful = isStateful;
+  }
+
+  public boolean isEntryComponent() {
+    return isEntryComponent;
+  }
+
+  public Integer getEntryPort() {
+    return entryPort;
+  }
+
+  public Map<String, String> getEnvironmentVariables() {
+    return environmentVariables;
+  }
+
+  public String getHealthcheckCommand() {
+    return healthcheckCommand;
+  }
+
+  public String getHealthEndpointPath() {
+    return healthEndpointPath;
+  }
+
+  /**
+   * Infers the healthcheck command from the Docker image name.
+   * Only covers known databases. Returns null for unknown images.
+   * Moved here from DockerSandboxManager so both ServiceProperty (parse-time
+   * validation) and DockerSandboxManager (actual --health-cmd) share one
+   * source of truth without introducing a service -> sandbox dependency.
+   */
+  public static String inferHealthcheckCmd(String imageName) {
+    if (imageName == null) return null;
+    String lower = imageName.toLowerCase();
+    if (lower.contains("mysql") || lower.contains("mariadb"))
+      return "mysqladmin ping -h 127.0.0.1 --silent";
+    if (lower.contains("postgres"))
+      return "pg_isready -U postgres";
+    return null;
+  }
+
+  /**
+   * Returns true if this image's healthcheck is known to have a false-positive
+   * window during startup (e.g. Postgres/MySQL's bootstrap-then-restart
+   * entrypoint sequence), where a single successful healthcheck run can
+   * report ready before the real long-running server process is up.
+   * Such images require multiple consecutive healthy reads before being
+   * trusted, rather than a single success.
+   */
+  public static boolean requiresConsecutiveHealthyCheck(String imageName) {
+    if (imageName == null) return false;
+    String lower = imageName.toLowerCase();
+    return lower.contains("mysql") || lower.contains("mariadb") || lower.contains("postgres");
+  }
+
+  public final JSONObject toJsonObject() {
+    JSONObject jsonObject = new JSONObject();
+    try {
+      jsonObject.put("image", this.imageName);
+      if (this.entryPort != null) jsonObject.put("port", this.entryPort);
+      if (this.exposedPort != null) jsonObject.put("expose", this.exposedPort);
+      if (this.isStateful) jsonObject.put("stateful", true);
+      if (this.isEntryComponent) jsonObject.put("entry", true);
+      if (this.healthcheckCommand != null && !this.healthcheckCommand.isEmpty()) {
+        jsonObject.put("healthcheck", this.healthcheckCommand);
+      } else if (this.healthEndpointPath != null && !this.healthEndpointPath.isEmpty()) {
+        JSONObject healthObj = new JSONObject();
+        healthObj.put("path", this.healthEndpointPath);
+        jsonObject.put("healthcheck", healthObj);
+      }
+      if (this.environmentVariables != null && !this.environmentVariables.isEmpty()) {
+        JSONArray envArr = new JSONArray();
+        for (Map.Entry<String, String> env : this.environmentVariables.entrySet()) {
+          JSONObject envItem = new JSONObject();
+          envItem.put(env.getKey(), env.getValue());
+          envArr.put(envItem);
+        }
+        jsonObject.put("environments", envArr);
+      }
+      JSONObject componentObject = new JSONObject();
+      componentObject.put(this.componentName, jsonObject);
+      return componentObject;
+    } catch (JSONException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  public final String toJsonString() {
+    JSONObject jsonObject = this.toJsonObject();
+    return jsonObject.toString();
+  }
+}
