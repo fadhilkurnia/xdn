@@ -15,11 +15,8 @@
  * Initial developer(s): V. Arun */
 package edu.umass.cs.gigapaxos;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -183,7 +180,7 @@ public class RequestBatcher extends ConsumerTask<RequestPacket> {
 		reqPktIter.remove();
 
 		// then pluck the rest into a batch within the first request
-		Set<RequestPacket> batch = new HashSet<RequestPacket>();
+		Set<RequestPacket> batch = new LinkedHashSet<RequestPacket>();
 		/* totalByteLength must be less than SQLPaxosLogger.MAX_LOG_MESSAGE_SIZE
 		 * that specifies the maximum length of a paxos log message. We use the
 		 * method lengthEstimate() below that is a loose upper bound on the
