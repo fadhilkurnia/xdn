@@ -46,8 +46,10 @@ public class XdnWordPressClusterTest {
 
   // MySQL GR bootstrap is slow: each member runs a full datadir --initialize (tens of seconds),
   // all 3 concurrently, before the group even forms — so this budget is deliberately large. The
-  // poll exits as soon as the group is up, so the ceiling only matters on failure.
-  private static final Duration GROUP_BUDGET = Duration.ofSeconds(360);
+  // poll exits as soon as the group is up, so the ceiling only matters on failure. The extra
+  // headroom over the original 360s is usable now that the member entrypoint supervises GR and
+  // retries a member that lands in the terminal ERROR state.
+  private static final Duration GROUP_BUDGET = Duration.ofSeconds(480);
   private static final Duration WORDPRESS_BUDGET = Duration.ofSeconds(180);
 
   @Test
@@ -157,12 +159,65 @@ public class XdnWordPressClusterTest {
       }
       Thread.sleep(3000);
     }
+    dumpGroupDiagnostics();
     throw new AssertionError(
         "MySQL Group Replication never reached "
             + expected
             + " ONLINE members (last seen: "
             + last
             + ")");
+  }
+
+  /**
+   * On formation failure, print each member container's view of the group plus its recent logs, so
+   * a CI flake shows whether a member is in the terminal ERROR state, still RECOVERING, or its
+   * mysqld never came up — the bare ONLINE count cannot distinguish these.
+   */
+  private void dumpGroupDiagnostics() {
+    try {
+      ProcResult ps =
+          runProcess(
+              List.of(
+                  "docker",
+                  "ps",
+                  "-a",
+                  "--filter",
+                  "ancestor=" + MYSQL_IMAGE,
+                  "--format",
+                  "{{.Names}}\t{{.Status}}"));
+      System.out.println("[gr-diagnostics] member containers:\n" + ps.stdout());
+      for (String line : ps.stdout().split("\\R")) {
+        if (line.isBlank()) {
+          continue;
+        }
+        String name = line.split("\t")[0].trim();
+        ProcResult view =
+            runProcess(
+                List.of(
+                    "docker",
+                    "exec",
+                    name,
+                    "mysql",
+                    "-uroot",
+                    "-p" + ROOT_PW,
+                    "-e",
+                    "SELECT MEMBER_HOST, MEMBER_STATE"
+                        + " FROM performance_schema.replication_group_members"));
+        System.out.println(
+            "[gr-diagnostics] "
+                + name
+                + " group view (exit "
+                + view.exitCode()
+                + "):\n"
+                + view.stdout()
+                + view.stderr());
+        ProcResult logs = runProcess(List.of("docker", "logs", "--tail", "60", name));
+        System.out.println(
+            "[gr-diagnostics] " + name + " last logs:\n" + logs.stdout() + logs.stderr());
+      }
+    } catch (Exception e) {
+      System.out.println("[gr-diagnostics] failed to collect diagnostics: " + e);
+    }
   }
 
   /** Returns the count of ONLINE GR members, or null if no member container is queryable yet. */
