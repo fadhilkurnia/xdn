@@ -629,9 +629,10 @@ public class HttpActiveReplica {
                 } else {
                     if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED
                             && httpResponse != null) {
-                        long callbackElapsedMs = (System.nanoTime() - rctx.startExecTimeNs()) / 1_000_000;
+                        double callbackElapsedMs =
+                                (System.nanoTime() - rctx.startExecTimeNs()) / 1_000_000.0;
                         httpResponse.headers().set("X-XDN-Pipeline",
-                                String.format("callback=%dms", callbackElapsedMs));
+                                String.format("callback=%.3fms", callbackElapsedMs));
                     }
                     httpRequest.maybeAddXdnCookieToResponse(httpResponse);
                     HttpActiveReplicaHandler.writeHttpResponse(
