@@ -1,0 +1,67 @@
+[
+ {
+  "date": "2026-08-20",
+  "timestamp": "2026-08-20T14:52:04.192079+00:00",
+  "head_sha": "9fbf3936c01a289c38209a96fba1a5e73915ad21",
+  "base_sha": null,
+  "head": {
+   "perfcatalog": {
+    "p50_ms": 2.4,
+    "p99_ms": 9.49,
+    "max_tput_rps": 879.5,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 2.391,
+     "requests": 10354,
+     "stages_p50_ms": {
+      "callback": 2.035,
+      "container": 0.88,
+      "copyreq": 0.01,
+      "proxy": 0.89
+     }
+    }
+   },
+   "perfcatalognd": {
+    "p50_ms": 3.51,
+    "p99_ms": 9.02,
+    "max_tput_rps": 852.8,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 3.236,
+     "requests": 8410,
+     "stages_p50_ms": {
+      "callback": 2.635,
+      "container": 1.0,
+      "copyreq": 0.0,
+      "proxy": 1.0
+     },
+     "pbm_p50_ms": {
+      "queue_wait": 0.03,
+      "exec": 1.1,
+      "capture_wait": 0.03,
+      "capture": 0.14,
+      "propose_prep": 0.01,
+      "paxos": 0.82,
+      "total": 2.34
+     }
+    }
+   }
+  },
+  "base": null,
+  "delta_pct": null,
+  "regression": false,
+  "regressions": [],
+  "calibration": {
+   "fsync_avg_ms": 0.266,
+   "cpu_loops_per_500ms": 5135277
+  }
+ }
+]
