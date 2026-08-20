@@ -109,6 +109,14 @@ public class HttpActiveReplica {
 
     public final static String XDN_HOST_DOMAIN = "xdnapp.com";
 
+    // Held so close() can tear the frontend down; without this the acceptor outlives
+    // ActiveReplica.close() and a replacement node in the same JVM cannot bind the port.
+    private Channel serverChannel;
+    private EventLoopGroup bossGroup;
+    private EventLoopGroup workerGroup;
+    private DefaultEventExecutorGroup readPool;
+    private DefaultEventExecutorGroup writePool;
+
     // FIXME: used to indicate whether a single outstanding request has been executed, might go wrong when there are multiple outstanding requests
     static boolean finished;
 
@@ -219,10 +227,12 @@ public class HttpActiveReplica {
         // worker group (i.e., `workerGroup`).
         int bossThreads = Config.getGlobalInt(ReconfigurationConfig.RC.HTTP_AR_BOSS_THREADS);
         int workerThreads = Config.getGlobalInt(ReconfigurationConfig.RC.HTTP_AR_WORKER_THREADS);
-        EventLoopGroup bossGroup = bossThreads > 0
+        this.bossGroup = bossThreads > 0
                 ? new NioEventLoopGroup(bossThreads) : new NioEventLoopGroup();
-        EventLoopGroup workerGroup = workerThreads > 0
+        this.workerGroup = workerThreads > 0
                 ? new NioEventLoopGroup(workerThreads) : new NioEventLoopGroup();
+        EventLoopGroup bossGroup = this.bossGroup;
+        EventLoopGroup workerGroup = this.workerGroup;
 
         // Dedicated executor group for dispatching requests.
         int threads = Math.max(4, Runtime.getRuntime().availableProcessors());
@@ -233,12 +243,12 @@ public class HttpActiveReplica {
                 ReconfigurationConfig.RC.HTTP_AR_WRITE_POOL_MULTIPLIER);
         int writePoolSize = writePoolMultiplier > 0
                 ? threads * writePoolMultiplier : threads;
-        DefaultEventExecutorGroup writePool =
-                new DefaultEventExecutorGroup(writePoolSize);
+        this.writePool = new DefaultEventExecutorGroup(writePoolSize);
+        DefaultEventExecutorGroup writePool = this.writePool;
 
         // Pool 2: Reads
-        DefaultEventExecutorGroup readPool =
-                new DefaultEventExecutorGroup((int) (threads * 0.4));
+        this.readPool = new DefaultEventExecutorGroup((int) (threads * 0.4));
+        DefaultEventExecutorGroup readPool = this.readPool;
 
         logger.log(Level.INFO,
                 "HttpActiveReplica pools: bossThreads={0} workerThreads={1} "
@@ -287,6 +297,7 @@ public class HttpActiveReplica {
                 sockAddr = new InetSocketAddress(sockAddr.getAddress(), httpsPort);
             }
             Channel channel = b.bind(sockAddr).sync().channel();
+            this.serverChannel = channel;
 
             logger.log(Level.INFO, "HttpActiveReplica is ready on {0}", new Object[]{sockAddr});
 
@@ -307,14 +318,27 @@ public class HttpActiveReplica {
                 }
             }
 
-            channel.closeFuture().sync();
-        } finally {
-            bossGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
-            readPool.shutdownGracefully();
-            writePool.shutdownGracefully();
+            // The server keeps running on the Netty event loops; the constructor returns so
+            // the owning ActiveReplica can hold a reference and close() this frontend on
+            // shutdown. It previously blocked here on closeFuture().sync(), which made the
+            // instance unreachable and left the acceptor alive after ActiveReplica.close():
+            // a replacement node in the same JVM then could not bind the port, and probes
+            // hung against the orphaned frontend.
+        } catch (Exception e) {
+            close();
+            throw e;
         }
+    }
 
+    /** Closes the server channel and releases the event loops and executor pools. */
+    public void close() {
+        if (this.serverChannel != null) {
+            this.serverChannel.close().awaitUninterruptibly(2, TimeUnit.SECONDS);
+        }
+        this.bossGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS);
+        this.workerGroup.shutdownGracefully(0, 2, TimeUnit.SECONDS);
+        this.readPool.shutdownGracefully(0, 2, TimeUnit.SECONDS);
+        this.writePool.shutdownGracefully(0, 2, TimeUnit.SECONDS);
     }
 
     // Tiny plaintext listener on :80 that 308-redirects to the https:// URL.

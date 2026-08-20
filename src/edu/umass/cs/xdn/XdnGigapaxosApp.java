@@ -917,6 +917,20 @@ public class XdnGigapaxosApp
    * @return false if failed to initialize the service.
    */
   private boolean initContainerizedService2(String serviceName) {
+    // Init is documented idempotent, but two concurrent invocations (PrimaryBackupManager can
+    // spawn duplicate primary-init threads) interleave destructively: each run wipes and
+    // re-creates the bind-mount source (recorder preInitialization does rm -rf + mkdir), so one
+    // thread's `docker run` keeps landing inside the other's wipe window and both livelock on
+    // "bind source path does not exist". Serialize per service; the initializationSucceed
+    // early-return then turns the duplicate invocation into a no-op.
+    synchronized (this.serviceInitLocks.computeIfAbsent(serviceName, k -> new Object())) {
+      return initContainerizedService2Serialized(serviceName);
+    }
+  }
+
+  private final ConcurrentHashMap<String, Object> serviceInitLocks = new ConcurrentHashMap<>();
+
+  private boolean initContainerizedService2Serialized(String serviceName) {
     int initialPlacementEpoch = this.servicePlacementEpoch.get(serviceName);
     assertNotNull("initialPlacementEpoch must not be null", initialPlacementEpoch);
 
@@ -977,6 +991,22 @@ public class XdnGigapaxosApp
     if (!service.property.isDeterministic()) {
       stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
       stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+      // Docker Desktop (macOS) validates bind sources eagerly at `docker run` (Linux dockerd
+      // would auto-create them as root), so ensure the mount source exists even when the
+      // recorder implementation did not create it.
+      try {
+        Files.createDirectories(Paths.get(stateDirMountSource));
+      } catch (IOException e) {
+        logger.log(
+            Level.WARNING,
+            "{0}:{1} failed to pre-create bind source {2}: {3}",
+            new Object[] {
+              this.myNodeId.toUpperCase(),
+              this.getClass().getSimpleName(),
+              stateDirMountSource,
+              e.getMessage()
+            });
+      }
     } else {
       Shell.runCommand("rm -rf " + stateDirMountSource);
       Shell.runCommand("mkdir -p " + stateDirMountSource);
