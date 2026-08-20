@@ -1581,6 +1581,9 @@ public class XdnGigapaxosApp
     String removeDirCommand = String.format("rm -rf %s", toBeRemovedMountDir);
     int code = Shell.runCommand(removeDirCommand);
     assert code == 0;
+    // prune the now-empty per-service parent; rmdir refuses non-empty dirs, so
+    // this is a no-op while another epoch's state still lives here
+    Shell.runCommand("rmdir " + Paths.get(toBeRemovedMountDir).getParent());
 
     logger.log(
         Level.FINE,
