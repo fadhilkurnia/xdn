@@ -131,6 +131,8 @@ jobs:
           - XdnGetReplicaInfoTest
           - XdnMultiServiceTest
           - XdnPerReplicaRequestTest
+          - XdnRestartRecoveryTest
+          - XdnServiceDestroyRecreateTest
           - XdnSetCoordinatorNodeTest
           - XdnTaggedImageLaunchTest
           - XdnClusterLaunchTest
@@ -157,6 +159,23 @@ jobs:
         docker run --rm hello-world
         docker pull fadhilkurnia/xdn-bookcatalog
         docker pull fadhilkurnia/xdn-randstate
+
+    # The WordPress-cluster test needs ~1.2GB of images (mysql:8.0 base + wordpress) that are
+    # otherwise pulled from Docker Hub on every run. Cache them as a tarball: on a hit, docker
+    # load restores them before the test (the test's `docker build` then resolves FROM mysql:8.0
+    # locally and its pre-pull of wordpress is a no-op); on a miss, the post-test step below
+    # saves the freshly pulled images and actions/cache uploads the tarball at job end.
+    - name: 🗄️ Restore docker image cache (WordPress-cluster test)
+      if: matrix.test_class == 'XdnWordPressClusterTest'
+      id: wp-image-cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/wp-docker-images.tar
+        key: wp-docker-images-mysql8.0-wordpress6.5.4
+
+    - name: 🗄️ Load cached docker images (WordPress-cluster test)
+      if: matrix.test_class == 'XdnWordPressClusterTest' && steps.wp-image-cache.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/wp-docker-images.tar
 
     - name: 🐝 Initialize Docker swarm (for cluster overlay networking)
       # Required by the cluster tests (XdnClusterLaunchTest, XdnWordPressClusterTest), harmless
@@ -206,6 +225,12 @@ jobs:
       run: |
         set -o pipefail
         bin/run_xdn_tests.sh ${{ matrix.test_class }} 2>&1 | tee junit-test-output.log
+
+    - name: 🗄️ Save docker images for cache (WordPress-cluster test)
+      # Runs even when the test failed — the images are valid either way, and caching them
+      # makes the retry faster. actions/cache uploads the tarball in its post step.
+      if: always() && matrix.test_class == 'XdnWordPressClusterTest' && steps.wp-image-cache.outputs.cache-hit != 'true'
+      run: docker save -o /tmp/wp-docker-images.tar mysql:8.0 wordpress:6.5.4-apache || true
 
     - name: 📝 Reporting the test results ...
       uses: dorny/test-reporter@v2

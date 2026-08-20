@@ -192,6 +192,10 @@ function do_distributed_initialization() {
       }
       progress_line "$machine" "[ssh] ok"
 
+      progress_line "$machine" "[root-ssh] start"
+      prepare_remote_root_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME"
+      progress_line "$machine" "[root-ssh] ok"
+
       progress_line "$machine" "[install] start"
       install_dependencies "$machine" "$SSH_KEY" "$USERNAME" || {
         progress_line "$machine" "[install] FAILED"
@@ -250,7 +254,10 @@ function do_start_all() {
   echo "Starting all gigapaxos servers defined in the config ..."
 
   local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local DEFAULT_XDN_CONFIG="./conf/xdn.properties"
   local CONFIG=$DEFAULT_CONFIG
+  local XDN_CONFIG=$DEFAULT_XDN_CONFIG
+  local XDN_CONFIG_SET=0
   local SSH_KEY=""
   local USERNAME=""
 
@@ -258,6 +265,10 @@ function do_start_all() {
     case $ARG in
     -config=*)
       CONFIG="${ARG#*=}"
+      ;;
+    -xdn-config=*)
+      XDN_CONFIG="${ARG#*=}"
+      XDN_CONFIG_SET=1
       ;;
     -ssh-key=*)
       SSH_KEY="${ARG#*=}"
@@ -271,6 +282,14 @@ function do_start_all() {
   if [ ! -f "$CONFIG" ]; then
     echo "Config file '$CONFIG' can not be found!"
     exit 1
+  fi
+
+  if [ "$XDN_CONFIG_SET" -eq 1 ] && [ ! -f "$XDN_CONFIG" ]; then
+    echo "XDN config file '$XDN_CONFIG' can not be found!"
+    exit 1
+  fi
+  if [ "$XDN_CONFIG_SET" -eq 0 ] && [ ! -f "$XDN_CONFIG" ]; then
+    XDN_CONFIG=""
   fi
 
   if [ -z "$SSH_KEY" ]; then
@@ -287,20 +306,245 @@ function do_start_all() {
   CONFIG_DIR=$(cd "$(dirname "$CONFIG")" && pwd)
   local CONFIG_ABS="$CONFIG_DIR/$(basename "$CONFIG")"
 
+  local XDN_CONFIG_ABS=""
+  if [ -n "$XDN_CONFIG" ]; then
+    local XDN_CONFIG_DIR
+    XDN_CONFIG_DIR=$(cd "$(dirname "$XDN_CONFIG")" && pwd)
+    XDN_CONFIG_ABS="$XDN_CONFIG_DIR/$(basename "$XDN_CONFIG")"
+  fi
+
   local GPSERVER="$XDN_SRC_PATH/bin/gpServer.sh"
   if [ ! -x "$GPSERVER" ]; then
     echo "Unable to find executable gpServer at '$GPSERVER'"
     exit 1
   fi
 
-  echo " - config file : ${CONFIG_ABS}"
-  echo " - ssh key     : ${SSH_KEY}"
-  echo " - username    : ${USERNAME}"
+  echo " - config file     : ${CONFIG_ABS}"
+  echo " - xdn config file : ${XDN_CONFIG_ABS:-<none>}"
+  echo " - ssh key         : ${SSH_KEY}"
+  echo " - username        : ${USERNAME}"
   echo ""
   echo "Invoking gpServer to start all nodes ..."
 
-  SSH_KEY_PATH="$SSH_KEY" GP_USERNAME="$USERNAME" "$GPSERVER" "-DgigapaxosConfig=$CONFIG_ABS" start all
+  local GP_ARGS=("-DgigapaxosConfig=$CONFIG_ABS")
+  if [ -n "$XDN_CONFIG_ABS" ]; then
+    GP_ARGS+=("-DxdnConfig=$XDN_CONFIG_ABS")
+  fi
+
+  SSH_KEY_PATH="$SSH_KEY" GP_USERNAME="$USERNAME" "$GPSERVER" \
+    "${GP_ARGS[@]}" start all
   exit $?
+}
+
+function do_clear_all() {
+  echo "Force-clearing all gigapaxos servers defined in the config ..."
+
+  local DEFAULT_CONFIG="./conf/gigapaxos.properties"
+  local DEFAULT_XDN_CONFIG="./conf/xdn.properties"
+  local CONFIG=$DEFAULT_CONFIG
+  local XDN_CONFIG=$DEFAULT_XDN_CONFIG
+  local XDN_CONFIG_SET=0
+  local SSH_KEY=""
+  local USERNAME=""
+
+  for ARG in "$@"; do
+    case $ARG in
+    -config=*)
+      CONFIG="${ARG#*=}"
+      ;;
+    -xdn-config=*)
+      XDN_CONFIG="${ARG#*=}"
+      XDN_CONFIG_SET=1
+      ;;
+    -ssh-key=*)
+      SSH_KEY="${ARG#*=}"
+      ;;
+    -username=*)
+      USERNAME="${ARG#*=}"
+      ;;
+    esac
+  done
+
+  if [ ! -f "$CONFIG" ]; then
+    echo "Config file '$CONFIG' can not be found!"
+    exit 1
+  fi
+
+  if [ "$XDN_CONFIG_SET" -eq 1 ] && [ ! -f "$XDN_CONFIG" ]; then
+    echo "XDN config file '$XDN_CONFIG' can not be found!"
+    exit 1
+  fi
+  if [ "$XDN_CONFIG_SET" -eq 0 ] && [ ! -f "$XDN_CONFIG" ]; then
+    XDN_CONFIG=""
+  fi
+
+  if [ -z "$SSH_KEY" ]; then
+    echo "Please specify the ssh key with '-ssh-key=<location>' argument."
+    exit 1
+  fi
+
+  if [ -z "$USERNAME" ]; then
+    echo "Please specify the username with '-username=<name>' argument."
+    exit 1
+  fi
+
+  local CONFIG_DIR
+  CONFIG_DIR=$(cd "$(dirname "$CONFIG")" && pwd)
+  local CONFIG_ABS="$CONFIG_DIR/$(basename "$CONFIG")"
+
+  local XDN_CONFIG_ABS=""
+  if [ -n "$XDN_CONFIG" ]; then
+    local XDN_CONFIG_DIR
+    XDN_CONFIG_DIR=$(cd "$(dirname "$XDN_CONFIG")" && pwd)
+    XDN_CONFIG_ABS="$XDN_CONFIG_DIR/$(basename "$XDN_CONFIG")"
+  fi
+
+  local GPSERVER="$XDN_SRC_PATH/bin/gpServer.sh"
+  if [ ! -x "$GPSERVER" ]; then
+    echo "Unable to find executable gpServer at '$GPSERVER'"
+    exit 1
+  fi
+
+  echo " - config file     : ${CONFIG_ABS}"
+  echo " - xdn config file : ${XDN_CONFIG_ABS:-<none>}"
+  echo " - ssh key         : ${SSH_KEY}"
+  echo " - username        : ${USERNAME}"
+  echo ""
+  echo "Invoking gpServer to force-clear all nodes ..."
+
+  local GP_ARGS=("-DgigapaxosConfig=$CONFIG_ABS")
+  if [ -n "$XDN_CONFIG_ABS" ]; then
+    GP_ARGS+=("-DxdnConfig=$XDN_CONFIG_ABS")
+  fi
+
+  SSH_KEY_PATH="$SSH_KEY" GP_USERNAME="$USERNAME" "$GPSERVER" \
+    "${GP_ARGS[@]}" forceclear all
+  local gp_exit=$?
+
+  # wipe leftover fuselog/state directories on every node after forceclear,
+  # so a fresh start-all doesn't inherit stale data from a prior run.
+  local ssh_key_expanded="${SSH_KEY/#\~/$HOME}"
+  local unique_ips=()
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+
+  echo ""
+  echo "Unmounting any active fuselog mounts, then clearing state on all nodes ..."
+  for ip in "${unique_ips[@]}"; do
+    if ! ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" '
+        mount | awk "\$5 == \"fuse.fuselog\" {print \$3}" | xargs -r -n1 sudo fusermount3 -u
+        sudo rm -rf /tmp/xdn /tmp/xdn2 ~/XdnApp ~/XdnGigapaxosApp
+      '; then
+      echo " - $ip: failed to clean up (mount/state/XdnApp)" >&2
+    fi
+  done
+
+  exit $gp_exit
+}
+
+# do_set_latency injects a uniform, static netem delay on every node's
+# experiment-subnet interface (auto-detected per node), before start-all.
+function do_set_latency() {
+  echo "Injecting uniform network latency on all nodes defined in the config ..."
+
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
+
+  local DELAY_MS=""
+  for ARG in "$@"; do
+    case $ARG in
+    -delay-ms=*)
+      DELAY_MS="${ARG#*=}"
+      ;;
+    esac
+  done
+  if [ -z "$DELAY_MS" ]; then
+    echo "Please specify the delay with '-delay-ms=<value>' argument." >&2
+    exit 1
+  fi
+
+  local ssh_key_expanded="${SSH_KEY/#\~/$HOME}"
+  local unique_ips=()
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
+
+  echo " - config file : ${CONFIG}"
+  echo " - ssh key     : ${SSH_KEY}"
+  echo " - username    : ${USERNAME}"
+  echo " - delay       : ${DELAY_MS}ms"
+  echo " - machines    :"
+  for ip in "${unique_ips[@]}"; do
+    echo "   - $ip"
+  done
+  echo ""
+
+  local failed=0
+  for ip in "${unique_ips[@]}"; do
+    local iface
+    iface=$(ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "ip -4 -o addr show | grep -F '$ip/' | awk '{print \$2}'")
+    if [ -z "$iface" ]; then
+      echo "[latency] $ip: could not detect interface for $ip" >&2
+      failed=1
+      continue
+    fi
+    echo "[latency] $ip: iface=$iface, setting delay=${DELAY_MS}ms"
+    if ! ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "sudo tc qdisc replace dev $iface root netem delay ${DELAY_MS}ms"; then
+      echo "[latency] $ip: failed to set qdisc" >&2
+      failed=1
+    fi
+  done
+
+  if [ $failed -ne 0 ]; then
+    echo ""
+    echo "[set-latency] completed with failures." >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "[set-latency] ${DELAY_MS}ms delay set on all nodes."
+  exit 0
+}
+
+function do_clear_latency() {
+  echo "Clearing injected network latency on all nodes defined in the config ..."
+
+  local parsed_args
+  if ! parsed_args=$(parse_common_dist_args "$@"); then
+    exit 1
+  fi
+  read -r CONFIG SSH_KEY USERNAME <<<"$parsed_args"
+
+  local ssh_key_expanded="${SSH_KEY/#\~/$HOME}"
+  local unique_ips=()
+  mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
+  if [ ${#unique_ips[@]} -eq 0 ]; then
+    echo "No machines found in config '$CONFIG'." >&2
+    exit 1
+  fi
+
+  for ip in "${unique_ips[@]}"; do
+    local iface
+    iface=$(ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "ip -4 -o addr show | grep -F '$ip/' | awk '{print \$2}'")
+    if [ -z "$iface" ]; then
+      echo "[latency] $ip: could not detect interface, skipping" >&2
+      continue
+    fi
+    echo "[latency] $ip: clearing qdisc on $iface"
+    ssh -i "$ssh_key_expanded" -o StrictHostKeyChecking=no "$USERNAME@$ip" \
+      "sudo tc qdisc del dev $iface root" 2>/dev/null
+  done
+
+  echo ""
+  echo "[clear-latency] done."
+  exit 0
 }
 
 function do_start_ar_instance() {
@@ -442,6 +686,57 @@ EOF
   rm -f "$tmp_config"
 
   return $err
+}
+
+function prepare_remote_root_ssh_config() {
+  if [ "$#" -lt 4 ]; then
+    echo "prepare_remote_root_ssh_config expects 4 args (node, config, ssh_key, username)" >&2
+    return 1
+  fi
+
+  local node=$1;
+  local config_file=$2;
+  local ssh_key=$3;
+  local username=$4;
+  local err=0
+
+  echo "Preparing root ssh access for machine $node ..."
+
+  ssh_key="${ssh_key/#\~/$HOME}"
+
+  local pub_key
+  pub_key=$(ssh-keygen -y -f "$ssh_key")
+
+  # stage the key under /tmp (user-writable), then use sudo remotely to
+  # move it into /root/.ssh, which the regular user can't write directly.
+  scp -i "$ssh_key" -o StrictHostKeyChecking=no "$ssh_key" "$username@$node:/tmp/xdn_ssh_key" || err=1
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$username@$node" "
+    echo '$pub_key' > /tmp/xdn_ssh_key.pub &&
+    sudo mkdir -p /root/.ssh &&
+    sudo chmod 700 /root/.ssh &&
+    sudo cp /tmp/xdn_ssh_key /root/.ssh/xdn_ssh_key &&
+    sudo chmod 600 /root/.ssh/xdn_ssh_key &&
+    cat /tmp/xdn_ssh_key.pub | sudo tee -a /root/.ssh/authorized_keys > /dev/null &&
+    sudo chmod 600 /root/.ssh/authorized_keys &&
+    sudo chown root:root /root/.ssh/xdn_ssh_key /root/.ssh/authorized_keys &&
+    rm -f /tmp/xdn_ssh_key /tmp/xdn_ssh_key.pub
+  " || err=1
+
+  return $err
+}
+
+function check_passwordless_sudo() {
+  if [ "$#" -lt 3 ]; then
+    echo "check_passwordless_sudo expects 3 args (node, ssh_key, username)" >&2
+    return 1
+  fi
+
+  local node=$1;
+  local ssh_key=$2;
+  local username=$3;
+
+  ssh_key="${ssh_key/#\~/$HOME}"
+  ssh -i "$ssh_key" -o StrictHostKeyChecking=no -o BatchMode=yes "$username@$node" "sudo -n true" 2>/dev/null
 }
 
 function prepare_local_ssh_config() {
@@ -659,7 +954,16 @@ function print_usage() {
   echo "   xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
   echo " To start all gigapaxos servers using gpServer:"
-  echo "   xdnd start-all -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo "   xdnd start-all -config=gigapaxos.properties -xdn-config=xdn.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To force-clear all gigapaxos servers using gpServer:"
+  echo "   xdnd clear-all -config=gigapaxos.properties -xdn-config=xdn.properties -ssh-key=/ssh/key -username=user"
+  echo ""
+  echo " To inject uniform network latency on all nodes:"
+  echo "   xdnd set-latency -config=gigapaxos.properties -ssh-key=/ssh/key -username=user -delay-ms=50"
+  echo ""
+  echo " To clear injected network latency on all nodes:"
+  echo "   xdnd clear-latency -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
   echo ""
   echo " To initialize distributed observability:"
   echo "   xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
@@ -1101,7 +1405,7 @@ function main() {
 
   # parse the second param, i.e., the action.
   local SECOND_PARAM=$1
-  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "init-driver" "start" "help" "check")
+  local VALID_ACTIONS=("dist-init" "dist-init-observability" "start-all" "clear-all" "set-latency" "clear-latency" "init-driver" "start" "help" "check")
   if ! is_in_list "$SECOND_PARAM" "${VALID_ACTIONS[@]}"; then
     echo "Action '$SECOND_PARAM' is not a valid actions."
     echo "Valid actions are: start, check, dist-init, help."
@@ -1120,6 +1424,15 @@ function main() {
     ;;
   "start-all")
     do_start_all "$@"
+    ;;
+  "clear-all")
+    do_clear_all "$@"
+    ;;
+  "set-latency")
+    do_set_latency "$@"
+    ;;
+  "clear-latency")
+    do_clear_latency "$@"
     ;;
   "init-driver")
     do_init_driver "$@"

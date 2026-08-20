@@ -202,11 +202,13 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   }
 
   public boolean usesPrimaryBackup(String serviceName) {
-    var coordinator = this.serviceCoordinator.get(serviceName);
+    var coordinator = this.lookupCoordinator(serviceName);
     return coordinator != null && coordinator == this.primaryBackupCoordinator;
   }
 
   public List<RequestMatcher> getRequestMatchersForService(String serviceName) {
+    // lookupCoordinator repopulates serviceProperties after a restart-recovery.
+    this.lookupCoordinator(serviceName);
     ServiceProperty sp = this.serviceProperties.get(serviceName);
     return sp != null ? sp.getRequestMatchers() : null;
   }
@@ -228,7 +230,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
     // gets service name and its coordinator
     var serviceName = request.getServiceName();
-    var coordinator = this.serviceCoordinator.get(serviceName);
+    var coordinator = this.lookupCoordinator(serviceName);
     if (coordinator == null) {
       // Gigapaxos' default group and the reconfigurator's node-config meta-records
       // (AR_AR_NODES, AR_RC_NODES) have no per-service XDN coordinator -- XDN keeps
@@ -391,7 +393,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return;
     }
 
-    var coordinator = this.serviceCoordinator.get(serviceName);
+    var coordinator = this.lookupCoordinator(serviceName);
     if (coordinator == null) {
       setCoordinatorNodeRequest.setFailed(
           ClientReconfigurationPacket.ResponseCodes.ACTIVE_REPLICA_EXCEPTION);
@@ -567,7 +569,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       callback.executed(request, true);
       return;
     }
-    AbstractReplicaCoordinator<NodeIDType> coordinator = this.serviceCoordinator.get(serviceName);
+    AbstractReplicaCoordinator<NodeIDType> coordinator = this.lookupCoordinator(serviceName);
 
     // prepare for the response
     String protocolName = coordinator != null ? coordinator.getClass().getSimpleName() : "?";
@@ -921,7 +923,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
   @Override
   public boolean deleteReplicaGroup(String serviceName, int epoch) {
-    AbstractReplicaCoordinator<NodeIDType> coordinator = this.serviceCoordinator.get(serviceName);
+    AbstractReplicaCoordinator<NodeIDType> coordinator = this.lookupCoordinator(serviceName);
     if (coordinator == null) {
       return true;
     }
@@ -930,11 +932,80 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   }
 
   @Override
+  public boolean deleteFinalState(String serviceName, int epoch) {
+    // App-level cleanup: remove this epoch's containers and state directories.
+    boolean isAppStateDeleted = this.xdnGigapaxosApp.deleteFinalState(serviceName, epoch);
+
+    // Paxos-level cleanup: remove the epoch-final checkpoint from the paxos logger.
+    // Without this, re-creating a destroyed service under the same name is refused
+    // forever: the on-disk stopped epoch trips gigapaxos' going-back-in-time check
+    // (createPaxosInstanceFinal's equalOrHigherVersionStopped), every AR throws
+    // PaxosInstanceCreationException, and the reconfigurator resends START_EPOCH
+    // indefinitely. The paxos, primary-backup, and sequential (Aw) coordinators all
+    // share one PaxosManager, so delegating to paxosCoordinator covers every
+    // paxos-backed service; for services without paxos state this is a no-op that
+    // returns true.
+    boolean isPaxosStateDeleted = this.paxosCoordinator.deleteFinalState(serviceName, epoch);
+
+    return isAppStateDeleted && isPaxosStateDeleted;
+  }
+
+  @Override
   public Set<NodeIDType> getReplicaGroup(String serviceName) {
-    var coordinator = this.serviceCoordinator.get(serviceName);
+    var coordinator = this.lookupCoordinator(serviceName);
     if (coordinator == null) {
       return null;
     }
     return coordinator.getReplicaGroup(serviceName);
+  }
+
+  // Looks up the service's coordinator, lazily re-registering it after a process restart.
+  private AbstractReplicaCoordinator<NodeIDType> lookupCoordinator(String serviceName) {
+    AbstractReplicaCoordinator<NodeIDType> coordinator = this.serviceCoordinator.get(serviceName);
+    if (coordinator != null) {
+      return coordinator;
+    }
+    return this.recoverServiceRegistration(serviceName);
+  }
+
+  // On a process restart, gigapaxos log recovery replays straight into
+  // XdnGigapaxosApp.restore(), which re-creates the service instance (and its containers)
+  // without ever calling createReplicaGroup() -- the only writer of the serviceCoordinator
+  // map -- so the node would 404 every request for a service it still hosts. Rebuild the
+  // mapping from what recovery left behind: the app retains the ServiceProperty, and the
+  // inferred sub-coordinator has already recovered the replica group from its own logs.
+  // Registration is refused while the sub-coordinator has no recovered group (a restore
+  // still in flight, or a service this node truly never hosted) so requests are never
+  // routed into a coordinator that would drop them.
+  private synchronized AbstractReplicaCoordinator<NodeIDType> recoverServiceRegistration(
+      String serviceName) {
+    AbstractReplicaCoordinator<NodeIDType> coordinator = this.serviceCoordinator.get(serviceName);
+    if (coordinator != null) {
+      return coordinator;
+    }
+    ServiceInstance instance = this.xdnGigapaxosApp.getServiceInstance(serviceName);
+    if (instance == null || instance.property == null) {
+      return null;
+    }
+    AbstractReplicaCoordinator<NodeIDType> inferred =
+        this.inferCoordinatorByProperties(instance.property);
+    if (inferred == null) {
+      return null;
+    }
+    Set<NodeIDType> group = inferred.getReplicaGroup(serviceName);
+    if (group == null || group.isEmpty()) {
+      logger.log(
+          Level.WARNING,
+          "{0}:XdnReplicaCoordinator - cannot re-register recovered service {1}: "
+              + "{2} has no replica group for it (yet)",
+          new Object[] {myNodeID, serviceName, inferred.getClass().getSimpleName()});
+      return null;
+    }
+    this.serviceCoordinator.put(serviceName, inferred);
+    this.serviceProperties.put(serviceName, instance.property);
+    System.out.printf(
+        ">> XDNReplicaCoordinator:%s re-registered recovered service %s with %s (group=%s)%n",
+        myNodeID, serviceName, inferred.getClass().getSimpleName(), group);
+    return inferred;
   }
 }

@@ -74,3 +74,5 @@ nav:
       - 'GigaPaxos — log compaction': 'reference/paxos-compaction.md'
       - 'WordPress primary-backup investigation': 'reference/wordpress-pb-investigation.md'
   - Dashboard: 'dashboard.md'
+  # Embeds eval/perf-dashboard/, bundled at /performance/app/ by bin/build_site.sh.
+  - Performance: 'performance.md'

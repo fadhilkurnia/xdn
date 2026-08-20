@@ -395,6 +395,19 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
     int umountRetCode = Shell.runCommand("fusermount -u " + targetDir, false);
     int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
     assert rmRetCode == 0;
+    // prune this epoch's socket and stateDiff files, which otherwise outlive the service
+    Shell.runCommand(
+        String.format(
+            "rm -f %s%s::%d.sock %s%s::%d::apply.sock %s%s::%d.diff",
+            baseSocketDirPath,
+            serviceName,
+            placementEpoch,
+            baseSocketDirPath,
+            serviceName,
+            placementEpoch,
+            baseDiffDirPath,
+            serviceName,
+            placementEpoch));
     return true;
   }
 

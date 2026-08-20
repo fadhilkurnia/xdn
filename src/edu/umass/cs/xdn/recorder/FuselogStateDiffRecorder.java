@@ -831,6 +831,17 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       return false;
     }
 
+    // prune this epoch's socket and stateDiff files, which otherwise outlive the service
+    Shell.runCommand(
+        String.format(
+            "rm -f %s%s::%d.sock %s%s::%d.diff",
+            baseSocketDirPath,
+            serviceName,
+            placementEpoch,
+            baseDiffDirPath,
+            serviceName,
+            placementEpoch));
+
     return true;
   }
 

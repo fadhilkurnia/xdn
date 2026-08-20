@@ -70,6 +70,11 @@ loose-group_replication_bootstrap_group = OFF
 # over the (non-TLS) recovery connection. This is a system variable — it canNOT be set via
 # CHANGE REPLICATION SOURCE on the recovery channel (that fails with ER 3139).
 loose-group_replication_recovery_get_public_key = ON
+# Slow hosts (CI runners with 3 concurrent members) can exhaust the default
+# distributed-recovery budget (10 tries x 60s apart) and land the joiner in the
+# terminal ERROR state. Retry more times, faster, to ride out a busy donor.
+loose-group_replication_recovery_retry_count        = 30
+loose-group_replication_recovery_reconnect_interval = 10
 # keep memory modest: up to N of these run on one CI runner alongside the JVM
 innodb_buffer_pool_size           = 128M
 performance_schema                = ON
@@ -160,6 +165,10 @@ if [ "$state" != "ONLINE" ] && [ "$state" != "RECOVERING" ]; then
     [ "$created" = 1 ] || \
       echo "[xdn-mysql] WARNING: app db not created (member never became writable)" >&2
   else
+    # Stagger joiners by ordinal so they do not all race distributed recovery
+    # against the same donor at once — simultaneous recovery from one donor is
+    # a common way for the loser to exhaust its retries on a slow host.
+    sleep "$(( XDN_CLUSTER_ORDINAL * 5 ))"
     echo "[xdn-mysql] joining the group (retrying until the seed is reachable)"
     # 6 min: at larger cluster sizes many joiners race distributed recovery
     # against the same donors and later ordinals wait through several rounds.
@@ -171,6 +180,33 @@ if [ "$state" != "ONLINE" ] && [ "$state" != "RECOVERING" ]; then
     [ "$joined" = 1 ] || echo "[xdn-mysql] WARNING: START GROUP_REPLICATION never succeeded" >&2
   fi
 fi
+
+# Supervise group membership for the life of the container. START GROUP_REPLICATION
+# can be accepted and the member still land in the terminal ERROR state later (e.g.
+# distributed recovery exhausted its retries); nothing in MySQL retries a terminal
+# member, so re-issue STOP/START whenever the member sits outside ONLINE/RECOVERING
+# for two consecutive checks (one bad reading may just be a transient query failure,
+# and needlessly bouncing a healthy member would drop it from the group). Never
+# re-bootstraps — a plain START either rejoins the existing group or fails harmlessly.
+(
+  bad=0
+  while true; do
+    sleep 10
+    st="$(mysql_tcp "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_HOST='${XDN_CLUSTER_SELF}'" 2>/dev/null || true)"
+    case "$st" in
+      ONLINE|RECOVERING) bad=0 ;;
+      *)
+        bad=$((bad + 1))
+        if [ "$bad" -ge 2 ]; then
+          echo "[xdn-mysql] supervisor: member state '${st:-<none>}'; retrying START GROUP_REPLICATION"
+          mysql_tcp "STOP GROUP_REPLICATION;" >/dev/null 2>&1 || true
+          mysql_tcp "START GROUP_REPLICATION;" >/dev/null 2>&1 || true
+          bad=0
+        fi
+        ;;
+    esac
+  done
+) &
 
 # Report final membership state (best effort; informational).
 for _ in $(seq 1 60); do

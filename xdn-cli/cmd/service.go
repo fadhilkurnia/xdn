@@ -212,7 +212,8 @@ var ServiceInfoCmd = &cobra.Command{
 				if httpAddrStr, ok := httpAddrIf.(string); ok && httpAddrStr != "" {
 					_, httpIP, parsedPort, ok := parseNodeSocketAddress(httpAddrStr)
 					if ok {
-						httpBaseURL = fmt.Sprintf("http://%s:%d", httpIP, parsedPort)
+						// JoinHostPort brackets IPv6 literals so the URL stays valid.
+						httpBaseURL = "http://" + net.JoinHostPort(httpIP, strconv.Itoa(parsedPort))
 						httpPort = parsedPort
 					}
 				}
@@ -329,17 +330,7 @@ var ServiceInfoCmd = &cobra.Command{
 				svcReplicaURLStr = fmt.Sprintf("%s/?_xdnsvc=%s",
 					r.httpBaseURL, url.QueryEscape(serviceName))
 			}
-			roleStr := "unreachable"
-			createdStr := "unreachable"
-			statusStr := "unreachable"
-			info := replicaInfos[idx]
-			if info.fetchErr == nil && info.raw != nil {
-				roleStr = stringOrDash(info.raw["role"])
-				if c := pickStatefulContainer(info.raw); c != nil {
-					createdStr = stringOrDash(c["createdAt"])
-					statusStr = stringOrDash(c["status"])
-				}
-			}
+			roleStr, createdStr, statusStr := replicaStatusCells(replicaInfos[idx])
 			rows[idx] = replicaRow{
 				geoStr, r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr, svcReplicaURLStr,
 			}
@@ -389,6 +380,16 @@ var ServiceInfoCmd = &cobra.Command{
 				wGeo, row.geolocation, wID, row.machineID, wIP, row.ipAddress,
 				wPort, row.webPort, roleCell, wCreated, row.created,
 				statusCell, wURL, row.svcReplicaURL)
+		}
+
+		for _, row := range rows {
+			if row.status == "standby" {
+				fmt.Printf(
+					" %s\n",
+					footnoteColorPrint.Sprint(
+						"backups run no container; primary-backup activates one on promotion"))
+				break
+			}
 		}
 
 		if primaryInfo == nil {
@@ -461,20 +462,24 @@ var ServiceDestroyCmd = &cobra.Command{
 		}
 
 		serviceName := args[0]
-		isValidInput := false
-		isRemoveConfirmed := false
-		for !isValidInput {
+		isRemoveConfirmed, _ := cmd.Flags().GetBool("yes")
+		input := bufio.NewScanner(os.Stdin)
+		for !isRemoveConfirmed {
 			fmt.Printf(
 				"Are you sure you want to remove `%s` service? [yes/no]\n > ",
 				serviceName)
-			input := bufio.NewScanner(os.Stdin)
-			input.Scan()
+			// Scan() returning false means stdin is closed (EOF, e.g. piped
+			// input ran out) -- treat as "no" instead of looping forever.
+			if !input.Scan() {
+				fmt.Printf("\n")
+				break
+			}
 			isSureText := input.Text()
-			if isSureText == "yes" || isSureText == "no" {
-				isValidInput = true
-				if isSureText == "yes" {
-					isRemoveConfirmed = true
-				}
+			if isSureText == "yes" {
+				isRemoveConfirmed = true
+				break
+			}
+			if isSureText == "no" {
 				break
 			}
 			fmt.Printf(
@@ -577,20 +582,24 @@ var ServiceLeaderCmd = &cobra.Command{
 		serviceName := args[0]
 		nodeID := args[1]
 
-		isValidInput := false
 		isChangeConfirmed := false
-		for !isValidInput {
+		input := bufio.NewScanner(os.Stdin)
+		for {
 			fmt.Printf(
 				"Are you sure you want to change the leader of `%s` to `%s`? [yes/no]\n > ",
 				serviceName, nodeID)
-			input := bufio.NewScanner(os.Stdin)
-			input.Scan()
+			// Scan() returning false means stdin is closed (EOF, e.g. piped
+			// input ran out) -- treat as "no" instead of looping forever.
+			if !input.Scan() {
+				fmt.Printf("\n")
+				break
+			}
 			isSureText := input.Text()
-			if isSureText == "yes" || isSureText == "no" {
-				isValidInput = true
-				if isSureText == "yes" {
-					isChangeConfirmed = true
-				}
+			if isSureText == "yes" {
+				isChangeConfirmed = true
+				break
+			}
+			if isSureText == "no" {
 				break
 			}
 			fmt.Printf(
@@ -852,6 +861,9 @@ func init() {
 	ServiceMoveCmd.Flags().StringP("leader", "l", "",
 		"Optional coordinator node ID; must be one of --nodes")
 	_ = ServiceMoveCmd.MarkFlagRequired("nodes")
+
+	ServiceDestroyCmd.Flags().BoolP("yes", "y", false,
+		"Skip the confirmation prompt (for non-interactive use)")
 }
 
 type placementReplica struct {
@@ -870,22 +882,33 @@ type replicaInfo struct {
 }
 
 // parseNodeSocketAddress parses Java InetSocketAddress.toString() output
-// like "c240g5.wisc.cloudlab.us/128.105.144.59:2000" or "/127.0.0.1:2001".
-// Returns host (may be empty), ip, port; ok=false on malformed input.
+// like "c240g5.wisc.cloudlab.us/128.105.144.59:2000", "/127.0.0.1:2001", or,
+// for IPv6 nodes, "/[2600:1f18:1376:5a02:0:0:0:a]:2000".
+// Returns host (may be empty), ip (without brackets), port; ok=false on
+// malformed input.
 func parseNodeSocketAddress(s string) (host, ip string, port int, ok bool) {
-	hostPort := strings.SplitN(s, ":", 2)
-	if len(hostPort) != 2 {
+	slash := strings.Index(s, "/")
+	if slash < 0 {
 		return "", "", 0, false
 	}
-	hostIP := strings.SplitN(hostPort[0], "/", 2)
-	if len(hostIP) != 2 {
-		return "", "", 0, false
+	host = s[:slash]
+	addrPort := s[slash+1:]
+	ipStr, portStr, err := net.SplitHostPort(addrPort)
+	if err != nil {
+		// Older JDKs print IPv6 without brackets ("/2600::a:2000"), which
+		// net.SplitHostPort rejects; take the text after the last colon as
+		// the port.
+		colon := strings.LastIndex(addrPort, ":")
+		if colon < 0 {
+			return "", "", 0, false
+		}
+		ipStr, portStr = addrPort[:colon], addrPort[colon+1:]
 	}
-	p, err := strconv.Atoi(hostPort[1])
+	p, err := strconv.Atoi(portStr)
 	if err != nil {
 		return "", "", 0, false
 	}
-	return hostIP[0], hostIP[1], p, true
+	return host, ipStr, p, true
 }
 
 // fetchReplicaInfo queries the AR's /replica/info endpoint. The AR HTTP
@@ -925,6 +948,24 @@ func fetchReplicaInfo(r placementReplica, serviceName string) replicaInfo {
 // the response has no container array.
 func pickStatefulContainer(info map[string]interface{}) map[string]interface{} {
 	return pickNamedContainer(info, "statefulComponent")
+}
+
+// replicaStatusCells renders the ROLE / CREATED / STATUS table cells for one replica.
+// "unreachable" is reserved for replicas whose replica-info fetch actually failed. A replica
+// that answered but runs no container is not unreachable: a primary-backup backup runs the
+// containerized service only after promotion, so it renders as a healthy "standby".
+func replicaStatusCells(info replicaInfo) (role, created, status string) {
+	if info.fetchErr != nil || info.raw == nil {
+		return "unreachable", "unreachable", "unreachable"
+	}
+	role = stringOrDash(info.raw["role"])
+	if c := pickStatefulContainer(info.raw); c != nil {
+		return role, stringOrDash(c["createdAt"]), stringOrDash(c["status"])
+	}
+	if strings.EqualFold(role, "backup") {
+		return role, "-", "standby"
+	}
+	return role, "-", "-"
 }
 
 // pickEntryContainer returns the containers[] entry whose "name" matches
@@ -978,6 +1019,9 @@ func colorForStatus(s string) *color.Color {
 		return color.New(color.FgRed)
 	case "created", "starting", "restarting", "paused":
 		return color.New(color.FgYellow)
+	case "standby":
+		// A reachable primary-backup backup awaiting promotion: healthy, not a warning.
+		return color.New(color.FgCyan)
 	default:
 		return color.New()
 	}

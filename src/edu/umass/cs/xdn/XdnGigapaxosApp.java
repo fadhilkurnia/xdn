@@ -920,20 +920,21 @@ public class XdnGigapaxosApp
    * @return false if failed to initialize the service.
    */
   private boolean initContainerizedService2(String serviceName) {
-    // Serialize per-service initialization: the reconfigurator resends START_EPOCH when a
-    // slow first pass (image pull, MySQL first boot behind the readiness gate) outlives its
-    // ack timeout, and an unguarded re-entry would rm -rf the state dir and force-recreate
-    // containers mid-bootstrap -- destroying e.g. a forming Group Replication group and
-    // stranding the bandwidth probe in the old network namespace. Re-entries block here
-    // until the in-flight pass finishes, then get absorbed by the initializationSucceed
-    // check below.
-    Object initLock = this.serviceInitLocks.computeIfAbsent(serviceName, k -> new Object());
-    synchronized (initLock) {
-      return initContainerizedService2Locked(serviceName);
+    // Serialize per-service initialization. Two ways it can re-enter destructively: (1) the
+    // reconfigurator resends START_EPOCH when a slow first pass (image pull, MySQL first boot
+    // behind the readiness gate) outlives its ack timeout; (2) PrimaryBackupManager can spawn
+    // duplicate primary-init threads. Either way, concurrent runs each rm -rf + mkdir the
+    // bind-mount source (recorder preInitialization), so one thread's `docker run` keeps landing
+    // inside the other's wipe window -- livelocking on "bind source path does not exist" and
+    // destroying e.g. a forming Group Replication group or stranding the bandwidth probe in the
+    // old network namespace. Re-entries block here, then the initializationSucceed early-return
+    // turns the duplicate invocation into a no-op.
+    synchronized (this.serviceInitLocks.computeIfAbsent(serviceName, k -> new Object())) {
+      return initContainerizedService2Serialized(serviceName);
     }
   }
 
-  private boolean initContainerizedService2Locked(String serviceName) {
+  private boolean initContainerizedService2Serialized(String serviceName) {
     int initialPlacementEpoch = this.servicePlacementEpoch.get(serviceName);
     assertNotNull("initialPlacementEpoch must not be null", initialPlacementEpoch);
 
@@ -994,6 +995,22 @@ public class XdnGigapaxosApp
     if (!service.property.isDeterministic()) {
       stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
       stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+      // Docker Desktop (macOS) validates bind sources eagerly at `docker run` (Linux dockerd
+      // would auto-create them as root), so ensure the mount source exists even when the
+      // recorder implementation did not create it.
+      try {
+        Files.createDirectories(Paths.get(stateDirMountSource));
+      } catch (IOException e) {
+        logger.log(
+            Level.WARNING,
+            "{0}:{1} failed to pre-create bind source {2}: {3}",
+            new Object[] {
+              this.myNodeId.toUpperCase(),
+              this.getClass().getSimpleName(),
+              stateDirMountSource,
+              e.getMessage()
+            });
+      }
     } else {
       Shell.runCommand("rm -rf " + stateDirMountSource);
       Shell.runCommand("mkdir -p " + stateDirMountSource);
@@ -1081,6 +1098,38 @@ public class XdnGigapaxosApp
     } else {
       // For deterministic services, no FUSE to drain — just mark init complete.
       service.initializationSucceed = true;
+    }
+
+    // Hold off returning until the entry port answers HTTP, mirroring the cluster path's
+    // gate. This matters most during restart recovery: gigapaxos rolls the paxos log
+    // forward immediately after restore() returns, and an execute() that reaches a
+    // still-booting container fails; after HANDLE_REQUEST_RETRY_LIMIT (10) retries at
+    // 100ms the instance is force-stopped and the committed decision is silently dropped,
+    // leaving this replica's container state permanently diverged from its peers.
+    // Best-effort on timeout: a pathologically slow image keeps today's behavior instead
+    // of failing the epoch start.
+    long readinessStartMs = System.currentTimeMillis();
+    if (waitForHttpReadiness(allocatedPort, 60_000)) {
+      logger.log(
+          Level.INFO,
+          "{0}:{1} service {2} entry port {3} answered HTTP in {4}ms",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort),
+            String.valueOf(System.currentTimeMillis() - readinessStartMs)
+          });
+    } else {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} service {2} entry port {3} not answering HTTP after 60s; proceeding",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort)
+          });
     }
 
     // store all the current service metadata
@@ -1638,6 +1687,9 @@ public class XdnGigapaxosApp
     String removeDirCommand = String.format("rm -rf %s", toBeRemovedMountDir);
     int code = Shell.runCommand(removeDirCommand);
     assert code == 0;
+    // prune the now-empty per-service parent; rmdir refuses non-empty dirs, so
+    // this is a no-op while another epoch's state still lives here
+    Shell.runCommand("rmdir " + Paths.get(toBeRemovedMountDir).getParent());
 
     logger.log(
         Level.FINE,

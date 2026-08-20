@@ -207,13 +207,17 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 				HttpActiveReplica.debugAppReference = xdnGigapaxosApp;
 			}
 
-			// Initialize HTTP server
-			new HttpActiveReplica(nodeId, this, addr, ssl);
+			// Initialize HTTP server; keep the reference so close() can tear it down
+			// (otherwise the acceptor outlives this node and a same-JVM restart of the
+			// node cannot re-bind the frontend port).
+			this.httpFrontend = new HttpActiveReplica(nodeId, this, addr, ssl);
 		} catch (Exception e) {
 			if (!(e instanceof InterruptedException)) // close
 				e.printStackTrace();
 		}
 	}
+
+	private volatile HttpActiveReplica httpFrontend = null;
 
 	protected static AbstractReplicaCoordinator<?> wrapCoordinator(
 			AbstractReplicaCoordinator<?> coordinator) {
@@ -858,6 +862,11 @@ public class ActiveReplica<NodeIDType> implements ReconfiguratorCallback,
 	 * For graceful closure.
 	 */
 	public void close() {
+		HttpActiveReplica frontend = this.httpFrontend;
+		if (frontend != null) {
+			frontend.close();
+			this.httpFrontend = null;
+		}
 		this.protocolExecutor.stop();
 		this.messenger.stop();
 		this.appCoordinator.stop();
