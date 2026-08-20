@@ -1066,6 +1066,38 @@ public class XdnGigapaxosApp
       service.initializationSucceed = true;
     }
 
+    // Hold off returning until the entry port answers HTTP, mirroring the cluster path's
+    // gate. This matters most during restart recovery: gigapaxos rolls the paxos log
+    // forward immediately after restore() returns, and an execute() that reaches a
+    // still-booting container fails; after HANDLE_REQUEST_RETRY_LIMIT (10) retries at
+    // 100ms the instance is force-stopped and the committed decision is silently dropped,
+    // leaving this replica's container state permanently diverged from its peers.
+    // Best-effort on timeout: a pathologically slow image keeps today's behavior instead
+    // of failing the epoch start.
+    long readinessStartMs = System.currentTimeMillis();
+    if (waitForHttpReadiness(allocatedPort, 60_000)) {
+      logger.log(
+          Level.INFO,
+          "{0}:{1} service {2} entry port {3} answered HTTP in {4}ms",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort),
+            String.valueOf(System.currentTimeMillis() - readinessStartMs)
+          });
+    } else {
+      logger.log(
+          Level.WARNING,
+          "{0}:{1} service {2} entry port {3} not answering HTTP after 60s; proceeding",
+          new Object[] {
+            this.myNodeId.toUpperCase(),
+            this.getClass().getSimpleName(),
+            serviceName,
+            String.valueOf(allocatedPort)
+          });
+    }
+
     // store all the current service metadata
     this.activeServicePorts.put(serviceName, allocatedPort);
     return true;
