@@ -60,6 +60,7 @@ public class XdnTestCluster implements AutoCloseable {
   private final Map<String, InetSocketAddress> reconfigurators =
       Map.of(RECONFIGURATOR_ID, new InetSocketAddress(LOOPBACK, RECONFIGURATOR_BASE_PORT));
   private final List<ReconfigurableNode<String>> nodes = new ArrayList<>();
+  private final Map<String, ReconfigurableNode<String>> nodesById = new LinkedHashMap<>();
   private final List<String> createdServices = new ArrayList<>();
   private static volatile boolean loggingConfigured = false;
 
@@ -70,21 +71,37 @@ public class XdnTestCluster implements AutoCloseable {
     }
   }
 
-  /** Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster. */
-  public void start() throws Exception {
+  /**
+   * Boots the Reconfigurator and ActiveReplica nodes required for an XDN cluster. Replicas named in
+   * {@code externalActiveIds} run as separate OS processes (required for tests that restart a
+   * replica via {@link #restartActiveReplica}); all other nodes run in-process as before.
+   */
+  public void start(String... externalActiveIds) throws Exception {
     // TODO: enable logging for better debugging in Github action runners.
     //   configureLogging();
     configureGigapaxos();
     cleanDirectory(GP_DATA_DIR);
     cleanDirectory(XDN_WORK_DIR);
 
-    nodes.add(startNode(RECONFIGURATOR_ID));
+    registerNode(RECONFIGURATOR_ID, startNode(RECONFIGURATOR_ID));
+    List<String> external = List.of(externalActiveIds);
     for (String activeId : ACTIVE_REPLICA_IDS) {
-      nodes.add(startNode(activeId));
+      if (external.contains(activeId)) {
+        // A replica that a test will restart must run as its own OS process from birth:
+        // in-process teardown leaks shared-JVM state (embedded Derby keeps the paxos DB
+        // locked for the whole JVM; run_xdn_tests.sh's per-method-JVM isolation exists for
+        // the same reason), while killing and respawning a subprocess matches the
+        // production systemd-restart shape exactly.
+        spawnNodeProcess(activeId);
+      } else {
+        registerNode(activeId, startNode(activeId));
+      }
     }
 
     waitForPort(LOOPBACK, getReconfiguratorHttpPort(), PORT_WAIT_TIMEOUT);
-    waitForPort(LOOPBACK, getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst()), PORT_WAIT_TIMEOUT);
+    for (String activeId : ACTIVE_REPLICA_IDS) {
+      waitForPort(LOOPBACK, getActiveHttpPort(activeId), PORT_WAIT_TIMEOUT);
+    }
   }
 
   /** Launches a service using default SEQUENTIAL consistency and deterministic=true. */
@@ -397,6 +414,12 @@ public class XdnTestCluster implements AutoCloseable {
       }
     }
     nodes.clear();
+    nodesById.clear();
+
+    for (Process process : nodeProcesses.values()) {
+      process.destroyForcibly();
+    }
+    nodeProcesses.clear();
 
     try {
       TimeUnit.SECONDS.sleep(2);
@@ -486,6 +509,101 @@ public class XdnTestCluster implements AutoCloseable {
         new DefaultNodeConfig<>(activeReplicas, reconfigurators);
     return new ReconfigurableNode.DefaultReconfigurableNode(
         nodeId, nodeConfig, new String[] {nodeId}, false);
+  }
+
+  private void registerNode(String nodeId, ReconfigurableNode<String> node) {
+    nodes.add(node);
+    nodesById.put(nodeId, node);
+  }
+
+  /**
+   * Restarts a single ActiveReplica, preserving its on-disk paxos logs and XDN state so the new
+   * process goes through the log-recovery path -- the scenario where a restarted replica must
+   * re-register its services and roll its container state forward without diverging from its peers
+   * (the AR-restart recovery bugs fixed alongside this helper). The replica must have been started
+   * as an external process (see {@link #start(String...)}); SIGTERM + respawn then mirrors a
+   * production systemd restart exactly.
+   */
+  public void restartActiveReplica(int replicaIdx) throws Exception {
+    String activeId = ACTIVE_REPLICA_IDS.get(replicaIdx);
+    Process process = nodeProcesses.get(activeId);
+    if (process == null) {
+      throw new IllegalStateException(
+          "Replica "
+              + activeId
+              + " is not an external process; pass it to start(...) as an external replica");
+    }
+    process.destroy(); // SIGTERM, same signal systemd's try-restart sends
+    if (!process.waitFor(20, TimeUnit.SECONDS)) {
+      process.destroyForcibly();
+      process.waitFor(10, TimeUnit.SECONDS);
+    }
+    // The old process's listeners must actually be gone before the replacement binds; fail
+    // loudly if a port lingers so a teardown leak surfaces instead of a hung test.
+    waitForPortClose(LOOPBACK, ACTIVE_REPLICA_BASE_PORT + replicaIdx, Duration.ofSeconds(15));
+    waitForPortClose(LOOPBACK, getActiveHttpPort(activeId), Duration.ofSeconds(15));
+
+    spawnNodeProcess(activeId);
+    waitForPort(LOOPBACK, getActiveHttpPort(activeId), PORT_WAIT_TIMEOUT);
+  }
+
+  private final Map<String, Process> nodeProcesses = new LinkedHashMap<>();
+
+  /** Spawns a node as a separate OS process on the shared local config and /tmp state dirs. */
+  private void spawnNodeProcess(String activeId) throws IOException {
+    String javaBin = Paths.get(System.getProperty("java.home"), "bin", "java").toString();
+    Path configPath = Paths.get("conf", "gigapaxos.xdn.local.properties").toAbsolutePath();
+    Path logPath = Paths.get("out", "junit5-test-output", "node-process-" + activeId + ".log");
+    Files.createDirectories(logPath.getParent());
+    ProcessBuilder builder =
+        new ProcessBuilder(
+            javaBin,
+            "-ea",
+            "-D" + PaxosConfig.GIGAPAXOS_CONFIG_FILE_KEY + "=" + configPath,
+            "-cp",
+            System.getProperty("java.class.path"),
+            "edu.umass.cs.reconfiguration.ReconfigurableNode",
+            activeId);
+    builder.redirectErrorStream(true);
+    // Append so the pre- and post-restart incarnations land in one readable log.
+    builder.redirectOutput(ProcessBuilder.Redirect.appendTo(logPath.toFile()));
+    Process previous = this.nodeProcesses.put(activeId, builder.start());
+    if (previous != null && previous.isAlive()) {
+      previous.destroyForcibly();
+    }
+  }
+
+  private static void waitForPortClose(String host, int port, Duration timeout)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    while (System.nanoTime() < deadline) {
+      try (Socket socket = new Socket()) {
+        socket.connect(new InetSocketAddress(host, port), 500);
+      } catch (IOException closedOrRefused) {
+        return;
+      }
+      TimeUnit.MILLISECONDS.sleep(250);
+    }
+    throw new IllegalStateException(
+        "Port %s:%d is still accepting connections after node close(); the old node's listener leaked"
+            .formatted(host, port));
+  }
+
+  /** Issues an HTTP POST with a JSON body to a specific replica's frontend. */
+  public HttpResponse<String> sendPostRequest(
+      String serviceName, int replicaIdx, String endpoint, String jsonBody, Duration timeout)
+      throws IOException, InterruptedException {
+    Duration effectiveTimeout = timeout != null ? timeout : REQUEST_TIMEOUT;
+    int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.get(replicaIdx));
+    HttpRequest request =
+        HttpRequest.newBuilder()
+            .uri(URI.create("http://%s:%d%s".formatted(LOOPBACK, httpPort, endpoint)))
+            .timeout(effectiveTimeout)
+            .header("XDN", serviceName)
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+            .build();
+    return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
   }
 
   private static void waitForPort(String host, int port, Duration timeout)

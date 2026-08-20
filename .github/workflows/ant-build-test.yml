@@ -127,6 +127,7 @@ jobs:
           - XdnGetReplicaInfoTest
           - XdnMultiServiceTest
           - XdnPerReplicaRequestTest
+          - XdnRestartRecoveryTest
           - XdnServiceDestroyRecreateTest
           - XdnSetCoordinatorNodeTest
           - XdnTaggedImageLaunchTest

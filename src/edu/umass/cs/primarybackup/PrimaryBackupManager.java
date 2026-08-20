@@ -2432,14 +2432,25 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         @Override
         public boolean execute(Request request, boolean doNotReplyToClient) {
             if (request == null) return true;
-            assert this.primaryBackupManager != null :
-                    "Ensure to set the manager for this middleware app";
 
+            // The manager can only be wired after PaxosManager's constructor returns
+            // (PrimaryBackupManager needs the PaxosManager, so it cannot exist while
+            // log-recovery replay runs inside that constructor). Requiring it for every
+            // request made each replayed app decision throw AssertionError under -ea;
+            // gigapaxos swallows the error, exhausts its execute retries, force-stops
+            // the instance, and silently drops the committed decision -- leaving the
+            // restarted replica's app state permanently behind its peers. Only the PB
+            // control packets below actually need the manager, so the requirement
+            // lives in those branches; plain app requests pass through during recovery.
             if (request instanceof StartEpochPacket startEpochPacket) {
+                assert this.primaryBackupManager != null :
+                        "Ensure to set the manager for this middleware app";
                 return this.primaryBackupManager.executeStartEpochPacket(startEpochPacket);
             }
 
             if (request instanceof ApplyStateDiffPacket stateDiffPacket) {
+                assert this.primaryBackupManager != null :
+                        "Ensure to set the manager for this middleware app";
                 return this.primaryBackupManager.executeApplyStateDiffPacket(stateDiffPacket);
             }
 
@@ -2448,6 +2459,8 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
             // raw InitBackupPacket -- dispatch it the same way as StartEpoch/ApplyStateDiff above.
             // (In legacy RSYNC mode InitBackup never reaches this path; it is messaged directly.)
             if (request instanceof InitBackupPacket initBackupPacket) {
+                assert this.primaryBackupManager != null :
+                        "Ensure to set the manager for this middleware app";
                 return this.primaryBackupManager.executeInitBackupPacket(initBackupPacket);
             }
 
