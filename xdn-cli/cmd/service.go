@@ -212,7 +212,8 @@ var ServiceInfoCmd = &cobra.Command{
 				if httpAddrStr, ok := httpAddrIf.(string); ok && httpAddrStr != "" {
 					_, httpIP, parsedPort, ok := parseNodeSocketAddress(httpAddrStr)
 					if ok {
-						httpBaseURL = fmt.Sprintf("http://%s:%d", httpIP, parsedPort)
+						// JoinHostPort brackets IPv6 literals so the URL stays valid.
+						httpBaseURL = "http://" + net.JoinHostPort(httpIP, strconv.Itoa(parsedPort))
 						httpPort = parsedPort
 					}
 				}
@@ -870,22 +871,33 @@ type replicaInfo struct {
 }
 
 // parseNodeSocketAddress parses Java InetSocketAddress.toString() output
-// like "c240g5.wisc.cloudlab.us/128.105.144.59:2000" or "/127.0.0.1:2001".
-// Returns host (may be empty), ip, port; ok=false on malformed input.
+// like "c240g5.wisc.cloudlab.us/128.105.144.59:2000", "/127.0.0.1:2001", or,
+// for IPv6 nodes, "/[2600:1f18:1376:5a02:0:0:0:a]:2000".
+// Returns host (may be empty), ip (without brackets), port; ok=false on
+// malformed input.
 func parseNodeSocketAddress(s string) (host, ip string, port int, ok bool) {
-	hostPort := strings.SplitN(s, ":", 2)
-	if len(hostPort) != 2 {
+	slash := strings.Index(s, "/")
+	if slash < 0 {
 		return "", "", 0, false
 	}
-	hostIP := strings.SplitN(hostPort[0], "/", 2)
-	if len(hostIP) != 2 {
-		return "", "", 0, false
+	host = s[:slash]
+	addrPort := s[slash+1:]
+	ipStr, portStr, err := net.SplitHostPort(addrPort)
+	if err != nil {
+		// Older JDKs print IPv6 without brackets ("/2600::a:2000"), which
+		// net.SplitHostPort rejects; take the text after the last colon as
+		// the port.
+		colon := strings.LastIndex(addrPort, ":")
+		if colon < 0 {
+			return "", "", 0, false
+		}
+		ipStr, portStr = addrPort[:colon], addrPort[colon+1:]
 	}
-	p, err := strconv.Atoi(hostPort[1])
+	p, err := strconv.Atoi(portStr)
 	if err != nil {
 		return "", "", 0, false
 	}
-	return hostIP[0], hostIP[1], p, true
+	return host, ipStr, p, true
 }
 
 // fetchReplicaInfo queries the AR's /replica/info endpoint. The AR HTTP
