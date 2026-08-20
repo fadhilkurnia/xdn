@@ -610,6 +610,27 @@ public class ReconfigurationConfig {
         XDN_EVENTUAL_CHECKPOINT_INLINE_MAX_BYTES(8_000_000L),
 
         /**
+         * Enables per-replica bandwidth profiling for cluster-mode services: a tiny probe
+         * sidecar joins each cluster member's network namespace and the ActiveReplica
+         * periodically reads kernel TCP byte counters through it, building directed
+         * per-peer traffic edges exposed via the replica-info endpoint.
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_CLUSTER_BW_TRACER_ENABLED(true),
+
+        /**
+         * Container image for the bandwidth probe sidecar (see services/bw-probe/).
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_CLUSTER_BW_PROBE_IMAGE("fadhilkurnia/xdn-bw-probe"),
+
+        /**
+         * Poll period (ms) for reading TCP byte counters through the bandwidth probe.
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_CLUSTER_BW_POLL_INTERVAL_MS(1000L),
+
+        /**
          * A flag to enable/disable batching in HttpActiveReplica.
          */
         HTTP_AR_FRONTEND_BATCH_ENABLED(false),

@@ -305,6 +305,19 @@ are treated as success.
 replication, so XDN-side state-tar capture is a no-op and FUSE/rsync are
 skipped.
 
+**Bandwidth profiling** (`XdnBandwidthProfiler`, on by default via
+`XDN_CLUSTER_BW_TRACER_ENABLED`): each cluster member gets a tiny probe
+sidecar (`services/bw-probe/`, image `fadhilkurnia/xdn-bw-probe`) in its
+network namespace; the AR polls kernel TCP byte counters through it
+(`docker exec <probe> ss -tinH`) and folds per-connection deltas into
+directed per-peer edges, classified by peer address alone: overlay-alias IPs
+(resolved via embedded DNS `getent hosts replica-N`) are coordination
+traffic, loopback is intra-pod and skipped, everything else aggregates as
+`client`. Snapshots ride the replica-info endpoint as a `bandwidth` JSON
+section. All failures degrade gracefully (missing probe image just logs a
+warning and disables profiling). Tests: `XdnBwProbeParserTest` (unit),
+`XdnClusterBandwidthTest` (integration).
+
 **Reference images** under `services/`:
 - `services/etcd-cluster/` — single-image cluster (etcd), entrypoint maps
   `XDN_CLUSTER_*` → etcd's `--initial-cluster`, `--initial-cluster-state`, etc.
