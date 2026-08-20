@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseNodeSocketAddress(t *testing.T) {
 	tests := []struct {
@@ -72,3 +75,71 @@ func TestParseNodeSocketAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestReplicaStatusCells(t *testing.T) {
+	container := map[string]interface{}{
+		"name":      "svc",
+		"createdAt": "2 minutes ago",
+		"status":    "running",
+	}
+	tests := []struct {
+		name        string
+		info        replicaInfo
+		wantRole    string
+		wantCreated string
+		wantStatus  string
+	}{
+		{
+			name:        "fetch failed",
+			info:        replicaInfo{fetchErr: errTest},
+			wantRole:    "unreachable",
+			wantCreated: "unreachable",
+			wantStatus:  "unreachable",
+		},
+		{
+			name: "primary with running container",
+			info: replicaInfo{
+				raw: map[string]interface{}{
+					"role":              "primary",
+					"statefulComponent": "svc",
+					"containers":        []interface{}{container},
+				},
+			},
+			wantRole:    "primary",
+			wantCreated: "2 minutes ago",
+			wantStatus:  "running",
+		},
+		{
+			name: "backup without container is standby, not unreachable",
+			info: replicaInfo{
+				raw: map[string]interface{}{
+					"role":       "backup",
+					"containers": []interface{}{},
+				},
+			},
+			wantRole:    "backup",
+			wantCreated: "-",
+			wantStatus:  "standby",
+		},
+		{
+			name: "non-backup role without container falls back to dashes",
+			info: replicaInfo{
+				raw: map[string]interface{}{"role": "follower"},
+			},
+			wantRole:    "follower",
+			wantCreated: "-",
+			wantStatus:  "-",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			role, created, status := replicaStatusCells(tt.info)
+			if role != tt.wantRole || created != tt.wantCreated || status != tt.wantStatus {
+				t.Errorf("got (%q, %q, %q), want (%q, %q, %q)",
+					role, created, status, tt.wantRole, tt.wantCreated, tt.wantStatus)
+			}
+		})
+	}
+}
+
+var errTest = errors.New("connection refused")

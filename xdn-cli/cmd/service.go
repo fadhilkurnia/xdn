@@ -330,17 +330,7 @@ var ServiceInfoCmd = &cobra.Command{
 				svcReplicaURLStr = fmt.Sprintf("%s/?_xdnsvc=%s",
 					r.httpBaseURL, url.QueryEscape(serviceName))
 			}
-			roleStr := "unreachable"
-			createdStr := "unreachable"
-			statusStr := "unreachable"
-			info := replicaInfos[idx]
-			if info.fetchErr == nil && info.raw != nil {
-				roleStr = stringOrDash(info.raw["role"])
-				if c := pickStatefulContainer(info.raw); c != nil {
-					createdStr = stringOrDash(c["createdAt"])
-					statusStr = stringOrDash(c["status"])
-				}
-			}
+			roleStr, createdStr, statusStr := replicaStatusCells(replicaInfos[idx])
 			rows[idx] = replicaRow{
 				geoStr, r.nodeID, displayAddr, webPortStr, roleStr, createdStr, statusStr, svcReplicaURLStr,
 			}
@@ -390,6 +380,16 @@ var ServiceInfoCmd = &cobra.Command{
 				wGeo, row.geolocation, wID, row.machineID, wIP, row.ipAddress,
 				wPort, row.webPort, roleCell, wCreated, row.created,
 				statusCell, wURL, row.svcReplicaURL)
+		}
+
+		for _, row := range rows {
+			if row.status == "standby" {
+				fmt.Printf(
+					" %s\n",
+					footnoteColorPrint.Sprint(
+						"backups run no container; primary-backup activates one on promotion"))
+				break
+			}
 		}
 
 		if primaryInfo == nil {
@@ -950,6 +950,24 @@ func pickStatefulContainer(info map[string]interface{}) map[string]interface{} {
 	return pickNamedContainer(info, "statefulComponent")
 }
 
+// replicaStatusCells renders the ROLE / CREATED / STATUS table cells for one replica.
+// "unreachable" is reserved for replicas whose replica-info fetch actually failed. A replica
+// that answered but runs no container is not unreachable: a primary-backup backup runs the
+// containerized service only after promotion, so it renders as a healthy "standby".
+func replicaStatusCells(info replicaInfo) (role, created, status string) {
+	if info.fetchErr != nil || info.raw == nil {
+		return "unreachable", "unreachable", "unreachable"
+	}
+	role = stringOrDash(info.raw["role"])
+	if c := pickStatefulContainer(info.raw); c != nil {
+		return role, stringOrDash(c["createdAt"]), stringOrDash(c["status"])
+	}
+	if strings.EqualFold(role, "backup") {
+		return role, "-", "standby"
+	}
+	return role, "-", "-"
+}
+
 // pickEntryContainer returns the containers[] entry whose "name" matches
 // info["entryComponent"], falling back to containers[0].
 func pickEntryContainer(info map[string]interface{}) map[string]interface{} {
@@ -1001,6 +1019,9 @@ func colorForStatus(s string) *color.Color {
 		return color.New(color.FgRed)
 	case "created", "starting", "restarting", "paused":
 		return color.New(color.FgYellow)
+	case "standby":
+		// A reachable primary-backup backup awaiting promotion: healthy, not a warning.
+		return color.New(color.FgCyan)
 	default:
 		return color.New()
 	}
