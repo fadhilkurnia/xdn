@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN Nightly Performance</title>
+<style>
+  :root { --fg:#1a1a2e; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --bad:#dc2626; --ok:#059669; }
+  body { font:15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--fg);
+         max-width:1000px; margin:2rem auto; padding:0 1.25rem; background:#fff; }
+  h1 { font-size:1.5rem; } h2 { font-size:1.15rem; margin-top:2.2rem; }
+  .note { color:var(--muted); font-size:.9rem; max-width:46rem; }
+  .charts { display:flex; flex-wrap:wrap; gap:1.5rem; }
+  figure { margin:0; } figcaption { font-size:.85rem; color:var(--muted); text-align:center; }
+  svg { background:#fafafa; border:1px solid var(--line); border-radius:6px; }
+  table { border-collapse:collapse; margin-top:.75rem; font-size:.9rem; }
+  th, td { border:1px solid var(--line); padding:.3rem .6rem; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  .regress { color:var(--bad); font-weight:600; } .fine { color:var(--ok); }
+  #status { color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>XDN Nightly Performance</h1>
+<p class="note">
+Nightly interleaved A/B measurement of XDN's low-load latency and max throughput
+(bookcatalog on Paxos, bookcatalog-nd on primary-backup), run on GitHub-hosted
+runners. The baseline and current HEAD are measured alternately on the <em>same</em>
+runner, so the head/base <strong>delta</strong> is the trustworthy signal; absolute
+values vary with runner hardware and are plotted only for context. Data:
+<a id="datalink" href="#">perf.json</a> on the <code>perf-results</code> branch.
+</p>
+<div id="status">Loading…</div>
+<div id="root"></div>
+<script>
+const DATA_URL = "https://raw.githubusercontent.com/fadhilkurnia/xdn/perf-results/perf.json";
+document.getElementById("datalink").href = DATA_URL;
+
+const METRICS = [
+  ["p50_ms", "low-load p50 (ms)"],
+  ["p99_ms", "low-load p99 (ms)"],
+  ["max_tput_rps", "max throughput (rps)"],
+];
+
+function lineChart(points, label, width = 300, height = 160) {
+  const pad = { l: 42, r: 8, t: 8, b: 22 };
+  const xs = points.map((_, i) => i);
+  const ys = points.map(p => p.v);
+  const ymax = Math.max(...ys) * 1.1 || 1, ymin = 0;
+  const px = i => pad.l + (width - pad.l - pad.r) * (xs.length > 1 ? i / (xs.length - 1) : 0.5);
+  const py = v => pad.t + (height - pad.t - pad.b) * (1 - (v - ymin) / (ymax - ymin));
+  let path = points.map((p, i) => `${i ? "L" : "M"}${px(i).toFixed(1)},${py(p.v).toFixed(1)}`).join(" ");
+  const dots = points.map((p, i) =>
+    `<circle cx="${px(i).toFixed(1)}" cy="${py(p.v).toFixed(1)}" r="3"
+       fill="${p.reg ? "var(--bad)" : "var(--accent)"}"><title>${p.date} — ${p.v}${p.reg ? " (regression flagged)" : ""}</title></circle>`).join("");
+  const gridY = [0.25, 0.5, 0.75, 1].map(f => {
+    const v = ymin + (ymax - ymin) * f, y = py(v).toFixed(1);
+    return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}" stroke="var(--line)"/>
+            <text x="${pad.l - 4}" y="${y}" font-size="9" fill="var(--muted)" text-anchor="end" dy="3">${v >= 100 ? v.toFixed(0) : v.toFixed(1)}</text>`;
+  }).join("");
+  const xlabels = points.length ? `
+    <text x="${pad.l}" y="${height - 6}" font-size="9" fill="var(--muted)">${points[0].date}</text>
+    <text x="${width - pad.r}" y="${height - 6}" font-size="9" fill="var(--muted)" text-anchor="end">${points[points.length - 1].date}</text>` : "";
+  return `<figure><svg width="${width}" height="${height}" role="img" aria-label="${label}">
+    ${gridY}<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}${xlabels}
+  </svg><figcaption>${label}</figcaption></figure>`;
+}
+
+function fmt(v, digits = 1) { return v == null ? "n/a" : (+v).toFixed(digits); }
+
+async function main() {
+  const status = document.getElementById("status");
+  let records;
+  try {
+    const resp = await fetch(DATA_URL, { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    records = await resp.json();
+  } catch (e) {
+    status.textContent = "No data yet (" + e.message + "). The perf-results branch is created by the first nightly run.";
+    return;
+  }
+  if (!records.length) { status.textContent = "No records yet."; return; }
+  status.remove();
+  const root = document.getElementById("root");
+  const services = [...new Set(records.flatMap(r => Object.keys(r.head || {})))];
+
+  for (const svc of services) {
+    const section = document.createElement("section");
+    let html = `<h2>${svc}</h2><div class="charts">`;
+    for (const [key, label] of METRICS) {
+      const pts = records
+        .filter(r => r.head?.[svc]?.[key] != null)
+        .map(r => ({ date: r.date, v: +r.head[svc][key], reg: r.regression }));
+      if (pts.length) html += lineChart(pts, label);
+    }
+    html += `</div>`;
+
+    const recent = records.slice(-10).reverse();
+    html += `<table><tr><th>date</th><th>head</th><th>p50 (ms)</th><th>Δp50</th>
+             <th>p99 (ms)</th><th>Δp99</th><th>tput (rps)</th><th>Δtput</th><th></th></tr>`;
+    for (const r of recent) {
+      const h = r.head?.[svc] || {}, d = r.delta_pct?.[svc] || {};
+      const dp = v => v == null ? "" : `<span class="${v > 0 ? "" : "fine"}">${v > 0 ? "+" : ""}${v}%</span>`;
+      html += `<tr><td>${r.date}</td><td><code>${(r.head_sha || "").slice(0, 8)}</code></td>
+        <td>${fmt(h.p50_ms)}</td><td>${dp(d.p50_pct)}</td>
+        <td>${fmt(h.p99_ms)}</td><td>${dp(d.p99_pct)}</td>
+        <td>${fmt(h.max_tput_rps, 0)}</td><td>${dp(d.tput_pct)}</td>
+        <td>${r.regression ? '<span class="regress">regression</span>' : ""}</td></tr>`;
+    }
+    html += `</table>`;
+    section.innerHTML = html;
+    root.appendChild(section);
+  }
+}
+main();
+</script>
+</body>
+</html>

@@ -1,0 +1,231 @@
+# Nightly performance regression check: low-load latency + max throughput.
+#
+# Runs on GitHub-hosted runners, which are shared and noisy -- so the design is
+# interleaved A/B: the job measures the BASELINE commit (last recorded run on
+# the perf-results branch) and HEAD alternately on the SAME runner, and only the
+# relative head/base deltas are judged (eval/nightly_perf_check.py). Absolute
+# numbers are recorded for the trend page (https://xdn.cs.umass.edu/perf/) but
+# are not comparable night-to-night.
+#
+# Change gating: skipped when main HEAD was already measured, or when nothing
+# perf-relevant (src/, lib/, bin/gpServer.sh, bin/gpEnv.sh, xdn-cli/) changed
+# since the last measured commit. workflow_dispatch always runs. A pull_request
+# touching the perf scripts runs the measurement as a self-test (no recording).
+#
+# Results: one JSON line per night appended to perf.jsonl on the perf-results
+# branch (plus a regenerated perf.json the dashboard fetches); raw per-round
+# JSONs are uploaded as workflow artifacts. On regression, an issue is filed
+# and the job is failed.
+name: Nightly performance
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: "Baseline commit (default: last recorded on perf-results)"
+        required: false
+  pull_request:
+    paths:
+      - "eval/nightly_perf.py"
+      - "eval/nightly_perf_check.py"
+      - ".github/workflows/nightly-perf.yml"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: nightly-perf
+  cancel-in-progress: false
+
+env:
+  PERF_BRANCH: perf-results
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run_mode: ${{ steps.decide.outputs.run_mode }} # skip | bootstrap | compare
+      base_sha: ${{ steps.decide.outputs.base_sha }}
+      head_sha: ${{ steps.decide.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_BASE: ${{ github.event.inputs.base_sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -x
+          if [ "$EVENT" = "pull_request" ]; then
+            # Self-test on perf-script changes: compare the PR head against its base.
+            echo "run_mode=compare" >> "$GITHUB_OUTPUT"
+            echo "base_sha=$PR_BASE" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$PR_HEAD" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HEAD_SHA=$(git rev-parse HEAD)
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          LAST=""
+          if git fetch origin "$PERF_BRANCH" 2>/dev/null; then
+            LAST=$(git show FETCH_HEAD:perf.jsonl 2>/dev/null | tail -1 \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["head_sha"])' \
+              2>/dev/null || true)
+          fi
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "$INPUT_BASE" ]; then
+            LAST="$INPUT_BASE"
+          fi
+          # A recorded baseline that is no longer in history (force-push) restarts the series.
+          if [ -n "$LAST" ] && ! git cat-file -e "$LAST" 2>/dev/null; then
+            LAST=""
+          fi
+          if [ -z "$LAST" ]; then
+            echo "run_mode=bootstrap" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT" != "workflow_dispatch" ]; then
+            if [ "$LAST" = "$HEAD_SHA" ]; then
+              echo "HEAD already measured; skipping"
+              echo "run_mode=skip" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if ! git diff --name-only "$LAST".."$HEAD_SHA" -- \
+                src lib bin/gpServer.sh bin/gpEnv.sh xdn-cli | grep -q .; then
+              echo "no perf-relevant changes since $LAST; skipping"
+              echo "run_mode=skip" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "run_mode=compare" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$LAST" >> "$GITHUB_OUTPUT"
+
+  measure:
+    needs: gate
+    if: needs.gate.outputs.run_mode != 'skip'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          path: head
+
+      - name: Checkout base
+        if: needs.gate.outputs.run_mode == 'compare'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.base_sha }}
+          path: base
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "oracle"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: head/xdn-cli/go.mod
+
+      - name: Set up Docker
+        uses: docker-practice/actions-setup-docker@master
+        timeout-minutes: 12
+
+      - name: Set up Rsync
+        uses: GuillaumeFalourd/setup-rsync@v1.2
+
+      - name: Pre-pull service images
+        run: |
+          docker pull fadhilkurnia/xdn-bookcatalog
+          docker pull fadhilkurnia/xdn-bookcatalog-nd
+
+      - name: Build head
+        run: cd head && ant jar && bash bin/build_xdn_cli.sh
+
+      - name: Build base
+        if: needs.gate.outputs.run_mode == 'compare'
+        run: cd base && ant jar && bash bin/build_xdn_cli.sh
+
+      - name: Measure (interleaved A/B rounds)
+        env:
+          RUN_MODE: ${{ needs.gate.outputs.run_mode }}
+        run: |
+          set -e
+          mkdir -p results
+          pass() { # pass <side> <round> [extra args]
+            side=$1; round=$2; shift 2
+            python3 head/eval/nightly_perf.py --repo "$side" \
+              --label "${side}_r${round}" --out "results/${side}_r${round}.json" \
+              --tput-hint-file "results/hint_${side}.txt" "$@"
+          }
+          if [ "$RUN_MODE" = "compare" ]; then
+            pass base 1
+            pass head 1
+            pass head 2
+            pass base 2
+            pass base 3 --skip-tput
+            pass head 3 --skip-tput
+          else
+            pass head 1
+            pass head 2
+            pass head 3 --skip-tput
+          fi
+
+      - name: Compare and summarize
+        id: check
+        run: |
+          python3 head/eval/nightly_perf_check.py \
+            --results results \
+            --head-sha "${{ needs.gate.outputs.head_sha }}" \
+            ${{ needs.gate.outputs.base_sha && format('--base-sha {0}', needs.gate.outputs.base_sha) || '' }} \
+            --summary results/summary.md \
+            --record results/record.json \
+            --github-output "$GITHUB_OUTPUT"
+          cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record result on perf-results branch
+        if: github.event_name != 'pull_request'
+        run: |
+          set -e
+          REPO_URL="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
+          if git clone --depth 1 --branch "$PERF_BRANCH" "$REPO_URL" perf; then
+            cd perf
+          else
+            mkdir perf && cd perf
+            git init -b "$PERF_BRANCH"
+            git remote add origin "$REPO_URL"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cat ../results/record.json >> perf.jsonl
+          python3 -c "import json; records = [json.loads(l) for l in open('perf.jsonl') if l.strip()]; json.dump(records, open('perf.json', 'w'), indent=1)"
+          git add perf.jsonl perf.json
+          git commit -m "perf: record ${{ needs.gate.outputs.head_sha }}"
+          git push origin "$PERF_BRANCH"
+
+      - name: Upload raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-perf-results
+          path: results/
+
+      - name: File issue and fail on regression
+        if: github.event_name != 'pull_request' && steps.check.outputs.regression == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Nightly perf regression at $(echo ${{ needs.gate.outputs.head_sha }} | cut -c1-10)" \
+            --body-file results/summary.md \
+            --label performance || true
+          echo "::error::performance regression detected (see summary)"
+          exit 1

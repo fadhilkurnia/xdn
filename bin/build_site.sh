@@ -20,4 +20,11 @@ echo "staged $(ls "$REF" | wc -l | tr -d ' ') reference docs"
 MKDOCS="${MKDOCS:-mkdocs}"
 ( cd "$ROOT/website" && "$MKDOCS" build --site-dir "$ROOT/site" )
 
+# 3. Bundle the nightly-perf trend page at /perf/. The page is static; its data
+# is fetched at view time from the perf-results branch (raw.githubusercontent),
+# so nightly data updates need no site rebuild.
+mkdir -p "$ROOT/site/perf"
+cp "$ROOT/eval/perf-dashboard/index.html" "$ROOT/site/perf/index.html"
+echo "bundled perf dashboard -> site/perf/"
+
 echo "built site -> $ROOT/site  (open: python3 -m http.server -d site)"
