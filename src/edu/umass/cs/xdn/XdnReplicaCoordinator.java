@@ -896,6 +896,25 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   }
 
   @Override
+  public boolean deleteFinalState(String serviceName, int epoch) {
+    // App-level cleanup: remove this epoch's containers and state directories.
+    boolean isAppStateDeleted = this.xdnGigapaxosApp.deleteFinalState(serviceName, epoch);
+
+    // Paxos-level cleanup: remove the epoch-final checkpoint from the paxos logger.
+    // Without this, re-creating a destroyed service under the same name is refused
+    // forever: the on-disk stopped epoch trips gigapaxos' going-back-in-time check
+    // (createPaxosInstanceFinal's equalOrHigherVersionStopped), every AR throws
+    // PaxosInstanceCreationException, and the reconfigurator resends START_EPOCH
+    // indefinitely. The paxos, primary-backup, and sequential (Aw) coordinators all
+    // share one PaxosManager, so delegating to paxosCoordinator covers every
+    // paxos-backed service; for services without paxos state this is a no-op that
+    // returns true.
+    boolean isPaxosStateDeleted = this.paxosCoordinator.deleteFinalState(serviceName, epoch);
+
+    return isAppStateDeleted && isPaxosStateDeleted;
+  }
+
+  @Override
   public Set<NodeIDType> getReplicaGroup(String serviceName) {
     var coordinator = this.serviceCoordinator.get(serviceName);
     if (coordinator == null) {
