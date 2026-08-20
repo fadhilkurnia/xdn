@@ -13,5 +13,8 @@
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -t fadhilkurnia/xdn-bw-probe:latest --push services/bw-probe/
 FROM alpine:3.20
-RUN apk add --no-cache iproute2-ss
+# iproute2-ss: `ss` with tcp_info for the bandwidth poller (busybox's lacks it).
+# iproute2-tc: `tc` for the quorum-size probe's netem latency injection inside
+# the member's netns (eval/infer_quorum_size.py); harmless when unused.
+RUN apk add --no-cache iproute2-ss iproute2-tc
 ENTRYPOINT ["sleep", "infinity"]
