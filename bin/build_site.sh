@@ -20,11 +20,20 @@ echo "staged $(ls "$REF" | wc -l | tr -d ' ') reference docs"
 MKDOCS="${MKDOCS:-mkdocs}"
 ( cd "$ROOT/website" && "$MKDOCS" build --site-dir "$ROOT/site" )
 
-# 3. Bundle the nightly-perf trend page at /perf/. The page is static; its data
-# is fetched at view time from the perf-results branch (raw.githubusercontent),
-# so nightly data updates need no site rebuild.
-mkdir -p "$ROOT/site/perf"
-cp "$ROOT/eval/perf-dashboard/index.html" "$ROOT/site/perf/index.html"
-echo "bundled perf dashboard -> site/perf/"
+# 3. Bundle the nightly-perf trend page at /performance/app/, embedded by the
+# Performance tab (website/docs/performance.md) the same way the dashboard SPA
+# is. The page is static; its data is fetched at view time from the
+# perf-results branch (raw.githubusercontent), so nightly data updates need no
+# site rebuild. /perf/ redirects to the tab for links minted before the move.
+mkdir -p "$ROOT/site/performance/app" "$ROOT/site/perf"
+cp "$ROOT/eval/perf-dashboard/index.html" "$ROOT/site/performance/app/index.html"
+cat > "$ROOT/site/perf/index.html" <<'REDIR'
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=/performance/">
+<link rel="canonical" href="https://xdn.cs.umass.edu/performance/">
+<title>Moved</title></head>
+<body>Moved to <a href="/performance/">/performance/</a>.</body></html>
+REDIR
+echo "bundled perf dashboard -> site/performance/app/ (redirect at /perf/)"
 
 echo "built site -> $ROOT/site  (open: python3 -m http.server -d site)"

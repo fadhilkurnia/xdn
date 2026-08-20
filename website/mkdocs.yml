@@ -74,5 +74,5 @@ nav:
       - 'GigaPaxos — log compaction': 'reference/paxos-compaction.md'
       - 'WordPress primary-backup investigation': 'reference/wordpress-pb-investigation.md'
   - Dashboard: 'dashboard.md'
-  # Bundled by bin/build_site.sh from eval/perf-dashboard/ (nightly-perf data).
-  - Performance: 'https://xdn.cs.umass.edu/perf/'
+  # Embeds eval/perf-dashboard/, bundled at /performance/app/ by bin/build_site.sh.
+  - Performance: 'performance.md'
