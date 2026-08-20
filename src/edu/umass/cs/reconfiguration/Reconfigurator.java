@@ -1334,7 +1334,9 @@ public class Reconfigurator<NodeIDType> implements
         for (NodeIDType node : nodeIds) {
             InetSocketAddress address = this.consistentNodeConfig.getNodeSocketAddress(node);
             addresses.add(address.toString());
-            int httpPort = ReconfigurationConfig.getHTTPPort(address.getPort());
+            // Advertise the port the frontend actually binds (80 / 443 / offset),
+            // not just the offset port, so clients probe a reachable address.
+            int httpPort = ReconfigurationConfig.getAdvertisedHTTPPort(address.getPort());
             httpAddresses.add(
                     new InetSocketAddress(address.getAddress(), httpPort).toString());
         }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -911,19 +912,72 @@ func parseNodeSocketAddress(s string) (host, ip string, port int, ok bool) {
 	return host, ipStr, p, true
 }
 
-// fetchReplicaInfo queries the AR's /replica/info endpoint. The AR HTTP
-// frontend requires the XDN header to route into XDN-specific handling.
+// fetchReplicaInfo queries an AR's /replica/info control endpoint, tolerating a
+// control plane that advertised the wrong HTTP port/scheme. It probes, in order:
+// the advertised address, then https on 443, then http on 80 -- so an HTTPS
+// frontend (ENABLE_ACTIVE_REPLICA_HTTPS) or a :80 frontend
+// (ENABLE_ACTIVE_REPLICA_HTTP_PORT_80) is reached even when the reconfigurator
+// advertised the cleartext offset port. A replica is "unreachable" only when
+// none of these answers /replica/info with 200. URLs use net.JoinHostPort so
+// IPv6 addresses are bracketed.
 func fetchReplicaInfo(r placementReplica, serviceName string) replicaInfo {
-	if r.httpBaseURL == "" {
+	if r.ip == "" {
 		return replicaInfo{fetchErr: fmt.Errorf("no HTTP address from control plane")}
 	}
-	url := fmt.Sprintf("%s/api/v2/services/%s/replica/info", r.httpBaseURL, serviceName)
+
+	type target struct {
+		scheme string
+		port   int
+	}
+	var targets []target
+	seen := map[target]bool{}
+	add := func(scheme string, port int) {
+		t := target{scheme, port}
+		if port > 0 && !seen[t] {
+			seen[t] = true
+			targets = append(targets, t)
+		}
+	}
+	// Advertised address first (443 implies https), then the well-known
+	// externally-exposed frontends.
+	if r.httpPort == 443 {
+		add("https", 443)
+	} else {
+		add("http", r.httpPort)
+	}
+	add("https", 443)
+	add("http", 80)
+
+	var lastErr error
+	for _, t := range targets {
+		info := probeReplicaInfo(t.scheme, r.ip, t.port, serviceName)
+		if info.fetchErr == nil {
+			return info
+		}
+		lastErr = info.fetchErr
+	}
+	return replicaInfo{fetchErr: lastErr}
+}
+
+// probeReplicaInfo does one GET of /replica/info at scheme://host:port. The
+// "XDN" header is required: it routes the request into the XDN control handler,
+// which returns the replica-info JSON; without it the endpoint answers 200 with
+// an empty body. https uses InsecureSkipVerify since AR frontends may present a
+// self-signed certificate.
+func probeReplicaInfo(scheme, host string, port int, serviceName string) replicaInfo {
+	url := fmt.Sprintf("%s://%s/api/v2/services/%s/replica/info",
+		scheme, net.JoinHostPort(host, strconv.Itoa(port)), serviceName)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return replicaInfo{fetchErr: err}
 	}
 	req.Header.Set("XDN", serviceName)
 	client := http.Client{Timeout: 5 * time.Second}
+	if scheme == "https" {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return replicaInfo{fetchErr: err}
