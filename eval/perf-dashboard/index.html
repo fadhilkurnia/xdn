@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XDN Nightly Performance</title>
+<style>
+  :root { --fg:#1a1a2e; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --bad:#dc2626; --ok:#059669; }
+  body { font:15px/1.55 -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--fg);
+         max-width:1000px; margin:2rem auto; padding:0 1.25rem; background:#fff; }
+  h1 { font-size:1.5rem; } h2 { font-size:1.15rem; margin-top:2.2rem; }
+  .note { color:var(--muted); font-size:.9rem; max-width:46rem; }
+  .charts { display:flex; flex-wrap:wrap; gap:1.5rem; }
+  figure { margin:0; } figcaption { font-size:.85rem; color:var(--muted); text-align:center; }
+  svg { background:#fafafa; border:1px solid var(--line); border-radius:6px; }
+  table { border-collapse:collapse; margin-top:.75rem; font-size:.9rem; }
+  th, td { border:1px solid var(--line); padding:.3rem .6rem; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  .regress { color:var(--bad); font-weight:600; } .fine { color:var(--ok); }
+  #status { color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>XDN Nightly Performance</h1>
+<p class="note">
+Nightly interleaved A/B measurement of XDN's low-load latency (sequential
+closed loop, one outstanding request) and max throughput (open-loop rate
+ladder) for bookcatalog on Paxos and bookcatalog-nd on primary-backup with the
+fuselog statediff recorder on /dev/shm, run on GitHub-hosted runners. The baseline and current HEAD are measured alternately on the <em>same</em>
+runner, so the head/base <strong>delta</strong> is the trustworthy signal; absolute
+values vary with runner hardware and are plotted only for context. Data:
+<a id="datalink" href="#">perf.json</a> on the <code>perf-results</code> branch.
+</p>
+<div id="status">Loading…</div>
+<div id="root"></div>
+<script>
+const DATA_URL = "https://raw.githubusercontent.com/fadhilkurnia/xdn/perf-results/perf.json";
+document.getElementById("datalink").href = DATA_URL;
+
+const METRICS = [
+  ["p50_ms", "low-load p50 (ms)"],
+  ["p99_ms", "low-load p99 (ms)"],
+  ["max_tput_rps", "max throughput (rps)"],
+];
+
+// Stage colors: validated categorical palette, assigned in flow order (fixed,
+// never cycled); schematic-only steps that carry no measurement are gray.
+const STAGE_COLORS = {
+  queue: "#2a78d6", exec: "#eb6834", capwait: "#1baf7a", capture: "#eda100",
+  prep: "#e87ba4", paxos: "#008300", callback: "#4a3aa7", none: "#9ca3af",
+};
+
+// Per-service presentation: display title, the request-flow steps (the
+// waterfall guide above the breakdown table), and the measured stage rows.
+// Row spec: [label, color key, accessor(flow), indent]
+const SERVICE_META = {
+  perfcatalog: {
+    title: "Paxos Active Replication",
+    subtitle: "client → AR HTTP frontend → Paxos coordination → execute → container → respond",
+    steps: [
+      ["HTTP frontend", "none"], ["Paxos coordination", "callback"],
+      ["execute", "exec"], ["container fwd", "exec"], ["respond", "none"],
+    ],
+    rows: [
+      ["client total (measured at client)", null, f => f.client_p50_ms, 0],
+      ["callback (coordination → execute → respond ready)", "callback", f => (f.stages_p50_ms || {}).callback, 0],
+      ["container round-trip", "exec", f => (f.stages_p50_ms || {}).container, 1],
+      ["proxy (forwarder client)", "exec", f => (f.stages_p50_ms || {}).proxy, 1],
+      ["request copy", "exec", f => (f.stages_p50_ms || {}).copyreq, 1],
+    ],
+    bar: f => [["callback", "callback", (f.stages_p50_ms || {}).callback]],
+  },
+  perfcatalognd: {
+    title: "Primary Backup Replication",
+    subtitle: "client → AR HTTP frontend → PBM queue → execute → container → statediff capture → Paxos commit → respond",
+    steps: [
+      ["HTTP frontend", "none"], ["PBM queue", "queue"], ["execute", "exec"],
+      ["container fwd", "exec"], ["capture wait", "capwait"],
+      ["statediff capture", "capture"], ["propose prep", "prep"],
+      ["Paxos commit", "paxos"], ["respond", "none"],
+    ],
+    rows: [
+      ["client total (measured at client)", null, f => f.client_p50_ms, 0],
+      ["callback (spans PBM queue → Paxos commit)", "callback", f => (f.stages_p50_ms || {}).callback, 0],
+      ["container round-trip", "exec", f => (f.stages_p50_ms || {}).container, 1],
+      ["proxy (forwarder client)", "exec", f => (f.stages_p50_ms || {}).proxy, 1],
+      ["request copy", "exec", f => (f.stages_p50_ms || {}).copyreq, 1],
+      ["PBM: queue wait", "queue", f => (f.pbm_p50_ms || {}).queue_wait, 0],
+      ["PBM: execute (incl. container fwd)", "exec", f => (f.pbm_p50_ms || {}).exec, 0],
+      ["PBM: capture wait", "capwait", f => (f.pbm_p50_ms || {}).capture_wait, 0],
+      ["PBM: statediff capture (fuselog)", "capture", f => (f.pbm_p50_ms || {}).capture, 0],
+      ["PBM: propose prep", "prep", f => (f.pbm_p50_ms || {}).propose_prep, 0],
+      ["PBM: Paxos commit", "paxos", f => (f.pbm_p50_ms || {}).paxos, 0],
+      ["PBM: pipeline total", null, f => (f.pbm_p50_ms || {}).total, 0],
+    ],
+    bar: f => {
+      const p = f.pbm_p50_ms || {};
+      return [["queue wait", "queue", p.queue_wait], ["execute", "exec", p.exec],
+              ["capture wait", "capwait", p.capture_wait], ["capture", "capture", p.capture],
+              ["propose prep", "prep", p.propose_prep], ["paxos", "paxos", p.paxos]];
+    },
+  },
+};
+
+function dot(colorKey) {
+  return colorKey
+    ? `<span style="display:inline-block;width:9px;height:9px;border-radius:2px;`
+      + `background:${STAGE_COLORS[colorKey]};margin-right:.4rem"></span>`
+    : `<span style="display:inline-block;width:9px;margin-right:.4rem"></span>`;
+}
+
+function flowGuide(meta) {
+  const chips = meta.steps.map(([label, colorKey]) =>
+    `<span style="display:inline-block;padding:.15rem .5rem;border-radius:4px;margin:.1rem 0;
+       background:${STAGE_COLORS[colorKey]}${colorKey === "none" ? "22" : "26"};
+       border:1.5px solid ${STAGE_COLORS[colorKey]};font-size:.8rem;white-space:nowrap">${label}</span>`
+  ).join(`<span style="color:var(--muted);margin:0 .15rem">→</span>`);
+  return `<div style="margin:.4rem 0 .2rem">${chips}</div>`;
+}
+
+function flowBar(meta, flow) {
+  // proportional stacked bar of the latest digest's measured stages; the
+  // unattributed remainder (frontend + response write) is gray.
+  const segments = meta.bar(flow).filter(s => s[2] != null && s[2] > 0);
+  const total = flow.client_p50_ms;
+  if (!segments.length || !total) return "";
+  const used = segments.reduce((a, s) => a + s[2], 0);
+  if (total > used) segments.push(["frontend & respond (rest)", "none", total - used]);
+  const cells = segments.map(([label, colorKey, ms]) =>
+    `<div title="${label}: ${us(ms)} µs" style="flex:${Math.max(ms, total * 0.015)} 0 0;
+       background:${STAGE_COLORS[colorKey]};height:16px;border-radius:3px"></div>`).join("");
+  return `<div style="display:flex;gap:2px;max-width:640px;margin:.3rem 0 .5rem">${cells}</div>
+    <div style="font-size:.78rem;color:var(--muted)">latest night's p50 proportions
+      (client total ${us(total)} µs; hover segments)</div>`;
+}
+
+function lineChart(points, label, width = 300, height = 160) {
+  const pad = { l: 42, r: 8, t: 8, b: 22 };
+  const xs = points.map((_, i) => i);
+  const ys = points.map(p => p.v);
+  const ymax = Math.max(...ys) * 1.1 || 1, ymin = 0;
+  const px = i => pad.l + (width - pad.l - pad.r) * (xs.length > 1 ? i / (xs.length - 1) : 0.5);
+  const py = v => pad.t + (height - pad.t - pad.b) * (1 - (v - ymin) / (ymax - ymin));
+  let path = points.map((p, i) => `${i ? "L" : "M"}${px(i).toFixed(1)},${py(p.v).toFixed(1)}`).join(" ");
+  const dots = points.map((p, i) =>
+    `<circle cx="${px(i).toFixed(1)}" cy="${py(p.v).toFixed(1)}" r="3"
+       fill="${p.reg ? "var(--bad)" : "var(--accent)"}"><title>${p.date} — ${p.v}${p.reg ? " (regression flagged)" : ""}</title></circle>`).join("");
+  const gridY = [0.25, 0.5, 0.75, 1].map(f => {
+    const v = ymin + (ymax - ymin) * f, y = py(v).toFixed(1);
+    return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}" stroke="var(--line)"/>
+            <text x="${pad.l - 4}" y="${y}" font-size="9" fill="var(--muted)" text-anchor="end" dy="3">${v >= 100 ? v.toFixed(0) : v.toFixed(1)}</text>`;
+  }).join("");
+  const xlabels = points.length ? `
+    <text x="${pad.l}" y="${height - 6}" font-size="9" fill="var(--muted)">${points[0].date}</text>
+    <text x="${width - pad.r}" y="${height - 6}" font-size="9" fill="var(--muted)" text-anchor="end">${points[points.length - 1].date}</text>` : "";
+  return `<figure><svg width="${width}" height="${height}" role="img" aria-label="${label}">
+    ${gridY}<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>${dots}${xlabels}
+  </svg><figcaption>${label}</figcaption></figure>`;
+}
+
+function fmt(v, digits = 1) { return v == null ? "n/a" : (+v).toFixed(digits); }
+// breakdown stages are sub-millisecond; show them in microseconds
+function us(vMs) { return vMs == null ? "n/a" : Math.round(vMs * 1000).toLocaleString(); }
+
+async function main() {
+  const status = document.getElementById("status");
+  let records;
+  try {
+    const resp = await fetch(DATA_URL, { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    records = await resp.json();
+  } catch (e) {
+    status.textContent = "No data yet (" + e.message + "). The perf-results branch is created by the first nightly run.";
+    return;
+  }
+  if (!records.length) { status.textContent = "No records yet."; return; }
+  status.remove();
+  const root = document.getElementById("root");
+  const services = [...new Set(records.flatMap(r => Object.keys(r.head || {})))];
+
+  for (const svc of services) {
+    const meta = SERVICE_META[svc] || { title: svc, steps: [], rows: [], bar: () => [] };
+    const section = document.createElement("section");
+    let html = `<h2>${meta.title} <code style="font-size:.75rem;color:var(--muted);font-weight:400">${svc}</code></h2>`;
+    html += `<div class="charts">`;
+    for (const [key, label] of METRICS) {
+      const pts = records
+        .filter(r => r.head?.[svc]?.[key] != null)
+        .map(r => ({ date: r.date, v: +r.head[svc][key], reg: r.regression }));
+      if (pts.length) html += lineChart(pts, label);
+    }
+    html += `</div>`;
+
+    const recent = records.slice(-10).reverse();
+    html += `<table><tr><th>date</th><th>head</th><th>p50 (ms)</th><th>Δp50</th>
+             <th>p99 (ms)</th><th>Δp99</th><th>tput (rps)</th><th>Δtput</th><th></th></tr>`;
+    for (const r of recent) {
+      const h = r.head?.[svc] || {}, d = r.delta_pct?.[svc] || {};
+      const dp = v => v == null ? "" : `<span class="${v > 0 ? "" : "fine"}">${v > 0 ? "+" : ""}${v}%</span>`;
+      html += `<tr><td>${r.date}</td><td><code>${(r.head_sha || "").slice(0, 8)}</code></td>
+        <td>${fmt(h.p50_ms)}</td><td>${dp(d.p50_pct)}</td>
+        <td>${fmt(h.p99_ms)}</td><td>${dp(d.p99_pct)}</td>
+        <td>${fmt(h.max_tput_rps, 0)}</td><td>${dp(d.tput_pct)}</td>
+        <td>${r.regression ? '<span class="regress">regression</span>' : ""}</td></tr>`;
+    }
+    html += `</table>`;
+
+    // Request-flow breakdown: waterfall guide of the protocol's steps, the
+    // latest night's proportional bar, then one column per measured digest.
+    const flowRecords = records.filter(r => r.head?.[svc]?.flow).slice(-6);
+    if (flowRecords.length && meta.rows.length) {
+      const latest = flowRecords[flowRecords.length - 1].head[svc].flow;
+      html += `<h3 style="font-size:.95rem;margin-top:1.2rem">request-flow latency breakdown (instrumented run, p50 per stage, µs)</h3>`;
+      html += flowGuide(meta);
+      html += flowBar(meta, latest);
+      html += `<table><tr><th>stage</th>`;
+      for (const r of flowRecords)
+        html += `<th>${r.date}<br><code style="font-weight:400">${(r.head_sha || "").slice(0, 7)}</code></th>`;
+      html += `</tr>`;
+      for (const [label, colorKey, get, indent] of meta.rows) {
+        html += `<tr><td style="padding-left:${0.6 + indent * 1.1}rem">${dot(colorKey)}${label}</td>`;
+        for (const r of flowRecords) html += `<td>${us(get(r.head[svc].flow))}</td>`;
+        html += `</tr>`;
+      }
+      html += `</table>`;
+    }
+    section.innerHTML = html;
+    root.appendChild(section);
+  }
+}
+main();
+</script>
+</body>
+</html>

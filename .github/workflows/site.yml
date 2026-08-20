@@ -21,6 +21,7 @@ on:
       - "website/**"
       - "docs/**"
       - "dashboard/**"
+      - "eval/perf-dashboard/**"
       - "bin/build_site.sh"
       - ".github/workflows/site.yml"
   workflow_dispatch:
