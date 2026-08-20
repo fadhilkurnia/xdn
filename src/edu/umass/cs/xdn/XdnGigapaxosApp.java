@@ -78,6 +78,7 @@ public class XdnGigapaxosApp
 
   private final String myNodeId;
   private final Set<IntegerPacketType> packetTypes;
+  private final XdnBandwidthProfiler bandwidthProfiler;
 
   // TODO: remove this metadata as the port is already stored inside the ServiceInstance.
   private final HashMap<String, Integer> activeServicePorts;
@@ -156,6 +157,7 @@ public class XdnGigapaxosApp
         "{0}:{1} Initializing with args: {2}",
         new Object[] {myNodeId, XdnGigapaxosApp.class.getSimpleName(), Arrays.toString(args)});
 
+    this.bandwidthProfiler = new XdnBandwidthProfiler(this.myNodeId);
     this.serviceInstances = new ConcurrentHashMap<>();
     this.servicePlacementEpoch = new ConcurrentHashMap<>();
     this.activeServicePorts = new HashMap<>();
@@ -1264,6 +1266,28 @@ public class XdnGigapaxosApp
       }
     }
 
+    // Attach the bandwidth probe sidecar and start profiling this member's traffic. Any
+    // failure here only disables profiling; the service itself is unaffected.
+    if (Config.getGlobalBoolean(ReconfigurationConfig.RC.XDN_CLUSTER_BW_TRACER_ENABLED)) {
+      String probeImage =
+          Config.getGlobalString(ReconfigurationConfig.RC.XDN_CLUSTER_BW_PROBE_IMAGE);
+      String probeName = "bwprobe." + clusterContainerName;
+      if (startClusterSidecar(probeImage, probeName, clusterContainerName, null)) {
+        this.bandwidthProfiler.register(
+            serviceName,
+            probeName,
+            topology.clusterSize(),
+            publishedContainerPort != null ? publishedContainerPort : 0);
+      } else {
+        logger.log(
+            Level.WARNING,
+            "{0}:{1} bandwidth probe failed to start; profiling disabled for {2}",
+            new Object[] {
+              this.myNodeId.toUpperCase(), this.getClass().getSimpleName(), serviceName
+            });
+      }
+    }
+
     // Hold off marking the service live until the entry port answers HTTP. Without this, a
     // request can reach XdnHttpForwarderClient before the container binds its port; on Linux
     // that fails fast (RST) and the client retries, but Docker Desktop's port forwarder
@@ -1630,6 +1654,12 @@ public class XdnGigapaxosApp
         assert exitCode == 0 : "failed to remove compose directory " + composeDir;
       }
     } else {
+      if (serviceInstance.property.isClusterManaged()) {
+        this.bandwidthProfiler.deregister(serviceName);
+        for (String containerName : toBeRemovedContainerNames) {
+          Shell.runCommand("docker container rm --force bwprobe." + containerName, true);
+        }
+      }
       for (String containerName : toBeRemovedContainerNames) {
         boolean isSuccess = this.removeContainer(containerName);
         assert isSuccess : "failed to remove container " + containerName;
@@ -2787,6 +2817,14 @@ public class XdnGigapaxosApp
   public boolean hostsService(String serviceName) {
     Map<Integer, ServiceInstance> instances = this.serviceInstances.get(serviceName);
     return instances != null && !instances.isEmpty();
+  }
+
+  /**
+   * Returns this replica's bandwidth edge snapshot for a profiled cluster service, or null when the
+   * service is not profiled (tracer disabled, probe failed, or not cluster-managed).
+   */
+  public org.json.JSONObject getBandwidthSnapshot(String serviceName) {
+    return this.bandwidthProfiler.snapshot(serviceName);
   }
 
   /**********************************************************************************************

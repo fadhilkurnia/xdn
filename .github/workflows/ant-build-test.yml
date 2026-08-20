@@ -82,6 +82,7 @@ jobs:
         bin/run_xdn_tests.sh XdnHttpRequestBatchTest
         bin/run_xdn_tests.sh XdnGeoDemandProfilerTest
         bin/run_xdn_tests.sh XdnPortAllocatorTest
+        bin/run_xdn_tests.sh XdnBwProbeParserTest
 
     - name: 📝 Reporting the test results ...
       uses: dorny/test-reporter@v2
@@ -132,6 +133,7 @@ jobs:
           - XdnSetCoordinatorNodeTest
           - XdnTaggedImageLaunchTest
           - XdnClusterLaunchTest
+          - XdnClusterBandwidthTest
           - XdnWordPressClusterTest
 
     steps:
