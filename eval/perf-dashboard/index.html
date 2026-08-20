@@ -23,9 +23,10 @@
 <body>
 <h1>XDN Nightly Performance</h1>
 <p class="note">
-Nightly interleaved A/B measurement of XDN's low-load latency and max throughput
-(bookcatalog on Paxos, bookcatalog-nd on primary-backup), run on GitHub-hosted
-runners. The baseline and current HEAD are measured alternately on the <em>same</em>
+Nightly interleaved A/B measurement of XDN's low-load latency (sequential
+closed loop, one outstanding request) and max throughput (open-loop rate
+ladder) for bookcatalog on Paxos and bookcatalog-nd on primary-backup with the
+fuselog statediff recorder on /dev/shm, run on GitHub-hosted runners. The baseline and current HEAD are measured alternately on the <em>same</em>
 runner, so the head/base <strong>delta</strong> is the trustworthy signal; absolute
 values vary with runner hardware and are plotted only for context. Data:
 <a id="datalink" href="#">perf.json</a> on the <code>perf-results</code> branch.
@@ -108,6 +109,18 @@ async function main() {
         <td>${r.regression ? '<span class="regress">regression</span>' : ""}</td></tr>`;
     }
     html += `</table>`;
+
+    const latestFlow = [...records].reverse().find(r => r.head?.[svc]?.flow)?.head[svc].flow;
+    if (latestFlow) {
+      html += `<h3 style="font-size:.95rem;margin-top:1rem">latest request-flow breakdown (instrumented run, p50 per stage)</h3>`;
+      html += `<table><tr><th>stage</th><th>p50 (ms)</th></tr>`;
+      html += `<tr><td>client total</td><td>${fmt(latestFlow.client_p50_ms)}</td></tr>`;
+      for (const [k, v] of Object.entries(latestFlow.stages_p50_ms || {}))
+        html += `<tr><td>${k}</td><td>${fmt(v)}</td></tr>`;
+      for (const [k, v] of Object.entries(latestFlow.pbm_p50_ms || {}))
+        html += `<tr><td>pbm: ${k}</td><td>${fmt(v)}</td></tr>`;
+      html += `</table>`;
+    }
     section.innerHTML = html;
     root.appendChild(section);
   }

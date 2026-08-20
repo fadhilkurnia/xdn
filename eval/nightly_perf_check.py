@@ -39,6 +39,9 @@ def median_metrics(rounds: list) -> dict:
             slot = services.setdefault(name, {"p50": [], "p99": [], "tput": [], "errors": []})
             if "error" in svc:
                 slot["errors"].append(svc["error"])
+            if svc.get("instrumented") and "error" not in svc["instrumented"]:
+                # per-stage request-flow breakdown (diagnostic, never gated)
+                slot.setdefault("flow", svc["instrumented"])
             low = svc.get("low_load") or {}
             if low.get("p50_ms") is not None:
                 slot["p50"].append(low["p50_ms"])
@@ -58,6 +61,7 @@ def median_metrics(rounds: list) -> dict:
             "max_tput_rps": round(max(slot["tput"]), 1) if slot["tput"] else None,
             "rounds": {"p50": len(slot["p50"]), "tput": len(slot["tput"])},
             "errors": slot["errors"],
+            "flow": slot.get("flow"),
         }
     return out
 
@@ -144,6 +148,23 @@ def main():
                      f"| {fmt(h['max_tput_rps'], ' rps')} | {fmt(d.get('tput_pct'), '%')} |")
         for err in h["errors"]:
             lines.append(f"| {name} | error | | `{err[:80]}` | |")
+    lines.append("")
+    for name, h in head.items():
+        flow = h.get("flow")
+        if not flow:
+            continue
+        lines.append(f"<details><summary>{name} request-flow breakdown "
+                     f"(instrumented run, head; p50 per stage)</summary>")
+        lines.append("")
+        lines.append("| stage | p50 (ms) |")
+        lines.append("|---|---|")
+        lines.append(f"| client total | {flow.get('client_p50_ms', 'n/a')} |")
+        for stage, value in (flow.get("stages_p50_ms") or {}).items():
+            lines.append(f"| {stage} | {value} |")
+        for stage, value in (flow.get("pbm_p50_ms") or {}).items():
+            lines.append(f"| pbm: {stage} | {value} |")
+        lines.append("")
+        lines.append("</details>")
     lines.append("")
     if regressions:
         lines.append("### REGRESSION detected")

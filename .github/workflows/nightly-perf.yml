@@ -8,8 +8,8 @@
 # are not comparable night-to-night.
 #
 # Change gating: skipped when main HEAD was already measured, or when nothing
-# perf-relevant (src/, lib/, bin/gpServer.sh, bin/gpEnv.sh, xdn-cli/) changed
-# since the last measured commit. workflow_dispatch always runs. A pull_request
+# perf-relevant (src/, lib/, bin/gpServer.sh, bin/gpEnv.sh, xdn-cli/, xdn-fs/)
+# changed since the last measured commit. workflow_dispatch always runs. A pull_request
 # touching the perf scripts runs the measurement as a self-test (no recording).
 #
 # Results: one JSON line per night appended to perf.jsonl on the perf-results
@@ -95,7 +95,7 @@ jobs:
               exit 0
             fi
             if ! git diff --name-only "$LAST".."$HEAD_SHA" -- \
-                src lib bin/gpServer.sh bin/gpEnv.sh xdn-cli | grep -q .; then
+                src lib bin/gpServer.sh bin/gpEnv.sh xdn-cli xdn-fs | grep -q .; then
               echo "no perf-relevant changes since $LAST; skipping"
               echo "run_mode=skip" >> "$GITHUB_OUTPUT"
               exit 0
@@ -141,17 +141,31 @@ jobs:
       - name: Set up Rsync
         uses: GuillaumeFalourd/setup-rsync@v1.2
 
+      # The perf cluster uses the FUSELOG statediff recorder (the production-
+      # representative one; rsync forks a process per capture and dominates PB
+      # latency). Each tree builds its OWN fuselog binaries so xdn-fs/ changes
+      # are A/B'd; eval/nightly_perf.py installs the measured tree's binaries
+      # to /usr/local/bin at the start of each pass.
+      - name: Set up FUSE
+        run: |
+          set -x
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
+          sudo modprobe fuse
+          sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+          grep user_allow_other /etc/fuse.conf
+
       - name: Pre-pull service images
         run: |
           docker pull fadhilkurnia/xdn-bookcatalog
           docker pull fadhilkurnia/xdn-bookcatalog-nd
 
       - name: Build head
-        run: cd head && ant jar && bash bin/build_xdn_cli.sh
+        run: cd head && ant jar && bash bin/build_xdn_cli.sh && bash bin/build_xdn_fuselog.sh cpp
 
       - name: Build base
         if: needs.gate.outputs.run_mode == 'compare'
-        run: cd base && ant jar && bash bin/build_xdn_cli.sh
+        run: cd base && ant jar && bash bin/build_xdn_cli.sh && bash bin/build_xdn_fuselog.sh cpp
 
       - name: Measure (interleaved A/B rounds)
         env:
@@ -166,14 +180,14 @@ jobs:
               --tput-hint-file "results/hint_${side}.txt" "$@"
           }
           if [ "$RUN_MODE" = "compare" ]; then
-            pass base 1
-            pass head 1
+            pass base 1 --with-instrumented
+            pass head 1 --with-instrumented
             pass head 2
             pass base 2
             pass base 3 --skip-tput
             pass head 3 --skip-tput
           else
-            pass head 1
+            pass head 1 --with-instrumented
             pass head 2
             pass head 3 --skip-tput
           fi
