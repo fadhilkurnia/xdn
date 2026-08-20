@@ -127,11 +127,11 @@ function flowBar(meta, flow) {
   const used = segments.reduce((a, s) => a + s[2], 0);
   if (total > used) segments.push(["frontend & respond (rest)", "none", total - used]);
   const cells = segments.map(([label, colorKey, ms]) =>
-    `<div title="${label}: ${ms.toFixed(2)} ms" style="flex:${Math.max(ms, total * 0.015)} 0 0;
+    `<div title="${label}: ${us(ms)} µs" style="flex:${Math.max(ms, total * 0.015)} 0 0;
        background:${STAGE_COLORS[colorKey]};height:16px;border-radius:3px"></div>`).join("");
   return `<div style="display:flex;gap:2px;max-width:640px;margin:.3rem 0 .5rem">${cells}</div>
     <div style="font-size:.78rem;color:var(--muted)">latest night's p50 proportions
-      (client total ${total} ms; hover segments)</div>`;
+      (client total ${us(total)} µs; hover segments)</div>`;
 }
 
 function lineChart(points, label, width = 300, height = 160) {
@@ -159,6 +159,8 @@ function lineChart(points, label, width = 300, height = 160) {
 }
 
 function fmt(v, digits = 1) { return v == null ? "n/a" : (+v).toFixed(digits); }
+// breakdown stages are sub-millisecond; show them in microseconds
+function us(vMs) { return vMs == null ? "n/a" : Math.round(vMs * 1000).toLocaleString(); }
 
 async function main() {
   const status = document.getElementById("status");
@@ -208,7 +210,7 @@ async function main() {
     const flowRecords = records.filter(r => r.head?.[svc]?.flow).slice(-6);
     if (flowRecords.length && meta.rows.length) {
       const latest = flowRecords[flowRecords.length - 1].head[svc].flow;
-      html += `<h3 style="font-size:.95rem;margin-top:1.2rem">request-flow latency breakdown (instrumented run, p50 per stage)</h3>`;
+      html += `<h3 style="font-size:.95rem;margin-top:1.2rem">request-flow latency breakdown (instrumented run, p50 per stage, µs)</h3>`;
       html += flowGuide(meta);
       html += flowBar(meta, latest);
       html += `<table><tr><th>stage</th>`;
@@ -217,7 +219,7 @@ async function main() {
       html += `</tr>`;
       for (const [label, colorKey, get, indent] of meta.rows) {
         html += `<tr><td style="padding-left:${0.6 + indent * 1.1}rem">${dot(colorKey)}${label}</td>`;
-        for (const r of flowRecords) html += `<td>${fmt(get(r.head[svc].flow))}</td>`;
+        for (const r of flowRecords) html += `<td>${us(get(r.head[svc].flow))}</td>`;
         html += `</tr>`;
       }
       html += `</table>`;

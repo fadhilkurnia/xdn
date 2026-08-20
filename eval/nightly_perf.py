@@ -270,7 +270,7 @@ def percentile(sorted_values, fraction):
     if not sorted_values:
         return None
     index = min(len(sorted_values) - 1, int(fraction * (len(sorted_values) - 1) + 0.5))
-    return round(sorted_values[index], 2)
+    return round(sorted_values[index], 3)
 
 
 def sequential_stats(latencies, errors):
@@ -280,7 +280,7 @@ def sequential_stats(latencies, errors):
         "mode": "sequential-closed-loop",
         "requests": len(latencies),
         "errors": errors,
-        "avg_ms": round(statistics.fmean(latencies), 2),
+        "avg_ms": round(statistics.fmean(latencies), 3),
         "p50_ms": percentile(latencies, 0.50),
         "p95_ms": percentile(latencies, 0.95),
         "p99_ms": percentile(latencies, 0.99),
@@ -324,14 +324,14 @@ def parse_pbm_samples(path: str) -> dict:
     for match in PBM_SAMPLE_RE.finditer(text):
         for stage, value in zip(PBM_STAGES, match.groups()):
             stage_values[stage].append(float(value))
-    return {stage: round(statistics.median(values), 2)
+    return {stage: round(statistics.median(values), 3)
             for stage, values in stage_values.items() if values}
 
 
 def stage_medians(header_samples: list) -> dict:
     keys = set().union(*header_samples) if header_samples else set()
     return {key: round(statistics.median(
-        [sample[key] for sample in header_samples if key in sample]), 2)
+        [sample[key] for sample in header_samples if key in sample]), 3)
         for key in sorted(keys)}
 
 

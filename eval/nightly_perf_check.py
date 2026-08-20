@@ -153,16 +153,19 @@ def main():
         flow = h.get("flow")
         if not flow:
             continue
+        def as_us(value_ms):
+            return f"{round(value_ms * 1000):,}" if value_ms is not None else "n/a"
+
         lines.append(f"<details><summary>{name} request-flow breakdown "
-                     f"(instrumented run, head; p50 per stage)</summary>")
+                     f"(instrumented run, head; p50 per stage, µs)</summary>")
         lines.append("")
-        lines.append("| stage | p50 (ms) |")
+        lines.append("| stage | p50 (µs) |")
         lines.append("|---|---|")
-        lines.append(f"| client total | {flow.get('client_p50_ms', 'n/a')} |")
+        lines.append(f"| client total | {as_us(flow.get('client_p50_ms'))} |")
         for stage, value in (flow.get("stages_p50_ms") or {}).items():
-            lines.append(f"| {stage} | {value} |")
+            lines.append(f"| {stage} | {as_us(value)} |")
         for stage, value in (flow.get("pbm_p50_ms") or {}).items():
-            lines.append(f"| pbm: {stage} | {value} |")
+            lines.append(f"| pbm: {stage} | {as_us(value)} |")
         lines.append("")
         lines.append("</details>")
     lines.append("")
