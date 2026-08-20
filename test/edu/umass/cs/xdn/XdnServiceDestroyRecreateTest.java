@@ -38,9 +38,7 @@ public class XdnServiceDestroyRecreateTest {
       // so the re-create below hits nodes that hosted the previous incarnation.
       cluster.launchService(
           serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
-      HttpResponse<String> response =
-          cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
-      assertEquals(308, response.statusCode(), "Service did not return HTTP 308");
+      awaitServiceServing(cluster, serviceName);
 
       // destroy it and wait until the name record is fully removed
       cluster.deleteService(serviceName);
@@ -69,15 +67,44 @@ public class XdnServiceDestroyRecreateTest {
           isRecreated,
           "Re-creating the destroyed service was never accepted; last failure: "
               + lastLaunchFailure);
-      HttpResponse<String> recreateResponse =
-          cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
-      assertEquals(
-          308, recreateResponse.statusCode(), "Re-created service did not return HTTP 308");
+      awaitServiceServing(cluster, serviceName);
 
       HttpResponse<String> apiResponse = cluster.sendGetRequest(serviceName, "/api/books");
       assertEquals(200, apiResponse.statusCode(), "Re-created service did not return HTTP 200");
       assertEquals("[]", apiResponse.body(), "Re-created service did not start from empty state");
     }
+  }
+
+  /**
+   * Polls the AR frontend until bookcatalog answers its HTTP 308 redirect, i.e. the service is
+   * registered and its container is serving. {@link XdnTestCluster#awaitServiceReady} returns on
+   * any status below 500 -- including the 404 an AR answers while service registration is still
+   * propagating on a slow runner -- so poll for the expected status explicitly.
+   */
+  private void awaitServiceServing(XdnTestCluster cluster, String serviceName) throws Exception {
+    long deadline = System.currentTimeMillis() + XdnTestCluster.SERVICE_READY_TIMEOUT.toMillis();
+    Integer lastStatus = null;
+    Exception lastError = null;
+    while (System.currentTimeMillis() < deadline) {
+      try {
+        HttpResponse<String> response = cluster.invokeService(serviceName);
+        lastStatus = response.statusCode();
+        if (lastStatus == 308) {
+          assertFalse(response.body().isEmpty(), "Service returned empty body");
+          return;
+        }
+      } catch (Exception e) {
+        lastError = e;
+      }
+      Thread.sleep(1000);
+    }
+    fail(
+        "Service "
+            + serviceName
+            + " never returned HTTP 308; last status: "
+            + lastStatus
+            + ", last error: "
+            + lastError);
   }
 
   /** Polls the reconfigurator until the service name record no longer exists. */
