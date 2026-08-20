@@ -258,6 +258,17 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
     int retCode = Shell.runCommand("rm -rf " + targetDir);
     assert retCode == 0;
+    // prune the now-empty per-service parents; rmdir refuses non-empty dirs, so
+    // this is a no-op while another epoch's state still lives here
+    Shell.runCommand(
+        String.format(
+            "rmdir %s%s %s%s %s%s",
+            baseMountDirPath,
+            serviceName,
+            baseSnapshotDirPath,
+            serviceName,
+            baseDiffDirPath,
+            serviceName));
     return true;
   }
 

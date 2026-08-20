@@ -462,20 +462,24 @@ var ServiceDestroyCmd = &cobra.Command{
 		}
 
 		serviceName := args[0]
-		isValidInput := false
-		isRemoveConfirmed := false
-		for !isValidInput {
+		isRemoveConfirmed, _ := cmd.Flags().GetBool("yes")
+		input := bufio.NewScanner(os.Stdin)
+		for !isRemoveConfirmed {
 			fmt.Printf(
 				"Are you sure you want to remove `%s` service? [yes/no]\n > ",
 				serviceName)
-			input := bufio.NewScanner(os.Stdin)
-			input.Scan()
+			// Scan() returning false means stdin is closed (EOF, e.g. piped
+			// input ran out) -- treat as "no" instead of looping forever.
+			if !input.Scan() {
+				fmt.Printf("\n")
+				break
+			}
 			isSureText := input.Text()
-			if isSureText == "yes" || isSureText == "no" {
-				isValidInput = true
-				if isSureText == "yes" {
-					isRemoveConfirmed = true
-				}
+			if isSureText == "yes" {
+				isRemoveConfirmed = true
+				break
+			}
+			if isSureText == "no" {
 				break
 			}
 			fmt.Printf(
@@ -578,20 +582,24 @@ var ServiceLeaderCmd = &cobra.Command{
 		serviceName := args[0]
 		nodeID := args[1]
 
-		isValidInput := false
 		isChangeConfirmed := false
-		for !isValidInput {
+		input := bufio.NewScanner(os.Stdin)
+		for {
 			fmt.Printf(
 				"Are you sure you want to change the leader of `%s` to `%s`? [yes/no]\n > ",
 				serviceName, nodeID)
-			input := bufio.NewScanner(os.Stdin)
-			input.Scan()
+			// Scan() returning false means stdin is closed (EOF, e.g. piped
+			// input ran out) -- treat as "no" instead of looping forever.
+			if !input.Scan() {
+				fmt.Printf("\n")
+				break
+			}
 			isSureText := input.Text()
-			if isSureText == "yes" || isSureText == "no" {
-				isValidInput = true
-				if isSureText == "yes" {
-					isChangeConfirmed = true
-				}
+			if isSureText == "yes" {
+				isChangeConfirmed = true
+				break
+			}
+			if isSureText == "no" {
 				break
 			}
 			fmt.Printf(
@@ -853,6 +861,9 @@ func init() {
 	ServiceMoveCmd.Flags().StringP("leader", "l", "",
 		"Optional coordinator node ID; must be one of --nodes")
 	_ = ServiceMoveCmd.MarkFlagRequired("nodes")
+
+	ServiceDestroyCmd.Flags().BoolP("yes", "y", false,
+		"Skip the confirmation prompt (for non-interactive use)")
 }
 
 type placementReplica struct {
