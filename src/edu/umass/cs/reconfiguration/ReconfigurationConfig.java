@@ -867,6 +867,27 @@ public class ReconfigurationConfig {
     }
 
     /**
+     * The port an ActiveReplica's HTTP frontend actually binds, mirroring the
+     * precedence in {@link edu.umass.cs.reconfiguration.http.HttpActiveReplica}:
+     * HTTPS (443 by default) overrides port 80, which overrides the cleartext
+     * offset port. Used when the reconfigurator advertises {@code HTTP_ADDRESS}
+     * so the placement reports the port clients can actually reach, not just the
+     * offset-derived one.
+     *
+     * @param consensusPort the node's consensus (TCP listener) port
+     * @return the effective HTTP frontend port
+     */
+    public static int getAdvertisedHTTPPort(int consensusPort) {
+        if (Config.getGlobalBoolean(RC.ENABLE_ACTIVE_REPLICA_HTTPS)) {
+            return Config.getGlobalInt(RC.ACTIVE_REPLICA_HTTPS_PORT);
+        }
+        if (Config.getGlobalBoolean(RC.ENABLE_ACTIVE_REPLICA_HTTP_PORT_80)) {
+            return 80;
+        }
+        return getHTTPPort(consensusPort);
+    }
+
+    /**
      * @param port
      * @return Translates port to corresponding client facing port.
      */

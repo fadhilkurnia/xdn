@@ -380,9 +380,21 @@ public class HttpActiveReplica {
                     if (host == null) {
                         host = "";
                     }
-                    int colon = host.indexOf(':');
-                    if (colon >= 0) {
-                        host = host.substring(0, colon); // strip any :port
+                    // Strip the port while keeping a bracketed IPv6 literal intact.
+                    // Splitting on the first colon truncates "[2600::a]" to "[2600"
+                    // and yields a malformed Location; for "[v6]:port" the port is
+                    // after the closing bracket, for "host:port"/"v4:port" after the
+                    // first colon.
+                    if (host.startsWith("[")) {
+                        int end = host.indexOf(']');
+                        if (end >= 0) {
+                            host = host.substring(0, end + 1);
+                        }
+                    } else {
+                        int colon = host.indexOf(':');
+                        if (colon >= 0) {
+                            host = host.substring(0, colon);
+                        }
                     }
                     String portSuffix = httpsPort == 443 ? "" : ":" + httpsPort;
                     String location = "https://" + host + portSuffix + req.uri();
