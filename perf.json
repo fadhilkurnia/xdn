@@ -189,5 +189,131 @@
    "fsync_avg_ms": 0.261,
    "cpu_loops_per_500ms": 5269916
   }
+ },
+ {
+  "date": "2026-08-23",
+  "timestamp": "2026-08-23T08:04:52.401077+00:00",
+  "head_sha": "7fabb049eda5f1cf2911b18d8b7ef5a7d8a4d8d3",
+  "base_sha": "08514648fa3b8b99d16bc6df91bde5a35ce81895",
+  "head": {
+   "perfcatalog": {
+    "p50_ms": 2.28,
+    "p99_ms": 8.96,
+    "max_tput_rps": 882.1,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 2.357,
+     "requests": 10528,
+     "stages_p50_ms": {
+      "callback": 2.014,
+      "container": 0.87,
+      "copyreq": 0.01,
+      "proxy": 0.89
+     }
+    }
+   },
+   "perfcatalognd": {
+    "p50_ms": 3.3,
+    "p99_ms": 8.38,
+    "max_tput_rps": 878.5,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 3.145,
+     "requests": 8846,
+     "stages_p50_ms": {
+      "callback": 2.561,
+      "container": 0.98,
+      "copyreq": 0.0,
+      "proxy": 0.99
+     },
+     "pbm_p50_ms": {
+      "queue_wait": 0.02,
+      "exec": 1.08,
+      "capture_wait": 0.03,
+      "capture": 0.13,
+      "propose_prep": 0.01,
+      "paxos": 0.83,
+      "total": 2.27
+     }
+    }
+   }
+  },
+  "base": {
+   "perfcatalog": {
+    "p50_ms": 2.27,
+    "p99_ms": 8.81,
+    "max_tput_rps": 890.4,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 3.385,
+     "requests": 7079,
+     "stages_p50_ms": {
+      "callback": 2.803,
+      "container": 1.1,
+      "copyreq": 0.01,
+      "proxy": 1.13
+     }
+    }
+   },
+   "perfcatalognd": {
+    "p50_ms": 3.24,
+    "p99_ms": 8.81,
+    "max_tput_rps": 736.1,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 4.047,
+     "requests": 6445,
+     "stages_p50_ms": {
+      "callback": 3.355,
+      "container": 1.14,
+      "copyreq": 0.0,
+      "proxy": 1.15
+     },
+     "pbm_p50_ms": {
+      "queue_wait": 0.03,
+      "exec": 1.28,
+      "capture_wait": 0.03,
+      "capture": 0.16,
+      "propose_prep": 0.01,
+      "paxos": 0.93,
+      "total": 2.93
+     }
+    }
+   }
+  },
+  "delta_pct": {
+   "perfcatalog": {
+    "p50_pct": 0.4,
+    "p99_pct": 1.7,
+    "tput_pct": -0.9
+   },
+   "perfcatalognd": {
+    "p50_pct": 1.9,
+    "p99_pct": -4.9,
+    "tput_pct": 19.3
+   }
+  },
+  "regression": false,
+  "regressions": [],
+  "calibration": {
+   "fsync_avg_ms": 0.234,
+   "cpu_loops_per_500ms": 5291681
+  }
  }
 ]
