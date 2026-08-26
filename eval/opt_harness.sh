@@ -52,24 +52,33 @@ cmd_launch() {
   [ "$det" = false ] && img="fadhilkurnia/xdn-bookcatalog-nd"
   echo y | XDN_CONTROL_PLANE="$(rc_ip)" timeout 180 ./bin/xdn launch bookcatalog --image="$img" --state=/app/data/ --deterministic="$det" 2>&1 | grep -E "successfully|ERROR" | head -1
 }
+# Pin the leader/primary to AR1 (the AR co-located with the RC + driver) so the
+# measured client->leader hop is always loopback and the number isolates
+# server-side coordination+execution, not the variable driver->remote-leader
+# network RTT. AR1's node id is the 2nd OPT_NODES entry.
+cmd_pin() {
+  local svc="${1:-bookcatalog}"
+  local nid1; nid1=$(echo "$OPT_NODES" | tr ' ' '\n' | sed -n 2p | cut -d: -f2)
+  echo y | XDN_CONTROL_PLANE="$(rc_ip)" timeout 60 ./bin/xdn service leader "$svc" "$nid1" 2>&1 | tail -1
+  sleep 4
+}
+# Always measure against the driver-local AR1 frontend (127.0.0.1:2300) so the
+# client hop is fixed across runs and groups.
 cmd_measure() {
   local svc="${1:-bookcatalog}" dur="${2:-30}"
-  local leader
-  leader=$(XDN_CONTROL_PLANE="$(rc_ip)" ./bin/xdn service info "$svc" 2>/dev/null | awk -F'|' '/leader|primary/{gsub(/ /,"",$4); print $4; exit}')
-  [ -z "$leader" ] && leader=$(echo "$OPT_NODES" | tr ' ' '\n' | sed -n 2p | cut -d: -f1)
-  python3 eval/opt_seq_latency.py --host "$leader" --port 2300 --service "$svc" --duration "$dur" --warmup 5
+  python3 eval/opt_seq_latency.py --host 127.0.0.1 --port 2300 --service "$svc" --duration "$dur" --warmup 5
 }
 cmd_destroy() { XDN_CONTROL_PLANE="$(rc_ip)" ./bin/xdn service destroy "${1:-bookcatalog}" --yes 2>&1 | tail -1; }
 cmd_cycle() {
   local det="${1:-true}" dur="${2:-30}"
   cmd_build || return 1
-  cmd_deploy; cmd_start; cmd_launch "$det"; sleep 6; cmd_measure bookcatalog "$dur"
+  cmd_deploy; cmd_start; cmd_launch "$det"; sleep 6; cmd_pin bookcatalog; cmd_measure bookcatalog "$dur"
 }
 
 sub="${1:-}"; shift || true
 case "$sub" in
   build) cmd_build;; deploy) cmd_deploy;; start) cmd_start;;
-  launch) cmd_launch "$@";; measure) cmd_measure "$@";; destroy) cmd_destroy "$@";;
+  launch) cmd_launch "$@";; pin) cmd_pin "$@";; measure) cmd_measure "$@";; destroy) cmd_destroy "$@";;
   cycle) cmd_cycle "$@";;
-  *) echo "usage: OPT_CONFIG=.. OPT_NODES=.. $0 {build|deploy|start|launch <det>|measure <svc> <dur>|destroy <svc>|cycle <det> <dur>}"; exit 1;;
+  *) echo "usage: OPT_CONFIG=.. OPT_NODES=.. $0 {build|deploy|start|launch <det>|pin <svc>|measure <svc> <dur>|destroy <svc>|cycle <det> <dur>}"; exit 1;;
 esac
