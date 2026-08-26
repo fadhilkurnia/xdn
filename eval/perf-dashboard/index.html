@@ -23,13 +23,9 @@
 <body>
 <h1>XDN Nightly Performance</h1>
 <p class="note">
-Nightly interleaved A/B measurement of XDN's low-load latency (sequential
-closed loop, one outstanding request) and max throughput (open-loop rate
-ladder) for bookcatalog on Paxos and bookcatalog-nd on primary-backup with the
-fuselog statediff recorder on /dev/shm, run on GitHub-hosted runners. The baseline and current HEAD are measured alternately on the <em>same</em>
-runner, so the head/base <strong>delta</strong> is the trustworthy signal; absolute
-values vary with runner hardware and are plotted only for context. Data:
-<a id="datalink" href="#">perf.json</a> on the <code>perf-results</code> branch.
+Head-vs-base <strong>delta</strong> (same-runner A/B) is the trustworthy signal;
+absolute values vary with runner hardware. Data:
+<a id="datalink" href="#">perf.json</a>.
 </p>
 <div id="status">Loading…</div>
 <div id="root"></div>
