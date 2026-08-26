@@ -62,11 +62,13 @@ cmd_pin() {
   echo y | XDN_CONTROL_PLANE="$(rc_ip)" timeout 60 ./bin/xdn service leader "$svc" "$nid1" 2>&1 | tail -1
   sleep 4
 }
-# Always measure against the driver-local AR1 frontend (127.0.0.1:2300) so the
-# client hop is fixed across runs and groups.
+# Always measure against AR1's frontend on the RC host's own LAN IP (frontends
+# bind the LAN address, not loopback). Since the driver runs on the RC host,
+# this is a same-host hop -- fixed across runs and groups, and AR1 is pinned as
+# leader so it coordinates with the 2 remote followers.
 cmd_measure() {
   local svc="${1:-bookcatalog}" dur="${2:-30}"
-  python3 eval/opt_seq_latency.py --host 127.0.0.1 --port 2300 --service "$svc" --duration "$dur" --warmup 5
+  python3 eval/opt_seq_latency.py --host "$(rc_ip)" --port 2300 --service "$svc" --duration "$dur" --warmup 5
 }
 cmd_destroy() { XDN_CONTROL_PLANE="$(rc_ip)" ./bin/xdn service destroy "${1:-bookcatalog}" --yes 2>&1 | tail -1; }
 cmd_cycle() {
