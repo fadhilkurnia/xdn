@@ -1030,6 +1030,11 @@ public class PaxosManager<NodeIDType> {
             this.handlePaxosPacket(pp);
     }
 
+    /* Single-request fast path (default on). Set
+     * -DPAXOS_SINGLE_REQ_FASTPATH=false to always route through the batcher. */
+    private static final boolean SINGLE_REQ_FASTPATH = Boolean
+            .parseBoolean(System.getProperty("PAXOS_SINGLE_REQ_FASTPATH", "true"));
+
     /* If RequestPacket, hand over to batcher that will then call
      * handleIncomingPacketInternal on batched requests. */
     private void enqueueRequest(PaxosPacket pp) {
@@ -1040,9 +1045,22 @@ public class PaxosManager<NodeIDType> {
                 && RequestBatcher.shouldEnqueue()
                 && !((RequestPacket) pp).isBroadcasted()) {
             if (pp.getPaxosID() != null) {
-                PaxosConfig.log.log(level, "{0} enqueueing request {1}", new Object[]{
-                        this, pp.getSummary(PaxosConfig.log.isLoggable(level))});
-                this.requestBatcher.enqueue(((RequestPacket) pp));
+                /* When no batch is pending, the batcher can only produce a
+                 * size-1 batch, so its worker-thread wakeup is pure latency on
+                 * the propose->accept path; propose on the calling thread
+                 * instead. Slot assignment stays serialized by the coordinator's
+                 * lock (PaxosCoordinatorState.propose is synchronized) and
+                 * persist-before-ack ordering is unaffected -- identical to
+                 * BATCHING_ENABLED=false for this request. Under concurrent load
+                 * (queue non-empty) we fall through to the batcher to batch. */
+                if (SINGLE_REQ_FASTPATH
+                        && this.requestBatcher.getQueueSize() == 0) {
+                    this.handlePaxosPacket(pp);
+                } else {
+                    PaxosConfig.log.log(level, "{0} enqueueing request {1}", new Object[]{
+                            this, pp.getSummary(PaxosConfig.log.isLoggable(level))});
+                    this.requestBatcher.enqueue(((RequestPacket) pp));
+                }
             } else
                 error((RequestPacket) pp);
         } else {
