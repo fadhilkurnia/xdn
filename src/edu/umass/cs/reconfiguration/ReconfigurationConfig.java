@@ -594,6 +594,16 @@ public class ReconfigurationConfig {
         XDN_FUSELOG_BASE_DIR("/tmp/xdn/state/fuselog/"),
 
         /**
+         * Base directory under which the non-FUSE statediff recorders (RSYNC, ZIP,
+         * FUSERUST) create each service's container bind-mount + working dirs
+         * (e.g. &lt;base&gt;rsync/&lt;node&gt;/mnt/&lt;svc&gt;/e&lt;epoch&gt;/). Point it at a tmpfs
+         * such as /dev/shm/xdn/state/ to keep the mounted service state in memory
+         * and off disk. FUSELOG has its own XDN_FUSELOG_BASE_DIR.
+         * TODO: this should be specific to XDN, and not Gigapaxos config.
+         */
+        XDN_STATE_BASE_DIR("/tmp/xdn/state/"),
+
+        /**
          * Anti-entropy round period (ms) for the eventual-consistency
          * LazyReplicaCoordinator: every period, replicas exchange vector clocks and
          * state digests, and a frontier replica ships its checkpoint to lagging peers.

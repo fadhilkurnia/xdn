@@ -1,5 +1,7 @@
 package edu.umass.cs.xdn.recorder;
 
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.utils.Shell;
 import edu.umass.cs.xdn.utils.Utils;
 import java.io.File;
@@ -17,7 +19,10 @@ import java.util.stream.Collectors;
 public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
 
   private static final String RSYNC_BIN_PATH = "/usr/bin/rsync";
-  private static final String defaultWorkingBasePath = "/tmp/xdn/state/rsync/";
+  // Base under XDN_STATE_BASE_DIR (default /tmp/xdn/state/); point that at a
+  // tmpfs like /dev/shm/xdn/state/ to keep the container bind-mount in memory.
+  private static final String defaultWorkingBasePath =
+      Config.getGlobalString(ReconfigurationConfig.RC.XDN_STATE_BASE_DIR) + "rsync/";
 
   private final String baseMountDirPath;
   private final String baseSnapshotDirPath;

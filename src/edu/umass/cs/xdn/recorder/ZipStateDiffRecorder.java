@@ -1,5 +1,7 @@
 package edu.umass.cs.xdn.recorder;
 
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.utils.ZipFiles;
 import edu.umass.cs.xdn.utils.Shell;
 import edu.umass.cs.xdn.utils.Utils;
@@ -14,7 +16,9 @@ import java.util.Map;
 
 public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
 
-  private static final String defaultWorkingBasePath = "/tmp/xdn/state/zip/";
+  // Base under XDN_STATE_BASE_DIR (default /tmp/xdn/state/); tmpfs-friendly.
+  private static final String defaultWorkingBasePath =
+      Config.getGlobalString(ReconfigurationConfig.RC.XDN_STATE_BASE_DIR) + "zip/";
 
   private final String baseMountDirPath;
   private final String baseSnapshotDirPath;

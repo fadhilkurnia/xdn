@@ -1,5 +1,7 @@
 package edu.umass.cs.xdn.recorder;
 
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
+import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.utils.Shell;
 import java.io.File;
 import java.io.IOException;
@@ -33,7 +35,9 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   private static final String FUSERUST_BIN_PATH = "/usr/local/bin/fuserust";
   private static final String FUSERUST_APPLY_BIN_PATH = "/usr/local/bin/fuserust-apply";
 
-  private static final String defaultWorkingBasePath = "/tmp/xdn/state/fuserust/";
+  // Base under XDN_STATE_BASE_DIR (default /tmp/xdn/state/); tmpfs-friendly.
+  private static final String defaultWorkingBasePath =
+      Config.getGlobalString(ReconfigurationConfig.RC.XDN_STATE_BASE_DIR) + "fuserust/";
 
   private final String baseMountDirPath;
   private final String baseSocketDirPath;
