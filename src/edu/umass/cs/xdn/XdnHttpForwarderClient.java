@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -49,6 +50,21 @@ public final class XdnHttpForwarderClient implements Closeable {
   private final EventLoopGroup eventLoopGroup;
   private final boolean manageEventLoopGroup;
   private final ConcurrentMap<Origin, FixedChannelPool> pools = new ConcurrentHashMap<>();
+
+  /**
+   * Per-origin single cached idle channel for the sequential single-request fast path. When present
+   * and active, {@link #executeOnce} reuses it directly and skips {@link
+   * FixedChannelPool#acquire()} (and its paired release), eliminating the pool's event-loop acquire
+   * task, pending-acquire semaphore, health check, and the release event-loop task from the
+   * critical path. The channel is acquired from the pool exactly once and then parked here between
+   * requests (never released back to the pool while cached), so pool accounting still sees it as
+   * "acquired". Enable/disable with {@code -DXDN_HTTP_CACHED_CHANNEL=true} (default true).
+   */
+  private final ConcurrentMap<Origin, AtomicReference<Channel>> cachedChannels =
+      new ConcurrentHashMap<>();
+
+  private static final boolean CACHED_CHANNEL_ENABLED =
+      Boolean.parseBoolean(System.getProperty("XDN_HTTP_CACHED_CHANNEL", "true"));
 
   /** Creates a client backed by its own event loop group. */
   public XdnHttpForwarderClient() {
@@ -287,6 +303,28 @@ public final class XdnHttpForwarderClient implements Closeable {
     ReferenceCountUtil.retain(request);
     final FullHttpRequest outbound = request;
 
+    // Slot where this channel is parked between requests (fast-path reuse). Passed into the
+    // RequestContext so completion returns the channel here instead of to the pool.
+    final AtomicReference<Channel> slot =
+        CACHED_CHANNEL_ENABLED
+            ? cachedChannels.computeIfAbsent(origin, o -> new AtomicReference<>())
+            : null;
+
+    // Fast path: reuse a parked, still-active channel and skip pool.acquire() entirely.
+    if (slot != null) {
+      Channel cached = slot.getAndSet(null);
+      if (cached != null && cached.isActive()) {
+        ts[0] = System.nanoTime(); // "acquire" is instantaneous on the fast path
+        dispatchRequest(cached, pool, slot, outbound, responseFuture, ts);
+        return awaitResponse(responseFuture, request, reqNum, t0, ts);
+      }
+      if (cached != null) {
+        // Parked channel died while idle: return the pool permit and close it.
+        releaseQuietly(pool, cached);
+        cached.close();
+      }
+    }
+
     pool.acquire()
         .addListener(
             (Future<Channel> acquireFuture) -> {
@@ -324,14 +362,25 @@ public final class XdnHttpForwarderClient implements Closeable {
                             }
                             return;
                           }
-                          dispatchRequest(fresh, pool, outbound, responseFuture, ts);
+                          dispatchRequest(fresh, pool, slot, outbound, responseFuture, ts);
                         });
                 return;
               }
 
-              dispatchRequest(channel, pool, outbound, responseFuture, ts);
+              dispatchRequest(channel, pool, slot, outbound, responseFuture, ts);
             });
 
+    return awaitResponse(responseFuture, request, reqNum, t0, ts);
+  }
+
+  /** Blocks for the response and stamps the per-request forward timing (shared by both paths). */
+  private FullHttpResponse awaitResponse(
+      CompletableFuture<FullHttpResponse> responseFuture,
+      FullHttpRequest request,
+      long reqNum,
+      long t0,
+      long[] ts)
+      throws Exception {
     try {
       FullHttpResponse response = responseFuture.get();
       if (reqNum % LOG_SAMPLE_INTERVAL == 0) {
@@ -359,11 +408,13 @@ public final class XdnHttpForwarderClient implements Closeable {
 
   /**
    * Dispatch the HTTP request on an active channel. Used by both the initial acquire path and the
-   * retry-on-inactive path.
+   * retry-on-inactive path. When {@code slot} is non-null the channel is parked there on completion
+   * (fast-path reuse) instead of released to the pool.
    */
   private void dispatchRequest(
       Channel channel,
       FixedChannelPool pool,
+      AtomicReference<Channel> slot,
       FullHttpRequest outbound,
       CompletableFuture<FullHttpResponse> responseFuture,
       long[] ts) {
@@ -375,7 +426,7 @@ public final class XdnHttpForwarderClient implements Closeable {
       return;
     }
 
-    RequestContext context = new RequestContext(channel, pool, responseFuture);
+    RequestContext context = new RequestContext(channel, pool, slot, responseFuture);
     if (!handler.register(context)) {
       responseFuture.completeExceptionally(
           new IllegalStateException("Another request is already in flight"));
@@ -529,6 +580,16 @@ public final class XdnHttpForwarderClient implements Closeable {
 
   @Override
   public void close() {
+    cachedChannels
+        .values()
+        .forEach(
+            ref -> {
+              Channel ch = ref.getAndSet(null);
+              if (ch != null) {
+                ch.close();
+              }
+            });
+    cachedChannels.clear();
     pools
         .values()
         .forEach(
@@ -700,7 +761,10 @@ public final class XdnHttpForwarderClient implements Closeable {
   }
 
   private record RequestContext(
-      Channel channel, FixedChannelPool pool, CompletableFuture<FullHttpResponse> responseFuture) {
+      Channel channel,
+      FixedChannelPool pool,
+      AtomicReference<Channel> slot,
+      CompletableFuture<FullHttpResponse> responseFuture) {
 
     void complete(FullHttpResponse response) {
       boolean delivered = responseFuture.complete(response);
@@ -714,6 +778,14 @@ public final class XdnHttpForwarderClient implements Closeable {
       if (!HttpUtil.isKeepAlive(response)) {
         release();
         channel.close();
+        return;
+      }
+      // Fast-path reuse: park the still-active channel for the next request instead of
+      // releasing it to the pool. Keeps the pool permit held but skips the pool's release/
+      // acquire event-loop round-trips on the hot path. Guard with compareAndSet so that under
+      // concurrency at most one channel is parked per origin; any extra channel goes back to
+      // the pool to keep its acquired-count accounting correct.
+      if (slot != null && channel.isActive() && slot.compareAndSet(null, channel)) {
         return;
       }
       release();
