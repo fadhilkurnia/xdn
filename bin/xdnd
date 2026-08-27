@@ -821,6 +821,13 @@ function install_dependencies() {
   CMD_DESC+=("install docker - (8) add user to docker group")
   CMD+=('sudo usermod -aG docker $USER')
 
+  # disable userland-proxy (measured ~1ms+ median improvement, larger at tail,
+  # for loopback-published-port traffic)
+  CMD_DESC+=("install docker - (9) disable userland-proxy")
+  CMD+=('echo '\''{"userland-proxy": false}'\'' | sudo tee /etc/docker/daemon.json > /dev/null')
+  CMD_DESC+=("install docker - (10) restart docker to apply daemon.json")
+  CMD+=("sudo systemctl restart docker")
+
   # install java21
   CMD_DESC+=("install java21")
   CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk ant")
