@@ -138,6 +138,13 @@ jobs:
         uses: docker-practice/actions-setup-docker@master
         timeout-minutes: 12
 
+      - name: Disable Docker userland-proxy
+        run: |
+          set -x
+          echo '{"userland-proxy": false}' | sudo tee /etc/docker/daemon.json > /dev/null
+          sudo systemctl restart docker
+          docker info --format '{{json .}}' | python3 -c "import json,sys; print('userland-proxy:', json.load(sys.stdin).get('DriverStatus'))" || true
+
       - name: Set up Rsync
         uses: GuillaumeFalourd/setup-rsync@v1.2
 
