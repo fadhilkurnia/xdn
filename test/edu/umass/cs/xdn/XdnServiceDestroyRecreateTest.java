@@ -37,7 +37,7 @@ public class XdnServiceDestroyRecreateTest {
       // first incarnation: on a 3-AR cluster the service is placed on every node,
       // so the re-create below hits nodes that hosted the previous incarnation.
       cluster.launchService(
-          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
+          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true, "/api/books", null);
       awaitServiceServing(cluster, serviceName);
 
       // destroy it and wait until the name record is fully removed
@@ -55,7 +55,7 @@ public class XdnServiceDestroyRecreateTest {
       while (System.currentTimeMillis() < deadline) {
         try {
           cluster.launchService(
-              serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
+              serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true, "/api/books", null);
           isRecreated = true;
           break;
         } catch (Exception e) {

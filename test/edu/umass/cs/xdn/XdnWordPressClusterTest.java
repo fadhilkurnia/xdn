@@ -113,6 +113,7 @@ public class XdnWordPressClusterTest {
             .put("image", WORDPRESS_IMAGE)
             .put("port", 80) // entry port: published to the host, routed by the XDN frontend
             .put("entry", true)
+            .put("healthcheck", new JSONObject().put("path", "/"))
             .put(
                 "environments",
                 new JSONArray()

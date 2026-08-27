@@ -45,7 +45,7 @@ public class XdnRestartRecoveryTest {
       // AR1 runs as an external OS process so it can be killed and respawned like a real
       // systemd restart; see the start(...) javadoc for why an in-JVM restart cannot work.
       cluster.start("AR1");
-      cluster.launchService(serviceName, IMAGE, "/app/data/", "LINEARIZABLE", true);
+      cluster.launchService(serviceName, IMAGE, "/app/data/", "LINEARIZABLE", true, "/api/books", null);
       cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
       for (int i = 0; i < 3; i++) {
         cluster.awaitReplicaReady(serviceName, i, XdnTestCluster.SERVICE_READY_TIMEOUT);
@@ -109,7 +109,7 @@ public class XdnRestartRecoveryTest {
     try (XdnTestCluster cluster = new XdnTestCluster()) {
       cluster.start();
       // deterministic=false selects the primary-backup coordinator.
-      cluster.launchService(serviceName, IMAGE, "/app/data/", "LINEARIZABLE", false);
+      cluster.launchService(serviceName, IMAGE, "/app/data/", "LINEARIZABLE", false, "/api/books", null);
       cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
       for (int i = 0; i < 3; i++) {
         cluster.awaitReplicaReady(serviceName, i, XdnTestCluster.SERVICE_READY_TIMEOUT);

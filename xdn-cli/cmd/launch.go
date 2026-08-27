@@ -35,6 +35,8 @@ type CommonProperties struct {
 	numReplicas       *int
 	minReplicas       *int
 	maxReplicas       *int
+	healthcheckCmd    string
+	healthcheckPath   string
 }
 
 type EnvPair struct {
@@ -96,6 +98,8 @@ func init() {
 	LaunchCmd.PersistentFlags().IntP("num-replicas", "n", 0, "fixed number of replicas at creation (overrides cluster default)")
 	LaunchCmd.PersistentFlags().Int("min-replicas", 0, "minimum number of replicas (lower bound for reconfiguration)")
 	LaunchCmd.PersistentFlags().Int("max-replicas", 0, "maximum number of replicas (upper bound for reconfiguration)")
+	LaunchCmd.PersistentFlags().String("healthcheck-cmd", "", "shell command used to check the service's readiness")
+	LaunchCmd.PersistentFlags().String("healthcheck-path", "", "HTTP path used to check the service's readiness")
 
 	// Note: if file is specified, properties specified by flags will be ignored
 	LaunchCmd.Flags().StringP("file", "f", "", "indicate file location containing the service's properties")
@@ -122,7 +126,7 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		errMsg := "service name can only be alphanumeric, optionally with '-' or '_'"
 		fmt.Print(errMsg + ".\n")
 		return prop, errors.New(errMsg)
-	}
+		}
 
 	// TODO: check valid docker image name from illegal chars
 	prop.imageName, err = flags.GetString("image")
@@ -203,6 +207,21 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		return prop, err
 	}
 
+	prop.healthcheckCmd, err = flags.GetString("healthcheck-cmd")
+	if err != nil {
+		return prop, err
+	}
+	prop.healthcheckPath, err = flags.GetString("healthcheck-path")
+	if err != nil {
+		return prop, err
+	}
+	if prop.healthcheckCmd != "" && prop.healthcheckPath != "" {
+		return prop, fmt.Errorf("specify only one of --healthcheck-cmd or --healthcheck-path")
+	}
+	if prop.healthcheckCmd == "" && prop.healthcheckPath == "" && !hasInferableHealthcheck(prop.imageName) {
+		return prop, fmt.Errorf("a healthcheck is required: specify --healthcheck-cmd or --healthcheck-path")
+	}
+
 	config := map[string]interface{}{
 		"name":          prop.serviceName,
 		"image":         prop.imageName,
@@ -230,6 +249,17 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 	}
 	if prop.maxReplicas != nil {
 		config["max_replicas"] = *prop.maxReplicas
+	}
+
+	if prop.healthcheckCmd != "" || prop.healthcheckPath != "" {
+		healthcheck := map[string]interface{}{}
+		if prop.healthcheckCmd != "" {
+			healthcheck["command"] = prop.healthcheckCmd
+		}
+		if prop.healthcheckPath != "" {
+			healthcheck["path"] = prop.healthcheckPath
+		}
+		config["healthcheck"] = healthcheck
 	}
 
 	jsonBody, err := json.Marshal(config)
@@ -263,6 +293,31 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 	err = json.Unmarshal(jsonBody, &propMap)
 	if err != nil {
 		return prop, err
+	}
+
+	if propMap["components"] == nil {
+		if propMap["mode"] != "cluster" && propMap["healthcheck"] == nil {
+			imageName, _ := propMap["image"].(string)
+			if !hasInferableHealthcheck(imageName) {
+				return prop, fmt.Errorf(
+					"a healthcheck is required: add a 'healthcheck' field (path or command) to the service properties file")
+			}
+		}
+	} else if propMap["mode"] != "cluster" {
+		componentsForCheck := propMap["components"].([]interface{})
+		for _, components := range componentsForCheck {
+			for componentName, componentPropIf := range components.(map[string]interface{}) {
+				componentProp := componentPropIf.(map[string]interface{})
+				if componentProp["healthcheck"] == nil {
+					componentImage, _ := componentProp["image"].(string)
+					if !hasInferableHealthcheck(componentImage) {
+						return prop, fmt.Errorf(
+							"component %q: a healthcheck is required: add a 'healthcheck' field (path or command)",
+							componentName)
+					}
+				}
+			}
+		}
 	}
 
 	if propMap["components"] == nil {
@@ -433,6 +488,17 @@ func validateImageName(imageName string) error {
 		return fmt.Errorf("docker image name must not contain whitespace")
 	}
 	return nil
+}
+
+// hasInferableHealthcheck reports whether imageName matches one of the database images
+// the server can automatically infer a healthcheck command for. Must be kept in sync
+// with ServiceComponent.inferHealthcheckCmd() in ServiceProperty.java — this is a
+// client-side convenience check only; the server is the source of truth.
+func hasInferableHealthcheck(imageName string) bool {
+	lower := strings.ToLower(imageName)
+	return strings.Contains(lower, "mysql") ||
+		strings.Contains(lower, "mariadb") ||
+		strings.Contains(lower, "postgres")
 }
 
 // sendCreateRequest wraps rawJSON with the xdn:init: prefix and issues the gigapaxos CREATE
