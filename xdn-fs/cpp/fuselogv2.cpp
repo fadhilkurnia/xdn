@@ -74,6 +74,33 @@ static char *mount_point; // the file system mount point
 static int   safe_fd;     // file description of the mount point directory
 static mutex fid_mutex;   // protects filename_to_fid only
 
+// Set of underlying fds (the value stashed in fi->fh) that the application
+// opened with write access. This is the discriminator that replaces the
+// pid > 0 heuristic on the write path when writeback_cache is enabled: under
+// writeback_cache the kernel flushes an app's dirty pages from background
+// writeback threads that run with pid == 0, but those write upcalls still
+// carry the app's writable fi->fh. Recognizing the handle (rather than the
+// pid) lets us attribute — and capture — those deferred writes.
+//
+// Populated in fuselog_open (app context, pid > 0), cleared in
+// fuselog_release. Guarded by its own mutex, disjoint from fid_mutex and
+// never held across it, so no lock-ordering hazard exists.
+static mutex                   app_wr_fh_mutex;
+static unordered_set<uint64_t> app_writable_fh;
+
+static void mark_app_writable_fh(uint64_t fh) {
+    lock_guard<mutex> lk(app_wr_fh_mutex);
+    app_writable_fh.insert(fh);
+}
+static void clear_app_writable_fh(uint64_t fh) {
+    lock_guard<mutex> lk(app_wr_fh_mutex);
+    app_writable_fh.erase(fh);
+}
+static bool is_app_writable_fh(uint64_t fh) {
+    lock_guard<mutex> lk(app_wr_fh_mutex);
+    return app_writable_fh.count(fh) > 0;
+}
+
 // configurations for logging purposes
 #define LOG_DEBUG    0
 #define LOG_INFO     1
@@ -94,6 +121,12 @@ static bool is_sd_capture  = true;   // set from FUSELOG_CAPTURE
 static bool is_sd_coalesce = true;   // set from WRITE_COALESCING
 static bool is_sd_prune    = true;   // set from FUSELOG_PRUNE
 static bool is_sd_compress = false;  // set from FUSELOG_COMPRESSION
+// When true, fuselog_init advertises FUSE_CAP_WRITEBACK_CACHE (if the kernel
+// supports it) so the kernel buffers and defers app writes for lower exec
+// latency. Default OFF: the shipping default is byte-for-byte the pre-existing
+// behavior. Safe to turn on ONLY because fuselog_write now attributes the
+// resulting pid == 0 writeback writes by handle ownership (app_writable_fh).
+static bool is_writeback_cache = false;  // set from FUSELOG_WRITEBACK_CACHE
 static ZSTD_CCtx* zstd_cctx = nullptr;
 static const int ZSTD_COMPRESS_LEVEL = 1;
 // TODO: allocate fresh fids on recreate.
@@ -299,6 +332,7 @@ int main(int argc, char *argv[]) {
     is_sd_coalesce = getenv_bool("WRITE_COALESCING", true);
     is_sd_prune    = getenv_bool("FUSELOG_PRUNE", true);
     is_sd_compress = getenv_bool("FUSELOG_COMPRESSION", false);
+    is_writeback_cache = getenv_bool("FUSELOG_WRITEBACK_CACHE", false);
     if (char* env_p = getenv("FUSELOG_TRACE_FILE")) {
 	fuselog_trace_file = env_p;
 	trace_fp = fopen(fuselog_trace_file, "w");
@@ -314,6 +348,7 @@ int main(int argc, char *argv[]) {
     logging(LOG_INFO, " - sd_coalesce         : %s\n", is_sd_coalesce ? "true" : "false");
     logging(LOG_INFO, " - sd_prune            : %s\n", is_sd_prune    ? "true" : "false");
     logging(LOG_INFO, " - sd_compress         : %s\n", is_sd_compress ? "true" : "false");
+    logging(LOG_INFO, " - writeback_cache     : %s\n", is_writeback_cache ? "true" : "false");
     logging(LOG_INFO, " - trace_file          : %s\n",
 	    fuselog_trace_file ? fuselog_trace_file : "(disabled)");
 
@@ -943,8 +978,40 @@ static bool initialize_unix_socket() {
 static void *fuselog_init(struct fuse_conn_info *info,
 	struct fuse_config    *cfg) {
     logging(LOG_INFO, ">> initialization ...\n");
-    (void) info;
     cfg->use_ino = 1;
+
+    // Opt-in FUSE writeback_cache. When enabled, the kernel buffers app
+    // writes in its page cache and flushes them later from writeback threads
+    // (pid == 0), which cuts the synchronous exec-stage latency on the PB
+    // write path. This is only correct for statediff CAPTURE because
+    // fuselog_write attributes those deferred pid == 0 writes by handle
+    // ownership (app_writable_fh) instead of the pid > 0 heuristic — see the
+    // discriminator in fuselog_write. Capture is byte-exact under writeback
+    // (verified: L3 replay tree and L5 sqlite round-trip both match the
+    // backing store and the POSIX oracle), so Paxos-replicated backups stay
+    // consistent.
+    //
+    // KNOWN LIMITATION (does NOT affect capture / backups): with writeback_cache
+    // the kernel caches DATA pages per inode and does not observe fuselog's
+    // path-based backing mutations (rename/truncate/unlink/link). Under
+    // pathological HARDLINK + rename + inode-reuse aliasing a read through the
+    // LIVE mount can return stale bytes even though the backing store and the
+    // captured statediff are both correct. This is a primary-side live-read
+    // artifact only; realistic single-writer DB workloads (sqlite/mysql/
+    // wordpress) do not exhibit it (L5 passes). In-handler fuse_invalidate_path
+    // was tried and does not close the aliasing case, so writeback stays
+    // opt-in. Default OFF so the shipping behavior is byte-for-byte unchanged;
+    // toggle with FUSELOG_WRITEBACK_CACHE=1.
+    if (is_writeback_cache) {
+        if (info->capable & FUSE_CAP_WRITEBACK_CACHE) {
+            info->want |= FUSE_CAP_WRITEBACK_CACHE;
+            logging(LOG_INFO, ">> writeback_cache ENABLED\n");
+        } else {
+            logging(LOG_WARNING,
+                    ">> writeback_cache requested but kernel does not "
+                    "advertise FUSE_CAP_WRITEBACK_CACHE; running without it\n");
+        }
+    }
 
     /* Pick up changes from lower filesystem right away. This is
        also necessary for better hardlink support. When the kernel
@@ -1640,6 +1707,24 @@ static int fuselog_open(const char *orig_path, struct fuse_file_info *fi) {
     // app's durability is unaffected because COMMIT-time fsync still flows
     // through fuselog_fsync.
     int open_flags = fi->flags & ~O_DIRECT;
+
+    // Under writeback_cache the kernel buffers writes in its page cache and,
+    // to fill partial pages, performs read-modify-write — issuing READ upcalls
+    // even for files the app opened O_WRONLY. fuselog_read services those with
+    // pread(fi->fh, ...), which would fail EBADF on a write-only backing fd.
+    // So broaden a write-only backing descriptor to O_RDWR. Also drop O_APPEND:
+    // with writeback_cache the kernel owns the file offset/size, and an
+    // O_APPEND backing fd would force every pwrite to EOF and corrupt offsets.
+    // Gated on is_writeback_cache so the default path is byte-for-byte
+    // unchanged; only our internal descriptor mode changes, never app-visible
+    // semantics.
+    if (is_writeback_cache) {
+	if ((open_flags & O_ACCMODE) == O_WRONLY) {
+	    open_flags = (open_flags & ~O_ACCMODE) | O_RDWR;
+	}
+	open_flags &= ~O_APPEND;
+    }
+
     int   res  = open(path, open_flags);
 
     if (fi->flags & O_DIRECT) {
@@ -1666,6 +1751,14 @@ static int fuselog_open(const char *orig_path, struct fuse_file_info *fi) {
 	return -errno;
 
     fi->fh = res;
+
+    // Remember write-capable handles so that under writeback_cache we can
+    // recognize (and capture) writes that the kernel later flushes for this
+    // file from a pid == 0 writeback thread. O_RDONLY is 0, so test the access
+    // mode explicitly rather than masking a zero-valued flag.
+    if ((open_flags & O_ACCMODE) != O_RDONLY) {
+	mark_app_writable_fh((uint64_t) res);
+    }
     return 0;
 }
 
@@ -1725,12 +1818,31 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
 	return res;
     }
 
+    /* Discriminator for "this write carries genuine application data that must
+     * enter the statediff". Two cases:
+     *   1. Synchronous app write: runs in the application's context, pid > 0.
+     *      This is the ONLY case in the default (writeback_cache OFF) config,
+     *      so the predicate reduces to the historical `pid > 0` check and
+     *      behavior is byte-for-byte unchanged.
+     *   2. Deferred writeback write: with writeback_cache ON, the kernel
+     *      flushes the app's dirty pages from a background writeback thread
+     *      (pid == 0). That upcall still carries the app's writable fi->fh, so
+     *      we recognize it by handle ownership. Capturing it is exactly right
+     *      and does not double-count: under writeback_cache the app's write()
+     *      only dirties the page cache (no WRITE upcall) — the single WRITE
+     *      upcall per dirty range happens here, at flush time.
+     * The silly-renamed (.fuse_hiddenXXXX) exclusion is applied separately at
+     * the capture site, matching the pre-existing structure. */
+    bool is_app_write =
+	(fuse_get_context()->pid > 0) ||
+	(is_writeback_cache && fi != NULL && is_app_writable_fh((uint64_t) fi->fh));
+
     /* Capturing the actual differences by getting the diff between existing data
      * and the to-be-written data.
      */
     int64_t num_diff = -1;            // the number of actual differences
     vector<struct statediff_write_unit> coalesced_write;
-    if (is_sd_capture && is_sd_coalesce && fuse_get_context()->pid > 0) {
+    if (is_sd_capture && is_sd_coalesce && is_app_write) {
 	int      fd_ro;
 	char     sd_buffer_rd[size];
 	ssize_t  rd_size;
@@ -1814,19 +1926,20 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
     if (is_sd_capture) {
 	auto start_time = chrono::high_resolution_clock::now();
 
-	/* Ignore statediff from pid == 0, and writes that land on a
-	   silly-renamed (.fuse_hiddenXXXX) inode — those bytes are about to
-	   be discarded when the last fd closes.
+	/* Capture the write when it is genuine application data (is_app_write,
+	   computed above) and does NOT land on a silly-renamed (.fuse_hiddenXXXX)
+	   inode — those bytes are about to be discarded when the last fd closes.
 
-	   WARNING — writeback_cache landmine: this pid > 0 guard silently DROPS any
-	   write from a KERNEL WRITEBACK THREAD (pid == 0). Those bytes reach the
-	   backing store (primary looks correct) but never enter the statediff, so
-	   backups diverge -- and an app fsync flushes THROUGH the writeback threads,
-	   so fsync-before-respond does not save us. Hence this mount does NOT enable
-	   writeback_cache/kernel_cache; enabling it fails the L3 and L5 oracles.
-	   Enabling it later requires capturing pid==0 writes (track by fh, not pid)
-	   and re-validating against L3/L5. */
-	if (fuse_get_context()->pid > 0 && !is_silly_path(path)) {
+	   FUSE writeback_cache landmine (now handled): a write delivered by a
+	   KERNEL WRITEBACK THREAD runs with pid == 0. The old `pid > 0` guard
+	   silently DROPPED those from the statediff — they reached the backing
+	   store (primary looked correct) but never entered the Paxos-replicated
+	   diff, so backups diverged. is_app_write closes that gap by recognizing
+	   the app's writable fi->fh, which the writeback upcall still carries, so
+	   writeback_cache can be enabled (FUSELOG_WRITEBACK_CACHE=1) safely. With
+	   writeback_cache OFF (the default), is_app_write == (pid > 0) and this is
+	   identical to the historical behavior. */
+	if (is_app_write && !is_silly_path(path)) {
 
 	    // get the file id (fid)
 	    uint64_t cur_fid = 0;
@@ -1972,6 +2085,12 @@ static int fuselog_release(const char *orig_path, struct fuse_file_info *fi) {
     logging(LOG_DEBUG, ">> release %s\n", orig_path);
 
     (void)orig_path;
+    // The kernel flushes all dirty pages for this handle (via the FLUSH/writeback
+    // path, pid == 0) before issuing RELEASE, so every deferred write has
+    // already been delivered to fuselog_write and captured by the time we drop
+    // the handle here. Clear before close() so the fd number cannot be reused
+    // by a concurrent open while still present in the set.
+    clear_app_writable_fh((uint64_t) fi->fh);
     close(fi->fh);
     return 0;
 }
