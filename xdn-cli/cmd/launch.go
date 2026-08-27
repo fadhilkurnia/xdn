@@ -126,7 +126,7 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 		errMsg := "service name can only be alphanumeric, optionally with '-' or '_'"
 		fmt.Print(errMsg + ".\n")
 		return prop, errors.New(errMsg)
-		}
+	}
 
 	// TODO: check valid docker image name from illegal chars
 	prop.imageName, err = flags.GetString("image")
