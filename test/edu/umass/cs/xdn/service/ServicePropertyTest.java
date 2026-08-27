@@ -20,7 +20,8 @@ public class ServicePropertyTest {
                   "port": 8000,
                   "state": "/data/",
                   "consistency": "linearizability",
-                  "deterministic": true
+                  "deterministic": true,
+                  "healthcheck": {"path": "/api/books"}
                 }
                 """,
             serviceName);
@@ -54,7 +55,8 @@ public class ServicePropertyTest {
                       "backend": {
                         "image": "note-backend",
                         "expose": 8000,
-                        "stateful": true
+                        "stateful": true,
+                        "healthcheck": "curl -f http://localhost:8000/health"
                       }
                     },
                     {
@@ -62,6 +64,7 @@ public class ServicePropertyTest {
                         "image": "note-frontend",
                         "port": 8080,
                         "entry": true,
+                        "healthcheck": {"path": "/"},
                         "environments": [
                           {
                             "BACKEND_HOST": "localhost:8000"
@@ -100,6 +103,7 @@ public class ServicePropertyTest {
             """
                 {
                   "image": "bookcatalog",
+                  "healthcheck": "curl -f http://localhost:8000/health",
                   "port": 8000,
                   "name": "%s",
                   "deterministic": true,
@@ -138,7 +142,8 @@ public class ServicePropertyTest {
                       "wordpress": {
                         "image": "wordpress:6.5.4-apache",
                         "port": 80,
-                        "entry": true
+                        "entry": true,
+                        "healthcheck": {"path": "/"}
                       }
                     }
                   ],

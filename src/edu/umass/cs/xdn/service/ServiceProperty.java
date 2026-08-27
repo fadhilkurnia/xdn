@@ -782,6 +782,15 @@ public class ServiceProperty {
         jsonObject.put("state", this.stateDirectory);
         jsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
         jsonObject.put("deterministic", this.isDeterministic);
+        String healthcheckCommand = this.getEntryComponent().getHealthcheckCommand();
+        String healthEndpointPath = this.getEntryComponent().getHealthEndpointPath();
+        if (healthcheckCommand != null && !healthcheckCommand.isEmpty()) {
+          jsonObject.put("healthcheck", healthcheckCommand);
+        } else if (healthEndpointPath != null && !healthEndpointPath.isEmpty()) {
+          JSONObject healthObj = new JSONObject();
+          healthObj.put("path", healthEndpointPath);
+          jsonObject.put("healthcheck", healthObj);
+        }
         putReplicaFields(jsonObject);
         putClusterFields(jsonObject);
       } catch (JSONException e) {
