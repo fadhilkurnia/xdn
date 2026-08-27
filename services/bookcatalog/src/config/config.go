@@ -89,10 +89,13 @@ func Connect() {
 	case "sqlite":
 		dataDir := filepath.Join(".", "data")
 		os.MkdirAll(dataDir, os.ModePerm)
-		dsn := "file:data/data.db"
-		isEnableWAL := os.Getenv("ENABLE_WAL")
-		if isEnableWAL != "" && strings.ToLower(isEnableWAL) == "true" {
-			dsn = "file:data/data.db?_journal_mode=WAL&_synchronous=FULL"
+		// WAL + synchronous=FULL is the DEFAULT: durable (fsyncs the WAL per COMMIT)
+		// and dramatically faster than the SQLite rollback-journal default, which
+		// serializes/rewrites the whole journal per commit and is the write-path
+		// bottleneck. Opt out to the old rollback-journal with ENABLE_WAL=false.
+		dsn := "file:data/data.db?_journal_mode=WAL&_synchronous=FULL"
+		if strings.ToLower(os.Getenv("ENABLE_WAL")) == "false" {
+			dsn = "file:data/data.db"
 		}
 		d, err := gorm.Open(sqlite.Open(dsn), gormConfig)
 		if err != nil {
