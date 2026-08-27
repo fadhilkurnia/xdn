@@ -136,8 +136,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     // serviceBatchQueues queue and its associated queue amplification of
     // tail latency. The capture thread + doneQueue are still used for
     // serialized captureStateDiff + propose.
+    // Default ON: at depth 1 the worker-thread handoff is pure latency with no
+    // batching benefit; serialization and durability are unchanged. Disable with
+    // -DPB_INLINE_EXECUTE=false.
     private static final boolean INLINE_EXECUTE =
-        Boolean.getBoolean("PB_INLINE_EXECUTE");
+        Boolean.parseBoolean(System.getProperty("PB_INLINE_EXECUTE", "true"));
 
     // Maximum number of concurrent execute() calls per service.
     // Limits how many PBM workers can simultaneously execute requests against

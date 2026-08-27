@@ -215,10 +215,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     env.put("FUSELOG_DAEMON_LOGS", "1");
     env.put("FUSELOG_COMPRESSION", "true");
     env.put("RUST_LOG", "info");
-    // Coalescing reads old data before each write (two passes per write).
-    // For heavy-write databases like MySQL, this can add overhead.
-    // Disable with -DFUSELOG_DISABLE_COALESCING=true
-    if (Boolean.parseBoolean(System.getProperty("FUSELOG_DISABLE_COALESCING", "false"))) {
+    // Coalescing reads old data before each write (open+pread+compute_diff per write,
+    // on the container's exec path). Default OFF: recording the full write buffer per
+    // write is still correct (apply reproduces the exact bytes) and avoids that cost.
+    // Re-enable with -DFUSELOG_DISABLE_COALESCING=false.
+    if (!Boolean.parseBoolean(System.getProperty("FUSELOG_DISABLE_COALESCING", "true"))) {
+      env.put("WRITE_COALESCING", "true");
+    } else {
       env.put("WRITE_COALESCING", "false");
     }
     int exitCode = Shell.runCommand(cmd, false, env);
