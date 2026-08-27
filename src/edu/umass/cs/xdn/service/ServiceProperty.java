@@ -243,14 +243,9 @@ public class ServiceProperty {
         }
       }
       if (healthEndpointPath == null && healthcheckCommand == null) {
+        // Healthcheck is optional. Infer one for known database images as a
+        // convenience; otherwise proceed without one.
         healthcheckCommand = ServiceComponent.inferHealthcheckCmd(imageName);
-        if (healthcheckCommand == null && !isClusterManaged) {
-          throw new IllegalStateException(
-              "no healthcheck available for image '"
-                  + imageName
-                  + "' -- specify "
-                  + "an explicit healthcheck path or command");
-        }
       }
 
       ServiceComponent c =
@@ -652,31 +647,16 @@ public class ServiceProperty {
       // services are exempt: their non-entry, non-stateful components are sidecars that
       // share the stateful member's network namespace and don't need their own readiness
       // check (see StatefulClusterReplicaCoordinator).
-      if (isEntry) {
-        if (healthEndpointPath == null && healthcheckCommand == null) {
-          throw new IllegalStateException(
-              "entry component '"
-                  + componentName
-                  + "' requires a healthcheck "
-                  + "('path' or 'command')");
-        }
-      } else if (isStateful) {
-        if (healthcheckCommand == null && ServiceComponent.inferHealthcheckCmd(imageName) == null) {
-          throw new IllegalStateException(
-              "no healthcheck available for stateful image '"
-                  + imageName
-                  + "', component '"
-                  + componentName
-                  + "' -- specify an explicit "
-                  + "healthcheck command");
-        }
-      } else if (!isClusterManaged) {
+      if (isStateful && healthcheckCommand == null && healthEndpointPath == null) {
+        // Healthcheck is optional; infer one for known database images as a
+        // convenience only for the stateful component.
+        healthcheckCommand = ServiceComponent.inferHealthcheckCmd(imageName);
+      }
+      if (!isEntry && !isStateful && !isClusterManaged) {
         // TODO: support additional non-entry stateless components
         throw new IllegalStateException(
-            "component '"
-                + componentName
-                + "' is neither stateful nor entry -- "
-                + "unsupported topology");
+                "component '" + componentName + "' is neither stateful nor entry -- "
+                        + "unsupported topology");
       }
 
       components.add(
