@@ -100,7 +100,18 @@ func Connect() {
 		// state-diff recorder captures the -wal writes byte-exact and the replica
 		// rebuilds -shm from the -wal on recovery (verified by the WAL-mode L5
 		// fuselog fuzz). Opt out to the old rollback-journal with ENABLE_WAL=false.
-		dsn := "file:data/data.db?_journal_mode=WAL&_synchronous=FULL"
+		// SQLITE_SYNC picks the WAL fsync level: FULL (default) fsyncs the WAL on
+		// every commit; NORMAL fsyncs only at checkpoint. NORMAL is safe here
+		// because durability is provided by XDN's replicated Paxos statediff log
+		// (the client ack fires only after Paxos commit), not the primary's local
+		// fsync, so the local fsync is redundant. NORMAL is ~2x faster on a real
+		// disk (nearly free on the default tmpfs state dir). Accepts NORMAL/FULL
+		// case-insensitively; any other value falls back to FULL.
+		syncLevel := strings.ToUpper(strings.TrimSpace(os.Getenv("SQLITE_SYNC")))
+		if syncLevel != "NORMAL" && syncLevel != "FULL" {
+			syncLevel = "FULL"
+		}
+		dsn := fmt.Sprintf("file:data/data.db?_journal_mode=WAL&_synchronous=%s", syncLevel)
 		useWAL := strings.ToLower(os.Getenv("ENABLE_WAL")) != "false"
 		if !useWAL {
 			dsn = "file:data/data.db"

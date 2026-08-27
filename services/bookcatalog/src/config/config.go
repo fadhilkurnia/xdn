@@ -93,7 +93,15 @@ func Connect() {
 		// and dramatically faster than the SQLite rollback-journal default, which
 		// serializes/rewrites the whole journal per commit and is the write-path
 		// bottleneck. Opt out to the old rollback-journal with ENABLE_WAL=false.
-		dsn := "file:data/data.db?_journal_mode=WAL&_synchronous=FULL"
+		// SQLITE_SYNC picks the WAL fsync level: FULL (default) or NORMAL. NORMAL
+		// is safe under XDN replication (durability comes from the Paxos statediff
+		// log, so the primary's local fsync is redundant) and ~2x faster on disk.
+		// Accepts NORMAL/FULL case-insensitively; any other value falls back to FULL.
+		syncLevel := strings.ToUpper(strings.TrimSpace(os.Getenv("SQLITE_SYNC")))
+		if syncLevel != "NORMAL" && syncLevel != "FULL" {
+			syncLevel = "FULL"
+		}
+		dsn := fmt.Sprintf("file:data/data.db?_journal_mode=WAL&_synchronous=%s", syncLevel)
 		if strings.ToLower(os.Getenv("ENABLE_WAL")) == "false" {
 			dsn = "file:data/data.db"
 		}
