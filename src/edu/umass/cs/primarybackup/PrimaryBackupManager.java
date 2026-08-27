@@ -91,8 +91,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private static final long START_EPOCH_PROPOSAL_RETRY_DELAY_MS = 200;
 
     private static final int PB_BATCH_SIZE = 128;
+
+    // Worker threads that drain the per-service batch queue and call execute()
+    // concurrently (used only when INLINE_EXECUTE is false). Primary throughput
+    // knob: a bounded pool decouples container I/O from the Netty frontend. Defaults
+    // to availableProcessors(); override with -DPB_N_PARALLEL_WORKERS=N.
     private static final int N_PARALLEL_WORKERS =
-        Integer.getInteger("PB_N_PARALLEL_WORKERS", 16);
+        Integer.getInteger("PB_N_PARALLEL_WORKERS", Runtime.getRuntime().availableProcessors());
 
     // After receiving the first queued request, wait up to this many milliseconds for
     // additional requests to accumulate before executing the batch.  A larger window
@@ -131,16 +136,13 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private static final boolean SAMPLE_LATENCY =
         Boolean.getBoolean("PB_SAMPLE_LATENCY");
 
-    // When true, execute requests directly on the calling thread (writePool)
-    // instead of enqueueing to dedicated worker threads. Eliminates the
-    // serviceBatchQueues queue and its associated queue amplification of
-    // tail latency. The capture thread + doneQueue are still used for
-    // serialized captureStateDiff + propose.
-    // Default ON: at depth 1 the worker-thread handoff is pure latency with no
-    // batching benefit; serialization and durability are unchanged. Disable with
-    // -DPB_INLINE_EXECUTE=false.
+    // Execute mode (default false = throughput). When false, requests drain through
+    // the bounded N_PARALLEL_WORKERS pool, which caps concurrent container I/O and
+    // sustains peak throughput. Set -DPB_INLINE_EXECUTE=true to execute inline on the
+    // writePool for the lowest depth-1 latency, at the cost of a p99 collapse under
+    // concurrency.
     private static final boolean INLINE_EXECUTE =
-        Boolean.parseBoolean(System.getProperty("PB_INLINE_EXECUTE", "true"));
+        Boolean.getBoolean("PB_INLINE_EXECUTE");
 
     // Maximum number of concurrent execute() calls per service.
     // Limits how many PBM workers can simultaneously execute requests against
