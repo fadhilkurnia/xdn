@@ -655,8 +655,10 @@ public class ServiceProperty {
       if (!isEntry && !isStateful && !isClusterManaged) {
         // TODO: support additional non-entry stateless components
         throw new IllegalStateException(
-                "component '" + componentName + "' is neither stateful nor entry -- "
-                        + "unsupported topology");
+            "component '"
+                + componentName
+                + "' is neither stateful nor entry -- "
+                + "unsupported topology");
       }
 
       components.add(

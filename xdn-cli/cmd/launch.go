@@ -215,12 +215,9 @@ func parseDeclaredPropertiesFromFlags(serviceName string, flags *pflag.FlagSet) 
 	if err != nil {
 		return prop, err
 	}
-	if prop.healthcheckCmd != "" && prop.healthcheckPath != "" {
-		return prop, fmt.Errorf("specify only one of --healthcheck-cmd or --healthcheck-path")
-	}
-	if prop.healthcheckCmd == "" && prop.healthcheckPath == "" && !hasInferableHealthcheck(prop.imageName) {
-		return prop, fmt.Errorf("a healthcheck is required: specify --healthcheck-cmd or --healthcheck-path")
-	}
+    if prop.healthcheckCmd != "" && prop.healthcheckPath != "" {
+        return prop, fmt.Errorf("specify only one of --healthcheck-cmd or --healthcheck-path")
+    }
 
 	config := map[string]interface{}{
 		"name":          prop.serviceName,
