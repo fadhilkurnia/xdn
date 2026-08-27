@@ -25,7 +25,13 @@ public class XdnGetReplicaInfoTest {
 
       // Launch a service with Paxos replication (deterministic=true)
       cluster.launchService(
-          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true, "/api/books", null);
+          serviceName,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          true,
+          "/api/books",
+          null);
 
       Thread.sleep(2000); // wait for service to be created
 
@@ -115,7 +121,13 @@ public class XdnGetReplicaInfoTest {
       cluster.start();
 
       cluster.launchService(
-          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true, "/api/books", null);
+          serviceName,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          true,
+          "/api/books",
+          null);
 
       cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
 
@@ -195,7 +207,13 @@ public class XdnGetReplicaInfoTest {
       cluster.start();
 
       cluster.launchService(
-          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false, "/api/books", null);
+          serviceName,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          false,
+          "/api/books",
+          null);
 
       cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
 

@@ -106,29 +106,35 @@ public class XdnTestCluster implements AutoCloseable {
 
   /** Launches a service by issuing a request to the HTTP reconfigurator. */
   public void launchService(
-          String serviceName,
-          String imageName,
-          String stateDirectory,
-          String consistency,
-          boolean deterministic,
-          String healthcheckPath,
-          String healthcheckCommand)
-          throws IOException, InterruptedException, JSONException {
+      String serviceName,
+      String imageName,
+      String stateDirectory,
+      String consistency,
+      boolean deterministic,
+      String healthcheckPath,
+      String healthcheckCommand)
+      throws IOException, InterruptedException, JSONException {
     launchService(
-            serviceName, imageName, stateDirectory, consistency, deterministic, null,
-            healthcheckPath, healthcheckCommand);
+        serviceName,
+        imageName,
+        stateDirectory,
+        consistency,
+        deterministic,
+        null,
+        healthcheckPath,
+        healthcheckCommand);
   }
 
   public void launchService(
-          String serviceName,
-          String imageName,
-          String stateDirectory,
-          String consistency,
-          boolean deterministic,
-          JSONArray requests,
-          String healthcheckPath,
-          String healthcheckCommand)
-          throws IOException, InterruptedException, JSONException {
+      String serviceName,
+      String imageName,
+      String stateDirectory,
+      String consistency,
+      boolean deterministic,
+      JSONArray requests,
+      String healthcheckPath,
+      String healthcheckCommand)
+      throws IOException, InterruptedException, JSONException {
 
     JSONObject serviceJson = new JSONObject();
     serviceJson.put("name", serviceName);

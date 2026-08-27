@@ -54,8 +54,8 @@ public class XdnEventualConsistencyBatchingTest {
                       .put("path_prefix", "/")
                       .put("methods", "PUT,POST,DELETE")
                       .put("behavior", "monotonic")),
-              "/api/books", null
-      );
+          "/api/books",
+          null);
 
       Thread.sleep(2000);
 

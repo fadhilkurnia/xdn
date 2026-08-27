@@ -45,7 +45,8 @@ public class XdnPerReplicaRequestTest {
     try (XdnTestCluster cluster = new XdnTestCluster()) {
       cluster.start();
 
-      cluster.launchService(serviceName, imageName, "/app/data/", "LINEARIZABLE", true, "/api/books", null);
+      cluster.launchService(
+          serviceName, imageName, "/app/data/", "LINEARIZABLE", true, "/api/books", null);
 
       // At least one replica is reachable through the cluster HTTP frontend.
       HttpResponse<String> aggregate =

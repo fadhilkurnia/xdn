@@ -21,9 +21,21 @@ public class XdnMultiServiceTest {
       cluster.start();
 
       cluster.launchService(
-          serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true, "/api/books", null);
+          serviceAlpha,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          true,
+          "/api/books",
+          null);
       cluster.launchService(
-          serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true, "/api/books", null);
+          serviceBeta,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          true,
+          "/api/books",
+          null);
 
       Thread.sleep(2000); // wait for services to be created
 
@@ -63,9 +75,21 @@ public class XdnMultiServiceTest {
       cluster.start();
 
       cluster.launchService(
-          serviceAlpha, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false, "/api/books", null);
+          serviceAlpha,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          false,
+          "/api/books",
+          null);
       cluster.launchService(
-          serviceBeta, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false, "/api/books", null);
+          serviceBeta,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          false,
+          "/api/books",
+          null);
 
       System.out.println("Waiting for services to be ready...");
       Thread.sleep(2000); // wait for services to be created
