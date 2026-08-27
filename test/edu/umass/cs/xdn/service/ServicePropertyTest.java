@@ -186,7 +186,8 @@ public class ServicePropertyTest {
                       "wordpress": {
                         "image": "wordpress:6.5.4-apache",
                         "port": 80,
-                        "entry": true
+                        "entry": true,
+                        "healthcheck": {"path": "/"}
                       }
                     }
                   ],
