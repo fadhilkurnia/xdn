@@ -28,7 +28,10 @@ closed loop, one outstanding request) and max throughput (open-loop rate
 ladder) for bookcatalog on Paxos and bookcatalog-nd on primary-backup with the
 fuselog statediff recorder on /dev/shm, run on GitHub-hosted runners. The baseline and current HEAD are measured alternately on the <em>same</em>
 runner, so the head/base <strong>delta</strong> is the trustworthy signal; absolute
-values vary with runner hardware and are plotted only for context. Data:
+values vary with runner hardware and are plotted only for context. The SQLite app
+runs in WAL mode (<code>ENABLE_WAL=true</code>), and the capacity ladder pins the
+primary-backup throughput config (bounded worker pool, <code>PB_INLINE_EXECUTE=false</code>)
+so the measured knee reflects code changes, not config drift. Data:
 <a id="datalink" href="#">perf.json</a> on the <code>perf-results</code> branch.
 </p>
 <div id="status">Loading…</div>
@@ -48,6 +51,9 @@ const METRICS = [
 const STAGE_COLORS = {
   queue: "#2a78d6", exec: "#eb6834", capwait: "#1baf7a", capture: "#eda100",
   prep: "#e87ba4", paxos: "#008300", callback: "#4a3aa7", none: "#9ca3af",
+  // forward sub-stages: XDN plumbing (acquire, write) vs the container's own
+  // processing time (respwait), split out of the container round-trip.
+  acquire: "#7c3aed", write: "#0891b2", respwait: "#c2410c",
 };
 
 // Per-service presentation: display title, the request-flow steps (the
@@ -64,11 +70,19 @@ const SERVICE_META = {
     rows: [
       ["client total (measured at client)", null, f => f.client_p50_ms, 0],
       ["callback (coordination → execute → respond ready)", "callback", f => (f.stages_p50_ms || {}).callback, 0],
+      ["execute (total)", "exec", f => (f.stages_p50_ms || {}).exec, 0],
       ["container round-trip", "exec", f => (f.stages_p50_ms || {}).container, 1],
+      ["conn acquire", "acquire", f => (f.stages_p50_ms || {}).acquire, 2],
+      ["request write", "write", f => (f.stages_p50_ms || {}).write, 2],
+      ["container processing (resp wait)", "respwait", f => (f.stages_p50_ms || {}).respwait, 2],
       ["proxy (forwarder client)", "exec", f => (f.stages_p50_ms || {}).proxy, 1],
       ["request copy", "exec", f => (f.stages_p50_ms || {}).copyreq, 1],
     ],
-    bar: f => [["callback", "callback", (f.stages_p50_ms || {}).callback]],
+    bar: f => {
+      const s = f.stages_p50_ms || {};
+      return [["conn acquire", "acquire", s.acquire], ["request write", "write", s.write],
+              ["container processing", "respwait", s.respwait]];
+    },
   },
   perfcatalognd: {
     title: "Primary Backup Replication",
@@ -83,6 +97,9 @@ const SERVICE_META = {
       ["client total (measured at client)", null, f => f.client_p50_ms, 0],
       ["callback (spans PBM queue → Paxos commit)", "callback", f => (f.stages_p50_ms || {}).callback, 0],
       ["container round-trip", "exec", f => (f.stages_p50_ms || {}).container, 1],
+      ["conn acquire", "acquire", f => (f.stages_p50_ms || {}).acquire, 2],
+      ["request write", "write", f => (f.stages_p50_ms || {}).write, 2],
+      ["container processing (resp wait)", "respwait", f => (f.stages_p50_ms || {}).respwait, 2],
       ["proxy (forwarder client)", "exec", f => (f.stages_p50_ms || {}).proxy, 1],
       ["request copy", "exec", f => (f.stages_p50_ms || {}).copyreq, 1],
       ["PBM: queue wait", "queue", f => (f.pbm_p50_ms || {}).queue_wait, 0],
