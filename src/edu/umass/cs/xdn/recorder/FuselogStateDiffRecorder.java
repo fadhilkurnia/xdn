@@ -224,6 +224,15 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     } else {
       env.put("WRITE_COALESCING", "false");
     }
+    // FUSE writeback_cache lets the kernel buffer/defer container writes, cutting the
+    // synchronous exec-stage latency on the PB write path. Default OFF: only correct for
+    // statediff capture because fuselog attributes the resulting pid==0 writeback writes
+    // by file-handle ownership. Safe for single-writer DB-style services (verified byte-
+    // exact via L5 sqlite); keep off for services that do hardlink/rename/inode-reuse
+    // aliasing. Enable with -DFUSELOG_WRITEBACK_CACHE=true on the AR JVM.
+    env.put(
+        "FUSELOG_WRITEBACK_CACHE",
+        Boolean.parseBoolean(System.getProperty("FUSELOG_WRITEBACK_CACHE", "false")) ? "1" : "0");
     int exitCode = Shell.runCommand(cmd, false, env);
     if (exitCode != 0) {
       String errMessage =
