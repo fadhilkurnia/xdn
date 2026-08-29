@@ -954,7 +954,17 @@ static void *fuselog_init(struct fuse_conn_info *info,
        incorrect st_nlink value being reported for any remaining
        hardlinks to this inode. */
     cfg->entry_timeout = 0;
-    cfg->attr_timeout = 0;
+    // Cache stat attributes for 1s instead of 0. At 0, every stat/fstat by the
+    // service (SQLite stats its db/WAL constantly on the write path) forces a
+    // getattr round-trip, inflating the PB `exec` stage. Safe: this mount is the
+    // sole writer (cached size/mtime can't go stale) and capture is unaffected
+    // (writes still traverse fuselog_write). entry_timeout stays 0 for hardlink
+    // st_nlink correctness. Override with FUSELOG_ATTR_TIMEOUT (seconds).
+    {
+        double at = 1.0;
+        if (const char* e = getenv("FUSELOG_ATTR_TIMEOUT")) { at = atof(e); }
+        cfg->attr_timeout = at;
+    }
     cfg->negative_timeout = 0;
 
     // cfg->direct_io = 1;
@@ -1806,7 +1816,16 @@ static int fuselog_write(const char *orig_path, const char *buf, size_t size,
 
 	/* Ignore statediff from pid == 0, and writes that land on a
 	   silly-renamed (.fuse_hiddenXXXX) inode — those bytes are about to
-	   be discarded when the last fd closes. */
+	   be discarded when the last fd closes.
+
+	   WARNING — writeback_cache landmine: this pid > 0 guard silently DROPS any
+	   write from a KERNEL WRITEBACK THREAD (pid == 0). Those bytes reach the
+	   backing store (primary looks correct) but never enter the statediff, so
+	   backups diverge -- and an app fsync flushes THROUGH the writeback threads,
+	   so fsync-before-respond does not save us. Hence this mount does NOT enable
+	   writeback_cache/kernel_cache; enabling it fails the L3 and L5 oracles.
+	   Enabling it later requires capturing pid==0 writes (track by fh, not pid)
+	   and re-validating against L3/L5. */
 	if (fuse_get_context()->pid > 0 && !is_silly_path(path)) {
 
 	    // get the file id (fid)
