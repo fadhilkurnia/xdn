@@ -136,7 +136,10 @@ public class RequestBatcher extends ConsumerTask<RequestPacket> {
 		return this.queueSize;
 	}
 
-	private int queueSize = 0;
+	// volatile: read without the ConsumerTask lock by PaxosManager's single-request
+	// fast path (getQueueSize()==0 check). A stale read only flips between two correct
+	// propose paths (direct vs batcher), but volatile keeps the visibility honest.
+	private volatile int queueSize = 0;
 
 	/**
 	 * This load throttling mechanism will propagate the exception so that the
