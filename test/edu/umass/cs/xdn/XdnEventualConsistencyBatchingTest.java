@@ -53,7 +53,9 @@ public class XdnEventualConsistencyBatchingTest {
                   new JSONObject()
                       .put("path_prefix", "/")
                       .put("methods", "PUT,POST,DELETE")
-                      .put("behavior", "monotonic")));
+                      .put("behavior", "monotonic")),
+          "/api/books",
+          null);
 
       Thread.sleep(2000);
 

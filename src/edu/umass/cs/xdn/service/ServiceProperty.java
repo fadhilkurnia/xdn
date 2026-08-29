@@ -10,12 +10,20 @@ import org.json.JSONObject;
 // TODO: handle stateless service
 public class ServiceProperty {
 
+  // Legacy NonDeterministic const
   public static String XDN_INITIAL_STATE_PREFIX = "xdn:init:";
   public static String XDN_CHECKPOINT_PREFIX = "xdn:checkpoint:";
   public static String XDN_EPOCH_FINAL_STATE_PREFIX = "xdn:final:";
   public static String NON_DETERMINISTIC_CREATE_PREFIX = "nondeter:create:";
   public static String NON_DETERMINISTIC_START_PREFIX = "nondeter:start:";
   public static String NON_DETERMINISTIC_START_BACKUP_PREFIX = "nondeter:start:backup";
+
+  // New NonDeterministic const
+  public static String NON_DETERMINISTIC_LOAD_PREFIX = "non-deter:load:";
+  public static String NON_DETERMINISTIC_START_PRIMARY_PREFIX = "non-deter:start:primary:";
+  public static String NON_DETERMINISTIC_START_BACKUP_PB_PREFIX = "non-deter:start:backup:";
+  public static String NON_DETERMINISTIC_START_BACKUP1_PREFIX = "non-deter:start:backup:1:";
+  public static String NON_DETERMINISTIC_START_BACKUP2_PREFIX = "non-deter:start:backup:2:";
 
   private final String serviceName;
   private final boolean isDeterministic;
@@ -208,6 +216,38 @@ public class ServiceProperty {
         env = parseEnvironmentVariables(envJSON);
       }
 
+      // parse healthcheck: this component may be both stateful and entry at
+      // once (self-contained single-container app), so either a command or
+      // an HTTP path is acceptable -- HTTP path is preferred since it
+      // validates the app end-to-end rather than just the DB layer.
+      String healthcheckCommand = null;
+      String healthEndpointPath = null;
+      if (json.has("healthcheck")) {
+        Object healthcheckRaw = json.get("healthcheck");
+        if (healthcheckRaw instanceof JSONObject) {
+          JSONObject healthcheckObj = (JSONObject) healthcheckRaw;
+          if (healthcheckObj.has("path")) {
+            healthEndpointPath = healthcheckObj.getString("path");
+          }
+          if (healthcheckObj.has("command")) {
+            healthcheckCommand = healthcheckObj.getString("command");
+          }
+          if (healthEndpointPath == null && healthcheckCommand == null) {
+            throw new IllegalStateException(
+                "healthcheck object requires a 'command' or 'path' field");
+          }
+        } else if (healthcheckRaw instanceof String) {
+          healthcheckCommand = (String) healthcheckRaw;
+        } else {
+          throw new IllegalStateException("healthcheck must be a string or object");
+        }
+      }
+      if (healthEndpointPath == null && healthcheckCommand == null) {
+        // Healthcheck is optional. Infer one for known database images as a
+        // convenience; otherwise proceed without one.
+        healthcheckCommand = ServiceComponent.inferHealthcheckCmd(imageName);
+      }
+
       ServiceComponent c =
           new ServiceComponent(
               serviceName,
@@ -217,13 +257,14 @@ public class ServiceProperty {
               true,
               entryPort,
               env,
-              null);
+              healthcheckCommand,
+              healthEndpointPath);
       components.add(c);
     }
     // case-2: handle service with multiple components
     if (json.has("components")) {
       JSONArray componentsJSON = json.getJSONArray("components");
-      components.addAll(parseServiceComponents(componentsJSON));
+      components.addAll(parseServiceComponents(componentsJSON, isClusterManaged));
     }
 
     // parsing and validating request matchers
@@ -504,8 +545,8 @@ public class ServiceProperty {
     return env;
   }
 
-  private static List<ServiceComponent> parseServiceComponents(JSONArray componentsJSON)
-      throws JSONException {
+  private static List<ServiceComponent> parseServiceComponents(
+      JSONArray componentsJSON, boolean isClusterManaged) throws JSONException {
     List<ServiceComponent> components = new ArrayList<>();
     int len = componentsJSON.length();
     for (int i = 0; i < len; i++) {
@@ -562,19 +603,29 @@ public class ServiceProperty {
         env = parseEnvironmentVariables(envJSON);
       }
 
-      // parse healthcheck command for multi-component readiness gating
+      // parse healthcheck command (stateful) or health endpoint path (entry)
+      // for multi-component readiness gating
       String healthcheckCommand = null;
+      String healthEndpointPath = null;
       if (componentDetailJSON.has("healthcheck")) {
         Object healthcheckRaw = componentDetailJSON.get("healthcheck");
         if (healthcheckRaw instanceof JSONObject) {
           JSONObject healthcheckObj = (JSONObject) healthcheckRaw;
-          if (!healthcheckObj.has("command")) {
+          boolean hasCommand = healthcheckObj.has("command");
+          boolean hasPath = healthcheckObj.has("path");
+          if (!hasCommand && !hasPath) {
             throw new IllegalStateException(
-                "healthcheck object requires a 'command' field for component '"
+                "healthcheck object requires at least one of 'command' or 'path' "
+                    + "for component '"
                     + componentName
                     + "'");
           }
-          healthcheckCommand = healthcheckObj.getString("command");
+          if (hasPath) {
+            healthEndpointPath = healthcheckObj.getString("path");
+          }
+          if (hasCommand) {
+            healthcheckCommand = healthcheckObj.getString("command");
+          }
         } else if (healthcheckRaw instanceof String) {
           healthcheckCommand = (String) healthcheckRaw;
         } else {
@@ -582,10 +633,32 @@ public class ServiceProperty {
               "healthcheck must be a string or object for component '" + componentName + "'");
         }
 
-        if (healthcheckCommand == null || healthcheckCommand.isEmpty()) {
+        if (healthcheckCommand != null && healthcheckCommand.isEmpty()) {
           throw new IllegalStateException(
               "healthcheck command cannot be empty for component '" + componentName + "'");
         }
+        if (healthEndpointPath != null && healthEndpointPath.isEmpty()) {
+          throw new IllegalStateException(
+              "healthcheck path cannot be empty for component '" + componentName + "'");
+        }
+      }
+
+      // Validate readiness signaling is resolvable for every component. Cluster-managed
+      // services are exempt: their non-entry, non-stateful components are sidecars that
+      // share the stateful member's network namespace and don't need their own readiness
+      // check (see StatefulClusterReplicaCoordinator).
+      if (isStateful && healthcheckCommand == null && healthEndpointPath == null) {
+        // Healthcheck is optional; infer one for known database images as a
+        // convenience only for the stateful component.
+        healthcheckCommand = ServiceComponent.inferHealthcheckCmd(imageName);
+      }
+      if (!isEntry && !isStateful && !isClusterManaged) {
+        // TODO: support additional non-entry stateless components
+        throw new IllegalStateException(
+            "component '"
+                + componentName
+                + "' is neither stateful nor entry -- "
+                + "unsupported topology");
       }
 
       components.add(
@@ -597,7 +670,8 @@ public class ServiceProperty {
               isEntry,
               entryPort == 0 ? null : entryPort,
               env,
-              healthcheckCommand));
+              healthcheckCommand,
+              healthEndpointPath));
     }
 
     return components;
@@ -690,6 +764,15 @@ public class ServiceProperty {
         jsonObject.put("state", this.stateDirectory);
         jsonObject.put("consistency", this.consistencyModel.toString().toLowerCase());
         jsonObject.put("deterministic", this.isDeterministic);
+        String healthcheckCommand = this.getEntryComponent().getHealthcheckCommand();
+        String healthEndpointPath = this.getEntryComponent().getHealthEndpointPath();
+        if (healthcheckCommand != null && !healthcheckCommand.isEmpty()) {
+          jsonObject.put("healthcheck", healthcheckCommand);
+        } else if (healthEndpointPath != null && !healthEndpointPath.isEmpty()) {
+          JSONObject healthObj = new JSONObject();
+          healthObj.put("path", healthEndpointPath);
+          jsonObject.put("healthcheck", healthObj);
+        }
         putReplicaFields(jsonObject);
         putClusterFields(jsonObject);
       } catch (JSONException e) {

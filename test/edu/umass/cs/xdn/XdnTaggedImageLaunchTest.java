@@ -20,7 +20,8 @@ public class XdnTaggedImageLaunchTest {
     try (XdnTestCluster cluster = new XdnTestCluster()) {
       cluster.start();
 
-      cluster.launchService(serviceName, imageName, "/app/data/", "LINEARIZABLE", true);
+      cluster.launchService(
+          serviceName, imageName, "/app/data/", "LINEARIZABLE", true, "/api/books", null);
 
       HttpResponse<String> response =
           cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);

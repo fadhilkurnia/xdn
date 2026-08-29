@@ -104,21 +104,25 @@ public class XdnTestCluster implements AutoCloseable {
     }
   }
 
-  /** Launches a service using default SEQUENTIAL consistency and deterministic=true. */
-  public void launchService(String serviceName, String imageName, String stateDirectory)
-      throws IOException, InterruptedException, JSONException {
-    launchService(serviceName, imageName, stateDirectory, "SEQUENTIAL", true);
-  }
-
   /** Launches a service by issuing a request to the HTTP reconfigurator. */
   public void launchService(
       String serviceName,
       String imageName,
       String stateDirectory,
       String consistency,
-      boolean deterministic)
+      boolean deterministic,
+      String healthcheckPath,
+      String healthcheckCommand)
       throws IOException, InterruptedException, JSONException {
-    launchService(serviceName, imageName, stateDirectory, consistency, deterministic, null);
+    launchService(
+        serviceName,
+        imageName,
+        stateDirectory,
+        consistency,
+        deterministic,
+        null,
+        healthcheckPath,
+        healthcheckCommand);
   }
 
   public void launchService(
@@ -127,7 +131,9 @@ public class XdnTestCluster implements AutoCloseable {
       String stateDirectory,
       String consistency,
       boolean deterministic,
-      JSONArray requests)
+      JSONArray requests,
+      String healthcheckPath,
+      String healthcheckCommand)
       throws IOException, InterruptedException, JSONException {
 
     JSONObject serviceJson = new JSONObject();
@@ -141,6 +147,12 @@ public class XdnTestCluster implements AutoCloseable {
     serviceJson.put("deterministic", deterministic);
     if (requests != null && requests.length() > 0) {
       serviceJson.put("requests", requests);
+    }
+    if (healthcheckPath != null || healthcheckCommand != null) {
+      JSONObject healthcheck = new JSONObject();
+      if (healthcheckPath != null) healthcheck.put("path", healthcheckPath);
+      if (healthcheckCommand != null) healthcheck.put("command", healthcheckCommand);
+      serviceJson.put("healthcheck", healthcheck);
     }
 
     String initialState = "xdn:init:" + serviceJson;

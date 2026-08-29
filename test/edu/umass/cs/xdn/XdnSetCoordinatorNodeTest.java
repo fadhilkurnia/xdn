@@ -35,7 +35,13 @@ public class XdnSetCoordinatorNodeTest {
       cluster.start();
 
       cluster.launchService(
-          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", true);
+          serviceName,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          true,
+          "/api/books",
+          null);
 
       Thread.sleep(2000); // wait for service to be created
 
@@ -96,7 +102,13 @@ public class XdnSetCoordinatorNodeTest {
       cluster.start();
 
       cluster.launchService(
-          serviceName, "fadhilkurnia/xdn-bookcatalog", "/app/data/", "LINEARIZABLE", false);
+          serviceName,
+          "fadhilkurnia/xdn-bookcatalog",
+          "/app/data/",
+          "LINEARIZABLE",
+          false,
+          "/api/books",
+          null);
 
       Thread.sleep(2000); // wait for service to be created
 

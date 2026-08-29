@@ -108,7 +108,8 @@ jobs:
           xdn launch bookcatalog \
             --image=fadhilkurnia/xdn-bookcatalog \
             --state=/app/data/ \
-            --deterministic=true
+            --deterministic=true \
+            --healthcheck-path=/api/books
           # Give containers a few seconds to actually start.
           sleep 5
           xdn service info bookcatalog | tee /tmp/initial-placement.txt

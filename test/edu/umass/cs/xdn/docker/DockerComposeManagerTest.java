@@ -39,6 +39,7 @@ public class DockerComposeManagerTest {
                     "image": "wordpress:6.5.4-apache",
                     "port": 80,
                     "entry": true,
+                    "healthcheck": {"path": "/"},
                     "environments": [
                       { "WORDPRESS_DB_HOST": "database:3306" },
                       { "WORDPRESS_DB_USER": "root" }
@@ -119,7 +120,8 @@ public class DockerComposeManagerTest {
               "port": 8000,
               "state": "/data/",
               "deterministic": true,
-              "consistency": "linearizability"
+              "consistency": "linearizability",
+              "healthcheck": {"path": "/api/books"}
             }
             """;
 

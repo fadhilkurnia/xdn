@@ -26,6 +26,9 @@ public class ServiceComponent {
   /** Optional healthcheck command for readiness signaling in multi-component services. */
   private final String healthcheckCommand;
 
+  /** Optional HTTP path polled for readiness on entry (non-stateful) components. */
+  private final String healthEndpointPath;
+
   protected ServiceComponent(
       String componentName,
       String imageName,
@@ -34,7 +37,8 @@ public class ServiceComponent {
       boolean isEntryComponent,
       Integer entryPort,
       Map<String, String> environmentVariables,
-      String healthcheckCommand) {
+      String healthcheckCommand,
+      String healthEndpointPath) {
     this.componentName = componentName;
     this.imageName = imageName;
     this.exposedPort = exposedPort;
@@ -43,6 +47,7 @@ public class ServiceComponent {
     this.entryPort = entryPort;
     this.environmentVariables = environmentVariables;
     this.healthcheckCommand = healthcheckCommand;
+    this.healthEndpointPath = healthEndpointPath;
 
     if (this.isEntryComponent && entryPort == null) {
       throw new RuntimeException("port is required for service's entry component");
@@ -85,6 +90,38 @@ public class ServiceComponent {
     return healthcheckCommand;
   }
 
+  public String getHealthEndpointPath() {
+    return healthEndpointPath;
+  }
+
+  /**
+   * Infers the healthcheck command from the Docker image name. Only covers known databases. Returns
+   * null for unknown images. Moved here from DockerSandboxManager so both ServiceProperty
+   * (parse-time validation) and DockerSandboxManager (actual --health-cmd) share one source of
+   * truth without introducing a service -> sandbox dependency.
+   */
+  public static String inferHealthcheckCmd(String imageName) {
+    if (imageName == null) return null;
+    String lower = imageName.toLowerCase();
+    if (lower.contains("mysql") || lower.contains("mariadb"))
+      return "mysqladmin ping -h 127.0.0.1 --silent";
+    if (lower.contains("postgres")) return "pg_isready -U postgres";
+    return null;
+  }
+
+  /**
+   * Returns true if this image's healthcheck is known to have a false-positive window during
+   * startup (e.g. Postgres/MySQL's bootstrap-then-restart entrypoint sequence), where a single
+   * successful healthcheck run can report ready before the real long-running server process is up.
+   * Such images require multiple consecutive healthy reads before being trusted, rather than a
+   * single success.
+   */
+  public static boolean requiresConsecutiveHealthyCheck(String imageName) {
+    if (imageName == null) return false;
+    String lower = imageName.toLowerCase();
+    return lower.contains("mysql") || lower.contains("mariadb") || lower.contains("postgres");
+  }
+
   public final JSONObject toJsonObject() {
     JSONObject jsonObject = new JSONObject();
     try {
@@ -95,6 +132,10 @@ public class ServiceComponent {
       if (this.isEntryComponent) jsonObject.put("entry", true);
       if (this.healthcheckCommand != null && !this.healthcheckCommand.isEmpty()) {
         jsonObject.put("healthcheck", this.healthcheckCommand);
+      } else if (this.healthEndpointPath != null && !this.healthEndpointPath.isEmpty()) {
+        JSONObject healthObj = new JSONObject();
+        healthObj.put("path", this.healthEndpointPath);
+        jsonObject.put("healthcheck", healthObj);
       }
       if (this.environmentVariables != null && !this.environmentVariables.isEmpty()) {
         JSONArray envArr = new JSONArray();

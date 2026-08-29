@@ -48,7 +48,8 @@ public class XdnEventualConvergenceTest {
       // classify POST as read-modify-write, which the relaxed EVENTUAL dispatch must
       // still route to the LazyReplicaCoordinator (previously this would have fallen
       // back to primary-backup).
-      cluster.launchService(serviceName, SERVICE_IMAGE, "/app/data/", "EVENTUAL", false, null);
+      cluster.launchService(
+          serviceName, SERVICE_IMAGE, "/app/data/", "EVENTUAL", false, null, "/api/books", null);
 
       cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
       for (int replicaIdx = 0; replicaIdx < NUM_REPLICAS; replicaIdx++) {
@@ -141,7 +142,8 @@ public class XdnEventualConvergenceTest {
       // Non-deterministic service with default matchers: under the relaxed dispatch, an
       // explicit EVENTUAL declaration must route to the LazyReplicaCoordinator instead of
       // primary-backup.
-      cluster.launchService(serviceName, SERVICE_IMAGE, "/app/data/", "EVENTUAL", false, null);
+      cluster.launchService(
+          serviceName, SERVICE_IMAGE, "/app/data/", "EVENTUAL", false, null, "/api/books", null);
       cluster.awaitServiceReady(serviceName, XdnTestCluster.SERVICE_READY_TIMEOUT);
 
       HttpResponse<String> infoResponse =
