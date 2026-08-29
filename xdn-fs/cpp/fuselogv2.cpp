@@ -1719,10 +1719,10 @@ static int fuselog_open(const char *orig_path, struct fuse_file_info *fi) {
     // unchanged; only our internal descriptor mode changes, never app-visible
     // semantics.
     if (is_writeback_cache) {
-	if ((open_flags & O_ACCMODE) == O_WRONLY) {
-	    open_flags = (open_flags & ~O_ACCMODE) | O_RDWR;
-	}
-	open_flags &= ~O_APPEND;
+        if ((open_flags & O_ACCMODE) == O_WRONLY) {
+            open_flags = (open_flags & ~O_ACCMODE) | O_RDWR;
+        }
+        open_flags &= ~O_APPEND;
     }
 
     int   res  = open(path, open_flags);
@@ -1757,7 +1757,7 @@ static int fuselog_open(const char *orig_path, struct fuse_file_info *fi) {
     // file from a pid == 0 writeback thread. O_RDONLY is 0, so test the access
     // mode explicitly rather than masking a zero-valued flag.
     if ((open_flags & O_ACCMODE) != O_RDONLY) {
-	mark_app_writable_fh((uint64_t) res);
+        mark_app_writable_fh((uint64_t) res);
     }
     return 0;
 }
