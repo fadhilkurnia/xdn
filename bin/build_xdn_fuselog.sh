@@ -95,6 +95,13 @@ function build_cpp() {
     $(pkg-config libzstd --cflags --libs) \
     -pthread -O3 -std=c++11
 
+  echo "  Compiling fusenode.cpp -> fusenode (low-level inode-based recorder) ..."
+  g++ -Wall "$CPP_DIR/fusenode.cpp" -o "$CPP_DIR/fusenode" \
+    -D_FILE_OFFSET_BITS=64 \
+    $(pkg-config fuse3 --cflags --libs) \
+    $(pkg-config libzstd --cflags --libs) \
+    -pthread -O3 -std=c++17
+
   echo "  Compiling fuselog-apply.cpp -> fuselog-apply ..."
   g++ -Wall "$CPP_DIR/fuselog-apply.cpp" -o "$CPP_DIR/fuselog-apply" \
     $(pkg-config libzstd --cflags --libs) \
@@ -168,6 +175,10 @@ function stage_project_binaries() {
   if [[ -f "$CPP_DIR/fuselog" ]]; then
     cp "$CPP_DIR/fuselog" "$BIN_DIR/fuselog"
     echo "  Staged fuselog"
+  fi
+  if [[ -f "$CPP_DIR/fusenode" ]]; then
+    cp "$CPP_DIR/fusenode" "$BIN_DIR/fusenode"
+    echo "  Staged fusenode"
   fi
   if [[ -f "$CPP_DIR/fuselog-apply" ]]; then
     cp "$CPP_DIR/fuselog-apply" "$BIN_DIR/fuselog-apply"

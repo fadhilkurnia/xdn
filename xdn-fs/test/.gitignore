@@ -1,1 +1,8 @@
 __pycache__
+
+# local repro + micro-benchmark scaffolding (not part of the CI suite)
+hl3_repro.py
+run_perf_bench.sh
+smallio_bench.c
+smallio_bench
+strace_bench.sh
