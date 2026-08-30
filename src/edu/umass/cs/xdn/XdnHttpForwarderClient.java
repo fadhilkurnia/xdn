@@ -47,6 +47,12 @@ public final class XdnHttpForwarderClient implements Closeable {
   private static final AtomicLong REQUEST_COUNTER = new AtomicLong();
   private static final int LOG_SAMPLE_INTERVAL = 100;
 
+  // Per-thread hand-off of the last single-request forward's sub-stage timings
+  // {acquireMs, writeMs, respWaitMs}, populated only when timing headers are on.
+  // send() blocks on the calling thread, so the same thread that issued the
+  // forward reads this immediately after to enrich the X-XDN-Forward header.
+  public static final ThreadLocal<double[]> LAST_FORWARD_SUBSTAGES = new ThreadLocal<>();
+
   private final EventLoopGroup eventLoopGroup;
   private final boolean manageEventLoopGroup;
   private final ConcurrentMap<Origin, FixedChannelPool> pools = new ConcurrentHashMap<>();
@@ -383,16 +389,21 @@ public final class XdnHttpForwarderClient implements Closeable {
       throws Exception {
     try {
       FullHttpResponse response = responseFuture.get();
+      long tEnd = System.nanoTime();
+      double acqMs = (ts[0] - t0) / 1_000_000.0;
+      double writeMs = (ts[1] - ts[0]) / 1_000_000.0;
+      double respMs = (tEnd - ts[1]) / 1_000_000.0;
       if (reqNum % LOG_SAMPLE_INTERVAL == 0) {
-        long tEnd = System.nanoTime();
         double totalMs = (tEnd - t0) / 1_000_000.0;
-        double acqMs = (ts[0] - t0) / 1_000_000.0;
-        double writeMs = (ts[1] - ts[0]) / 1_000_000.0;
-        double respMs = (tEnd - ts[1]) / 1_000_000.0;
         LOG.info(
             String.format(
                 "HTTP fwd: total=%.2fms acq=%.2fms write=%.2fms resp=%.2fms",
                 totalMs, acqMs, writeMs, respMs));
+      }
+      // Publish the sub-stage split for the timing-header path (ts[1] > 0 means
+      // the write completed and both stamps are valid).
+      if (edu.umass.cs.xdn.XdnGigapaxosApp.TIMING_HEADERS_ENABLED && ts[1] > 0) {
+        LAST_FORWARD_SUBSTAGES.set(new double[] {acqMs, writeMs, respMs});
       }
       return response;
     } catch (ExecutionException e) {

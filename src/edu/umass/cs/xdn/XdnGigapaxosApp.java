@@ -3182,16 +3182,22 @@ public class XdnGigapaxosApp
           (endResponseStoreTime - endConversionTime) / 1_000_000.0
         });
 
-    // Instrumentation: add forwarding breakdown as response header.
+    // Instrumentation: add forwarding breakdown as response header. When the
+    // forwarder published its sub-stage split, decompose the container
+    // round-trip into XDN plumbing (conn acquire + request write) vs. the
+    // container's own processing time (respwait), the two stages the latency
+    // breakdown work isolated.
     if (TIMING_HEADERS_ENABLED && xdnRequest.getHttpResponse() != null) {
-      xdnRequest
-          .getHttpResponse()
-          .headers()
-          .set(
-              "X-XDN-Forward",
-              String.format(
-                  "container=%.2fms;proxy=%.2fms;copyreq=%.2fms",
-                  containerMs, proxyTotalMs, copyReqMs));
+      String forwardHeader =
+          String.format(
+              "container=%.2fms;proxy=%.2fms;copyreq=%.2fms", containerMs, proxyTotalMs, copyReqMs);
+      double[] sub = XdnHttpForwarderClient.LAST_FORWARD_SUBSTAGES.get();
+      XdnHttpForwarderClient.LAST_FORWARD_SUBSTAGES.remove();
+      if (sub != null) {
+        forwardHeader +=
+            String.format(";acquire=%.3fms;write=%.3fms;respwait=%.3fms", sub[0], sub[1], sub[2]);
+      }
+      xdnRequest.getHttpResponse().headers().set("X-XDN-Forward", forwardHeader);
     }
   }
 

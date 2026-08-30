@@ -65,6 +65,21 @@ FUSELOG_BASE_DIR = "/dev/shm/xdn-perf/fuselog/"
 PBM_SAMPLES_LOG = "/tmp/pbm_samples.log"
 INSTRUMENTATION_JVM_ARGS = ["-DXDN_TIMING_HEADERS=true", "-DPB_SAMPLE_LATENCY=true"]
 
+# Capacity (max-throughput) config for primary-backup. The default execute mode
+# floods the containerized service on the Netty writePool under concurrency and
+# collapses (head-of-line blocking); the throughput-stable config decouples
+# container I/O behind a bounded worker pool sized to the host. We pin this
+# explicitly (rather than relying on the measured checkout's defaults) so the
+# capacity number reflects code changes, not config drift, on both A/B sides.
+# Paxos (active replication) ignores these knobs. WAL is enabled per-service at
+# launch via --env ENABLE_WAL=true (see Cluster.launch) -- the intended,
+# dramatically faster SQLite mode; the rollback-journal default would measure an
+# artificially slow container.
+PB_CAPACITY_JVM_ARGS = [
+    "-DPB_INLINE_EXECUTE=false",
+    f"-DPB_N_PARALLEL_WORKERS={os.cpu_count() or 4}",
+]
+
 # Generated into the measured checkout at runtime (so baseline commits need no
 # new checked-in file). Exactly 3 ARs: the default replication factor is 3, so
 # every service is placed on ALL ARs and any frontend can serve the load --
@@ -439,7 +454,7 @@ def quiet_phase(cluster: Cluster, gen: LoadGen, args, hints: dict) -> dict:
     services = {}
     cluster.clean()
     try:
-        cluster.start()
+        cluster.start(jvm_args=PB_CAPACITY_JVM_ARGS)
         for name, image, deterministic in SERVICES:
             svc = {"image": image, "protocol": "paxos" if deterministic else "primary-backup"}
             try:
@@ -479,7 +494,7 @@ def instrumented_phase(cluster: Cluster, args) -> dict:
     cluster.clean()
     Path(PBM_SAMPLES_LOG).unlink(missing_ok=True)
     try:
-        cluster.start(jvm_args=INSTRUMENTATION_JVM_ARGS)
+        cluster.start(jvm_args=INSTRUMENTATION_JVM_ARGS + PB_CAPACITY_JVM_ARGS)
         for name, image, deterministic in SERVICES:
             flow = {}
             try:
