@@ -36,6 +36,15 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   private static final String FUSELOG_BIN_PATH = "/usr/local/bin/fuselog";
   private static final String FUSELOG_APPLY_BIN_PATH = "/usr/local/bin/fuselog-apply";
 
+  // Binary paths and writeback default are instance fields so subclasses (e.g. the low-level
+  // fusenode recorder) can reuse this entire launch/socket/apply pipeline while pointing at a
+  // different recorder binary. The public constructor keeps the byte-identical fuselog defaults;
+  // the protected constructor lets a subclass override them. Env keys stay FUSELOG_* (fusenode
+  // reads them as fallback), so only the mount binary and the writeback default change.
+  protected final String binPath;
+  protected final String applyBinPath;
+  protected final boolean writebackDefault;
+
   private static final String defaultWorkingBasePath = "/tmp/xdn/state/fuselog/";
 
   // the default working base directory is /tmp/xdn/state/fuselog/
@@ -80,26 +89,39 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   private final Logger logger = Logger.getLogger(FuselogStateDiffRecorder.class.getSimpleName());
 
   public FuselogStateDiffRecorder(String nodeID) {
+    // fuselog defaults: high-level recorder binary, shared apply binary, writeback default OFF.
+    this(nodeID, FUSELOG_BIN_PATH, FUSELOG_APPLY_BIN_PATH, false);
+  }
+
+  protected FuselogStateDiffRecorder(
+      String nodeID, String binPath, String applyBinPath, boolean writebackDefault) {
     super(nodeID, workingBasePath + nodeID + "/");
+    this.binPath = binPath;
+    this.applyBinPath = applyBinPath;
+    this.writebackDefault = writebackDefault;
     logger.log(
         Level.INFO,
         String.format(
-            "%s:%s - initializing FUSE stateDiff recorder",
-            nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
+            "%s:%s - initializing FUSE stateDiff recorder (bin=%s, apply=%s, writebackDefault=%b)",
+            nodeID,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            binPath,
+            applyBinPath,
+            writebackDefault));
 
-    // Ensure that fuselog and fuselog-apply binaries exist.
-    File fuselog = new File(FUSELOG_BIN_PATH);
+    // Ensure that the recorder and apply binaries exist.
+    File fuselog = new File(binPath);
     if (!fuselog.exists()) {
-      String errMessage = "fuselog binary does not exist at " + FUSELOG_BIN_PATH;
+      String errMessage = "recorder binary does not exist at " + binPath;
       logger.log(
           Level.SEVERE,
           String.format(
               "%s:%s - %s", nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
-    File fuselogApplicator = new File(FUSELOG_APPLY_BIN_PATH);
+    File fuselogApplicator = new File(applyBinPath);
     if (!fuselogApplicator.exists()) {
-      String errMessage = "fuselog-apply binary does not exist at " + FUSELOG_APPLY_BIN_PATH;
+      String errMessage = "apply binary does not exist at " + applyBinPath;
       logger.log(
           Level.SEVERE,
           String.format(
@@ -208,7 +230,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // access the mounted filesystem. This requires `user_allow_other` to be set in
     // /etc/fuse.conf and the recorder to be run with root privilege.
     // We do not use the `allow_root` that is more restrictive than `allow_other`.
-    String cmd = String.format("%s -o allow_other %s", FUSELOG_BIN_PATH, targetDirPath);
+    String cmd = String.format("%s -o allow_other %s", binPath, targetDirPath);
 
     Map<String, String> env = new HashMap<>();
     env.put("FUSELOG_SOCKET_FILE", socketFile);
@@ -232,7 +254,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // aliasing. Enable with -DFUSELOG_WRITEBACK_CACHE=true on the AR JVM.
     env.put(
         "FUSELOG_WRITEBACK_CACHE",
-        Boolean.parseBoolean(System.getProperty("FUSELOG_WRITEBACK_CACHE", "false")) ? "1" : "0");
+        Boolean.parseBoolean(
+                System.getProperty("FUSELOG_WRITEBACK_CACHE", Boolean.toString(writebackDefault)))
+            ? "1"
+            : "0");
     int exitCode = Shell.runCommand(cmd, false, env);
     if (exitCode != 0) {
       String errMessage =
@@ -795,8 +820,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     // Prepare the shell command to apply stateDiff.
-    String cmd =
-        String.format("%s %s --silent --statediff=%s", FUSELOG_APPLY_BIN_PATH, targetDir, diffFile);
+    String cmd = String.format("%s %s --silent --statediff=%s", applyBinPath, targetDir, diffFile);
     int exitCode = Shell.runCommand(cmd, true);
     if (exitCode != 0) {
       String errMessage =

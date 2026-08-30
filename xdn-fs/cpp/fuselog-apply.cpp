@@ -35,6 +35,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 using namespace std;
 
@@ -48,6 +49,9 @@ static char                  target_path[256];
 const bool                   is_dry_run = false;
 const int                    version = 2;
 static const uint32_t        ZSTD_MAGIC = 0xFD2FB528;
+// v3 identity-keyed statediff magic (first 4 bytes of the decompressed
+// payload). Must match FUSELOG_V3_MAGIC in fusenode.cpp.
+static const uint32_t        FUSELOG_V3_MAGIC = 0x33474C46;  // 'F''L''G''3'
 
 // configurations for logging purposes
 #define LOG_DEBUG   1
@@ -79,6 +83,7 @@ static void logging(const int level, const char *format, ...);
 
 void apply(char *target_root);
 void apply2(char *target_root);
+void apply3(const char *data, size_t data_sz, char *target_root);
 void apply_write(const char *sd_buffer, const char *target_root);
 void apply_unlink(const char *sd_buffer, const char *target_root);
 
@@ -346,6 +351,21 @@ void apply2(char *target_root) {
       data_sz = result;
       free(raw_data);
       raw_data = NULL;
+    }
+  }
+
+  // v3 auto-detection: identity-keyed (writeback-robust) statediff format.
+  // The magic sits at the start of the decompressed payload, so this runs
+  // after any zstd inflate above. Old/non-writeback captures fall through to
+  // the v2 parser below unchanged.
+  if (data_sz >= 4) {
+    uint32_t m;
+    memcpy(&m, data, sizeof(uint32_t));
+    if (m == FUSELOG_V3_MAGIC) {
+      apply3(data, data_sz, target_root);
+      if (decompressed) free(decompressed);
+      if (raw_data) free(raw_data);
+      return;
     }
   }
 
@@ -662,6 +682,282 @@ cleanup:
   if (raw_data) free(raw_data);
   if (decompressed) free(decompressed);
   return;
+}
+
+// ===========================================================================
+// apply3 - identity-keyed (writeback-robust) statediff replay.
+//
+// Layout (after zstd inflate):
+//   [4:magic][4:minor]
+//   [8:num_binding] { [8:cap_id][8:path_len][path] }   cap_id -> final path
+//   [8:num_sd]      { [1:type] + type-specific fields }
+//
+// Content (WRITE) is keyed by cap_id and placed at the identity's FINAL path
+// via the binding table; namespace/metadata/truncate records carry inline
+// paths and are replayed in captured (chronological) order. This decouples a
+// deferred write from any rename that the writeback flush crossed.
+//
+// Two passes:
+//   Pass 1: every non-WRITE record, in order (identical syscalls to apply2).
+//   Pass 2: WRITE records, in order, to the binding path(s), forcing the file
+//           temporarily writable if a pass-1 chmod made it read-only.
+// ===========================================================================
+struct V3Rec {
+  uint8_t     type = 0;
+  uint64_t    cap_id = 0;
+  uint64_t    off = 0;          // write offset / truncate size
+  const char *buf = nullptr;    // write data / symlink target (into `data`)
+  uint64_t    buflen = 0;
+  string      a, b;             // primary / secondary path
+  uint32_t    uid = 0, gid = 0, mode = 0;
+};
+
+void apply3(const char *data, size_t data_sz, char *target_root) {
+  logging(LOG_INFO, "running apply v3 (identity-keyed) ...\n");
+  size_t cur = 0;
+
+  // Bounds-checked readers. On short/malformed input we simply return; the
+  // caller owns `data` and frees it.
+  #define RB3(dst, n) do { \
+    if (cur + (size_t)(n) > data_sz) { \
+      logging(LOG_ERROR, "v3: unexpected end of data at %lu (need %lu)\n", \
+              cur, (size_t)(n)); return; } \
+    memcpy((dst), data + cur, (n)); cur += (n); } while (0)
+
+  uint32_t magic = 0, minor = 0;
+  RB3(&magic, 4);
+  RB3(&minor, 4);
+  if (magic != FUSELOG_V3_MAGIC) {
+    logging(LOG_ERROR, "v3: bad magic 0x%x\n", magic);
+    return;
+  }
+
+  // --- binding table: cap_id -> live path(s) ---
+  unordered_map<uint64_t, vector<string>> capid_paths;
+  {
+    uint64_t num_binding = 0;
+    RB3(&num_binding, 8);
+    for (uint64_t i = 0; i < num_binding; i++) {
+      uint64_t cid = 0, plen = 0;
+      RB3(&cid, 8);
+      RB3(&plen, 8);
+      if (cur + plen > data_sz) { logging(LOG_ERROR, "v3: bad binding path\n"); return; }
+      capid_paths[cid].push_back(string(data + cur, plen));
+      cur += plen;
+    }
+    logging(LOG_INFO, "  #bindings: %lu\n", num_binding);
+  }
+
+  // --- parse records ---
+  vector<V3Rec> recs;
+  uint64_t num_sd = 0;
+  RB3(&num_sd, 8);
+  logging(LOG_INFO, "  #statediff: %lu\n", num_sd);
+  recs.reserve(num_sd);
+
+  // read an inline [8:len][bytes] path field
+  #define RB3_PATH(dst) do { \
+    uint64_t _l = 0; RB3(&_l, 8); \
+    if (cur + _l > data_sz) { logging(LOG_ERROR, "v3: bad path len\n"); return; } \
+    (dst).assign(data + cur, _l); cur += _l; } while (0)
+
+  for (uint64_t i = 0; i < num_sd; i++) {
+    V3Rec r;
+    uint8_t t = 0;
+    RB3(&t, 1);
+    r.type = t;
+    switch (t) {
+      case SD_TYPE_WRITE:
+        RB3(&r.cap_id, 8);
+        RB3(&r.buflen, 8);
+        RB3(&r.off, 8);
+        if (cur + r.buflen > data_sz) { logging(LOG_ERROR, "v3: bad write buf\n"); return; }
+        r.buf = data + cur;
+        cur += r.buflen;
+        break;
+      case SD_TYPE_TRUNCATE:
+        RB3(&r.cap_id, 8);
+        RB3(&r.off, 8);
+        break;
+      case SD_TYPE_CREATE:
+        RB3_PATH(r.a);
+        RB3(&r.uid, 4); RB3(&r.gid, 4); RB3(&r.mode, 4);
+        break;
+      case SD_TYPE_MKDIR:
+        RB3_PATH(r.a);
+        RB3(&r.mode, 4);
+        break;
+      case SD_TYPE_SYMLINK: {
+        RB3_PATH(r.a);
+        uint32_t tlen = 0; RB3(&tlen, 4);
+        if (cur + tlen > data_sz) { logging(LOG_ERROR, "v3: bad symlink target\n"); return; }
+        r.buf = data + cur; r.buflen = tlen; cur += tlen;
+        RB3(&r.uid, 4); RB3(&r.gid, 4);
+        break;
+      }
+      case SD_TYPE_UNLINK:
+      case SD_TYPE_RMDIR:
+        RB3_PATH(r.a);
+        break;
+      case SD_TYPE_RENAME:
+      case SD_TYPE_LINK:
+        RB3_PATH(r.a);
+        RB3_PATH(r.b);
+        break;
+      case SD_TYPE_CHMOD:
+        RB3_PATH(r.a);
+        RB3(&r.mode, 4);
+        break;
+      case SD_TYPE_CHOWN:
+        RB3_PATH(r.a);
+        RB3(&r.uid, 4); RB3(&r.gid, 4);
+        break;
+      default:
+        logging(LOG_ERROR, "v3: unknown record type %u\n", t);
+        return;
+    }
+    recs.push_back(std::move(r));
+  }
+
+  auto abspath = [&](const string &rel) -> string {
+    return string(target_root) + rel;
+  };
+
+  // ---------------- Pass 1: structure / metadata ----------------
+  for (const V3Rec &r : recs) {
+    // WRITE and TRUNCATE are identity-keyed content, handled in pass 2.
+    if (r.type == SD_TYPE_WRITE || r.type == SD_TYPE_TRUNCATE) continue;
+    switch (r.type) {
+      case SD_TYPE_CREATE: {
+        string p = abspath(r.a);
+        int tfd = open(p.c_str(), O_CREAT | O_EXCL | O_WRONLY, r.mode | 0600);
+        if (tfd >= 0) {
+          close(tfd);
+          if (lchown(p.c_str(), r.uid, r.gid) == -1)
+            logging(LOG_INFO, "v3: chown create %s failed\n", p.c_str());
+          chmod(p.c_str(), r.mode & 07777);
+        } else if (errno != EEXIST) {
+          logging(LOG_ERROR, "v3: create %s failed\n", p.c_str());
+          perror("reason");
+        }
+        break;
+      }
+      case SD_TYPE_MKDIR: {
+        string p = abspath(r.a);
+        // Create owner-traversable so pass-1 ops can populate the dir; the
+        // final mode is set by the explicit trailing chmod below (a later
+        // CHMOD record) or here if the app never chmodded it.
+        if (mkdir(p.c_str(), r.mode | 0700) == -1 && errno != EEXIST) {
+          logging(LOG_ERROR, "v3: mkdir %s failed\n", p.c_str());
+          perror("reason");
+        }
+        break;
+      }
+      case SD_TYPE_SYMLINK: {
+        string p = abspath(r.a);
+        string tgt(r.buf ? string(r.buf, r.buflen) : string());
+        if (symlink(tgt.c_str(), p.c_str()) == -1 && errno != EEXIST) {
+          logging(LOG_ERROR, "v3: symlink %s failed\n", p.c_str());
+          perror("reason");
+        }
+        if (lchown(p.c_str(), r.uid, r.gid) == -1)
+          logging(LOG_INFO, "v3: chown symlink %s failed\n", p.c_str());
+        break;
+      }
+      case SD_TYPE_UNLINK: {
+        string p = abspath(r.a);
+        if (unlink(p.c_str()) == -1 && errno != ENOENT) {
+          logging(LOG_INFO, "v3: unlink %s failed\n", p.c_str());
+        }
+        break;
+      }
+      case SD_TYPE_RMDIR: {
+        string p = abspath(r.a);
+        if (rmdir(p.c_str()) == -1 && errno != ENOENT) {
+          logging(LOG_INFO, "v3: rmdir %s failed\n", p.c_str());
+        }
+        break;
+      }
+      case SD_TYPE_RENAME: {
+        string from = abspath(r.a), to = abspath(r.b);
+        if (rename(from.c_str(), to.c_str()) == -1 && errno != ENOENT) {
+          logging(LOG_ERROR, "v3: rename %s -> %s failed\n", from.c_str(), to.c_str());
+          perror("reason");
+        }
+        break;
+      }
+      case SD_TYPE_LINK: {
+        string from = abspath(r.a), to = abspath(r.b);
+        if (link(from.c_str(), to.c_str()) == -1 && errno != EEXIST) {
+          logging(LOG_INFO, "v3: link %s -> %s failed\n", from.c_str(), to.c_str());
+        }
+        break;
+      }
+      case SD_TYPE_CHMOD: {
+        string p = abspath(r.a);
+        if (chmod(p.c_str(), r.mode & 07777) == -1)
+          logging(LOG_INFO, "v3: chmod %s failed\n", p.c_str());
+        break;
+      }
+      case SD_TYPE_CHOWN: {
+        string p = abspath(r.a);
+        if (lchown(p.c_str(), r.uid, r.gid) == -1)
+          logging(LOG_INFO, "v3: chown %s failed\n", p.c_str());
+        break;
+      }
+      default: break;
+    }
+  }
+
+  // ---------------- Pass 2: content (writes + truncates), by identity ------
+  // WRITE and TRUNCATE are applied in captured (chronological) order to the
+  // identity's final path(s). Ordering them together per identity is required
+  // because the kernel may flush a large write either before or after a
+  // following truncate; replaying in stream order reproduces the exact final
+  // bytes and size. A pass-1 chmod may have left a file read-only, so force
+  // owner-write around the content ops and restore afterward.
+  unordered_set<string> seen;
+  unordered_map<string, mode_t> restore;  // abs_path -> original mode
+  auto ensure_writable = [&](const string &p) {
+    if (!seen.insert(p).second) return;
+    struct stat st;
+    if (stat(p.c_str(), &st) == 0 && !(st.st_mode & S_IWUSR)) {
+      chmod(p.c_str(), st.st_mode | S_IWUSR);
+      restore[p] = st.st_mode;
+    }
+  };
+  for (const V3Rec &r : recs) {
+    if (r.type != SD_TYPE_WRITE && r.type != SD_TYPE_TRUNCATE) continue;
+    auto it = capid_paths.find(r.cap_id);
+    if (it == capid_paths.end()) continue;  // identity has no live path: drop
+    for (const string &rel : it->second) {
+      string p = abspath(rel);
+      ensure_writable(p);
+      if (r.type == SD_TYPE_TRUNCATE) {
+        if (truncate(p.c_str(), (off_t) r.off) == -1)
+          logging(LOG_INFO, "v3: truncate %s (%lu) failed\n", p.c_str(), r.off);
+        updated_files.insert(rel);
+        continue;
+      }
+      int tfd = open(p.c_str(), O_WRONLY | O_CREAT, 0600);
+      if (tfd < 0) {
+        logging(LOG_ERROR, "v3: open-for-write %s failed\n", p.c_str());
+        perror("reason");
+        continue;
+      }
+      ssize_t w = pwrite(tfd, r.buf, r.buflen, (off_t) r.off);
+      if (w == -1) { logging(LOG_ERROR, "v3: write %s failed\n", p.c_str()); perror("reason"); }
+      close(tfd);
+      updated_files.insert(rel);
+    }
+  }
+  for (auto &kv : restore) chmod(kv.first.c_str(), kv.second);
+
+  logging(LOG_INFO, "v3: applied %lu records, %lu files touched\n",
+          num_sd, (unsigned long) updated_files.size());
+
+  #undef RB3
+  #undef RB3_PATH
 }
 
 void apply_write(const char *sd_buffer, const char *target_root) {

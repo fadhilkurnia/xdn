@@ -175,6 +175,8 @@ public class XdnGigapaxosApp
       recorderType = RecorderType.RSYNC;
     } else if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.FUSELOG.toString())) {
       recorderType = RecorderType.FUSELOG;
+    } else if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.FUSENODE.toString())) {
+      recorderType = RecorderType.FUSENODE;
     } else if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.ZIP.toString())) {
       recorderType = RecorderType.ZIP;
     } else if (stateDiffRecorderTypeString.equalsIgnoreCase(RecorderType.FUSERUST.toString())) {
@@ -185,7 +187,9 @@ public class XdnGigapaxosApp
       throw new RuntimeException(errMsg);
     }
 
-    if (recorderType.equals(RecorderType.FUSELOG) || recorderType.equals(RecorderType.FUSERUST)) {
+    if (recorderType.equals(RecorderType.FUSELOG)
+        || recorderType.equals(RecorderType.FUSENODE)
+        || recorderType.equals(RecorderType.FUSERUST)) {
       String osName = System.getProperty("os.name");
       if (!osName.equalsIgnoreCase("linux")) {
         String errMsg = "[WARNING] FUSE can only be used in Linux. Failing back to rsync.";
@@ -203,6 +207,9 @@ public class XdnGigapaxosApp
         break;
       case FUSELOG:
         this.stateDiffRecorder = new FuselogStateDiffRecorder(myNodeId);
+        break;
+      case FUSENODE:
+        this.stateDiffRecorder = new FusenodeStateDiffRecorder(myNodeId);
         break;
       case FUSERUST:
         this.stateDiffRecorder = new FuseRustStateDiffRecorder(myNodeId);

@@ -1,4 +1,8 @@
 fuselog
+fusenode
 fuselog-apply
 test_fuselog
 bench_fuselog
+
+# design notes (kept out of tree)
+DESIGN_*.md

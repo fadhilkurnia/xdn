@@ -47,8 +47,11 @@ APPLY_DIR = BASE_DIR / "C"          # fuselog-apply target
 SOCKET_PATH = BASE_DIR / "test.sock"
 STATEDIFF_FILE = BASE_DIR / "statediff.bin"
 
-FUSELOG_BIN = PROJECT_ROOT / "bin" / "fuselog"
-APPLY_BIN = PROJECT_ROOT / "bin" / "fuselog-apply"
+# FUSELOG_BIN env override lets the same harness A/B the high-level `fuselog`
+# against the low-level `fusenode` recorder without forking op-gen/oracle
+# logic. Only the mounted binary changes; everything else stays identical.
+FUSELOG_BIN = Path(os.environ.get("FUSELOG_BIN", PROJECT_ROOT / "bin" / "fuselog"))
+APPLY_BIN = Path(os.environ.get("FUSELOG_APPLY_BIN", PROJECT_ROOT / "bin" / "fuselog-apply"))
 
 FILE_NAMES = ["a", "b", "c"]            # leaf names for files/symlinks/hardlinks
 DIR_NAMES = ["x", "y"]                  # leaf names for directories
@@ -289,6 +292,10 @@ def pick_op(rng, entries):
     op_types = [OP_WRITE_NEW, OP_OVERWRITE, OP_EXTEND, OP_TRUNCATE,
                 OP_UNLINK, OP_RENAME, OP_MKDIR, OP_RMDIR, OP_CHMOD,
                 OP_CHOWN, OP_LINK, OP_SYMLINK]
+    # FUZZ_NO_HARDLINK drops OP_LINK only (the no-hardlink control used to
+    # A/B the writeback path); op *semantics* are unchanged.
+    if os.environ.get("FUZZ_NO_HARDLINK"):
+        op_types = [o for o in op_types if o != OP_LINK]
     cur_uid = os.getuid()
     cur_gid = os.getgid()
 
