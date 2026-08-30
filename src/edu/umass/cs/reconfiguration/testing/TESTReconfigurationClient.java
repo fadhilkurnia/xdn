@@ -322,7 +322,9 @@ public class TESTReconfigurationClient extends DefaultTest {
 		waitForAppResponses(Config.getGlobalLong(TRC.TEST_APP_REQUEST_TIMEOUT),
 				outstanding);
 		if (retryUntilSuccess) {
-			while (!outstanding.isEmpty()) {
+			long retryDeadline = System.currentTimeMillis() + DEFAULT_RECONFIG_TIMEOUT;
+			while (!outstanding.isEmpty()
+					&& System.currentTimeMillis() < retryDeadline) {
 				log.log(Level.INFO, "Retrying {0} outstanding app requests",
 						new Object[] { outstanding.size() });
 				testAppRequests(outstanding, rateLimiter);
@@ -516,7 +518,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 
 	private boolean testDelete(String name) throws IOException,
 			InterruptedException {
-		return testDelete(name, null);
+		return testDelete(name, DEFAULT_RECONFIG_TIMEOUT);
 	}
 
 	// blocking delete until success or timeout of a single name
@@ -665,6 +667,15 @@ public class TESTReconfigurationClient extends DefaultTest {
 	private static final long DEFAULT_TIMEOUT = 1000;
 	protected static final long DEFAULT_RTX_TIMEOUT = 2000;
 	protected static final long DEFAULT_APP_REQUEST_TIMEOUT = 2000;
+	// Membership reconfiguration (add/remove active replica or reconfigurator) is
+	// heavier than a normal request; bound the wait so a lost/never-delivered
+	// reconfiguration callback fails the test fast instead of blocking forever on
+	// an unbounded monitor.wait() until the CI job-level timeout cancels the run.
+	protected static final long DEFAULT_RECONFIG_TIMEOUT = 60 * 1000;
+	// Hard per-test-method backstop: JUnit fails (and moves on from) any method
+	// that exceeds this, so a never-delivered reconfiguration/request/delete
+	// callback can no longer hang the whole `ant test` job to the CI job cap.
+	protected static final long HANG_GUARD_TIMEOUT = 3 * 60 * 1000;
 
 	/**
 	 * Tests that a request to a random app name fails as expected.
@@ -756,7 +767,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws InterruptedException
 	 * @throws NumberFormatException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test01_BasicSequence() throws IOException,
 			NumberFormatException, InterruptedException {
 		String[] names = generateRandomNames(Config
@@ -786,7 +797,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws NumberFormatException
 	 * @throws InterruptedException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test02_ReplicableClientRequest() throws IOException,
 			NumberFormatException, InterruptedException {
 		String[] names = generateRandomNames(Config
@@ -818,7 +829,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws IOException
 	 * @throws InterruptedException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test02_NonDefaultRequest() throws NumberFormatException,
 			IOException, InterruptedException {
 		String[] names = generateRandomNames(1);
@@ -837,7 +848,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws NumberFormatException
 	 * @throws InterruptedException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	@Repeat(times = REPEAT)
 	public void test02_MutualAuthRequest() throws IOException,
 			NumberFormatException, InterruptedException {
@@ -890,7 +901,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws InterruptedException
 	 * @throws NumberFormatException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test03_BasicSequenceBatched() throws IOException,
 			NumberFormatException, InterruptedException {
 		// test batched creates
@@ -913,7 +924,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws IOException
 	 * @throws InterruptedException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test04_ReconfigurationRate() throws IOException,
 			InterruptedException {
 		DelayProfiler.clear();
@@ -980,7 +991,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws IOException
 	 * @throws InterruptedException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test20_RandomActiveReplicaDeleteAfterAdd() throws IOException,
 			InterruptedException {
 		Map<String, InetSocketAddress> adds = new HashMap<String, InetSocketAddress>();
@@ -999,7 +1010,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws InterruptedException
 	 * 
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test21_DeleteActiveReplica() throws IOException,
 			InterruptedException {
 		String[] names = null;
@@ -1025,7 +1036,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws InterruptedException
 	 * 
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test22_AddActiveReplica() throws IOException,
 			InterruptedException {
 		Map<String, InetSocketAddress> newlyAddedActives = new HashMap<String, InetSocketAddress>();
@@ -1033,7 +1044,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 		if (!justDeletedActives.isEmpty()) {
 			newlyAddedActives.putAll(justDeletedActives);
 			boolean test = this.testReconfigureActives(newlyAddedActives, null,
-					null);
+					DEFAULT_RECONFIG_TIMEOUT);
 			assert (test);
 			Assert.assertEquals(test, true);
 			justDeletedActives.clear();
@@ -1048,7 +1059,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 	/**
 	 * @throws IOException
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test31_AddReconfigurator() throws IOException {
 		boolean test = testCreates(generateRandomNames(Config
 				.getGlobalInt(TRC.TEST_NUM_APP_NAMES)));
@@ -1061,7 +1072,7 @@ public class TESTReconfigurationClient extends DefaultTest {
 						Config.getGlobalInt(TRC.TEST_PORT)));
 		test = test
 				&& this.testReconfigureReconfigurators(newlyAddedRCs, null,
-						null);
+						DEFAULT_RECONFIG_TIMEOUT);
 		/* Add reconfigurator may fail if a reconfigurator with the same name
 		 * was previously deleted and it has not been long enough yet. */
 		if (test)
@@ -1074,11 +1085,11 @@ public class TESTReconfigurationClient extends DefaultTest {
 	 * @throws IOException
 	 * 
 	 */
-	@Test
+	@Test(timeout = HANG_GUARD_TIMEOUT)
 	public void test32_DeleteReconfigurator() throws IOException {
 		if (!justAddedRCs.isEmpty()) {
 			boolean test = this.testReconfigureReconfigurators(null,
-					justAddedRCs.keySet(), null);
+					justAddedRCs.keySet(), DEFAULT_RECONFIG_TIMEOUT);
 			assert (test);
 			justAddedRCs.clear();
 			Assert.assertEquals(test, true);
