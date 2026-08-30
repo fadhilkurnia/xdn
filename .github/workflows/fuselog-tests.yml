@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install build deps + GoogleTest
         run: |
           sudo apt-get update
@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install FUSE
         run: |
           sudo apt-get update
@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install FUSE
         run: |
           sudo apt-get update
@@ -127,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install FUSE
         run: |
           sudo apt-get update
@@ -175,7 +175,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install FUSE
         run: |
           sudo apt-get update
@@ -211,7 +211,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install FUSE + python sqlite
         run: |
           sudo apt-get update
@@ -257,7 +257,7 @@ jobs:
           - db: mongodb
             image: mongo:7
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: 📦 Install FUSE + Docker
         run: |
           sudo apt-get update
