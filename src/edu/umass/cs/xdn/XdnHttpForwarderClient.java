@@ -417,6 +417,53 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
+  /*
+   * Handle forwarding requests to docker container asynchronously
+   */
+  public CompletableFuture<FullHttpResponse> executeAsync(String host, int port, FullHttpRequest req) {
+    Origin origin = new Origin(host, port);
+    FixedChannelPool pool = poolFor(origin);
+    CompletableFuture<FullHttpResponse> resFuture = new CompletableFuture<>();
+
+    ReferenceCountUtil.retain(req);
+    final FullHttpRequest outbound = req;
+    // ts[0]=acquire complete, ts[1]=write complete. Filled in by dispatchRequest, same as executeOnce
+    // Only kept alive here so executeAsync itself can read it back afterward
+    final long[] ts = new long[2];
+
+    pool.acquire().addListener((Future<Channel> acquireFuture) -> {
+      ts[0] = System.nanoTime();
+      if (!acquireFuture.isSuccess()) {
+        resFuture.completeExceptionally(acquireFuture.cause());
+        ReferenceCountUtil.release(outbound);
+        return;
+      };
+
+      Channel channel = acquireFuture.getNow();
+      if (channel == null || !channel.isActive()) {
+        resFuture.completeExceptionally(new IllegalStateException("Acquired inactive HTTP channel"));
+        ReferenceCountUtil.release(outbound);
+        return;
+      }
+
+      dispatchRequest(channel, pool, outbound, resFuture, ts);
+    });
+
+    // Diagnostic only, scoped entirely to this method. Registered before returning resFuture,
+    // so it always runs before any whenComplete the caller (ForwarderFrontend) attaches
+    resFuture.whenComplete((res, err) -> {
+      if (res != null) {
+        long tRespRecv = System.nanoTime();
+        res.headers().set("X-Fwd-Acquire-Nanos", Long.toString(ts[0]));
+        res.headers().set("X-Fwd-Write-Nanos", Long.toString(ts[1]));
+        res.headers().set("X-Fwd-RespRecv-Nanos", Long.toString(tRespRecv));
+      }
+    });
+
+    resFuture.whenComplete((r,t)-> ReferenceCountUtil.release(outbound));
+    return resFuture;
+  }
+
   /**
    * Dispatch the HTTP request on an active channel. Used by both the initial acquire path and the
    * retry-on-inactive path. When {@code slot} is non-null the channel is parked there on completion
