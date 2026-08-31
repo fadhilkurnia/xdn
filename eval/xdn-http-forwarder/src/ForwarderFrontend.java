@@ -40,9 +40,9 @@ public class ForwarderFrontend {
         System.out.printf("portListen=%d, containerName=%s, portDocker=%d, useProxy=%s, blocking=%s, logFile=%s%n",
                 portListen, containerName, portDocker, useProxy, blocking, logFile);
 
-        XdnHttpForwarderClient forwarder = new XdnHttpForwarderClient();
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
+        XdnHttpForwarderClient forwarder = new XdnHttpForwarderClient(workerGroup);
 
         final ExecutorService blockingPool = blocking ? Executors.newFixedThreadPool(200) : null;
         final boolean isBlocking = blocking;
@@ -53,7 +53,7 @@ public class ForwarderFrontend {
                 dockerIp, dockerPort, useProxy, blocking);
 
         final TimingLogger timingLogger = new TimingLogger(logFile);
-        final InnerTimingLogger innerTimingLogger = new InnerTimingLogger(logFile);
+        final InnerTimingLogger innerTimingLogger = new InnerTimingLogger(logFile.replace(".log", "-inner.log"));
 
         try {
             ServerBootstrap b = new ServerBootstrap();
@@ -75,9 +75,9 @@ public class ForwarderFrontend {
             workerGroup.shutdownGracefully();
             bossGroup.shutdownGracefully();
             if (blockingPool != null) blockingPool.shutdown();
-            forwarder.close();
             innerTimingLogger.close();
             timingLogger.close();
+            forwarder.close();
         }
     }
 
@@ -214,7 +214,7 @@ public class ForwarderFrontend {
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest req) {
             long tReceived = System.nanoTime();
-            String reqId = req.headers().get("X-Req-Id");
+            String reqId = req.headers().get("X-XDN-ReqId");
             if (reqId == null) reqId = "unknown";
             final String finalReqId = reqId;
 
@@ -297,9 +297,14 @@ public class ForwarderFrontend {
 
         private void drainLoop(BufferedWriter writer) {
             try {
+                int sinceFlush = 0;
                 while (running.get() || !queue.isEmpty()) {
                     RequestTiming t = queue.poll(200, TimeUnit.MILLISECONDS);
-                    if (t == null) continue;
+                    if (t == null) {
+                        writer.flush();
+                        sinceFlush = 0;
+                        continue;
+                    }
                     writer.write(String.join(",",
                             t.reqId(),
                             Long.toString((t.tReceivedMs())),
@@ -308,6 +313,11 @@ public class ForwarderFrontend {
                             Long.toString((t.tFlushedMs())),
                             Integer.toString(t.statusCode())));
                     writer.newLine();
+
+                    if (++sinceFlush >= 200) {
+                        writer.flush();
+                        sinceFlush = 0;
+                    }
                 }
 
                 writer.flush();
