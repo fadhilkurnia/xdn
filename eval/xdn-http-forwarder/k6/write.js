@@ -23,10 +23,10 @@ export const options = {
             preAllocatedVUs: 200,
             maxVUs: 1000,
             stages: [
-                { target: 10, duration: "10s" },  // warmup at floor rate
-                { target: 500, duration: "10s" },  // ramp 10 -> 500 req/s
+                { target: 10, duration: "30s" },  // warmup at floor rate
+                { target: 500, duration: "2m" },  // ramp 10 -> 500 req/s
                 { target: 500, duration: "1m" },  // hold at peak
-                { target: 0, duration: "10s" },   // ramp down
+                { target: 0, duration: "15s" },   // ramp down
             ],
         },
     },
