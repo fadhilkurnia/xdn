@@ -42,7 +42,7 @@ public class ForwarderFrontend {
 
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
-        XdnHttpForwarderClient forwarder = new XdnHttpForwarderClient(workerGroup);
+        XdnHttpForwarderClient forwarder = new XdnHttpForwarderClient();
 
         final ExecutorService blockingPool = blocking ? Executors.newFixedThreadPool(200) : null;
         final boolean isBlocking = blocking;
