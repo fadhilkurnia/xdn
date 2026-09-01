@@ -23,6 +23,7 @@ public class ForwarderFrontend {
         String containerName = "bookcatalog";
         boolean useProxy = true;
         boolean blocking = true;
+        boolean sharedGroup = false;
         String logFile = "forwarder-timings.log";
 
         for (int i = 0; i < args.length; i++) {
@@ -32,17 +33,20 @@ public class ForwarderFrontend {
                 case "--p-docker"       -> portDocker = Integer.parseInt(args[++i]);
                 case "--proxy-mode"     -> useProxy = Boolean.valueOf(args[++i]);
                 case "--blocking"       -> blocking = Boolean.valueOf(args[++i]);
+                case "--shared-group"   -> sharedGroup = Boolean.valueOf(args[++i]);
                 case "--log"            -> logFile = args[++i];
                 default -> throw new IllegalArgumentException("Unknown args: " + args[i]);
             }
         }
 
-        System.out.printf("portListen=%d, containerName=%s, portDocker=%d, useProxy=%s, blocking=%s, logFile=%s%n",
-                portListen, containerName, portDocker, useProxy, blocking, logFile);
+        System.out.printf("portListen=%d, containerName=%s, portDocker=%d, useProxy=%s, blocking=%s, sharedGroup=%s, logFile=%s%n",
+                portListen, containerName, portDocker, useProxy, blocking, sharedGroup, logFile);
 
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
-        XdnHttpForwarderClient forwarder = new XdnHttpForwarderClient();
+        XdnHttpForwarderClient forwarder = sharedGroup
+                ? new XdnHttpForwarderClient(workerGroup)
+                : new XdnHttpForwarderClient();
 
         final ExecutorService blockingPool = blocking ? Executors.newFixedThreadPool(200) : null;
         final boolean isBlocking = blocking;
