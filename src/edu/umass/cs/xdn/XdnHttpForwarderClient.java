@@ -82,6 +82,16 @@ public final class XdnHttpForwarderClient implements Closeable {
     this.manageEventLoopGroup = manageGroup;
   }
 
+  /**
+   * Creates a client that reuses an existing event loop group instead of creating its own. The
+   * caller retains ownership — close() will NOT shut down a group passed in this way. Use this when
+   * the client's backend connections should run on the same threads as an existing server (e.g. the
+   * front-end's own workerGroup), avoiding cross-thread hand-off cost between the two.
+   */
+  public XdnHttpForwarderClient(EventLoopGroup group) {
+    this(group, false);
+  }
+
   private static final int MAX_RETRIES = 1;
 
   /**
@@ -417,6 +427,59 @@ public final class XdnHttpForwarderClient implements Closeable {
     }
   }
 
+  /*
+   * Handle forwarding requests to docker container asynchronously
+   */
+  public CompletableFuture<FullHttpResponse> executeAsync(
+      String host, int port, FullHttpRequest req) {
+    Origin origin = new Origin(host, port);
+    FixedChannelPool pool = poolFor(origin);
+    CompletableFuture<FullHttpResponse> resFuture = new CompletableFuture<>();
+
+    ReferenceCountUtil.retain(req);
+    final FullHttpRequest outbound = req;
+    // ts[0]=acquire complete, ts[1]=write complete. Filled in by dispatchRequest, same as
+    // executeOnce
+    // Only kept alive here so executeAsync itself can read it back afterward
+    final long[] ts = new long[2];
+
+    pool.acquire()
+        .addListener(
+            (Future<Channel> acquireFuture) -> {
+              ts[0] = System.nanoTime();
+              if (!acquireFuture.isSuccess()) {
+                resFuture.completeExceptionally(acquireFuture.cause());
+                ReferenceCountUtil.release(outbound);
+                return;
+              }
+              ;
+
+              Channel channel = acquireFuture.getNow();
+              if (channel == null || !channel.isActive()) {
+                resFuture.completeExceptionally(
+                    new IllegalStateException("Acquired inactive HTTP channel"));
+                ReferenceCountUtil.release(outbound);
+                return;
+              }
+
+              dispatchRequest(channel, pool, null, outbound, resFuture, ts);
+            });
+
+    CompletableFuture<FullHttpResponse> withDiagnostics =
+        resFuture.whenComplete(
+            (res, err) -> {
+              if (res != null) {
+                long tRespRecv = System.nanoTime();
+                res.headers().set("X-Fwd-Acquire-Nanos", Long.toString(ts[0]));
+                res.headers().set("X-Fwd-Write-Nanos", Long.toString(ts[1]));
+                res.headers().set("X-Fwd-RespRecv-Nanos", Long.toString(tRespRecv));
+              }
+              ReferenceCountUtil.release(outbound);
+            });
+
+    return withDiagnostics;
+  }
+
   /**
    * Dispatch the HTTP request on an active channel. Used by both the initial acquire path and the
    * retry-on-inactive path. When {@code slot} is non-null the channel is parked there on completion
@@ -491,31 +554,28 @@ public final class XdnHttpForwarderClient implements Closeable {
     // don't pay the connect latency.
     if (POOL_PREWARM_SIZE > 0) {
       int n = Math.min(POOL_PREWARM_SIZE, getMaxPoolSize());
-      List<Channel> warmChannels = new ArrayList<>(n);
       for (int i = 0; i < n; i++) {
-        try {
-          Future<Channel> f = pool.acquire();
-          Channel ch = f.await().getNow();
-          if (ch != null && ch.isActive()) {
-            warmChannels.add(ch);
-          } else if (ch != null) {
-            ch.close();
-          }
-        } catch (Exception e) {
-          LOG.log(
-              Level.FINE,
-              "Pool pre-warm connection {0} failed: {1}",
-              new Object[] {i, e.getMessage()});
-          break;
-        }
-      }
-      for (Channel ch : warmChannels) {
-        pool.release(ch);
+        pool.acquire()
+            .addListener(
+                (Future<Channel> f) -> {
+                  if (!f.isSuccess()) {
+                    LOG.log(
+                        Level.FINE, "Pool pre-warm connection failed: {0}", f.cause().getMessage());
+                    return;
+                  }
+
+                  Channel ch = f.getNow();
+                  if (ch != null && ch.isActive()) {
+                    pool.release(ch);
+                  } else if (ch != null) {
+                    ch.close();
+                  }
+                });
       }
       LOG.log(
           Level.INFO,
-          "Pre-warmed {0} connections to {1}:{2}",
-          new Object[] {warmChannels.size(), origin.host(), origin.port()});
+          "Pre-warming up to {0} connections to {1}:{2}",
+          new Object[] {n, origin.host(), origin.port()});
     }
 
     return pool;
