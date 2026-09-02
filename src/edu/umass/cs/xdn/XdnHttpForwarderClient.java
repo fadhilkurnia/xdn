@@ -457,7 +457,7 @@ public final class XdnHttpForwarderClient implements Closeable {
         return;
       }
 
-      dispatchRequest(channel, pool, outbound, resFuture, ts);
+      dispatchRequest(channel, pool, null, outbound, resFuture, ts);
     });
 
     CompletableFuture<FullHttpResponse> withDiagnostics = resFuture.whenComplete((res, err) -> {
