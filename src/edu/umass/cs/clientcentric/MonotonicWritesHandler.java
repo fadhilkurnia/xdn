@@ -13,6 +13,7 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
+import edu.umass.cs.xdn.request.XdnRequestContentUtils;
 import org.json.JSONException;
 
 import java.io.IOException;
@@ -151,45 +152,50 @@ public class MonotonicWritesHandler {
             executePool.execute(() -> {
                 // Case-1: Handle write directly if this replica is "recent" enough.
                 if (finalWriteTs.isLessThanOrEqualTo(serviceLastTimestamp)) {
-                    boolean isExecSuccess = app.execute(clientRequest, false);
-                    if (!isExecSuccess) {
-                        logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
-                        callback.executed(clientRequest, false);
-                        return;
-                    }
-
-                    // Enqueue the executed request
-                    synchronized (serviceInstance.executedRequests()) {
-                        serviceInstance.executedRequests().add(clientRequest.toBytes());
-                    }
-
-                    // Bump up our timestamp
-                    VectorTimestamp updatedTimestamp = serviceInstance.currTimestamp()
-                            .increaseNodeTimestamp(myNodeID.toString());
-
-                    // Update the client's write timestamp, then send response back to client.
-                    ((TimestampedResponse) clientRequest)
-                            .setLastTimestamp("W", updatedTimestamp);
-                    callback.executed(clientRequest, true);
-
-                    // Asynchronously send the writes to other replicas
-                    Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
-                    otherReplicas.remove(myNodeID);
-                    ClientCentricWriteAfterPacket writeAfterPacket =
-                            new ClientCentricWriteAfterPacket(
-                                    /*senderID=*/myNodeID.toString(),
-                                    /*timestamp=*/updatedTimestamp,
-                                    /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
-                    GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
-                            new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
+                    XdnRequestContentUtils.retain(clientRequest);
                     try {
-                        if (logger.isLoggable(Level.FINER)) {
-                            logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
-                                    + writeAfterPacket.getServiceName());
+                        boolean isExecSuccess = app.execute(clientRequest, false);
+                        if (!isExecSuccess) {
+                            logger.log(Level.WARNING, "Failed to execute request: " + clientRequest);
+                            callback.executed(clientRequest, false);
+                            return;
                         }
-                        messenger.send(m);
-                    } catch (JSONException | IOException e) {
-                        throw new RuntimeException(e);
+
+                        // Enqueue the executed request
+                        synchronized (serviceInstance.executedRequests()) {
+                            serviceInstance.executedRequests().add(clientRequest.toBytes());
+                        }
+
+                        // Bump up our timestamp
+                        VectorTimestamp updatedTimestamp = serviceInstance.currTimestamp()
+                                .increaseNodeTimestamp(myNodeID.toString());
+
+                        // Update the client's write timestamp, then send response back to client.
+                        ((TimestampedResponse) clientRequest)
+                                .setLastTimestamp("W", updatedTimestamp);
+                        callback.executed(clientRequest, true);
+
+                        // Asynchronously send the writes to other replicas
+                        Set<NodeIDType> otherReplicas = new HashSet<>(serviceInstance.nodeIDs());
+                        otherReplicas.remove(myNodeID);
+                        ClientCentricWriteAfterPacket writeAfterPacket =
+                                new ClientCentricWriteAfterPacket(
+                                        /*senderID=*/myNodeID.toString(),
+                                        /*timestamp=*/updatedTimestamp,
+                                        /*clientWriteOnlyRequest=*/(ClientRequest) clientRequest);
+                        GenericMessagingTask<NodeIDType, ClientCentricPacket> m =
+                                new GenericMessagingTask<>(otherReplicas.toArray(), writeAfterPacket);
+                        try {
+                            if (logger.isLoggable(Level.FINER)) {
+                                logger.log(Level.FINER, "Sending ClientCentricWriteAfterPacket: "
+                                        + writeAfterPacket.getServiceName());
+                            }
+                            messenger.send(m);
+                        } catch (JSONException | IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    } finally {
+                        XdnRequestContentUtils.release(clientRequest);
                     }
                     return;
                 }
