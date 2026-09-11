@@ -75,6 +75,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private final boolean ENABLE_NON_DETERMINISTIC_INIT = Config.getGlobalBoolean(
             ReconfigurationConfig.RC.XDN_PB_ENABLE_NON_DETERMINISTIC_INIT);
 
+    private final boolean SKIP_EMPTY_STATEDIFF_PROPOSAL = Config.getGlobalBoolean(
+            ReconfigurationConfig.RC.XDN_PB_SKIP_EMPTY_STATEDIFF_PROPOSAL);
+
     // How the primary seeds backups with its non-deterministic initial state (see
     // XDN_PB_INIT_SYNC_MODE). RSYNC = legacy out-of-band rsync; RECORDER = capture via the
     // configured recorder and ship in-band as the first ordered ApplyStateDiff (atomic, no seam).
@@ -203,9 +206,31 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     private final ConcurrentHashMap<String, Thread> batchWorkerThreads =
         new ConcurrentHashMap<>();
 
-    // Maps ApplyStateDiffPacket.requestID → the N (packet, callback) pairs it represents
+    // Maps ApplyStateDiffPacket.requestID → the N (packet, callback) pairs it represents.
+    // Used by the original path when empty-diff proposal skipping is disabled.
     private final ConcurrentHashMap<Long, List<RequestAndCallback>>
         pendingBatchCallbacks = new ConcurrentHashMap<>();
+
+    /** A proposed state diff and every request waiting for that diff to commit. */
+    private static final class DiffProposal {
+        final long id;
+        final PrimaryEpoch<?> epoch;
+        final List<RequestAndCallback> waiters;
+        boolean done;
+
+        DiffProposal(
+                long id, PrimaryEpoch<?> epoch, List<RequestAndCallback> initialWaiters) {
+            this.id = id;
+            this.epoch = epoch;
+            this.waiters = new ArrayList<>(initialWaiters);
+        }
+    }
+
+    // The newest in-flight proposal is the barrier inherited by a later empty capture cycle.
+    private final ConcurrentHashMap<Long, DiffProposal> inFlightDiffProposals =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, DiffProposal> lastDiffProposal =
+            new ConcurrentHashMap<>();
 
     // Counter for sampling pipeline timing (every Nth batch prints breakdown)
     private static final java.util.concurrent.atomic.AtomicLong sampledBatchCounter =
@@ -569,10 +594,11 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
     //      and invokes client callbacks asynchronously. This eliminates worker
     //      blocking on capture+propose latency, enabling faster queue draining.
     //
-    //   7. NULL/EMPTY DIFFS: If no filesystem changes occurred (e.g., all
-    //      requests were reads), captureStateDiff() returns null or empty.
-    //      This is still proposed (as empty byte[]) — same as current code.
-    //      Backups apply the no-op diff harmlessly.
+    //   7. EMPTY DIFFS: An empty capture can inherit the previous proposal if
+    //      it is still in flight: that proposal's diff already contains every
+    //      write completed before this capture. If there is no live barrier,
+    //      an empty proposal is still required to confirm quorum reachability.
+    //      A null diff is a capture failure and is never considered empty.
     //
     // Maximum time the capture thread waits on doneQueue before draining the
     // FUSELOG socket anyway.  Prevents a deadlock where workers block on
@@ -602,9 +628,9 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 long takeEnd = System.nanoTime();
 
                 if (first == null) {
-                    // No completions arrived within the timeout.  Capture the
-                    // state diff AND propose it to keep the FUSELOG socket
-                    // drained AND ensure backups receive all state changes.
+                    // No completions arrived within the timeout. Capture the
+                    // state diff to keep the FUSELOG socket drained and propose
+                    // any state changes so backups receive them.
                     // Without this, a deadlock occurs: workers block on
                     // PostgreSQL writes through FUSELOG, the socket fills up
                     // because nobody is reading it, and this thread is stuck
@@ -614,7 +640,15 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                     if (epoch == null) continue;
                     try {
                         byte[] diff = backupableApp.captureStatediff(serviceName);
-                        if (diff != null && diff.length > 0) {
+                        if (SKIP_EMPTY_STATEDIFF_PROPOSAL
+                                && diff != null
+                                && !backupableApp.isEmptyStatediff(serviceName, diff)) {
+                            // An idle capture can sweep up a concurrently finishing request.
+                            // Register its proposal as a barrier even though it has no waiters yet.
+                            proposeStateDiff(serviceName, epoch, diff, List.of());
+                        } else if (!SKIP_EMPTY_STATEDIFF_PROPOSAL
+                                && diff != null
+                                && diff.length > 0) {
                             ApplyStateDiffPacket pkt = new ApplyStateDiffPacket(
                                     serviceName, epoch,
                                     diff);
@@ -750,6 +784,19 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                         stateDiff != null ? stateDiff.length : 0,
                         valid.size(), allCallbacks.size()));
 
+                if (SKIP_EMPTY_STATEDIFF_PROPOSAL) {
+                    boolean inherited =
+                            backupableApp.isEmptyStatediff(serviceName, stateDiff)
+                                    && tryAttachToBarrier(
+                                            serviceName, currentEpoch, allCallbacks, sdEnd);
+                    if (!inherited) {
+                        // A non-empty diff becomes the new barrier. An empty diff without a live
+                        // barrier is still proposed to prove this primary can reach a quorum.
+                        proposeStateDiff(serviceName, currentEpoch, stateDiff, allCallbacks);
+                    }
+                    continue;
+                }
+
                 // ONE propose() for the combined diff.
                 ApplyStateDiffPacket applyPkt = new ApplyStateDiffPacket(
                         serviceName, currentEpoch,
@@ -860,6 +907,94 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
                 }
             }
         }
+    }
+
+    /** Proposes a state diff and exposes it as the barrier for later empty capture cycles. */
+    private void proposeStateDiff(
+            String serviceName,
+            PrimaryEpoch<NodeIDType> epoch,
+            byte[] stateDiff,
+            List<RequestAndCallback> callbacks) {
+        ApplyStateDiffPacket applyPacket =
+                new ApplyStateDiffPacket(
+                        serviceName, epoch, stateDiff != null ? stateDiff : new byte[0]);
+        ReplicableClientRequest gpPacket = ReplicableClientRequest.wrap(applyPacket);
+        gpPacket.setClientAddress(messenger.getListeningSocketAddress());
+
+        long proposeNs = System.nanoTime();
+        callbacks.forEach(callback -> callback.setProposeNs(proposeNs));
+
+        DiffProposal proposal =
+                new DiffProposal(applyPacket.getRequestID(), epoch, callbacks);
+        inFlightDiffProposals.put(proposal.id, proposal);
+        lastDiffProposal.put(serviceName, proposal);
+
+        try {
+            this.paxosManager.propose(
+                    serviceName,
+                    gpPacket,
+                    (proposedPacket, handled) -> {
+                        long commitNs = System.nanoTime();
+                        long requestId =
+                                ((ApplyStateDiffPacket) proposedPacket).getRequestID();
+                        DiffProposal committed = inFlightDiffProposals.remove(requestId);
+                        if (committed == null) {
+                            return;
+                        }
+
+                        List<RequestAndCallback> toRelease;
+                        synchronized (committed) {
+                            committed.done = true;
+                            toRelease = new ArrayList<>(committed.waiters);
+                            committed.waiters.clear();
+                        }
+                        lastDiffProposal.remove(serviceName, committed);
+
+                        logger.log(
+                                Level.INFO,
+                                String.format(
+                                        "%s:%s - capture thread: %d requests committed in %.3f ms"
+                                                + " (diffSize=%d)",
+                                        myNodeID,
+                                        PrimaryBackupManager.class.getSimpleName(),
+                                        toRelease.size(),
+                                        (commitNs - proposeNs) / 1_000_000.0,
+                                        stateDiff != null ? stateDiff.length : 0));
+
+                        toRelease.forEach(callback -> callback.setCommitCallbackNs(commitNs));
+                        toRelease.forEach(
+                                callback ->
+                                        callback.callback().executed(
+                                                callback.requestPacket(), handled));
+                    });
+        } catch (RuntimeException e) {
+            inFlightDiffProposals.remove(proposal.id, proposal);
+            lastDiffProposal.remove(serviceName, proposal);
+            synchronized (proposal) {
+                proposal.done = true;
+            }
+            throw e;
+        }
+    }
+
+    /** Attaches callbacks to the newest proposal if it is still a live barrier for this epoch. */
+    private boolean tryAttachToBarrier(
+            String serviceName,
+            PrimaryEpoch<NodeIDType> epoch,
+            List<RequestAndCallback> callbacks,
+            long attachNs) {
+        DiffProposal barrier = lastDiffProposal.get(serviceName);
+        if (barrier == null || !barrier.epoch.equals(epoch)) {
+            return false;
+        }
+        synchronized (barrier) {
+            if (barrier.done) {
+                return false;
+            }
+            callbacks.forEach(callback -> callback.setProposeNs(attachNs));
+            barrier.waiters.addAll(callbacks);
+        }
+        return true;
     }
 
     private void batchWorkerLoop(
@@ -2202,6 +2337,20 @@ public class PrimaryBackupManager<NodeIDType> implements AppRequestParser {
         Thread captureThread = captureThreads.remove(groupName);
         if (captureThread != null) captureThread.interrupt();
         serviceDoneQueues.remove(groupName);
+
+        // Fail callbacks inherited by a barrier that can no longer commit.
+        DiffProposal orphaned = lastDiffProposal.remove(groupName);
+        if (orphaned != null) {
+            inFlightDiffProposals.remove(orphaned.id, orphaned);
+            List<RequestAndCallback> toFail;
+            synchronized (orphaned) {
+                orphaned.done = true;
+                toFail = new ArrayList<>(orphaned.waiters);
+                orphaned.waiters.clear();
+            }
+            toFail.forEach(
+                    callback -> callback.callback().executed(callback.requestPacket(), false));
+        }
 
         // Interrupt and remove worker threads for this service.
         for (int i = 0; i < N_PARALLEL_WORKERS; i++) {

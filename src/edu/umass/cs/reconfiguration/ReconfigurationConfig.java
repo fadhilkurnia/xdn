@@ -587,6 +587,13 @@ public class ReconfigurationConfig {
         XDN_PB_ENABLE_NON_DETERMINISTIC_INIT(true),
 
         /**
+         * Skip a Paxos proposal when a capture is provably empty and its requests can wait for
+         * the previous proposal that already contains their effects. If no proposal is still in
+         * flight, an empty proposal is sent as a fresh quorum barrier. Disabled by default.
+         */
+        XDN_PB_SKIP_EMPTY_STATEDIFF_PROPOSAL(false),
+
+        /**
          * The working directory for Fuselog, used to bind the state directory
          * of the replicated stateful services.
          * TODO: this should be specific to XDN, and not Gigapaxos config.

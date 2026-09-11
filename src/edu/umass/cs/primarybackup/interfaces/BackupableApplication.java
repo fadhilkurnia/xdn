@@ -17,4 +17,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public interface BackupableApplication {
     byte[] captureStatediff(String serviceName);
     boolean applyStatediff(String serviceName, byte[] statediff);
+
+    /**
+     * Returns whether a successfully captured state diff provably contains no state change.
+     * Capture failures must return false so they are never mistaken for empty diffs.
+     */
+    default boolean isEmptyStatediff(String serviceName, byte[] statediff) {
+        return statediff != null && statediff.length == 0;
+    }
 }

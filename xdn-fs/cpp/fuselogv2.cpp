@@ -660,6 +660,22 @@ static int send_gathered_statediffs(int conn_fd) {
 	num_create + num_link + num_truncate + num_chown + num_chmod +
 	num_mkdir + num_rmdir + num_symlink;
 
+    // num_statediffs describes the final post-pruning action stream. Emit an
+    // explicit empty marker before encoding or compression changes its size.
+    if (num_statediffs == 0) {
+        while (serialized) {
+            statediff_action* next = serialized->next;
+            delete serialized;
+            serialized = next;
+        }
+        uint64_t payload_size = 0;
+        if (send_all(conn_fd, (const char*)&payload_size, sizeof(uint64_t)) != 0) {
+            logging(LOG_ERROR, "failed to send empty payload size\n");
+            return -1;
+        }
+        return 0;
+    }
+
     uint64_t data_size_head = 8 +                                // num_file
 	(num_file * 16) + sum_len_path;    // fid to filename
     uint64_t data_size_all =  data_size_head +
