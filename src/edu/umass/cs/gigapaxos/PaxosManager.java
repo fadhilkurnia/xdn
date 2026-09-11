@@ -1030,10 +1030,10 @@ public class PaxosManager<NodeIDType> {
             this.handlePaxosPacket(pp);
     }
 
-    /* Single-request fast path (default on). Set
-     * -DPAXOS_SINGLE_REQ_FASTPATH=false to always route through the batcher. */
+    /* Single-request fast path (default off; it can deadlock CommitWorker). Set
+     * -DPAXOS_SINGLE_REQ_FASTPATH=true to propose inline when the batcher is idle. */
     private static final boolean SINGLE_REQ_FASTPATH = Boolean
-            .parseBoolean(System.getProperty("PAXOS_SINGLE_REQ_FASTPATH", "true"));
+            .parseBoolean(System.getProperty("PAXOS_SINGLE_REQ_FASTPATH", "false"));
 
     /* If RequestPacket, hand over to batcher that will then call
      * handleIncomingPacketInternal on batched requests. */
