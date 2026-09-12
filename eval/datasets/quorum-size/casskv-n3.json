@@ -1,0 +1,41 @@
+{
+  "service": "casskv",
+  "n": 3,
+  "peers": [
+    "10.0.2.6",
+    "10.0.2.4"
+  ],
+  "delta_ms": 50,
+  "writes": 120,
+  "write_ar": "10.10.1.1:2300",
+  "rounds": [
+    {
+      "label": "baseline",
+      "m": 0,
+      "subset": [],
+      "median_ms": 4.71,
+      "shifted": null
+    },
+    {
+      "label": "boundary",
+      "m": 2,
+      "subset": [
+        "10.0.2.6",
+        "10.0.2.4"
+      ],
+      "median_ms": 55.06,
+      "shifted": true
+    },
+    {
+      "label": "bisect m=1",
+      "m": 1,
+      "subset": [
+        "10.0.2.6"
+      ],
+      "median_ms": 4.51,
+      "shifted": false
+    }
+  ],
+  "m_star": 2,
+  "q": 2
+}

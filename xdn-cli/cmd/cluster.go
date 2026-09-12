@@ -36,9 +36,15 @@ var ClusterLaunchCmd = &cobra.Command{
 		serviceName := args[0]
 
 		// File-based path: needed for multi-component clusters (e.g. bookcatalog + local
-		// rqlite sidecar) since flags can only express a single image.
+		// rqlite sidecar) since flags can only express a single image. An explicit
+		// --num-replicas overrides the spec's value so the same spec can launch at
+		// different cluster sizes.
 		if fileName, _ := cmd.Flags().GetString("file"); fileName != "" {
-			return runClusterLaunchFromFile(serviceName, fileName)
+			override := 0
+			if cmd.Flags().Changed("num-replicas") {
+				override, _ = cmd.Flags().GetInt("num-replicas")
+			}
+			return runClusterLaunchFromFile(serviceName, fileName, override)
 		}
 
 		image, _ := cmd.Flags().GetString("image")
@@ -127,8 +133,9 @@ func init() {
 
 // runClusterLaunchFromFile reads a YAML/JSON cluster spec from disk and hands it to the
 // control plane. The file is the only way to declare a multi-component cluster (one stateful
-// member + one or more sidecars sharing its network namespace).
-func runClusterLaunchFromFile(serviceName, fileName string) error {
+// member + one or more sidecars sharing its network namespace). A non-zero numReplicasOverride
+// replaces the spec's num_replicas.
+func runClusterLaunchFromFile(serviceName, fileName string, numReplicasOverride int) error {
 	body, err := os.ReadFile(fileName)
 	if err != nil {
 		return fmt.Errorf("unable to read spec file %s: %w", fileName, err)
@@ -151,6 +158,10 @@ func runClusterLaunchFromFile(serviceName, fileName string) error {
 		// Default the name from the command line if the YAML omits it, so the user can reuse
 		// the same spec under different names.
 		spec["name"] = serviceName
+		jsonBody, _ = json.Marshal(spec)
+	}
+	if numReplicasOverride > 0 {
+		spec["num_replicas"] = numReplicasOverride
 		jsonBody, _ = json.Marshal(spec)
 	}
 	// Sanity-check mode: we won't refuse a non-cluster spec here (the validator will), but a

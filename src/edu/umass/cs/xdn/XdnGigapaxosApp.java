@@ -79,6 +79,7 @@ public class XdnGigapaxosApp
   private final String myNodeId;
   private final Set<IntegerPacketType> packetTypes;
   private final XdnBandwidthProfiler bandwidthProfiler;
+  private final ConcurrentHashMap<String, Object> serviceInitLocks = new ConcurrentHashMap<>();
 
   // TODO: remove this metadata as the port is already stored inside the ServiceInstance.
   private final HashMap<String, Integer> activeServicePorts;
@@ -926,18 +927,19 @@ public class XdnGigapaxosApp
    * @return false if failed to initialize the service.
    */
   private boolean initContainerizedService2(String serviceName) {
-    // Init is documented idempotent, but two concurrent invocations (PrimaryBackupManager can
-    // spawn duplicate primary-init threads) interleave destructively: each run wipes and
-    // re-creates the bind-mount source (recorder preInitialization does rm -rf + mkdir), so one
-    // thread's `docker run` keeps landing inside the other's wipe window and both livelock on
-    // "bind source path does not exist". Serialize per service; the initializationSucceed
-    // early-return then turns the duplicate invocation into a no-op.
+    // Serialize per-service initialization. Two ways it can re-enter destructively: (1) the
+    // reconfigurator resends START_EPOCH when a slow first pass (image pull, MySQL first boot
+    // behind the readiness gate) outlives its ack timeout; (2) PrimaryBackupManager can spawn
+    // duplicate primary-init threads. Either way, concurrent runs each rm -rf + mkdir the
+    // bind-mount source (recorder preInitialization), so one thread's `docker run` keeps landing
+    // inside the other's wipe window -- livelocking on "bind source path does not exist" and
+    // destroying e.g. a forming Group Replication group or stranding the bandwidth probe in the
+    // old network namespace. Re-entries block here, then the initializationSucceed early-return
+    // turns the duplicate invocation into a no-op.
     synchronized (this.serviceInitLocks.computeIfAbsent(serviceName, k -> new Object())) {
       return initContainerizedService2Serialized(serviceName);
     }
   }
-
-  private final ConcurrentHashMap<String, Object> serviceInitLocks = new ConcurrentHashMap<>();
 
   private boolean initContainerizedService2Serialized(String serviceName) {
     int initialPlacementEpoch = this.servicePlacementEpoch.get(serviceName);
@@ -1262,6 +1264,14 @@ public class XdnGigapaxosApp
           sidecar.getEnvironmentVariables() != null
               ? new LinkedHashMap<>(sidecar.getEnvironmentVariables())
               : new LinkedHashMap<>();
+      // The XDN_CLUSTER_* contract goes to every container in the pod, not just the cluster
+      // member: entry frontends need the topology too (route writes to the chain head or the
+      // GR primary, name the local Erlang node, bootstrap from ordinal 0).
+      for (Map.Entry<String, String> e : clusterEnv.entrySet()) {
+        if (e.getKey().startsWith("XDN_CLUSTER_")) {
+          sidecarEnv.put(e.getKey(), e.getValue());
+        }
+      }
       boolean ok =
           startClusterSidecar(
               sidecar.getImageName(),
@@ -1302,13 +1312,17 @@ public class XdnGigapaxosApp
     // a request that never completes. Best-effort on timeout: a slow-booting image keeps
     // today's behavior instead of failing the epoch start.
     long readinessStartMs = System.currentTimeMillis();
-    boolean entryReady = waitForHttpReadiness(allocatedPort, 30_000);
-    if (!entryReady) {
-      // Docker Desktop's port forwarder occasionally never wires a freshly published port:
-      // the container is healthy inside, the host port accepts TCP, but no bytes ever flow.
-      // A container restart re-programs the forward. Linux never takes this branch — a bound
-      // port there answers within the first wait. Sidecars restart after the member so they
-      // re-join its fresh network namespace.
+    // The restart heal below exists for Docker Desktop only: its port forwarder occasionally
+    // never wires a freshly published port (container healthy inside, host port accepts TCP,
+    // no bytes ever flow) and a container restart re-programs the forward. On Linux a dead
+    // port just means the app is still booting, and restarting a self-clustering member
+    // mid-formation is destructive (a restarted MySQL GR joiner never re-joins its group;
+    // a memory-mode corfu member loses its bootstrapped layout), so Linux waits the same
+    // total budget in one stretch and never restarts.
+    boolean healEnabled = System.getProperty("os.name", "").toLowerCase().contains("mac");
+    boolean entryReady = waitForEntryPortReadiness(allocatedPort, healEnabled ? 30_000 : 60_000);
+    if (!entryReady && healEnabled) {
+      // Sidecars restart after the member so they re-join its fresh network namespace.
       logger.log(
           Level.WARNING,
           "{0}:{1} cluster service {2} entry port {3} dead after 30s; restarting container(s)"
@@ -1325,7 +1339,7 @@ public class XdnGigapaxosApp
           Shell.runCommand("docker restart " + service.containerNames.get(i), true);
         }
       }
-      entryReady = waitForHttpReadiness(allocatedPort, 30_000);
+      entryReady = waitForEntryPortReadiness(allocatedPort, 30_000);
     }
     if (entryReady) {
       logger.log(
@@ -2469,6 +2483,45 @@ public class XdnGigapaxosApp
     }
     logger.log(
         Level.SEVERE, "Service " + serviceName + " did not become ready after checkpoint restore");
+    return false;
+  }
+
+  /**
+   * Polls the entry port until the service behind it proves it is alive, or the timeout elapses.
+   *
+   * <p>A TCP accept alone does not count: Docker Desktop's port forwarder accepts connections on a
+   * published port even while nothing is bound inside the container. But requiring an HTTP response
+   * is too strict for cluster services speaking binary protocols (Redis RESP, MySQL, Cassandra
+   * CQL), which can never satisfy an HTTP probe and would burn the full gate plus a needless heal
+   * restart. So the probe sends a CRLF pair and accepts <em>any bytes back or an orderly close</em>
+   * as proof of life: an HTTP server answers 400, Redis answers -ERR, MySQL sends its greeting
+   * unprompted, Cassandra closes the bad frame -- while a dead forward hangs silently and an
+   * unbound Linux port refuses outright.
+   */
+  private boolean waitForEntryPortReadiness(int port, long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs;
+    byte[] probe = "\r\n\r\n".getBytes(StandardCharsets.US_ASCII);
+    while (System.currentTimeMillis() < deadline) {
+      try (java.net.Socket s = new java.net.Socket()) {
+        s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 500);
+        s.setSoTimeout(500);
+        s.getOutputStream().write(probe);
+        s.getOutputStream().flush();
+        // Any byte, or an orderly EOF (-1), means something live handled the connection.
+        s.getInputStream().read();
+        return true;
+      } catch (java.net.SocketTimeoutException e) {
+        // Accepted but silent: a half-open forward. Keep polling.
+      } catch (IOException e) {
+        // Connection refused or reset before proof of life. Keep polling.
+      }
+      try {
+        TimeUnit.MILLISECONDS.sleep(200);
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
+    }
     return false;
   }
 

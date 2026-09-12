@@ -1,0 +1,106 @@
+// inter_replica_bw_bpf014.bt
+//
+// bpftrace 0.14 port of inter_replica_bw.bt for hosts on Ubuntu 22.04's
+// apt bpftrace (0.14 cannot run the 0.21 original). Used for the
+// eBPF-vs-tcp_info agreement experiment against XdnBandwidthProfiler.
+// Differences from the 0.21 original:
+//   - bswap() is unavailable: dport is byte-swapped manually
+//   - BEGIN/END blocks are dropped (0.14 BEGIN_trigger symbol bug), so the
+//     "# trace start" header line is NOT emitted
+//   - tcp_cleanup_rbuf's 32-bit copied arg is zero-extended by 0.14:
+//     masked to uint32 and two's-complement negatives rejected manually
+//
+// Per-interval TCP byte counter for XDN bandwidth tracing. Captures both
+// inter-replica TCP flows (NIO listener ports) and client<->replica HTTP
+// flows (AR HTTP frontend ports). A flow is matched if either endpoint
+// sits in EITHER configured port range.
+//
+// Positional args:
+//   $1 = nio_low    (uint16)  AR NIO listener range low,  e.g. 2000
+//   $2 = nio_high   (uint16)  AR NIO listener range high, e.g. 2004
+//   $3 = http_low   (uint16)  AR HTTP frontend range low,  e.g. 2300
+//   $4 = http_high  (uint16)  AR HTTP frontend range high, e.g. 2304
+//   $5 = interval_s (uint32)  snapshot interval in seconds
+//
+// Stdout protocol (parsed by trace_bw.py; note: no "# trace start" header
+// in this 0.14 variant):
+//   SNAP
+//   @out[<pid>, <local_port>, <peer_ip>, <peer_port>]: <bytes>
+//   ...
+//   @in[<pid>, <local_port>, <peer_ip>, <peer_port>]: <bytes>
+//   ...
+//   END
+//
+// Events are keyed by the tuple (pid, local_port, peer_ip, peer_port). Both
+// kprobes fire in the JVM thread's user context (sendmsg via send()/write(),
+// cleanup_rbuf via the recv() path), so the kernel pid identifies the local
+// AR. trace_bw.py post-processes these tuples into a (local_id -> peer_id)
+// bandwidth matrix; ephemeral peer ports are resolved by cross-referencing
+// against rows where the same port appears as someone's local_port.
+//
+// `struct sock` is resolved from kernel BTF (/sys/kernel/btf/vmlinux);
+// no kernel-header #includes are needed.
+
+
+// Java NIO (gigapaxos) opens IPv6 sockets even for 127.0.0.1 — peers appear
+// as ::ffff:127.0.0.1. We accept both AF_INET (2) and AF_INET6 (10) and
+// format the peer address with the family-appropriate ntop() call.
+kprobe:tcp_sendmsg {
+    $sk = (struct sock *)arg0;
+    $fam = $sk->__sk_common.skc_family;
+    if ($fam != 2 && $fam != 10) { return; }
+
+    $size = (uint64)arg2;
+    $dr = (uint32)$sk->__sk_common.skc_dport; $dport = (uint16)((($dr & 0xff) << 8) + (($dr >> 8) & 0xff));
+    $sport = (uint16)$sk->__sk_common.skc_num;
+
+    // Match if either endpoint sits in the AR NIO range (inter-replica
+    // Paxos/NIO traffic) OR in the AR HTTP frontend range (client<->AR
+    // HTTP traffic). This catches both directions of either kind of flow
+    // regardless of which side opened the connection.
+    if (($dport >= (uint16)$1 && $dport <= (uint16)$2) ||
+        ($sport >= (uint16)$1 && $sport <= (uint16)$2) ||
+        ($dport >= (uint16)$3 && $dport <= (uint16)$4) ||
+        ($sport >= (uint16)$3 && $sport <= (uint16)$4)) {
+        if ($fam == 2) {
+            @out[pid, $sport, ntop($sk->__sk_common.skc_daddr), $dport] = sum($size);
+        } else {
+            @out[pid, $sport, ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8), $dport] = sum($size);
+        }
+    }
+}
+
+kprobe:tcp_cleanup_rbuf {
+    $sk = (struct sock *)arg0;
+    $fam = $sk->__sk_common.skc_family;
+    if ($fam != 2 && $fam != 10) { return; }
+
+    // bpftrace 0.14 zero-extends the 32-bit copied arg; mask and reject the
+    // two's-complement negatives ourselves.
+    $c32 = (uint32)(arg1 & 0xffffffff);
+    if ($c32 == 0 || $c32 >= 2147483648) { return; }
+    $copied = (uint64)$c32;
+
+    $dr = (uint32)$sk->__sk_common.skc_dport; $dport = (uint16)((($dr & 0xff) << 8) + (($dr >> 8) & 0xff));
+    $sport = (uint16)$sk->__sk_common.skc_num;
+    if (($dport >= (uint16)$1 && $dport <= (uint16)$2) ||
+        ($sport >= (uint16)$1 && $sport <= (uint16)$2) ||
+        ($dport >= (uint16)$3 && $dport <= (uint16)$4) ||
+        ($sport >= (uint16)$3 && $sport <= (uint16)$4)) {
+        if ($fam == 2) {
+            @in[pid, $sport, ntop($sk->__sk_common.skc_daddr), $dport] = sum((uint64)$copied);
+        } else {
+            @in[pid, $sport, ntop($sk->__sk_common.skc_v6_daddr.in6_u.u6_addr8), $dport] = sum((uint64)$copied);
+        }
+    }
+}
+
+interval:s:$5 {
+    printf("SNAP\n");
+    print(@out);
+    print(@in);
+    printf("END\n");
+    clear(@out);
+    clear(@in);
+}
+

@@ -1,0 +1,22 @@
+# Redis sub-replica chain behind the uniform HTTP KV shim, as an XDN
+# cluster-mode pod. The frontend (services/redis-http) is dumb: it talks
+# only to the co-located member. Sub-replicas reject writes (-READONLY, no
+# forwarding in redis), so writes succeed only at the head's (replica-0)
+# frontend; the head relays each write down the chain (the PATH signature).
+#
+# Build first:  docker build -t xdn-redis-chain:test services/redis-chain/
+#               docker build -t xdn-redis-http:test services/redis-http/
+# Launch:       xdn cluster launch rediskv -f services/redis-chain-http-cluster.yaml
+mode: cluster
+peer_port: 6379
+num_replicas: 3
+state: redis:/data/
+components:
+  - redis:
+      image: xdn-redis-chain:test
+      stateful: true
+      expose: 6379
+  - frontend:
+      image: xdn-redis-http:test
+      port: 8080
+      entry: true
