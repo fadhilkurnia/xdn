@@ -161,7 +161,10 @@ function build_rust() {
   fi
 
   echo "  Building fuselog_core (release) ..."
-  cd "$RUST_DIR" && cargo build --release
+  # --workspace: the root package is itself a workspace member, so a bare
+  # `cargo build` compiles only that package and silently skips fuselog_core
+  # and fuselog_apply (no fuserust binaries would ever be staged).
+  cd "$RUST_DIR" && cargo build --release --workspace
 
   echo "  Rust binaries built:"
   ls -lh "$RUST_DIR/target/release/fuselog_core" 2>/dev/null || true
