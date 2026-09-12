@@ -142,6 +142,20 @@ Use the `bin/xdnd` shell script (driver-machine orchestrator) for multi-host dep
 # optional: dist-init-observability for Prometheus/Grafana stack
 ```
 
+`dist-init` installs only what an XDN host needs at runtime (Docker with
+`userland-proxy: false`, Java 21 JRE, rsync, FUSE runtime libs, swarm) and
+uploads artifacts **prebuilt on the driver**; nothing is compiled on the hosts.
+It refuses to start (before touching any host) unless the driver holds
+`jars/gigapaxos-*.jar`, `bin/xdn-linux-<arch>` and the four
+`bin/fuselog*`/`fuserust*` binaries as Linux ELF files matching the hosts'
+architecture, and prints the build recipe (`build_xdn_jar.sh`,
+`build_xdn_cli.sh`, `build_xdn_fuselog.sh` on a same-arch Linux box). Optional
+profiles: `--with-fuse` installs the C++/Rust toolchain and compiles fuselog on
+each host instead (lifts the prebuilt-fuselog requirement); `--with-baselines`
+adds the eval-only deps (Go, rqlite, tcconfig, Node/npm/wrangler for the
+Durable Objects baseline). The upload is an incremental `rsync --delete` that
+skips `papers/`, `lib/`, eval outputs and build caches (~400 MB per host).
+
 ## Architecture
 
 ### Languages
@@ -397,7 +411,7 @@ Key config properties: `APPLICATION`, `REPLICA_COORDINATOR_CLASS`, `XDN_PB_STATE
 ### Cluster Orchestration (`bin/xdnd`)
 For multi-machine/CloudLab deployments, `bin/xdnd` drives remote setup and lifecycle over SSH: `xdnd init-driver` on the driver machine, then `xdnd dist-init -config=... -ssh-key=... -username=...` to initialize remotes, and `xdnd start-all ...` to start xdn instances fleet-wide. `xdnd dist-init-observability` is the optional observability bootstrap.
 
-`xdnd dist-init` also bootstraps a Docker swarm across the hosts (all as managers) — required by cluster-mode services for the cross-host attachable overlay networks. `init_docker_swarm()` is idempotent.
+`xdnd dist-init` is split into a runtime-only core (Docker, Java 21 JRE, rsync, FUSE runtime, swarm bootstrap across the hosts — all as managers, required by cluster-mode services for the cross-host attachable overlay networks; `init_docker_swarm()` is idempotent) plus opt-in profiles `--with-fuse` (on-host fuselog build) and `--with-baselines` (Go, rqlite, tcconfig, Node/wrangler). The core path uploads the jar, `xdn-linux-<arch>` and fuselog/fuserust binaries built on the driver and hard-fails with a build recipe if any is missing or is not a Linux ELF for the hosts' architecture (`preflight_artifacts()` runs before the local ssh config is touched). Re-runs are cheap (incremental rsync; ~16 s on an already-initialized 7-host pod) and only restart Docker when `daemon.json` actually changed.
 
 For the cluster-launch demo specifically, `bin/xdn-cluster-up.sh` is a thinner helper that just starts ReconfigurableNode procs on the 4 configured hosts and optionally launches a demo service; it skips the dependency-install + image-build steps and assumes the hosts are already prepped.
 

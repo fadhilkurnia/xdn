@@ -218,10 +218,15 @@ Assuming we have 5 machines with the following role and IP address:
 We are using the `xdnd` shell script for most of the command here.
 
 1. Initialize the driver machine: `./bin/xdnd init-driver`.
-2. Initialize all the remote machines: 
+2. Initialize all the remote machines (Docker, Java 21 runtime, rsync, swarm; uploads
+   the jar, `xdn` CLI and fuselog binaries prebuilt on the driver, so build them first
+   with `./bin/build_xdn_jar.sh`, `./bin/build_xdn_cli.sh` and `./bin/build_xdn_fuselog.sh`):
    ```
    ./bin/xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user
    ```
+   Add `--with-fuse` to compile fuselog on each host instead of uploading prebuilt
+   binaries, and `--with-baselines` to also install the eval baseline dependencies
+   (Go, rqlite, tcconfig, Node/wrangler).
 3. Optionally, initialize observability in all machines:
    ```
    ./bin/xdnd dist-init-observability -config=gigapaxos.properties -ssh-key=/ssh/key -username=user

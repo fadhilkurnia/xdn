@@ -148,6 +148,24 @@ function do_distributed_initialization() {
     exit 1
   fi
 
+  # Optional profiles. Plain dist-init only installs what an XDN host needs at
+  # runtime (Docker, Java 21 runtime, rsync, FUSE runtime, swarm) and uploads
+  # artifacts prebuilt on the driver; nothing is compiled on the hosts.
+  local WITH_FUSE=0
+  local WITH_BASELINES=0
+  for ARG in "$@"; do
+    case $ARG in
+    --with-fuse) WITH_FUSE=1 ;;
+    --with-baselines) WITH_BASELINES=1 ;;
+    dist-init | -config=* | -ssh-key=* | -username=*) ;;
+    *)
+      echo "Unknown dist-init argument '$ARG'." >&2
+      echo "Valid flags: --with-fuse, --with-baselines" >&2
+      exit 1
+      ;;
+    esac
+  done
+
   # extract unique IPs from the config file
   local unique_ips=()
   mapfile -t unique_ips < <(get_unique_ips_from_config "$CONFIG")
@@ -165,6 +183,29 @@ function do_distributed_initialization() {
     echo "   - $ip"
   done
   echo " - parallel workers  : ${#unique_ips[@]}"
+  echo " - profiles          : core$([ $WITH_FUSE -eq 1 ] && echo ' +fuse')$([ $WITH_BASELINES -eq 1 ] && echo ' +baselines')"
+  echo ""
+
+  # Discover each host's CPU architecture so the driver can verify it holds
+  # matching prebuilt artifacts BEFORE touching any host (or the local ssh config).
+  declare -A host_arch
+  local arches=()
+  for machine in "${unique_ips[@]}"; do
+    local arch
+    arch=$(remote_arch "$machine" "$SSH_KEY" "$USERNAME") || {
+      echo "[dist-init] cannot reach $machine over ssh (user '$USERNAME', key '$SSH_KEY')." >&2
+      exit 1
+    }
+    host_arch[$machine]=$arch
+    if [[ ! " ${arches[*]-} " =~ " ${arch} " ]]; then
+      arches+=("$arch")
+    fi
+  done
+  echo " - host architectures: ${arches[*]}"
+
+  if ! preflight_artifacts "$WITH_FUSE" "${arches[@]}"; then
+    exit 1
+  fi
   echo ""
 
   # prepare local ssh config/key once, then run per-machine work in parallel.
@@ -182,8 +223,14 @@ function do_distributed_initialization() {
     local sanitized_machine="${machine//[^a-zA-Z0-9_.-]/_}"
     local log_file="$LOG_DIR/${sanitized_machine}.log"
     (
+      # Propagate each stage's failure: a stage that errors marks this host FAILED
+      # instead of silently printing ok (a broken apt mirror used to slip through and
+      # leave hosts without java while dist-init reported success).
       progress_line "$machine" "[ssh] start"
-      prepare_remote_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME"
+      prepare_remote_ssh_config "$machine" "$CONFIG" "$SSH_KEY" "$USERNAME" || {
+        progress_line "$machine" "[ssh] FAILED"
+        exit 1
+      }
       progress_line "$machine" "[ssh] ok"
 
       progress_line "$machine" "[root-ssh] start"
@@ -191,11 +238,35 @@ function do_distributed_initialization() {
       progress_line "$machine" "[root-ssh] ok"
 
       progress_line "$machine" "[install] start"
-      install_dependencies "$machine" "$SSH_KEY" "$USERNAME"
+      install_core_dependencies "$machine" "$SSH_KEY" "$USERNAME" || {
+        progress_line "$machine" "[install] FAILED"
+        exit 1
+      }
       progress_line "$machine" "[install] ok"
 
+      if [ $WITH_FUSE -eq 1 ]; then
+        progress_line "$machine" "[install-fuse] start"
+        install_fuse_toolchain "$machine" "$SSH_KEY" "$USERNAME" || {
+          progress_line "$machine" "[install-fuse] FAILED"
+          exit 1
+        }
+        progress_line "$machine" "[install-fuse] ok"
+      fi
+
+      if [ $WITH_BASELINES -eq 1 ]; then
+        progress_line "$machine" "[install-baselines] start"
+        install_baseline_dependencies "$machine" "$SSH_KEY" "$USERNAME" "${host_arch[$machine]}" || {
+          progress_line "$machine" "[install-baselines] FAILED"
+          exit 1
+        }
+        progress_line "$machine" "[install-baselines] ok"
+      fi
+
       progress_line "$machine" "[upload] start"
-      upload_binaries "$machine" "$SSH_KEY" "$USERNAME"
+      upload_binaries "$machine" "$SSH_KEY" "$USERNAME" "${host_arch[$machine]}" "$WITH_FUSE" || {
+        progress_line "$machine" "[upload] FAILED"
+        exit 1
+      }
       progress_line "$machine" "[upload] ok"
     ) >"$log_file" 2>&1 &
     pid_to_host[$!]="$machine"
@@ -228,14 +299,6 @@ function do_distributed_initialization() {
   echo "[dist-init] completed successfully. Logs in: $LOG_DIR"
 
   exit 0
-
-  # generate config in all the machines, based on the
-  # listed machines in the $MACHINES variable.
-  #  for machine in "${MACHINES[@]}"; do
-  #    generate_config $machine
-  #  done
-
-  # TODO: start the service
 }
 
 function do_start_all() {
@@ -746,7 +809,11 @@ function prepare_local_ssh_config() {
   local local_config_file="$local_ssh_dir/config"
   mkdir -p "$local_ssh_dir" || err=1
   chmod 700 "$local_ssh_dir" || err=1
-  cp $ssh_key "$local_ssh_key" || err=1
+  # the driver may already use ~/.ssh/xdn_ssh_key itself (re-running dist-init
+  # from an initialized pod driver); cp onto the same inode would fail.
+  if [ ! "$ssh_key" -ef "$local_ssh_key" ]; then
+    cp "$ssh_key" "$local_ssh_key" || err=1
+  fi
   chmod 600 "$local_ssh_key" || err=1
   local local_tmp_config
   local_tmp_config=$(mktemp)
@@ -765,109 +832,138 @@ EOF
   return $err
 }
 
-# install_dependencies installs all the required dependencies for xdn (e.g., docker)
-# arg-1: machine ip address
-# arg-2: ssh-key location
-# arg-3: username for ssh
-function install_dependencies() {
-  local node=$1;
-  local ssh_key=$2;
-  local username=$3;
+# remote_arch prints the Go-style architecture (amd64|arm64) of a remote host.
+# arg-1: machine ip address, arg-2: ssh-key location, arg-3: username for ssh
+function remote_arch() {
+  local node=$1
+  local ssh_key=$2
+  local username=$3
+  local m
+  m=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 -i "$ssh_key" "$username@$node" "uname -m" 2>/dev/null) || return 1
+  case "$m" in
+  x86_64) echo amd64 ;;
+  aarch64 | arm64) echo arm64 ;;
+  *) echo "$m" ;;
+  esac
+}
+
+# elf_arch prints the architecture an ELF binary was built for (amd64|arm64),
+# 'not-elf' for anything else (e.g. a Mach-O binary built on macOS), or 'missing'.
+# Reads the ELF header with od so it works on both Linux and macOS drivers.
+function elf_arch() {
+  local f=$1
+  [ -f "$f" ] || { echo missing; return; }
+  local magic
+  magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
+  [ "$magic" = "7f454c46" ] || { echo not-elf; return; }
+  local machine
+  machine=$(od -An -tx1 -j18 -N2 "$f" | tr -d ' \n')
+  case "$machine" in
+  3e00) echo amd64 ;;
+  b700) echo arm64 ;;
+  *) echo "unknown($machine)" ;;
+  esac
+}
+
+# preflight_artifacts verifies, on the driver, that every artifact plain dist-init
+# uploads exists and was built for the hosts' architecture: the gigapaxos jar,
+# the xdn CLI binary, and the fuselog/fuserust state-diff binaries. These are hard
+# requirements (hosts never compile anything), so any problem prints the build
+# recipe and fails the whole dist-init before a single host is touched.
+# arg-1: 1 if --with-fuse was given (fuselog is then built on the hosts, so the
+#        prebuilt fuselog binaries are not required on the driver)
+# arg-2..: distinct host architectures (amd64|arm64)
+function preflight_artifacts() {
+  local with_fuse=$1
+  shift
+  local arches=("$@")
+  local problems=()
+  local jar_dir="$XDN_SRC_PATH/jars"
+  local bin_dir="$XDN_SRC_PATH/bin"
+
+  # (1) gigapaxos jar (architecture independent)
+  local jar
+  jar=$(ls "$jar_dir"/gigapaxos-[0-9]*.jar 2>/dev/null | head -1)
+  if [ -z "$jar" ]; then
+    problems+=("jar      : no jars/gigapaxos-<version>.jar found")
+  elif [ "$(od -An -tx1 -N4 "$jar" | tr -d ' \n')" != "504b0304" ]; then
+    problems+=("jar      : $jar is not a valid jar (zip) file")
+  fi
+
+  # (2) xdn CLI, one binary per host architecture
+  for arch in "${arches[@]}"; do
+    local cli="$bin_dir/xdn-linux-$arch"
+    local got
+    got=$(elf_arch "$cli")
+    if [ "$got" != "$arch" ]; then
+      problems+=("xdn cli  : $cli is $got, need linux/$arch")
+    fi
+  done
+
+  # (3) fuselog + fuserust binaries, Linux ELF for every host architecture
+  if [ "$with_fuse" -ne 1 ]; then
+    if [ ${#arches[@]} -gt 1 ]; then
+      problems+=("fuselog  : hosts mix architectures (${arches[*]}) but bin/ holds one build; run dist-init per architecture or use --with-fuse")
+    fi
+    for b in fuselog fuselog-apply fuserust fuserust-apply; do
+      local got
+      got=$(elf_arch "$bin_dir/$b")
+      if [ "$got" != "${arches[0]}" ]; then
+        problems+=("fuselog  : bin/$b is $got, need linux/${arches[0]}")
+      fi
+    done
+  fi
+
+  if [ ${#problems[@]} -eq 0 ]; then
+    if [ "$with_fuse" -eq 1 ]; then
+      echo " - artifacts         : jar, xdn cli verified for ${arches[*]} (fuselog/fuserust built on hosts)"
+    else
+      echo " - artifacts         : jar, xdn cli, fuselog/fuserust verified for ${arches[*]}"
+    fi
+    return 0
+  fi
+
+  echo "" >&2
+  echo "[dist-init] FAILED: required prebuilt artifacts are missing or built for the wrong architecture:" >&2
+  for p in "${problems[@]}"; do
+    echo "   - $p" >&2
+  done
+  cat >&2 <<EOF
+
+  Plain dist-init never compiles on the hosts; it uploads what the driver has built.
+  Build the artifacts on the driver, then re-run dist-init:
+
+    ./bin/build_xdn_jar.sh          # -> jars/gigapaxos-<version>.jar   (needs Java 21 + Ant)
+    ./bin/build_xdn_cli.sh          # -> bin/xdn-linux-{amd64,arm64}    (needs Go 1.20+, cross-compiles)
+    ./bin/build_xdn_fuselog.sh      # -> bin/fuselog, fuselog-apply, fuserust, fuserust-apply
+                                    #    Linux only, on a machine with the SAME architecture as the hosts
+                                    #    (apt install build-essential pkg-config libfuse3-dev libzstd-dev
+                                    #     + rustup); on a macOS driver build them on one of the hosts
+                                    #    and copy the four binaries into bin/.
+
+  Alternatively pass --with-fuse to install the FUSE build toolchain on every host and
+  compile fuselog/fuserust there from the uploaded source (slower, but needs no prebuilt
+  fuselog binaries on the driver).
+EOF
+  return 1
+}
+
+# run_remote_steps runs the commands in the global CMD array (described by CMD_DESC)
+# one by one on a remote host, printing each description; returns non-zero if any fails.
+# arg-1: machine ip address, arg-2: ssh-key location, arg-3: username for ssh
+function run_remote_steps() {
+  local node=$1
+  local ssh_key=$2
+  local username=$3
   local err=0
-  local golang_tar_name="go1.22.4.linux-amd64.tar.gz";
-  local golang_download_url="https://go.dev/dl/go1.22.4.linux-amd64.tar.gz";
-
-  echo "Installing dependencies on machine $node with user '$username' ..."
-
-  CMD=()
-  CMD_DESC=()
-
-  CMD_DESC+=("update apt packages")
-  CMD+=("sudo apt-get update")
-  CMD_DESC+=("install dialog frontend")
-  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install dialog apt-utils -y")
-
-  # xdn-fs build dependencies
-  CMD_DESC+=("install xdn-fs build dependencies")
-  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential pkg-config libfuse3-dev libzstd-dev")
-
-  # install golang
-  CMD_DESC+=("download golang")
-  CMD+=("wget --quiet --no-clobber $golang_download_url && sudo rm -rf /usr/local/go")
-  CMD_DESC+=("extract golang")
-  CMD+=("sudo tar -C /usr/local -xzf $golang_tar_name")
-  CMD_DESC+=("add golang to PATH var")
-  CMD+=('grep -q "/usr/local/go/bin" /etc/environment || sudo sed -i '\''s|^PATH="\(.*\)"|PATH="\1:/usr/local/go/bin"|'\'' /etc/environment')
-
-  # install docker
-  CMD_DESC+=("install docker - (0) preparation")
-  CMD+=("echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections")
-  CMD_DESC+=("install docker - (1) install certificate and curl")
-  CMD+=("sudo apt-get install -y -q ca-certificates curl")
-  CMD_DESC+=("install docker - (2) install keyrings")
-  CMD+=("sudo install -m 0755 -d /etc/apt/keyrings")
-  CMD_DESC+=("install docker - (3) get gpg keys")
-  CMD+=("sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc")
-  CMD_DESC+=("install docker - (4) change permission for key")
-  CMD+=("sudo chmod a+r /etc/apt/keyrings/docker.asc")
-  CMD_DESC+=("install docker - (5) update apt sources")
-  CMD+=('echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null')
-  CMD_DESC+=("install docker - (6) get docker from the newly registered repo")
-  CMD+=("sudo apt-get update -y -q && sudo apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin")
-
-  # make docker accessible without sudo by the used user
-  CMD_DESC+=("install docker - (7) create docker group")
-  CMD+=("sudo groupadd -f docker")
-  CMD_DESC+=("install docker - (8) add user to docker group")
-  CMD+=('sudo usermod -aG docker $USER')
-
-  # disable userland-proxy (measured ~1ms+ median improvement, larger at tail,
-  # for loopback-published-port traffic)
-  CMD_DESC+=("install docker - (9) disable userland-proxy")
-  CMD+=('echo '\''{"userland-proxy": false}'\'' | sudo tee /etc/docker/daemon.json > /dev/null')
-  CMD_DESC+=("install docker - (10) restart docker to apply daemon.json")
-  CMD+=("sudo systemctl restart docker")
-
-  # install java21
-  CMD_DESC+=("install java21")
-  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk ant")
-
-  # install rust for xdn-fs rust binaries
-  CMD_DESC+=("install rust toolchain")
-  CMD+=("curl https://sh.rustup.rs -sSf | sh -s -- -y")
-
-  # install python3-pip and tcconfig for WAN latency emulation
-  CMD_DESC+=("install pip")
-  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip")
-  CMD_DESC+=("install tcconfig for WAN latency emulation")
-  CMD+=("sudo pip install -q tcconfig")
-
-  # install rqlite for the geodistributed baseline
-  local rqlite_folder_name="rqlite-v8.36.12-linux-amd64"
-  local rqlite_tar_name="rqlite-v8.36.12-linux-amd64.tar.gz"
-  local rqlite_download_url="https://github.com/rqlite/rqlite/releases/download/v8.36.12/rqlite-v8.36.12-linux-amd64.tar.gz"
-  CMD_DESC+=("download rqlite")
-  CMD+=("wget --quiet --no-clobber $rqlite_download_url && rm -rf $rqlite_folder_name")
-  CMD_DESC+=("extract rqlite")
-  CMD+=("tar xvfz $rqlite_tar_name && rm -rf rqlite && mv $rqlite_folder_name rqlite")
-  CMD_DESC+=("add rqlite to PATH var")
-  CMD+=('grep -q "/rqlite" /etc/environment || sudo sed -i '\''s|^PATH="\(.*\)"|PATH="\1:'"$PWD"'/rqlite"|'\'' /etc/environment')
-
-  # install node for the durable object baseline
-  CMD_DESC+=("install npm")
-  CMD+=("sudo apt-get install -y npm")
-  CMD_DESC+=("update node version to latest stable")
-  CMD+=("sudo npm install -g n && sudo n stable && hash -r && sudo npm install --save-dev wrangler@4")
-
   for i in "${!CMD_DESC[@]}"; do
-    desc=${CMD_DESC[$i]}
-    cmd=${CMD[$i]}
+    local desc=${CMD_DESC[$i]}
+    local cmd=${CMD[$i]}
     echo "     $desc ..."
-    ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "nohup $cmd" 2>&1 >/dev/null
-    return_code=$?
-    ret=$?
+    ssh -o StrictHostKeyChecking=no -i "$ssh_key" "$username@$node" "$cmd" </dev/null 2>&1
+    local return_code=$?
     if [ $return_code -ne 0 ]; then
-      echo " [ERROR] failed to run command '$cmd'."
+      echo " [ERROR] failed to run command '$cmd' (exit $return_code)."
       err=1
     fi
   done
@@ -875,50 +971,170 @@ function install_dependencies() {
   return $err
 }
 
-# copy_binaries transfer all the required binaries to the remote machines
-# specified in the config file (i.e., gigapaxos.properties)
-# arg-1: machine ip address
-# arg-2: ssh-key location
-# arg-3: username for ssh
-function upload_binaries() {
+# install_core_dependencies installs what an XDN host needs at RUNTIME and nothing
+# more: Docker, the Java 21 runtime, rsync (rsync statediff recorder + uploads), and
+# the FUSE runtime libraries that the prebuilt fuselog/fuserust binaries link against.
+# No compilers, no Go/Rust/Ant: every binary is built on the driver and uploaded.
+# arg-1: machine ip address, arg-2: ssh-key location, arg-3: username for ssh
+function install_core_dependencies() {
   local node=$1
-  local ssh_key=$2;
-  local username=$3;
-  local xdn_src_dir=$XDN_SRC_PATH;
-  local err=0
+  local ssh_key=$2
+  local username=$3
 
-  # copy from current source into the target machine
-  echo "Uploading XDN binaries from $xdn_src_dir/ ..."
-  ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "rm -rf xdn" || err=1
-  rsync -Pav -e "ssh -i $ssh_key -q" --exclude=".*/" -q -a $xdn_src_dir/ $username@$node:~/xdn || err=1
-
-  # TODO: check that fuselog and fuselog-apply are working
+  echo "Installing core dependencies on machine $node with user '$username' ..."
 
   CMD=()
-  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_cli.sh')
-  CMD+=('export PATH="$HOME/.cargo/bin:/usr/local/go/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_fuselog.sh')
-  CMD+=("sudo rm -rf /usr/local/bin/xdn")
-  CMD+=("sudo rm -rf /usr/local/bin/fuselog")
-  CMD+=("sudo rm -rf /usr/local/bin/fuselog-apply")
-  CMD+=("sudo rm -rf /usr/local/bin/fuserust")
-  CMD+=("sudo rm -rf /usr/local/bin/fuserust-apply")
-  CMD+=('sudo ln -s $HOME/xdn/bin/xdn /usr/local/bin/xdn')
-  CMD+=('sudo ln -s $HOME/xdn/bin/fuselog /usr/local/bin/fuselog')
-  CMD+=('sudo ln -s $HOME/xdn/bin/fuselog-apply /usr/local/bin/fuselog-apply')
-  CMD+=('sudo ln -s $HOME/xdn/bin/fuserust /usr/local/bin/fuserust')
-  CMD+=('sudo ln -s $HOME/xdn/bin/fuserust-apply /usr/local/bin/fuserust-apply')
+  CMD_DESC=()
+
+  CMD_DESC+=("update apt packages")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get update -q")
+  CMD_DESC+=("install runtime packages (java 21 runtime, rsync, fuse3, curl)")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q ca-certificates curl gnupg rsync fuse3 libfuse3-3 libzstd1 openjdk-21-jre-headless")
+
+  # install docker from docker's own repo (the Ubuntu one lags several majors)
+  CMD_DESC+=("install docker - (0) preparation")
+  CMD+=("echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections")
+  CMD_DESC+=("install docker - (1) install keyrings")
+  CMD+=("sudo install -m 0755 -d /etc/apt/keyrings")
+  CMD_DESC+=("install docker - (2) get gpg keys")
+  CMD+=("sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && sudo chmod a+r /etc/apt/keyrings/docker.asc")
+  CMD_DESC+=("install docker - (3) update apt sources")
+  CMD+=('echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null')
+  CMD_DESC+=("install docker - (4) get docker from the newly registered repo")
+  CMD+=("sudo apt-get update -y -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin")
+  CMD_DESC+=("install docker - (5) make docker usable without sudo")
+  CMD+=('sudo groupadd -f docker && sudo usermod -aG docker $USER')
+  # disable userland-proxy (measured ~1ms+ median improvement, larger at tail,
+  # for loopback-published-port traffic). The key is merged into any existing
+  # daemon.json instead of overwriting it, and docker is restarted only when the
+  # setting actually changed, so re-running dist-init on a live pod does not
+  # kill the running containers (python exits 10 = changed, 0 = already set).
+  CMD_DESC+=("install docker - (6) disable userland-proxy (restart docker only if changed)")
+  CMD+=('bash -c "sudo python3 -c \"import json,os,sys; p=sys.argv[1]; k=sys.argv[2]; d=json.load(open(p)) if os.path.isfile(p) and os.path.getsize(p) else {}; c=d.get(k) is not False; d[k]=False; c and os.write(os.open(p,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o644),json.dumps(d,indent=2).encode()); sys.exit(10 if c else 0)\" /etc/docker/daemon.json userland-proxy; rc=\$?; if [ \$rc -eq 10 ]; then sudo systemctl restart docker; else exit \$rc; fi"')
+
+  # fuselog mounts with allow_other so the containerized service (a different uid) can
+  # see the FUSE mount; the option is gated by /etc/fuse.conf.
+  CMD_DESC+=("enable user_allow_other in /etc/fuse.conf")
   CMD+=("sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf")
-  for i in "${!CMD[@]}"; do
-    cmd=${CMD[$i]}
-    ssh -o StrictHostKeyChecking=no -i $ssh_key $username@$node "$cmd" 2>&1 > /dev/null
-    return_code=$?
-    ret=$?
-    if [ $return_code -ne 0 ]; then
-      echo " [ERROR] failed to run command '$cmd'."
-      err=1
-    fi
-  done
-  echo ""
+
+  # XDN hosts cannot run without these; assert their presence so a partially
+  # failed install (e.g. an unreachable Ubuntu mirror: docker comes from
+  # download.docker.com and still installs while openjdk does not) is caught
+  # here rather than at first java invocation.
+  CMD_DESC+=("verify critical tools (java, docker, rsync, fusermount3)")
+  CMD+=("bash -c 'command -v java && command -v docker && command -v rsync && command -v fusermount3 && java -version 2>&1 | head -1'")
+
+  run_remote_steps "$node" "$ssh_key" "$username"
+}
+
+# install_fuse_toolchain (--with-fuse) installs the compilers needed to build
+# fuselog (C++) and fuserust (Rust) on the host itself; upload_binaries then runs
+# build_xdn_fuselog.sh there instead of expecting prebuilt binaries from the driver.
+# arg-1: machine ip address, arg-2: ssh-key location, arg-3: username for ssh
+function install_fuse_toolchain() {
+  local node=$1
+  local ssh_key=$2
+  local username=$3
+
+  echo "Installing FUSE build toolchain on machine $node ..."
+
+  CMD=()
+  CMD_DESC=()
+  CMD_DESC+=("install xdn-fs build dependencies (build-essential, libfuse3-dev, libzstd-dev)")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q build-essential pkg-config libfuse3-dev libzstd-dev")
+  CMD_DESC+=("install rust toolchain")
+  CMD+=('test -x $HOME/.cargo/bin/cargo || curl https://sh.rustup.rs -sSf | sh -s -- -y -q')
+
+  run_remote_steps "$node" "$ssh_key" "$username"
+}
+
+# install_baseline_dependencies (--with-baselines) installs what the eval baselines
+# and WAN-emulation scripts need on the hosts: Go (eval helpers), rqlite (geo
+# baseline), tcconfig (latency injection), and Node/npm/wrangler (Cloudflare
+# Durable Objects baseline). None of it is needed to run XDN itself.
+# arg-1: machine ip address, arg-2: ssh-key location, arg-3: username for ssh,
+# arg-4: host architecture (amd64|arm64)
+function install_baseline_dependencies() {
+  local node=$1
+  local ssh_key=$2
+  local username=$3
+  local arch=$4
+  local golang_tar_name="go1.22.4.linux-$arch.tar.gz"
+  local golang_download_url="https://go.dev/dl/$golang_tar_name"
+  local rqlite_folder_name="rqlite-v8.36.12-linux-$arch"
+  local rqlite_tar_name="$rqlite_folder_name.tar.gz"
+  local rqlite_download_url="https://github.com/rqlite/rqlite/releases/download/v8.36.12/$rqlite_tar_name"
+
+  echo "Installing baseline dependencies on machine $node ..."
+
+  CMD=()
+  CMD_DESC=()
+
+  CMD_DESC+=("install golang")
+  CMD+=("wget --quiet --no-clobber $golang_download_url && sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf $golang_tar_name")
+  CMD_DESC+=("add golang to PATH var")
+  CMD+=('grep -q "/usr/local/go/bin" /etc/environment || sudo sed -i '\''s|^PATH="\(.*\)"|PATH="\1:/usr/local/go/bin"|'\'' /etc/environment')
+
+  CMD_DESC+=("install pip and tcconfig for WAN latency emulation")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-pip && sudo pip install -q tcconfig")
+
+  CMD_DESC+=("install rqlite for the geodistributed baseline")
+  CMD+=("wget --quiet --no-clobber $rqlite_download_url && rm -rf $rqlite_folder_name && tar xfz $rqlite_tar_name && rm -rf rqlite && mv $rqlite_folder_name rqlite")
+  CMD_DESC+=("add rqlite to PATH var")
+  # $HOME must expand on the host (the old form baked in the driver's $PWD)
+  CMD+=('grep -q "/rqlite" /etc/environment || sudo sed -i "s|^PATH=\"\(.*\)\"|PATH=\"\1:$HOME/rqlite\"|" /etc/environment')
+
+  CMD_DESC+=("install node/npm and wrangler for the durable objects baseline")
+  CMD+=("sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q npm && sudo npm install -g n && sudo n stable && hash -r && sudo npm install --save-dev wrangler@4")
+
+  run_remote_steps "$node" "$ssh_key" "$username"
+}
+
+# upload_binaries syncs the XDN tree (source, prebuilt jar, CLI and fuselog
+# binaries) to ~/xdn on the remote machine and installs the /usr/local/bin
+# symlinks. Incremental (rsync --delete) so re-running dist-init is cheap; bulky
+# eval outputs, papers, and build caches are never uploaded.
+# arg-1: machine ip address, arg-2: ssh-key location, arg-3: username for ssh,
+# arg-4: host architecture (amd64|arm64), arg-5: 1 to build fuselog on the host
+function upload_binaries() {
+  local node=$1
+  local ssh_key=$2
+  local username=$3
+  local arch=$4
+  local build_fuse=${5:-0}
+  local xdn_src_dir=$XDN_SRC_PATH
+  local err=0
+
+  echo "Uploading XDN tree from $xdn_src_dir/ ..."
+  rsync -a --delete -q -e "ssh -i $ssh_key -q -o StrictHostKeyChecking=no" \
+    --exclude=".*/" --exclude="/papers/" --exclude="/lib/" --exclude="/build/" \
+    --exclude="/out/" --exclude="/output/" --exclude="/dist/" --exclude="target/" \
+    --exclude="node_modules/" --exclude="/eval/screen_logs/" --exclude="/eval/results/" \
+    --exclude="/eval/plots/" --exclude="/eval/location_distributions/" \
+    --exclude="/eval/xdn_init_logs/" --exclude="/logs/" \
+    "$xdn_src_dir/" "$username@$node:~/xdn" || {
+    echo " [ERROR] rsync of the XDN tree failed."
+    return 1
+  }
+
+  CMD=()
+  CMD_DESC=()
+  CMD_DESC+=("link xdn cli for linux/$arch")
+  CMD+=("ln -sfn \$HOME/xdn/bin/xdn-linux-$arch \$HOME/xdn/bin/xdn && sudo ln -sfn \$HOME/xdn/bin/xdn-linux-$arch /usr/local/bin/xdn && xdn --help >/dev/null")
+  if [ "$build_fuse" -eq 1 ]; then
+    CMD_DESC+=("build fuselog/fuserust on the host (--with-fuse)")
+    CMD+=('export PATH="$HOME/.cargo/bin:$PATH" && cd $HOME/xdn && ./bin/build_xdn_fuselog.sh')
+  fi
+  CMD_DESC+=("link fuselog/fuserust binaries and verify they execute")
+  CMD+=('bash -c '"'"'for b in fuselog fuselog-apply fuserust fuserust-apply; do chmod +x $HOME/xdn/bin/$b && sudo ln -sfn $HOME/xdn/bin/$b /usr/local/bin/$b; $b --help >/dev/null 2>&1; rc=$?; if [ $rc -eq 126 ] || [ $rc -eq 127 ]; then echo "$b cannot execute on this host (exit $rc)"; exit 1; fi; done'"'"'')
+  # fusenode (FUSENODE recorder, /usr/local/bin/fusenode) is optional: linked when
+  # the driver built it (or --with-fuse built it on the host), never required.
+  CMD_DESC+=("link fusenode if present")
+  CMD+=('if [ -f "$HOME/xdn/bin/fusenode" ]; then chmod +x "$HOME/xdn/bin/fusenode" && sudo ln -sfn "$HOME/xdn/bin/fusenode" /usr/local/bin/fusenode; fi')
+  CMD_DESC+=("verify the uploaded jar and the host java (21+)")
+  CMD+=('bash -c '"'"'cd $HOME/xdn && python3 -c "import zipfile,sys,glob; zipfile.ZipFile(glob.glob(\"jars/gigapaxos-[0-9]*.jar\")[0]).getinfo(\"edu/umass/cs/reconfiguration/ReconfigurableNode.class\")" && v=$(java -version 2>&1 | head -1 | sed -E "s/.*\"([0-9]+).*/\1/") && [ "$v" -ge 21 ]'"'"'')
+
+  run_remote_steps "$node" "$ssh_key" "$username" || err=1
   return $err
 }
 
@@ -934,8 +1150,11 @@ function print_usage() {
   echo "Usage: xdnd [actions]"
   echo ""
   echo " Available commands are listed below."
-  echo " To initialize all the machines, installing required dependencies:"
+  echo " To initialize all the machines (Docker, Java 21 runtime, rsync, swarm) and upload the"
+  echo " jar, xdn cli and fuselog binaries prebuilt on this driver (nothing is compiled remotely):"
   echo "   xdnd dist-init -config=gigapaxos.properties -ssh-key=/ssh/key -username=user"
+  echo "     --with-fuse       also install the FUSE build toolchain and compile fuselog on each host"
+  echo "     --with-baselines  also install eval baseline deps (Go, rqlite, tcconfig, Node/wrangler)"
   echo ""
   echo " To start all gigapaxos servers using gpServer:"
   echo "   xdnd start-all -config=gigapaxos.properties -xdn-config=xdn.properties -ssh-key=/ssh/key -username=user"
@@ -1314,12 +1533,12 @@ function do_init_driver() {
   grep -q "/usr/local/go/bin" /etc/environment || sudo sed -i 's|^PATH="\(.*\)"|PATH="\1:/usr/local/go/bin"|' /etc/environment
   curl https://sh.rustup.rs -sSf | sh -s -- -y
   source $HOME/.cargo/env
-  python -m pip install -U pip
-  python -m pip install -U matplotlib
-  python -m pip install -U scikit-learn
-  python -m pip install -U requests
-  python -m pip install -U pandas
-  python -m pip install -U basemap
+  python3 -m pip install -U pip
+  python3 -m pip install -U matplotlib
+  python3 -m pip install -U scikit-learn
+  python3 -m pip install -U requests
+  python3 -m pip install -U pandas
+  python3 -m pip install -U basemap
 
   # install docker
   echo "Installing Docker ..."
@@ -1336,9 +1555,22 @@ function do_init_driver() {
   sudo usermod -aG docker $USER
   newgrp docker
 
-  ant jar
-  ./bin/build_xdn_cli.sh
-  ./bin/build_xdn_fuselog.sh
+  # The apt phase above has no error handling (a broken mirror leaves the driver
+  # without java while the script runs to completion), so assert the critical
+  # tools before building anything.
+  local missing=""
+  for tool in java ant docker go; do
+    command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+  done
+  if [ -n "$missing" ]; then
+    echo "[init-driver] FAILED: missing tools after install:$missing"
+    echo "[init-driver] is the Ubuntu archive reachable from this node? (apt install output above)"
+    exit 1
+  fi
+
+  ant jar || { echo "[init-driver] FAILED: ant jar"; exit 1; }
+  ./bin/build_xdn_cli.sh || { echo "[init-driver] FAILED: xdn cli build"; exit 1; }
+  ./bin/build_xdn_fuselog.sh || echo "[init-driver] WARNING: fuselog build failed (eval-only dependency); continuing"
   sudo rm -rf /usr/local/bin/xdn && sudo ln -s "$PWD/bin/xdn" "/usr/local/bin/xdn"
   mkdir -p eval/screen_logs
   sudo mkdir -p /mydata/latency-results && sudo chmod 777 /mydata/latency-results
