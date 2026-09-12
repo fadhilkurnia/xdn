@@ -1,0 +1,25 @@
+# Validates the quorum-size inference search logic (eval/infer_quorum_size.py).
+# The measurement path needs a live cluster + tc injection, but the search
+# itself is a pure function (infer_q) checked against synthetic quorum oracles
+# by `--self-test` -- stdlib only, no Docker/JDK, runs in seconds.
+name: Quorum inference self-test
+
+on:
+  push:
+    paths:
+      - "eval/infer_quorum_size.py"
+      - ".github/workflows/quorum-infer-selftest.yml"
+  pull_request:
+    paths:
+      - "eval/infer_quorum_size.py"
+      - ".github/workflows/quorum-infer-selftest.yml"
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: python3 eval/infer_quorum_size.py --self-test
