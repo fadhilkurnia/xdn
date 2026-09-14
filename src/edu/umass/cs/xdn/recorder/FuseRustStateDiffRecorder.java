@@ -138,7 +138,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/fuserust/<node-id>/mnt/<service-name>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
@@ -162,7 +162,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // create target mnt dir, if not exist
     // e.g., /tmp/xdn/state/fuserust/node1/mnt/service1/
-    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDirPath = this.getTargetDirectoryOld(serviceName, placementEpoch);
     File targetDir = new File(targetDirPath);
     if (!targetDir.exists()) {
       logger.log(
@@ -213,7 +213,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
   @Override
   public boolean postInitialization(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     String captureSocketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
     // initialize file system in the mnt dir, with socket
@@ -390,8 +390,21 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
+  @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int umountRetCode = Shell.runCommand("fusermount -u " + targetDir, false);
     int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
     assert rmRetCode == 0;

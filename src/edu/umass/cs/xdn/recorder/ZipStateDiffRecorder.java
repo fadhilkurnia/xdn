@@ -55,7 +55,7 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
@@ -64,7 +64,7 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // remove and re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     try {
       int code = Shell.runCommand("rm -rf " + targetDir);
       assert code == 0;
@@ -201,8 +201,21 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
+  @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetMountDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetMountDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int code = Shell.runCommand("rm -rf " + targetMountDir);
     assert code == 0;
     return true;

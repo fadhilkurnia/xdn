@@ -165,14 +165,14 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // Location: /tmp/xdn/state/fuselog/<node-id>/mnt/<service-name>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
 
   @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     String socketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
     // A backup being promoted to primary already holds the exact-byte replicated state at
@@ -806,7 +806,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
             encodedState.length));
 
     String diffFile = this.baseDiffDirPath + serviceName + "::" + placementEpoch + ".diff";
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
 
     // Store stateDiff into an external .diff file.
     try {
@@ -839,11 +839,25 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO(step 5): replace with the real two-phase implementation once FuselogStateDiffRecorder
+    // is reconciled with main's independent perf work (#92, #93, #96).
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO(step 5): same as above.
+    return true;
+  }
+
+  @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
 
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int umountRetCode = Shell.runCommand("sudo umount " + targetDir, true);
     if (umountRetCode != 0) {
       logger.log(

@@ -60,7 +60,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
@@ -69,7 +69,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // remove and then re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
-    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDirPath = this.getTargetDirectoryOld(serviceName, placementEpoch);
 
     // Preserve any state already materialized at targetDirPath across the wipe below. This dir is
     // the container's bind-mount source, and by the time preInitialization runs it may already hold
@@ -254,8 +254,21 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
+  @Override
   public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int retCode = Shell.runCommand("rm -rf " + targetDir);
     assert retCode == 0;
     // prune the now-empty per-service parents; rmdir refuses non-empty dirs, so
