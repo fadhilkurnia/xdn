@@ -1,0 +1,7 @@
+name: xdn-forwarder-bench
+
+services:
+  bookcatalog-app:
+    image: michael2718/mock-bookcatalog:1
+    ports:
+      - "8000:80"
