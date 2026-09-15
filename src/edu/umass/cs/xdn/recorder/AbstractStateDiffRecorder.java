@@ -78,7 +78,7 @@ public abstract class AbstractStateDiffRecorder {
    * replica. Used by the primary-backup replication path; unrelated to the legacy
    * {@link #getTargetDirectoryOld(String, int)}.
    */
-  public String getTargetDirectoryOld(String serviceName, int epoch, LiveDirType type) {
+  public String getTargetDirectory(String serviceName, int epoch, LiveDirType type) {
     String base = getServiceBaseDir(serviceName, epoch);
     return switch (type) {
       case PRIMARY -> base + DIR_PRIMARY;
@@ -124,9 +124,11 @@ public abstract class AbstractStateDiffRecorder {
   public static AbstractStateDiffRecorder create(XdnConfig config, String nodeId) {
     return switch (config.getRecorderType()) {
       case RSYNC -> new RsyncStateDiffRecorder(nodeId);
-      // TODO(step 5): FuselogStateDiffRecorder needs a public (nodeId, basePath) constructor
-      // before config.getFuselogBaseDir() can actually be honored here. Until then this
-      // silently ignores FUSELOG_BASE_DIR and uses the recorder's own hardcoded default.
+      // NOTE: FuselogStateDiffRecorder's base directory comes from the old, static
+      // ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR setting, not from XdnConfig.
+      // config.getFuselogBaseDir() has no plumbing into this recorder at all -- the two
+      // config systems are unrelated. Not a bug introduced by this merge; just a gap
+      // between XdnConfig (new) and ReconfigurationConfig (old) that predates it.
       case FUSELOG -> new FuselogStateDiffRecorder(nodeId);
       case FUSENODE -> new FusenodeStateDiffRecorder(nodeId);
       case FUSERUST -> new FuseRustStateDiffRecorder(nodeId);
@@ -135,6 +137,27 @@ public abstract class AbstractStateDiffRecorder {
               "Unknown recorder type: " + config.getRecorderType());
     };
   }
+
+  public abstract boolean preInitialization(String serviceName, int placementEpoch);
+
+  public abstract boolean postInitialization(String serviceName, int placementEpoch);
+
+  public abstract byte[] captureStateDiff(String serviceName, int placementEpoch);
+
+  public abstract boolean removeServiceRecorder(String serviceName, int placementEpoch);
+
+  /**
+   * Saves a proposed state diff into the committed-diff staging area (cmtDiff/), without
+   * applying it to the live snapshot yet.
+   */
+  public abstract boolean saveStateDiff(
+          String serviceName, int placementEpoch, byte[] encodedState, String filename);
+
+  /**
+   * Applies a previously saved state diff from the committed-diff staging area into the
+   * live snapshot directory (snp/).
+   */
+  public abstract boolean applySnpDiff(String serviceName, int placementEpoch, String filename);
 
   // -------------------------------------------------------------------------
   // Deprecated / Legacy — used only by XdnGigapaxosApp's current (pre-primary-backup)
@@ -164,7 +187,7 @@ public abstract class AbstractStateDiffRecorder {
    * @param placementEpoch current placement epoch.
    * @return true iff all operations successfully executed.
    */
-  public abstract boolean preInitialization(String serviceName, int placementEpoch);
+  public abstract boolean preInitializationOld(String serviceName, int placementEpoch);
 
   /**
    * Prepares the state directory after the service is initialized. Examples of things that we can
@@ -175,7 +198,7 @@ public abstract class AbstractStateDiffRecorder {
    * @param placementEpoch current placement epoch number.
    * @return true iff all operations successfully executed.
    */
-  public abstract boolean postInitialization(String serviceName, int placementEpoch);
+  public abstract boolean postInitializationOld(String serviceName, int placementEpoch);
 
   /**
    * Captures the state diff generated after each request execution.
@@ -184,7 +207,7 @@ public abstract class AbstractStateDiffRecorder {
    * @param placementEpoch current placement epoch number.
    * @return the captured state diff (e.g., new data written into a file).
    */
-  public abstract byte[] captureStateDiff(String serviceName, int placementEpoch);
+  public abstract byte[] captureStateDiffOld(String serviceName, int placementEpoch);
 
   /**
    * Applies the previously captured state diff into the state directory. Mainly used by backups.
@@ -208,7 +231,7 @@ public abstract class AbstractStateDiffRecorder {
    * @param placementEpoch current placement epoch number.
    * @return true iff all operations successfully executed.
    */
-  public abstract boolean removeServiceRecorder(String serviceName, int placementEpoch);
+  public abstract boolean removeServiceRecorderOld(String serviceName, int placementEpoch);
 
   /**
    * @deprecated legacy rsync-based init sync, used only by XdnGigapaxosApp's current code
@@ -223,17 +246,4 @@ public abstract class AbstractStateDiffRecorder {
           Map<String, InetAddress> ipAddresses,
           int placementEpoch,
           String sshKey);
-
-  /**
-   * Saves a proposed state diff into the committed-diff staging area (cmtDiff/), without
-   * applying it to the live snapshot yet.
-   */
-  public abstract boolean saveStateDiff(
-          String serviceName, int placementEpoch, byte[] encodedState, String filename);
-
-  /**
-   * Applies a previously saved state diff from the committed-diff staging area into the
-   * live snapshot directory (snp/).
-   */
-  public abstract boolean applySnpDiff(String serviceName, int placementEpoch, String filename);
 }

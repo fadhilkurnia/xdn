@@ -55,13 +55,38 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean preInitialization(String serviceName, int placementEpoch) {
+    return preInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean postInitialization(String serviceName, int placementEpoch) {
+    return postInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+    return captureStateDiffOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    return removeServiceRecorderOld(serviceName, placementEpoch);
+  }
+
+  // -------------------------------------------------------------------------
+  // Deprecated / Legacy — used only by XdnGigapaxosApp's current (pre-primary-backup)
+  // code paths. Do not delete: still actively called in production.
+  // -------------------------------------------------------------------------
+
+  @Override
   public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
 
   @Override
-  public boolean preInitialization(String serviceName, int placementEpoch) {
+  public boolean preInitializationOld(String serviceName, int placementEpoch) {
     // remove and re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
     String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
@@ -100,13 +125,13 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean postInitialization(String serviceName, int placementEpoch) {
+  public boolean postInitializationOld(String serviceName, int placementEpoch) {
     // do nothing
     return true;
   }
 
   @Override
-  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiffOld(String serviceName, int placementEpoch) {
     // for rsync, assuming the initialization is deterministic, we update the state in
     // the snapshot dir.
     // mount dir    : /tmp/xdn/state/zip/<nodeId>/mnt/<serviceName>/e<epoch>/
@@ -214,7 +239,7 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+  public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
     String targetMountDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int code = Shell.runCommand("rm -rf " + targetMountDir);
     assert code == 0;

@@ -66,7 +66,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean preInitialization(String serviceName, int placementEpoch) {
+  public boolean preInitializationOld(String serviceName, int placementEpoch) {
     // remove and then re-create target mnt dir
     // e.g., /tmp/xdn/state/rsync/node1/mnt/service1/e0/
     String targetDirPath = this.getTargetDirectoryOld(serviceName, placementEpoch);
@@ -126,7 +126,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean postInitialization(String serviceName, int placementEpoch) {
+  public boolean postInitializationOld(String serviceName, int placementEpoch) {
     // for rsync, assuming the initialization is deterministic, we update the state in
     // the snapshot dir.
     // mount dir    : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
@@ -171,7 +171,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiffOld(String serviceName, int placementEpoch) {
     // important location:
     // mount dir    : /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
     // snapshot dir : /tmp/xdn/state/rsync/<nodeId>/snp/<serviceName>/e<epoch>/
@@ -267,7 +267,7 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+  public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
     String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int retCode = Shell.runCommand("rm -rf " + targetDir);
     assert retCode == 0;
@@ -283,6 +283,30 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
             baseDiffDirPath,
             serviceName));
     return true;
+  }
+
+  /**********************************************************************************************
+   *                        Deprecated Methods                                                  *
+   *********************************************************************************************/
+  // add these — delegate to the real implementations you already renamed
+  @Override
+  public boolean preInitialization(String serviceName, int placementEpoch) {
+    return preInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean postInitialization(String serviceName, int placementEpoch) {
+    return postInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+    return captureStateDiffOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    return removeServiceRecorderOld(serviceName, placementEpoch);
   }
 
   /**********************************************************************************************
