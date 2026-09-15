@@ -601,7 +601,7 @@ public class XdnGigapaxosApp
       System.out.println("Running postInitialization() in backup");
       int placementEpoch = 0;
 
-      return this.stateDiffRecorder.postInitialization(name, placementEpoch);
+      return this.stateDiffRecorder.postInitializationOld(name, placementEpoch);
     }
 
     // Case-8: handle start a created service (non-deterministic init)
@@ -793,13 +793,13 @@ public class XdnGigapaxosApp
           stateDiffRecorder.getTargetDirectoryOld(serviceName, newPlacementEpoch);
       String stateDirMountTarget = property.getStatefulComponentDirectory();
       if (!property.isDeterministic()) {
-        stateDiffRecorder.preInitialization(serviceName, newPlacementEpoch);
+        stateDiffRecorder.preInitializationOld(serviceName, newPlacementEpoch);
       }
 
       // Validates the previous epoch final state, then put it into the to-be-mounted dir.
       // First, prepare the mounted dir.
       if (!property.isDeterministic()) {
-        stateDiffRecorder.removeServiceRecorder(serviceName, newPlacementEpoch);
+        stateDiffRecorder.removeServiceRecorderOld(serviceName, newPlacementEpoch);
       }
       String mountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, newPlacementEpoch);
       String removeDirCommand = String.format("rm -rf %s", mountDir);
@@ -869,7 +869,7 @@ public class XdnGigapaxosApp
       // their state via the cluster's own protocol, so the recorder is skipped entirely.
       if (!property.isClusterManaged()) {
         if (!property.isDeterministic()) {
-          stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+          stateDiffRecorder.preInitializationOld(serviceName, initialPlacementEpoch);
         } else {
           String dir = stateDiffRecorder.getTargetDirectoryOld(serviceName, initialPlacementEpoch);
           Shell.runCommand("rm -rf " + dir);
@@ -998,8 +998,8 @@ public class XdnGigapaxosApp
     // TODO: Fix ordering. Must be:
     // preInitialization -> startContainer -> postInitialization
     if (!service.property.isDeterministic()) {
-      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
-      stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+      stateDiffRecorder.preInitializationOld(serviceName, initialPlacementEpoch);
+      stateDiffRecorder.postInitializationOld(serviceName, initialPlacementEpoch);
       // Docker Desktop (macOS) validates bind sources eagerly at `docker run` (Linux dockerd
       // would auto-create them as root), so ensure the mount source exists even when the
       // recorder implementation did not create it.
@@ -1461,14 +1461,14 @@ public class XdnGigapaxosApp
     String stateDirMountSource = stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     String stateDirMountTarget = property.getStatefulComponentDirectory();
     if (!property.isDeterministic()) {
-      stateDiffRecorder.preInitialization(serviceName, placementEpoch);
+      stateDiffRecorder.preInitializationOld(serviceName, placementEpoch);
     }
 
     // Validates the previous epoch final state, then put it into the to-be-mounted dir.
     // First, prepare the mounted dir.
     // TODO: test with fuse
     if (!property.isDeterministic()) {
-      stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+      stateDiffRecorder.removeServiceRecorderOld(serviceName, placementEpoch);
     }
     String mountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     String removeDirCommand = String.format("rm -rf %s", mountDir);
@@ -1598,7 +1598,7 @@ public class XdnGigapaxosApp
           "WARNING: non-deterministic service can generate different " + "initial state");
     }
     if (!property.isDeterministic()) {
-      stateDiffRecorder.postInitialization(serviceName, placementEpoch);
+      stateDiffRecorder.postInitializationOld(serviceName, placementEpoch);
     }
 
     this.services.put(serviceName, service);
@@ -1675,7 +1675,7 @@ public class XdnGigapaxosApp
 
     // clean the mounted dir for this epoch
     if (!serviceInstance.property.isDeterministic()) {
-      stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+      stateDiffRecorder.removeServiceRecorderOld(serviceName, placementEpoch);
     }
     String removeDirCommand = String.format("rm -rf %s", toBeRemovedMountDir);
     int code = Shell.runCommand(removeDirCommand);
@@ -2204,7 +2204,7 @@ public class XdnGigapaxosApp
       return null;
     }
 
-    byte[] stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
+    byte[] stateDiff = stateDiffRecorder.captureStateDiffOld(serviceName, currentPlacementEpoch);
     if (stateDiff == null) {
       logger.log(
           Level.WARNING,

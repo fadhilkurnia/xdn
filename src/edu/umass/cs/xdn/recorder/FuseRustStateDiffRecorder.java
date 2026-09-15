@@ -138,24 +138,62 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean saveStateDiff(String serviceName, int placementEpoch,
+                               byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean preInitialization(String serviceName, int placementEpoch) {
+    return preInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean postInitialization(String serviceName, int placementEpoch) {
+    return postInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+    return captureStateDiffOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    return removeServiceRecorderOld(serviceName, placementEpoch);
+  }
+
+  // -------------------------------------------------------------------------
+  // Deprecated / Legacy — used only by XdnGigapaxosApp's current (pre-primary-backup)
+  // code paths. Do not delete: still actively called in production.
+  // -------------------------------------------------------------------------
+
+  @Override
   public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/fuserust/<node-id>/mnt/<service-name>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
 
   @Override
-  public boolean preInitialization(String serviceName, int placementEpoch) {
+  public boolean preInitializationOld(String serviceName, int placementEpoch) {
     if (this.serviceFsSocket.containsKey(serviceName)
-        && this.serviceFsSocket.get(serviceName).containsKey((placementEpoch))) {
+            && this.serviceFsSocket.get(serviceName).containsKey((placementEpoch))) {
 
       logger.log(
-          Level.WARNING,
-          String.format(
-              "%s:%s - socket data for %s:%d already exists. Skipping preInitialization.",
-              this.nodeID,
-              FuseRustStateDiffRecorder.class.getSimpleName(),
-              serviceName,
-              placementEpoch));
+              Level.WARNING,
+              String.format(
+                      "%s:%s - socket data for %s:%d already exists. Skipping preInitialization.",
+                      this.nodeID,
+                      FuseRustStateDiffRecorder.class.getSimpleName(),
+                      serviceName,
+                      placementEpoch));
 
       return true;
     }
@@ -166,32 +204,32 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
     File targetDir = new File(targetDirPath);
     if (!targetDir.exists()) {
       logger.log(
-          Level.FINEST,
-          String.format(
-              "%s:%s - Directory %s doesn't exist. Creating...",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), targetDirPath));
+              Level.FINEST,
+              String.format(
+                      "%s:%s - Directory %s doesn't exist. Creating...",
+                      this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), targetDirPath));
 
       String createDirCommand = String.format("mkdir -p %s", targetDirPath);
       int code = Shell.runCommand(createDirCommand);
       assert code == 0;
     } else {
       logger.log(
-          Level.FINEST,
-          String.format(
-              "%s:%s - Directory %s exists. Unmounting fuserust (if exists) to allow initialization"
-                  + " of new fuserust.",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), targetDirPath));
+              Level.FINEST,
+              String.format(
+                      "%s:%s - Directory %s exists. Unmounting fuserust (if exists) to allow initialization"
+                              + " of new fuserust.",
+                      this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), targetDirPath));
       Shell.runCommand("fusermount -u " + targetDirPath);
     }
 
     // Initialize apply stateDiff socket for fuserust-apply
     String applySocketFile =
-        this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
+            this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
     try {
       Files.deleteIfExists(Path.of(applySocketFile));
     } catch (IOException e) {
       throw new RuntimeException(
-          String.format("Failed to delete old %s file: %s", applySocketFile, e));
+              String.format("Failed to delete old %s file: %s", applySocketFile, e));
     }
 
     UnixDomainSocketAddress applyAddress = UnixDomainSocketAddress.of(Path.of(applySocketFile));
@@ -212,7 +250,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean postInitialization(String serviceName, int placementEpoch) {
+  public boolean postInitializationOld(String serviceName, int placementEpoch) {
     String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     String captureSocketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
@@ -261,16 +299,16 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // Run fuserust-apply in background
     String applySocketFile =
-        this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
+            this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
     String applyCmd =
-        String.format(
-            "%s %s --applySocket=%s", FUSERUST_APPLY_BIN_PATH, targetDir, applySocketFile);
+            String.format(
+                    "%s %s --applySocket=%s", FUSERUST_APPLY_BIN_PATH, targetDir, applySocketFile);
     Shell.runCommandThread(applyCmd, false, null);
     return true;
   }
 
   @Override
-  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiffOld(String serviceName, int placementEpoch) {
     Map<Integer, SocketPair> epochToChannelMap = this.serviceFsSocket.get(serviceName);
     assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch).getCaptureSocket();
@@ -279,10 +317,10 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
     // send get command (g) to the filesystem
     try {
       logger.log(
-          Level.FINEST,
-          String.format(
-              "%s:%s - sending FuselogFS command",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName()));
+              Level.FINEST,
+              String.format(
+                      "%s:%s - sending FuselogFS command",
+                      this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName()));
       socketChannel.write(ByteBuffer.wrap("g".getBytes()));
     } catch (IOException e) {
       throw new RuntimeException(e);
@@ -309,14 +347,14 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
       return null;
     } else {
       logger.log(
-          Level.FINEST,
-          String.format(
-              "%s:%s - stateDiff size = %d bytes (%.2f KB, %.2f MB)%n",
-              this.nodeID,
-              FuseRustStateDiffRecorder.class.getSimpleName(),
-              stateDiffSize,
-              stateDiffSize / 1024.0,
-              stateDiffSize / (1024.0 * 1024)));
+              Level.FINEST,
+              String.format(
+                      "%s:%s - stateDiff size = %d bytes (%.2f KB, %.2f MB)%n",
+                      this.nodeID,
+                      FuseRustStateDiffRecorder.class.getSimpleName(),
+                      stateDiffSize,
+                      stateDiffSize / 1024.0,
+                      stateDiffSize / (1024.0 * 1024)));
     }
 
     ByteBuffer stateDiffBuffer = ByteBuffer.allocate((int) stateDiffSize);
@@ -343,24 +381,24 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
     //  the fuselog-apply program, which we currently use.
 
     logger.log(
-        Level.FINER,
-        String.format(
-            "%s:%s - applying stateDiff name=%s epoch=%d size=%d bytes",
-            this.nodeID,
-            FuseRustStateDiffRecorder.class.getSimpleName(),
-            serviceName,
-            placementEpoch,
-            encodedState.length));
+            Level.FINER,
+            String.format(
+                    "%s:%s - applying stateDiff name=%s epoch=%d size=%d bytes",
+                    this.nodeID,
+                    FuseRustStateDiffRecorder.class.getSimpleName(),
+                    serviceName,
+                    placementEpoch,
+                    encodedState.length));
 
     String applySocketFile =
-        this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
+            this.baseSocketDirPath + serviceName + "::" + placementEpoch + "::apply.sock";
     try (SocketChannel channel =
-        SocketChannel.open(UnixDomainSocketAddress.of(Path.of(applySocketFile)))) {
+                 SocketChannel.open(UnixDomainSocketAddress.of(Path.of(applySocketFile)))) {
       logger.log(
-          Level.INFO,
-          String.format(
-              "%s:%s - connecting to %s",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), applySocketFile));
+              Level.INFO,
+              String.format(
+                      "%s:%s - connecting to %s",
+                      this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), applySocketFile));
 
       ByteBuffer buffer = ByteBuffer.wrap(encodedState);
       while (buffer.hasRemaining()) {
@@ -379,10 +417,10 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
       }
 
       logger.log(
-          Level.INFO,
-          String.format(
-              "%s:%s - fuserust-apply responded with: %s",
-              this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), response.toString()));
+              Level.INFO,
+              String.format(
+                      "%s:%s - fuserust-apply responded with: %s",
+                      this.nodeID, FuseRustStateDiffRecorder.class.getSimpleName(), response.toString()));
     } catch (IOException e) {
       throw new RuntimeException("Fuserust error: " + e);
     }
@@ -390,20 +428,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean saveStateDiff(String serviceName, int placementEpoch,
-                               byte[] encodedState, String filename) {
-    // TODO: implement saveStateDiff for this recorder type
-    return true;
-  }
-
-  @Override
-  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
-    // TODO: implement applySnpDiff for this recorder type
-    return true;
-  }
-
-  @Override
-  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+  public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
     String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int umountRetCode = Shell.runCommand("fusermount -u " + targetDir, false);
     int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
