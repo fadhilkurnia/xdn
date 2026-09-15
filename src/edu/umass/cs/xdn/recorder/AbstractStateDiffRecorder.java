@@ -48,11 +48,8 @@ public abstract class AbstractStateDiffRecorder {
   public static AbstractStateDiffRecorder create(XdnConfig config, String nodeId) {
     return switch (config.getRecorderType()) {
       case RSYNC -> new RsyncStateDiffRecorder(nodeId);
-        // NOTE: FuselogStateDiffRecorder's base directory comes from the old, static
-        // ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR setting, not from XdnConfig.
-        // config.getFuselogBaseDir() has no plumbing into this recorder at all -- the two
-        // config systems are unrelated. Not a bug introduced by this merge; just a gap
-        // between XdnConfig (new) and ReconfigurationConfig (old) that predates it.
+        // NOTE: For FUSELOG, see XdnConfig.getFuselogBaseDir()'s javadoc: FUSELOG_BASE_DIR is not
+        // wired to anything here.
       case FUSELOG -> new FuselogStateDiffRecorder(nodeId);
       case FUSENODE -> new FusenodeStateDiffRecorder(nodeId);
       case FUSERUST -> new FuseRustStateDiffRecorder(nodeId);
@@ -73,18 +70,26 @@ public abstract class AbstractStateDiffRecorder {
     return String.format("%s%s/%s/e%d/", baseDirectoryPath, nodeID, serviceName, epoch);
   }
 
+  // DIR_SNAPSHOT: Directory where committed stateDiffs are applied to
+  // /tmp/xdn/state/<recorder>/<node-id>/<service-name>/e<epoch>/snp/
   public String getSnapshotDir(String serviceName, int epoch) {
     return getServiceBaseDir(serviceName, epoch) + DIR_SNAPSHOT;
   }
 
+  // DIR_COMMITTED_STATEDIFF: Directory that stores committed stateDiffs
+  // /tmp/xdn/state/<recorder>/<node-id>/<service-name>/e<epoch>/cmtDiff/
   public String getStateDiffDir(String serviceName, int epoch) {
     return getServiceBaseDir(serviceName, epoch) + DIR_COMMITTED_STATEDIFF;
   }
 
+  // DIR_PROPOSED_STATEDIFF: Directory that stores proposed* stateDiffs
+  // (captured stateDiffs whose propose hasn't received an ACK)
+  // /tmp/xdn/state/<recorder>/<node-id>/<service-name>/e<epoch>/prpDiff/
   public String getPrpDiffDir(String serviceName, int epoch) {
     return getServiceBaseDir(serviceName, epoch) + DIR_PROPOSED_STATEDIFF;
   }
 
+  // Get specific stateDiff file inside prpDiff/ directory
   public String getPrpDiffFilePath(String serviceName, int epoch, String filename) {
     return getPrpDiffDir(serviceName, epoch) + filename;
   }
@@ -108,8 +113,15 @@ public abstract class AbstractStateDiffRecorder {
   // - setup directories
   // - write file to directory
   // - move file between directories
+  // All these functions are part of AbstractStateDiffRecorder because the logic
+  // is identical across all recorders. No need to rewrite the same behavior across them all.
   // -------------------------------------------------------------------------
 
+  // Create the following directories inside
+  // /tmp/xdn/state/<recorder>/<node-id>/<service-name>/e<epoch>/:
+  // - snpDiff/
+  // - cmtDiff/
+  // - prpDiff/
   public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
     int code1 = Shell.runCommand("mkdir -p " + getSnapshotDir(serviceName, placementEpoch));
     int code2 = Shell.runCommand("mkdir -p " + getStateDiffDir(serviceName, placementEpoch));
@@ -117,6 +129,7 @@ public abstract class AbstractStateDiffRecorder {
     return code1 == 0 && code2 == 0 && code3 == 0;
   }
 
+  // Write a captured stateDiff into a file inside prpDiff/ directory
   public boolean writeToPrpDiff(
       String serviceName, int placementEpoch, String filename, byte[] encodedState) {
     String filePath = getPrpDiffFilePath(serviceName, placementEpoch, filename);
@@ -129,6 +142,7 @@ public abstract class AbstractStateDiffRecorder {
     }
   }
 
+  // Moves committed stateDiffs from prpDiff/ into cmtDiff/
   public boolean movePrpDiffToCmtDiff(String serviceName, int placementEpoch, String filename) {
     String src = getPrpDiffFilePath(serviceName, placementEpoch, filename);
     String dest = getStateDiffDir(serviceName, placementEpoch) + filename;
@@ -139,25 +153,53 @@ public abstract class AbstractStateDiffRecorder {
   // Abstract function for the new Primary-Backup (with read-only backup containers)
   // -------------------------------------------------------------------------
 
+  /**
+   * Prepares the state directory before the service is initialized, for the new primary-backup
+   * design. Called on the primary replica before its container starts.
+   *
+   * @param serviceName name of the app/service (e.g., "my-service")
+   * @param placementEpoch current placement epoch.
+   * @return true iff all operations successfully executed.
+   */
   public abstract boolean preInitialization(String serviceName, int placementEpoch);
 
+  /**
+   * Prepares the state directory after the service is initialized, for the new primary-backup
+   * design.
+   *
+   * @param serviceName name of the app/service (e.g., "my-service")
+   * @param placementEpoch current placement epoch number.
+   * @return true iff all operations successfully executed.
+   */
   public abstract boolean postInitialization(String serviceName, int placementEpoch);
 
+  /**
+   * Captures the state diff generated after each request execution, for the new primary-backup
+   * design.
+   *
+   * @param serviceName name of the app/service (e.g., "my-service")
+   * @param placementEpoch current placement epoch number.
+   * @return the captured state diff (e.g., new data written into a file).
+   */
   public abstract byte[] captureStateDiff(String serviceName, int placementEpoch);
 
+  /**
+   * Removes the target directory holding the safety-critical state for the new primary-backup
+   * design, including unmounting the filesystem if needed. Mainly used when a service is removed,
+   * or its placement epoch is bumped.
+   *
+   * @param serviceName name of the app/service (e.g., "my-service")
+   * @param placementEpoch current placement epoch number.
+   * @return true iff all operations successfully executed.
+   */
   public abstract boolean removeServiceRecorder(String serviceName, int placementEpoch);
 
-  /**
-   * Saves a proposed state diff into the committed-diff staging area (cmtDiff/), without applying
-   * it to the live snapshot yet.
-   */
+  // Saves a proposed state diff into cmtDiff/, without applying it to the live snapshot yet
   public abstract boolean saveStateDiff(
       String serviceName, int placementEpoch, byte[] encodedState, String filename);
 
-  /**
-   * Applies a previously saved state diff from the committed-diff staging area into the live
-   * snapshot directory (snp/).
-   */
+  // Applies a stateDiff in cmtDiff/ into snpDiff/
+  // Assumes that filename exists inside the cmtDiff/ directory
   public abstract boolean applySnpDiff(String serviceName, int placementEpoch, String filename);
 
   // -------------------------------------------------------------------------

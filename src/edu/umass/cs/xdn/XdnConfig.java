@@ -29,6 +29,7 @@ public class XdnConfig {
   private static final String DEFAULT_CONFIG_PATH = "conf/xdn.properties";
   private static final String CONFIG_PATH_PROPERTY = "xdnConfig";
 
+  // See getFuselogBaseDir()'s javadoc: this setting is parsed but currently unused
   private static final String KEY_FUSELOG_BASE_DIR = "FUSELOG_BASE_DIR";
   private static final String DEFAULT_FUSELOG_BASE_DIR = "/tmp/xdn/state/fuselog/";
 
@@ -104,6 +105,19 @@ public class XdnConfig {
     return healthcheckConsecutiveSuccesses;
   }
 
+  /**
+   * Returns the configured Fuselog base directory (FUSELOG_BASE_DIR, defaulting to
+   * "/tmp/xdn/state/fuselog/").
+   *
+   * @deprecated not currently wired to anything. FuselogStateDiffRecorder's actual base directory
+   *     comes from the older, static {@code ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR} setting
+   *     -- a separate config system this class has no connection to. This value is parsed and
+   *     stored but never read by {@link AbstractStateDiffRecorder#create}. Not a bug introduced
+   *     during the xdn2-merge; this gap predates it. Fixing it for real means either wiring
+   *     XdnConfig into ReconfigurationConfig, or giving FuselogStateDiffRecorder's constructor a
+   *     base-path override parameter -- neither exists today.
+   */
+  @Deprecated
   public String getFuselogBaseDir() {
     return fuselogBaseDir;
   }
