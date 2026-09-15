@@ -44,6 +44,23 @@ public abstract class AbstractStateDiffRecorder {
   public static final String DIR_BACKUP1 = "backup1/";
   public static final String DIR_BACKUP2 = "backup2/";
 
+  /** Creates a recorder instance based on the configured recorder type. */
+  public static AbstractStateDiffRecorder create(XdnConfig config, String nodeId) {
+    return switch (config.getRecorderType()) {
+      case RSYNC -> new RsyncStateDiffRecorder(nodeId);
+        // NOTE: FuselogStateDiffRecorder's base directory comes from the old, static
+        // ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR setting, not from XdnConfig.
+        // config.getFuselogBaseDir() has no plumbing into this recorder at all -- the two
+        // config systems are unrelated. Not a bug introduced by this merge; just a gap
+        // between XdnConfig (new) and ReconfigurationConfig (old) that predates it.
+      case FUSELOG -> new FuselogStateDiffRecorder(nodeId);
+      case FUSENODE -> new FusenodeStateDiffRecorder(nodeId);
+      case FUSERUST -> new FuseRustStateDiffRecorder(nodeId);
+      case ZIP -> new ZipStateDiffRecorder(nodeId);
+      default -> throw new RuntimeException("Unknown recorder type: " + config.getRecorderType());
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Path getter helper functions
   // - default: /tmp/xdn/state/<recorder>/<node-id>/<service-name>/e<epoch>/<directory>/
@@ -92,6 +109,7 @@ public abstract class AbstractStateDiffRecorder {
   // - write file to directory
   // - move file between directories
   // -------------------------------------------------------------------------
+
   public boolean prepareServiceDirectories(String serviceName, int placementEpoch) {
     int code1 = Shell.runCommand("mkdir -p " + getSnapshotDir(serviceName, placementEpoch));
     int code2 = Shell.runCommand("mkdir -p " + getStateDiffDir(serviceName, placementEpoch));
@@ -117,22 +135,9 @@ public abstract class AbstractStateDiffRecorder {
     return Shell.runCommand(String.format("mv %s %s", src, dest)) == 0;
   }
 
-  /** Creates a recorder instance based on the configured recorder type. */
-  public static AbstractStateDiffRecorder create(XdnConfig config, String nodeId) {
-    return switch (config.getRecorderType()) {
-      case RSYNC -> new RsyncStateDiffRecorder(nodeId);
-        // NOTE: FuselogStateDiffRecorder's base directory comes from the old, static
-        // ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR setting, not from XdnConfig.
-        // config.getFuselogBaseDir() has no plumbing into this recorder at all -- the two
-        // config systems are unrelated. Not a bug introduced by this merge; just a gap
-        // between XdnConfig (new) and ReconfigurationConfig (old) that predates it.
-      case FUSELOG -> new FuselogStateDiffRecorder(nodeId);
-      case FUSENODE -> new FusenodeStateDiffRecorder(nodeId);
-      case FUSERUST -> new FuseRustStateDiffRecorder(nodeId);
-      case ZIP -> new ZipStateDiffRecorder(nodeId);
-      default -> throw new RuntimeException("Unknown recorder type: " + config.getRecorderType());
-    };
-  }
+  // -------------------------------------------------------------------------
+  // Abstract function for the new Primary-Backup (with read-only backup containers)
+  // -------------------------------------------------------------------------
 
   public abstract boolean preInitialization(String serviceName, int placementEpoch);
 
@@ -156,7 +161,7 @@ public abstract class AbstractStateDiffRecorder {
   public abstract boolean applySnpDiff(String serviceName, int placementEpoch, String filename);
 
   // -------------------------------------------------------------------------
-  // Deprecated / Legacy — used only by XdnGigapaxosApp's current (pre-primary-backup)
+  // Deprecated / Legacy - used only by XdnGigapaxosApp's current (old primary-backup)
   // code paths. Do not delete: still actively called in production.
   // -------------------------------------------------------------------------
 

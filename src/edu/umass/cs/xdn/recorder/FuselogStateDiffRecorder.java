@@ -170,6 +170,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   // Values above this indicate protocol desynchronization (garbage size header).
   private static final long MAX_STATEDIFF_BYTES = 100L * 1024 * 1024;
 
+  // -------------------------------------------------------------------------
+  // Helper functions exclusive to FuselogStateDiffRecorder
+  // -------------------------------------------------------------------------
+
   private static String toHexString(byte[] bytes) {
     StringBuilder sb = new StringBuilder();
     for (byte b : bytes) {
@@ -389,78 +393,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     return getServiceBaseDir(serviceName, epoch) + "fuselog.sock";
   }
 
-  @Override
-  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
-    assert serviceName != null : "serviceName should not be null";
-    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
-    assert encodedState != null : "encoded stateDiff should not be null";
-
-    logger.log(
-        Level.FINER,
-        String.format(
-            "%s:%s - applying stateDiff name=%s epoch=%d size=%d bytes",
-            this.nodeID,
-            FuselogStateDiffRecorder.class.getSimpleName(),
-            serviceName,
-            placementEpoch,
-            encodedState.length));
-
-    String diffFile = this.baseDiffDirPath + serviceName + "::" + placementEpoch + ".diff";
-    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
-
-    // Store stateDiff into an external .diff file.
-    try {
-      FileOutputStream outputStream;
-      outputStream = new FileOutputStream(diffFile);
-      outputStream.write(encodedState);
-      outputStream.flush();
-      outputStream.close();
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
-
-    // Prepare the shell command to apply stateDiff.
-    String cmd = String.format("%s %s --silent --statediff=%s", applyBinPath, targetDir, diffFile);
-    int exitCode = Shell.runCommand(cmd, true);
-    if (exitCode != 0) {
-      String errMessage =
-          String.format(
-              "failed to apply stateDiff for service %s epoch %d with exit code %d",
-              serviceName, placementEpoch, exitCode);
-      logger.log(
-          Level.SEVERE,
-          String.format(
-              "%s:%s - %s",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
-      throw new RuntimeException(errMessage);
-    }
-
-    return true;
-  }
-
-  @Override
-  public boolean saveStateDiff(
-      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
-    // TODO(step 5): replace with the real two-phase implementation once FuselogStateDiffRecorder
-    // is reconciled with main's independent perf work (#92, #93, #96).
-    return true;
-  }
-
-  @Override
-  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
-    // TODO(step 5): same as above.
-    return true;
-  }
-
-  @Override
-  public String getTargetDirectory(String serviceName, int epoch, LiveDirType type) {
-    String base = getServiceBaseDir(serviceName, epoch);
-    return switch (type) {
-      case PRIMARY -> base + DIR_PRIMARY;
-      case BACKUP1 -> base + DIR_BACKUP1;
-      case BACKUP2 -> base + DIR_BACKUP2;
-    };
-  }
+  // -------------------------------------------------------------------------
+  // Abstract function for the new Primary-Backup (with read-only backup containers)
+  // -------------------------------------------------------------------------
 
   @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
@@ -728,8 +663,82 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     return true;
   }
 
+  @Override
+  public boolean saveStateDiff(
+      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+    assert encodedState != null : "encoded stateDiff should not be null";
+
+    String diffFile = getStateDiffDir(serviceName, placementEpoch) + filename;
+
+    logger.log(
+        Level.INFO,
+        String.format(
+            "%s:%s - saving stateDiff filename=%s size=%d bytes for %s epoch %d",
+            this.nodeID,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            filename,
+            encodedState.length,
+            serviceName,
+            placementEpoch));
+
+    try (FileOutputStream fos = new FileOutputStream(diffFile)) {
+      fos.write(encodedState);
+      fos.flush();
+      return true;
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+
+    String diffFile = getStateDiffDir(serviceName, placementEpoch) + filename;
+    String snapshotDir = getSnapshotDir(serviceName, placementEpoch);
+
+    String cmd = String.format("%s %s --statediff=%s", applyBinPath, snapshotDir, diffFile);
+
+    logger.log(
+        Level.FINE,
+        String.format(
+            "%s:%s - running: %s",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), cmd));
+
+    int exitCode = Shell.runCommand(cmd, true);
+
+    logger.log(
+        Level.FINE,
+        String.format(
+            "%s:%s - fuselog-apply exit=%d filename=%s for %s epoch %d",
+            this.nodeID,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            exitCode,
+            filename,
+            serviceName,
+            placementEpoch));
+
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - failed to apply snp diff filename=%s for %s epoch %d exit=%d",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              filename,
+              serviceName,
+              placementEpoch,
+              exitCode));
+      return false;
+    }
+    return true;
+  }
+
   // -------------------------------------------------------------------------
-  // Deprecated / Legacy — used only by XdnGigapaxosApp's current (pre-primary-backup)
+  // Deprecated / Legacy - used only by XdnGigapaxosApp's current (old primary-backup)
   // code paths. Do not delete: still actively called in production.
   // -------------------------------------------------------------------------
 
@@ -1140,6 +1149,55 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean applyStateDiff(String serviceName, int placementEpoch, byte[] encodedState) {
+    assert serviceName != null : "serviceName should not be null";
+    assert placementEpoch >= 0 : "placementEpoch should be non-negative";
+    assert encodedState != null : "encoded stateDiff should not be null";
+
+    logger.log(
+        Level.FINER,
+        String.format(
+            "%s:%s - applying stateDiff name=%s epoch=%d size=%d bytes",
+            this.nodeID,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            serviceName,
+            placementEpoch,
+            encodedState.length));
+
+    String diffFile = this.baseDiffDirPath + serviceName + "::" + placementEpoch + ".diff";
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
+
+    // Store stateDiff into an external .diff file.
+    try {
+      FileOutputStream outputStream;
+      outputStream = new FileOutputStream(diffFile);
+      outputStream.write(encodedState);
+      outputStream.flush();
+      outputStream.close();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+
+    // Prepare the shell command to apply stateDiff.
+    String cmd = String.format("%s %s --silent --statediff=%s", applyBinPath, targetDir, diffFile);
+    int exitCode = Shell.runCommand(cmd, true);
+    if (exitCode != 0) {
+      String errMessage =
+          String.format(
+              "failed to apply stateDiff for service %s epoch %d with exit code %d",
+              serviceName, placementEpoch, exitCode);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
+      throw new RuntimeException(errMessage);
+    }
+
+    return true;
+  }
+
+  @Override
   public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
@@ -1181,10 +1239,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     return true;
   }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
 
   @Override
   public void initContainerSync(

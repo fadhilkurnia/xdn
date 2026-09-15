@@ -59,6 +59,48 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Function implementation for the new Primary-Backup (with read-only backup containers)
+  // -------------------------------------------------------------------------
+
+  @Override
+  public boolean preInitialization(String serviceName, int placementEpoch) {
+    return preInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean postInitialization(String serviceName, int placementEpoch) {
+    return postInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+    return captureStateDiffOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    return removeServiceRecorderOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean saveStateDiff(
+      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Deprecated / Legacy - used only by XdnGigapaxosApp's current (old primary-backup)
+  // code paths. Do not delete: still actively called in production.
+  // -------------------------------------------------------------------------
+
   @Override
   public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/rsync/<nodeId>/mnt/<serviceName>/e<epoch>/
@@ -254,19 +296,6 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean saveStateDiff(
-      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
-    // TODO: implement saveStateDiff for this recorder type
-    return true;
-  }
-
-  @Override
-  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
-    // TODO: implement applySnpDiff for this recorder type
-    return true;
-  }
-
-  @Override
   public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
     String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int retCode = Shell.runCommand("rm -rf " + targetDir);
@@ -284,34 +313,6 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
             serviceName));
     return true;
   }
-
-  /**********************************************************************************************
-   *                        Deprecated Methods                                                  *
-   *********************************************************************************************/
-  // add these — delegate to the real implementations you already renamed
-  @Override
-  public boolean preInitialization(String serviceName, int placementEpoch) {
-    return preInitializationOld(serviceName, placementEpoch);
-  }
-
-  @Override
-  public boolean postInitialization(String serviceName, int placementEpoch) {
-    return postInitializationOld(serviceName, placementEpoch);
-  }
-
-  @Override
-  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
-    return captureStateDiffOld(serviceName, placementEpoch);
-  }
-
-  @Override
-  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    return removeServiceRecorderOld(serviceName, placementEpoch);
-  }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
 
   @Override
   public void initContainerSync(

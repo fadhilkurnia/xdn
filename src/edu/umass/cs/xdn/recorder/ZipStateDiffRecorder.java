@@ -54,6 +54,10 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Function implementations for the new Primary-Backup (with read-only backup containers)
+  // -------------------------------------------------------------------------
+
   @Override
   public boolean preInitialization(String serviceName, int placementEpoch) {
     return preInitializationOld(serviceName, placementEpoch);
@@ -74,8 +78,21 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
     return removeServiceRecorderOld(serviceName, placementEpoch);
   }
 
+  @Override
+  public boolean saveStateDiff(
+      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
   // -------------------------------------------------------------------------
-  // Deprecated / Legacy — used only by XdnGigapaxosApp's current (pre-primary-backup)
+  // Deprecated / Legacy - used only by XdnGigapaxosApp's current (old primary-backup)
   // code paths. Do not delete: still actively called in production.
   // -------------------------------------------------------------------------
 
@@ -226,29 +243,12 @@ public class ZipStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean saveStateDiff(
-      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
-    // TODO: implement saveStateDiff for this recorder type
-    return true;
-  }
-
-  @Override
-  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
-    // TODO: implement applySnpDiff for this recorder type
-    return true;
-  }
-
-  @Override
   public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
     String targetMountDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int code = Shell.runCommand("rm -rf " + targetMountDir);
     assert code == 0;
     return true;
   }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
 
   @Override
   public void initContainerSync(
