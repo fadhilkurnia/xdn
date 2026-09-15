@@ -1458,7 +1458,8 @@ public class XdnGigapaxosApp
     }
 
     // prepare statediff directory, if required
-    String stateDirMountSource = stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
+    String stateDirMountSource =
+        stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     String stateDirMountTarget = property.getStatefulComponentDirectory();
     if (!property.isDeterministic()) {
       stateDiffRecorder.preInitializationOld(serviceName, placementEpoch);
@@ -1640,7 +1641,8 @@ public class XdnGigapaxosApp
 
     // get the container names and mount dir, then remove the in-memory service metadata
     List<String> toBeRemovedContainerNames = serviceInstance.containerNames;
-    String toBeRemovedMountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
+    String toBeRemovedMountDir =
+        stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     this.serviceInstances.get(serviceName).remove(placementEpoch);
     if (this.serviceInstances.get(serviceName).isEmpty()) {
       this.serviceInstances.remove(serviceName);

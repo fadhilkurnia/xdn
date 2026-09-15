@@ -2,7 +2,6 @@ package edu.umass.cs.xdn.recorder;
 
 import edu.umass.cs.xdn.XdnConfig;
 import edu.umass.cs.xdn.utils.Shell;
-
 import java.net.InetAddress;
 import java.util.Map;
 
@@ -28,9 +27,9 @@ public abstract class AbstractStateDiffRecorder {
   }
 
   /**
-   * Enumerates the live directory types for a service replica.
-   * PRIMARY     — the FUSE-mounted capture directory for the primary container.
-   * BACKUP1/2   — the rsync-seeded directories for the two blue/green backup containers.
+   * Enumerates the live directory types for a service replica. PRIMARY — the FUSE-mounted capture
+   * directory for the primary container. BACKUP1/2 — the rsync-seeded directories for the two
+   * blue/green backup containers.
    */
   public enum LiveDirType {
     PRIMARY,
@@ -74,9 +73,9 @@ public abstract class AbstractStateDiffRecorder {
   }
 
   /**
-   * Returns the directory for a specific live role (PRIMARY/BACKUP1/BACKUP2) of a service
-   * replica. Used by the primary-backup replication path; unrelated to the legacy
-   * {@link #getTargetDirectoryOld(String, int)}.
+   * Returns the directory for a specific live role (PRIMARY/BACKUP1/BACKUP2) of a service replica.
+   * Used by the primary-backup replication path; unrelated to the legacy {@link
+   * #getTargetDirectoryOld(String, int)}.
    */
   public String getTargetDirectory(String serviceName, int epoch, LiveDirType type) {
     String base = getServiceBaseDir(serviceName, epoch);
@@ -100,8 +99,8 @@ public abstract class AbstractStateDiffRecorder {
     return code1 == 0 && code2 == 0 && code3 == 0;
   }
 
-  public boolean writeToPrpDiff(String serviceName, int placementEpoch,
-                                String filename, byte[] encodedState) {
+  public boolean writeToPrpDiff(
+      String serviceName, int placementEpoch, String filename, byte[] encodedState) {
     String filePath = getPrpDiffFilePath(serviceName, placementEpoch, filename);
     try (java.io.FileOutputStream fos = new java.io.FileOutputStream(filePath)) {
       fos.write(encodedState);
@@ -113,28 +112,25 @@ public abstract class AbstractStateDiffRecorder {
   }
 
   public boolean movePrpDiffToCmtDiff(String serviceName, int placementEpoch, String filename) {
-    String src  = getPrpDiffFilePath(serviceName, placementEpoch, filename);
+    String src = getPrpDiffFilePath(serviceName, placementEpoch, filename);
     String dest = getStateDiffDir(serviceName, placementEpoch) + filename;
     return Shell.runCommand(String.format("mv %s %s", src, dest)) == 0;
   }
 
-  /**
-   * Creates a recorder instance based on the configured recorder type.
-   */
+  /** Creates a recorder instance based on the configured recorder type. */
   public static AbstractStateDiffRecorder create(XdnConfig config, String nodeId) {
     return switch (config.getRecorderType()) {
       case RSYNC -> new RsyncStateDiffRecorder(nodeId);
-      // NOTE: FuselogStateDiffRecorder's base directory comes from the old, static
-      // ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR setting, not from XdnConfig.
-      // config.getFuselogBaseDir() has no plumbing into this recorder at all -- the two
-      // config systems are unrelated. Not a bug introduced by this merge; just a gap
-      // between XdnConfig (new) and ReconfigurationConfig (old) that predates it.
+        // NOTE: FuselogStateDiffRecorder's base directory comes from the old, static
+        // ReconfigurationConfig.RC.XDN_FUSELOG_BASE_DIR setting, not from XdnConfig.
+        // config.getFuselogBaseDir() has no plumbing into this recorder at all -- the two
+        // config systems are unrelated. Not a bug introduced by this merge; just a gap
+        // between XdnConfig (new) and ReconfigurationConfig (old) that predates it.
       case FUSELOG -> new FuselogStateDiffRecorder(nodeId);
       case FUSENODE -> new FusenodeStateDiffRecorder(nodeId);
       case FUSERUST -> new FuseRustStateDiffRecorder(nodeId);
       case ZIP -> new ZipStateDiffRecorder(nodeId);
-      default -> throw new RuntimeException(
-              "Unknown recorder type: " + config.getRecorderType());
+      default -> throw new RuntimeException("Unknown recorder type: " + config.getRecorderType());
     };
   }
 
@@ -147,15 +143,15 @@ public abstract class AbstractStateDiffRecorder {
   public abstract boolean removeServiceRecorder(String serviceName, int placementEpoch);
 
   /**
-   * Saves a proposed state diff into the committed-diff staging area (cmtDiff/), without
-   * applying it to the live snapshot yet.
+   * Saves a proposed state diff into the committed-diff staging area (cmtDiff/), without applying
+   * it to the live snapshot yet.
    */
   public abstract boolean saveStateDiff(
-          String serviceName, int placementEpoch, byte[] encodedState, String filename);
+      String serviceName, int placementEpoch, byte[] encodedState, String filename);
 
   /**
-   * Applies a previously saved state diff from the committed-diff staging area into the
-   * live snapshot directory (snp/).
+   * Applies a previously saved state diff from the committed-diff staging area into the live
+   * snapshot directory (snp/).
    */
   public abstract boolean applySnpDiff(String serviceName, int placementEpoch, String filename);
 
@@ -212,8 +208,8 @@ public abstract class AbstractStateDiffRecorder {
   /**
    * Applies the previously captured state diff into the state directory. Mainly used by backups.
    *
-   * @deprecated legacy one-shot apply, used only by XdnGigapaxosApp's current code paths.
-   *     New code should use {@link #saveStateDiff} followed by {@link #applySnpDiff}.
+   * @deprecated legacy one-shot apply, used only by XdnGigapaxosApp's current code paths. New code
+   *     should use {@link #saveStateDiff} followed by {@link #applySnpDiff}.
    * @param serviceName name of the app/service (e.g., "my-service")
    * @param placementEpoch current placement epoch number.
    * @param encodedState the state diff captured by primary.
@@ -221,7 +217,7 @@ public abstract class AbstractStateDiffRecorder {
    */
   @Deprecated
   public abstract boolean applyStateDiff(
-          String serviceName, int placementEpoch, byte[] encodedState);
+      String serviceName, int placementEpoch, byte[] encodedState);
 
   /**
    * Removes the target directory that hold the safety-critical state, include unmounting filesystem
@@ -234,16 +230,16 @@ public abstract class AbstractStateDiffRecorder {
   public abstract boolean removeServiceRecorderOld(String serviceName, int placementEpoch);
 
   /**
-   * @deprecated legacy rsync-based init sync, used only by XdnGigapaxosApp's current code
-   *     paths (active when XDN_PB_INIT_SYNC_MODE=RSYNC, the default). New primary-backup
-   *     code paths configured with XDN_PB_INIT_SYNC_MODE=RECORDER use {@link #saveStateDiff}/
-   *     {@link #applySnpDiff} instead and never call this method.
+   * @deprecated legacy rsync-based init sync, used only by XdnGigapaxosApp's current code paths
+   *     (active when XDN_PB_INIT_SYNC_MODE=RSYNC, the default). New primary-backup code paths
+   *     configured with XDN_PB_INIT_SYNC_MODE=RECORDER use {@link #saveStateDiff}/ {@link
+   *     #applySnpDiff} instead and never call this method.
    */
   @Deprecated
   public abstract void initContainerSync(
-          String myNodeId,
-          String serviceName,
-          Map<String, InetAddress> ipAddresses,
-          int placementEpoch,
-          String sshKey);
+      String myNodeId,
+      String serviceName,
+      Map<String, InetAddress> ipAddresses,
+      int placementEpoch,
+      String sshKey);
 }

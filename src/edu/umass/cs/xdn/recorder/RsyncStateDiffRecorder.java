@@ -254,8 +254,8 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean saveStateDiff(String serviceName, int placementEpoch,
-                               byte[] encodedState, String filename) {
+  public boolean saveStateDiff(
+      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
     // TODO: implement saveStateDiff for this recorder type
     return true;
   }

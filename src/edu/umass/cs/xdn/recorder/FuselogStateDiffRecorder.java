@@ -439,8 +439,8 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean saveStateDiff(String serviceName, int placementEpoch,
-                               byte[] encodedState, String filename) {
+  public boolean saveStateDiff(
+      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
     // TODO(step 5): replace with the real two-phase implementation once FuselogStateDiffRecorder
     // is reconciled with main's independent perf work (#92, #93, #96).
     return true;
@@ -478,10 +478,12 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     Shell.runCommand("rm -rf " + primaryLiveDir);
     int code = Shell.runCommand("mkdir -p " + primaryLiveDir);
     if (code != 0) {
-      String errMessage = String.format(
-              "failed to create %s directory with exit code %d",
-              primaryLiveDir, code);
-      logger.log(Level.SEVERE, String.format("%s:%s - %s",
+      String errMessage =
+          String.format("failed to create %s directory with exit code %d", primaryLiveDir, code);
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
               this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
@@ -499,9 +501,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     int exitCode = Shell.runCommand(cmd, false, env);
     if (exitCode != 0) {
-      String errMessage = String.format(
+      String errMessage =
+          String.format(
               "failed to mount fuselog at %s with exit code %d", primaryLiveDir, exitCode);
-      logger.log(Level.SEVERE, String.format("%s:%s - %s",
+      logger.log(
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
               this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
@@ -519,19 +525,25 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         }
       } catch (IOException e) {
         lastError = e;
-        try { socketChannel.close(); } catch (IOException ignored) {}
+        try {
+          socketChannel.close();
+        } catch (IOException ignored) {
+        }
         socketChannel = null;
       }
-      try { Thread.sleep(100); } catch (InterruptedException ie) {
+      try {
+        Thread.sleep(100);
+      } catch (InterruptedException ie) {
         Thread.currentThread().interrupt();
         throw new RuntimeException(ie);
       }
     }
     if (socketChannel == null) {
-      throw new RuntimeException(String.format(
+      throw new RuntimeException(
+          String.format(
               "%s:%s - failed to connect to fuselog socket at %s after %d attempts",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              socketFile, maxAttempts), lastError);
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), socketFile, maxAttempts),
+          lastError);
     }
 
     if (!serviceFsSocket.containsKey(serviceName)) {
@@ -539,10 +551,14 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
     serviceFsSocket.get(serviceName).put(placementEpoch, socketChannel);
 
-    logger.log(Level.INFO, String.format(
+    logger.log(
+        Level.INFO,
+        String.format(
             "%s:%s - fuselog mounted on primaryLive/ for %s epoch %d",
-            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-            serviceName, placementEpoch));
+            this.nodeID,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            serviceName,
+            placementEpoch));
     return true;
   }
 
@@ -558,23 +574,30 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     assert serviceName != null : "serviceName should not be null";
     assert placementEpoch >= 0 : "placementEpoch should be non-negative";
 
-    ReentrantLock lock = captureStateDiffLocks.computeIfAbsent(
-            serviceName, k -> new ReentrantLock());
+    ReentrantLock lock =
+        captureStateDiffLocks.computeIfAbsent(serviceName, k -> new ReentrantLock());
     lock.lock();
     try {
       Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
       if (epochToChannelMap == null) {
-        logger.log(Level.WARNING, String.format(
+        logger.log(
+            Level.WARNING,
+            String.format(
                 "%s:%s - no socket map for service=%s, returning null",
                 this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
         return null;
       }
       SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
       if (socketChannel == null) {
-        logger.log(Level.SEVERE, String.format(
+        logger.log(
+            Level.SEVERE,
+            String.format(
                 "%s:%s - no socket channel for service=%s epoch=%d, registered epochs=%s",
-                this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-                serviceName, placementEpoch, epochToChannelMap.keySet()));
+                this.nodeID,
+                FuselogStateDiffRecorder.class.getSimpleName(),
+                serviceName,
+                placementEpoch,
+                epochToChannelMap.keySet()));
         return null;
       }
 
@@ -594,7 +617,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         while (numRead < 8) {
           n = socketChannel.read(sizeBuffer);
           if (n < 0) {
-            logger.log(Level.SEVERE, String.format(
+            logger.log(
+                Level.SEVERE,
+                String.format(
                     "%s:%s - socket closed while reading size header after %d bytes; reconnecting",
                     this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
             reconnectSocket(serviceName, placementEpoch);
@@ -608,7 +633,9 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       long stateDiffSize = sizeBuffer.getLong(0);
 
       if (stateDiffSize < 0 || stateDiffSize > MAX_STATEDIFF_BYTES) {
-        logger.log(Level.SEVERE, String.format(
+        logger.log(
+            Level.SEVERE,
+            String.format(
                 "%s:%s - garbage stateDiffSize=%d; reconnecting socket",
                 this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
         reconnectSocket(serviceName, placementEpoch);
@@ -625,10 +652,14 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         while (numRead < stateDiffSize) {
           int n = socketChannel.read(stateDiffBuffer);
           if (n < 0) {
-            logger.log(Level.SEVERE, String.format(
+            logger.log(
+                Level.SEVERE,
+                String.format(
                     "%s:%s - socket closed after reading %d/%d bytes",
-                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-                    numRead, stateDiffSize));
+                    this.nodeID,
+                    FuselogStateDiffRecorder.class.getSimpleName(),
+                    numRead,
+                    stateDiffSize));
             return null;
           }
           numRead += n;
@@ -639,10 +670,14 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
       byte[] stateDiff = stateDiffBuffer.array();
       long elapsedTimeMs = (System.nanoTime() - startTime) / 1_000_000;
-      logger.log(Level.INFO, String.format(
+      logger.log(
+          Level.INFO,
+          String.format(
               "%s:%s - capturing stateDiff within %d ms, size=%d bytes",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              elapsedTimeMs, stateDiff.length));
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              elapsedTimeMs,
+              stateDiff.length));
 
       return stateDiff;
     } finally {
@@ -656,26 +691,37 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     if (epochMap != null) {
       SocketChannel sc = epochMap.remove(placementEpoch);
       if (sc != null) {
-        try { sc.close(); } catch (IOException ignored) {}
+        try {
+          sc.close();
+        } catch (IOException ignored) {
+        }
       }
     }
 
     String primaryLiveDir = getTargetDirectory(serviceName, placementEpoch, LiveDirType.PRIMARY);
     int umountCode = Shell.runCommand("sudo umount " + primaryLiveDir, true);
     if (umountCode != 0) {
-      logger.log(Level.WARNING, String.format(
+      logger.log(
+          Level.WARNING,
+          String.format(
               "%s:%s - failed to unmount %s with exit code %d",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              primaryLiveDir, umountCode));
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              primaryLiveDir,
+              umountCode));
     }
 
     String serviceEpochDir = getServiceBaseDir(serviceName, placementEpoch);
     int rmCode = Shell.runCommand("rm -rf " + serviceEpochDir, false);
     if (rmCode != 0) {
-      logger.log(Level.WARNING, String.format(
+      logger.log(
+          Level.WARNING,
+          String.format(
               "%s:%s - failed to remove %s with exit code %d",
-              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(),
-              serviceEpochDir, rmCode));
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              serviceEpochDir,
+              rmCode));
       return false;
     }
 
@@ -714,14 +760,14 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       int snapCode = Shell.runCommand(String.format("rsync -a %s %s", targetDir, snapshotDir));
       hadExistingState = (snapCode == 0);
       logger.log(
-              Level.INFO,
-              String.format(
-                      "%s:%s - snapshotted existing state for %s:%d before remount (promotion); rsync=%d",
-                      this.nodeID,
-                      FuselogStateDiffRecorder.class.getSimpleName(),
-                      serviceName,
-                      placementEpoch,
-                      snapCode));
+          Level.INFO,
+          String.format(
+              "%s:%s - snapshotted existing state for %s:%d before remount (promotion); rsync=%d",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              serviceName,
+              placementEpoch,
+              snapCode));
     }
 
     // Create target mnt dir, if not yet exist.
@@ -731,13 +777,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     int code = Shell.runCommand("mkdir -p " + targetDir);
     if (code != 0) {
       String errMessage =
-              String.format(
-                      "failed to create target mount directory %s with exit code %d", targetDir, code);
+          String.format(
+              "failed to create target mount directory %s with exit code %d", targetDir, code);
       logger.log(
-              Level.SEVERE,
-              String.format(
-                      "%s:%s - %s",
-                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
 
@@ -776,20 +822,20 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // exact via L5 sqlite); keep off for services that do hardlink/rename/inode-reuse
     // aliasing. Enable with -DFUSELOG_WRITEBACK_CACHE=true on the AR JVM.
     env.put(
-            "FUSELOG_WRITEBACK_CACHE",
-            Boolean.parseBoolean(
-                    System.getProperty("FUSELOG_WRITEBACK_CACHE", Boolean.toString(writebackDefault)))
-                    ? "1"
-                    : "0");
+        "FUSELOG_WRITEBACK_CACHE",
+        Boolean.parseBoolean(
+                System.getProperty("FUSELOG_WRITEBACK_CACHE", Boolean.toString(writebackDefault)))
+            ? "1"
+            : "0");
     int exitCode = Shell.runCommand(cmd, false, env);
     if (exitCode != 0) {
       String errMessage =
-              String.format("failed to mount filesystem at %s with exit code %d", targetDir, exitCode);
+          String.format("failed to mount filesystem at %s with exit code %d", targetDir, exitCode);
       logger.log(
-              Level.SEVERE,
-              String.format(
-                      "%s:%s - %s",
-                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
+          Level.SEVERE,
+          String.format(
+              "%s:%s - %s",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), errMessage));
       throw new RuntimeException(errMessage);
     }
 
@@ -826,10 +872,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
     if (socketChannel == null) {
       throw new RuntimeException(
-              String.format(
-                      "%s:%s - failed to connect to the filesystem socket at %s after %d attempts",
-                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), socketFile, maxAttempts),
-              lastError);
+          String.format(
+              "%s:%s - failed to connect to the filesystem socket at %s after %d attempts",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), socketFile, maxAttempts),
+          lastError);
     }
 
     // Update the socket metadata.
@@ -847,15 +893,15 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
       int restoreCode = Shell.runCommand(String.format("rsync -a %s %s", snapshotDir, targetDir));
       Shell.runCommand("rm -rf " + snapshotDir);
       logger.log(
-              Level.INFO,
-              String.format(
-                      "%s:%s - restored snapshotted state into capture mount for %s:%d (promotion);"
-                              + " rsync=%d",
-                      this.nodeID,
-                      FuselogStateDiffRecorder.class.getSimpleName(),
-                      serviceName,
-                      placementEpoch,
-                      restoreCode));
+          Level.INFO,
+          String.format(
+              "%s:%s - restored snapshotted state into capture mount for %s:%d (promotion);"
+                  + " rsync=%d",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              serviceName,
+              placementEpoch,
+              restoreCode));
     }
 
     return true;
@@ -876,22 +922,22 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // PrimaryBackupManager captures and proposes it right after init. Only RSYNC init-sync drains
     // (it ships the init state out-of-band, making the buffered diffs redundant).
     boolean recorderInitSync =
-            "RECORDER"
-                    .equalsIgnoreCase(
-                            Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE));
+        "RECORDER"
+            .equalsIgnoreCase(
+                Config.getGlobalString(ReconfigurationConfig.RC.XDN_PB_INIT_SYNC_MODE));
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
     if (!recorderInitSync && epochToChannelMap != null) {
       SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
       if (socketChannel != null) {
         drainStateDiff(socketChannel, serviceName, placementEpoch);
         logger.log(
-                Level.INFO,
-                String.format(
-                        "%s:%s - cleared init stateDiff for service=%s epoch=%d",
-                        this.nodeID,
-                        FuselogStateDiffRecorder.class.getSimpleName(),
-                        serviceName,
-                        placementEpoch));
+            Level.INFO,
+            String.format(
+                "%s:%s - cleared init stateDiff for service=%s epoch=%d",
+                this.nodeID,
+                FuselogStateDiffRecorder.class.getSimpleName(),
+                serviceName,
+                placementEpoch));
       }
     }
     return true;
@@ -905,22 +951,22 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
     if (epochToChannelMap == null) {
       logger.log(
-              Level.WARNING,
-              String.format(
-                      "%s:%s - no socket map for service=%s, returning null",
-                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
+          Level.WARNING,
+          String.format(
+              "%s:%s - no socket map for service=%s, returning null",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), serviceName));
       return null;
     }
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch);
     if (socketChannel == null) {
       logger.log(
-              Level.WARNING,
-              String.format(
-                      "%s:%s - no socket channel for service=%s epoch=%d, returning null",
-                      this.nodeID,
-                      FuselogStateDiffRecorder.class.getSimpleName(),
-                      serviceName,
-                      placementEpoch));
+          Level.WARNING,
+          String.format(
+              "%s:%s - no socket channel for service=%s epoch=%d, returning null",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              serviceName,
+              placementEpoch));
       return null;
     }
 
@@ -929,10 +975,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // Send get command (g) to the filesystem
     try {
       logger.log(
-              Level.FINEST,
-              String.format(
-                      "%s:%s - sending FuselogFS command",
-                      this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
+          Level.FINEST,
+          String.format(
+              "%s:%s - sending FuselogFS command",
+              this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
       socketChannel.write(ByteBuffer.wrap("g".getBytes()));
     } catch (IOException e) {
       throw new RuntimeException(e);
@@ -943,10 +989,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     sizeBuffer.order(ByteOrder.LITTLE_ENDIAN);
     sizeBuffer.clear();
     logger.log(
-            Level.FINEST,
-            String.format(
-                    "%s:%s - reading FuselogFS response",
-                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
+        Level.FINEST,
+        String.format(
+            "%s:%s - reading FuselogFS response",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName()));
     int numRead = 0;
     try {
       int n;
@@ -954,11 +1000,11 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
         n = socketChannel.read(sizeBuffer);
         if (n < 0) {
           logger.log(
-                  Level.SEVERE,
-                  String.format(
-                          "%s:%s - filesystem socket closed while reading size header after %d bytes;"
-                                  + " reconnecting",
-                          this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
+              Level.SEVERE,
+              String.format(
+                  "%s:%s - filesystem socket closed while reading size header after %d bytes;"
+                      + " reconnecting",
+                  this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), numRead));
           reconnectSocket(serviceName, placementEpoch);
           return null;
         }
@@ -969,23 +1015,23 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
     long stateDiffSize = sizeBuffer.getLong(0);
     logger.log(
-            Level.FINE,
-            String.format(
-                    "%s:%s - receiving stateDiff with size=%d bytes",
-                    this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
+        Level.FINE,
+        String.format(
+            "%s:%s - receiving stateDiff with size=%d bytes",
+            this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), stateDiffSize));
 
     // Sanity-check the size. If it is negative or implausibly large, the socket is
     // desynchronized (leftover payload bytes from a previous incomplete read are being
     // misinterpreted as a size header).  Close and reconnect to restore the protocol.
     if (stateDiffSize < 0 || stateDiffSize > MAX_STATEDIFF_BYTES) {
       logger.log(
-              Level.SEVERE,
-              String.format(
-                      "%s:%s - garbage stateDiffSize=%d (raw LE bytes=[%s]); reconnecting socket",
-                      this.nodeID,
-                      FuselogStateDiffRecorder.class.getSimpleName(),
-                      stateDiffSize,
-                      toHexString(sizeBuffer.array())));
+          Level.SEVERE,
+          String.format(
+              "%s:%s - garbage stateDiffSize=%d (raw LE bytes=[%s]); reconnecting socket",
+              this.nodeID,
+              FuselogStateDiffRecorder.class.getSimpleName(),
+              stateDiffSize,
+              toHexString(sizeBuffer.array())));
       reconnectSocket(serviceName, placementEpoch);
       return null;
     }
@@ -1005,13 +1051,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
           int n = socketChannel.read(stateDiffBuffer);
           if (n < 0) {
             logger.log(
-                    Level.SEVERE,
-                    String.format(
-                            "%s:%s - socket closed after reading %d/%d bytes",
-                            this.nodeID,
-                            FuselogStateDiffRecorder.class.getSimpleName(),
-                            numRead,
-                            stateDiffSize));
+                Level.SEVERE,
+                String.format(
+                    "%s:%s - socket closed after reading %d/%d bytes",
+                    this.nodeID,
+                    FuselogStateDiffRecorder.class.getSimpleName(),
+                    numRead,
+                    stateDiffSize));
             return null;
           }
           numRead += n;
@@ -1029,16 +1075,16 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
             int ready = selector.select(PAYLOAD_READ_TIMEOUT_MS);
             if (ready == 0) {
               logger.log(
-                      Level.SEVERE,
-                      String.format(
-                              "%s:%s - timeout after %dms reading payload; received %d/%d bytes."
-                                      + " Reconnecting socket to restore protocol sync"
-                                      + " (fuselog may be stuck in write_all).",
-                              this.nodeID,
-                              FuselogStateDiffRecorder.class.getSimpleName(),
-                              PAYLOAD_READ_TIMEOUT_MS,
-                              numRead,
-                              stateDiffSize));
+                  Level.SEVERE,
+                  String.format(
+                      "%s:%s - timeout after %dms reading payload; received %d/%d bytes."
+                          + " Reconnecting socket to restore protocol sync"
+                          + " (fuselog may be stuck in write_all).",
+                      this.nodeID,
+                      FuselogStateDiffRecorder.class.getSimpleName(),
+                      PAYLOAD_READ_TIMEOUT_MS,
+                      numRead,
+                      stateDiffSize));
               key.cancel();
               reconnectSocket(serviceName, placementEpoch);
               return null;
@@ -1047,13 +1093,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
             int n = socketChannel.read(stateDiffBuffer);
             if (n < 0) {
               logger.log(
-                      Level.SEVERE,
-                      String.format(
-                              "%s:%s - socket closed after reading %d/%d bytes",
-                              this.nodeID,
-                              FuselogStateDiffRecorder.class.getSimpleName(),
-                              numRead,
-                              stateDiffSize));
+                  Level.SEVERE,
+                  String.format(
+                      "%s:%s - socket closed after reading %d/%d bytes",
+                      this.nodeID,
+                      FuselogStateDiffRecorder.class.getSimpleName(),
+                      numRead,
+                      stateDiffSize));
               key.cancel();
               return null;
             }
@@ -1068,10 +1114,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
           socketChannel.configureBlocking(true);
         } catch (IOException e) {
           logger.log(
-                  Level.WARNING,
-                  String.format(
-                          "%s:%s - failed to restore blocking mode: %s",
-                          this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), e.getMessage()));
+              Level.WARNING,
+              String.format(
+                  "%s:%s - failed to restore blocking mode: %s",
+                  this.nodeID, FuselogStateDiffRecorder.class.getSimpleName(), e.getMessage()));
         }
       }
     }
@@ -1082,13 +1128,13 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     long elapsedTime = endTime - startTime;
     double elapsedTimeMs = (double) elapsedTime / 1_000_000.0;
     logger.log(
-            Level.INFO,
-            String.format(
-                    "%s:%s - capturing stateDiff within %f ms, size=%d bytes",
-                    this.nodeID,
-                    FuselogStateDiffRecorder.class.getSimpleName(),
-                    elapsedTimeMs,
-                    stateDiff.length));
+        Level.INFO,
+        String.format(
+            "%s:%s - capturing stateDiff within %f ms, size=%d bytes",
+            this.nodeID,
+            FuselogStateDiffRecorder.class.getSimpleName(),
+            elapsedTimeMs,
+            stateDiff.length));
 
     return stateDiff;
   }
