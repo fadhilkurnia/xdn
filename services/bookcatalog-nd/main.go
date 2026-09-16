@@ -21,7 +21,11 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 		// Calculate duration and log
 		duration := time.Since(start)
-		log.Printf("%s %s [lat=%v]", r.Method, r.URL.Path, duration)
+		reqId := r.Header.Get("X-XDN-ReqId")
+		if reqId == "" {
+			reqId = "-"
+		}
+		log.Printf("%s %s [reqId=%s] [lat=%v]", r.Method, r.URL.Path, reqId, duration)
 	})
 }
 
