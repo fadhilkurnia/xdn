@@ -23,6 +23,7 @@ import edu.umass.cs.reconfiguration.PaxosReplicaCoordinator;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ClientReconfigurationPacket;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.SetCoordinatorNodeRequest;
+import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.sequential.AwReplicaCoordinator;
 import edu.umass.cs.xdn.cluster.StatefulClusterReplicaCoordinator;
@@ -722,6 +723,28 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       throw new RuntimeException(e);
     }
 
+    // A replication-mode override riding the placement metadata switches the service's
+    // protocol for this and subsequent epochs: the updated property is stored below and
+    // round-trips through every future epoch's final state (like the cluster ordinal map),
+    // so the switch is sticky until overridden again.
+    if (placementMetadata != null && !placementMetadata.isEmpty()) {
+      try {
+        JSONObject metadataJson = new JSONObject(placementMetadata);
+        String modeKey = AbstractDemandProfile.Keys.REPLICATION_MODE.toString();
+        if (metadataJson.has(modeKey) && !metadataJson.isNull(modeKey)) {
+          serviceProperty.setReplicationMode(metadataJson.getString(modeKey));
+          logger.log(
+              Level.INFO,
+              "{0}:XdnReplicaCoordinator - replication mode override for {1}: {2} (epoch={3})",
+              new Object[] {
+                myNodeID, serviceName, serviceProperty.getReplicationMode(), placementEpoch
+              });
+        }
+      } catch (JSONException e) {
+        logger.log(Level.WARNING, "Ignoring unparseable placement metadata: " + placementMetadata);
+      }
+    }
+
     // Infer the replica coordinator based on the declared properties
     AbstractReplicaCoordinator<NodeIDType> coordinator =
         inferCoordinatorByProperties(serviceProperty);
@@ -803,6 +826,22 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // meaningless for a self-clustering service.
     if (serviceProperties.isClusterManaged()) {
       return this.statefulClusterCoordinator;
+    }
+
+    // An explicit replication-mode override (set at launch or via a placement update with
+    // REPLICATION) takes precedence over the determinism/consistency inference below. Active
+    // replication replays every request at every replica and therefore requires determinism;
+    // primary-backup executes once and ships statediffs, so it is always legal.
+    String replicationOverride = serviceProperties.getReplicationMode();
+    if (replicationOverride != null) {
+      if (replicationOverride.equals("primary-backup")) {
+        return this.primaryBackupCoordinator;
+      }
+      if (replicationOverride.equals("active")) {
+        assert serviceProperties.isDeterministic()
+            : "active replication requires a deterministic service";
+        return this.paxosCoordinator;
+      }
     }
 
     // An explicitly declared EVENTUAL consistency always uses the anti-entropy
