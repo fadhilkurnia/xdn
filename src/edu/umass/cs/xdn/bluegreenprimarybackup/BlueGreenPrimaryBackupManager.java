@@ -1,0 +1,1381 @@
+package edu.umass.cs.xdn.bluegreenprimarybackup;
+
+import edu.umass.cs.gigapaxos.PaxosConfig;
+import edu.umass.cs.gigapaxos.PaxosManager;
+import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
+import edu.umass.cs.gigapaxos.interfaces.Replicable;
+import edu.umass.cs.gigapaxos.interfaces.Request;
+import edu.umass.cs.nio.GenericMessagingTask;
+import edu.umass.cs.nio.interfaces.IntegerPacketType;
+import edu.umass.cs.nio.interfaces.Messenger;
+import edu.umass.cs.nio.interfaces.NodeConfig;
+import edu.umass.cs.nio.interfaces.Stringifiable;
+import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
+import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
+import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.XdnApp;
+import edu.umass.cs.xdn.bluegreenprimarybackup.packets.*;
+import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
+import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.service.ConsistencyModel;
+import edu.umass.cs.xdn.service.ServiceInstance;
+import edu.umass.cs.xdn.service.ServiceProperty;
+import edu.umass.cs.xdn.utils.Shell;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.*;
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+/**
+ * BlueGreenPrimaryBackupManager implements the xdn primary-backup event/action protocol designed
+ * across the prior conversation. This is a from-scratch implementation, independent of
+ * edu.umass.cs.primarybackup.PrimaryBackupManager.
+ *
+ * <p>This is a BOILERPLATE / starting point. Event handler bodies follow the pseudocode exactly as
+ * designed, with container/recorder integration left as TODO stubs pointing at SandboxManager /
+ * AbstractStateDiffRecorder, since the exact ServiceInstance construction wasn't traced in this
+ * pass.
+ *
+ * <p>Known deliberate gaps (per design discussion, left for the fuzzer/tester to surface before
+ * hardening): - Any single missed/reordered ApplyStateDiff aggressively triggers this node to
+ * attempt to become primary (no distinction between "primary is actually dead" and "one packet got
+ * dropped"). - No drain-before-stop when switching blue/green backup containers. - No explicit
+ * handling of duplicate/stale (difference &lt;= 0) state diffs beyond falling through as a no-op. -
+ * Possible unsynchronized race between createReplicaGroup()'s own coordinator-nudge retry loop and
+ * the background startPollingForCoordinatorStatus() poller, both of which may call
+ * tryToBePaxosCoordinator()/getPaxosCoordinator() concurrently.
+ *
+ * <p>TODO: see BlueGreenApplyStateDiffPacket's javadoc for an unresolved question about which field
+ * name (currPlacementEpoch) the Notify(ApplyStateDiff) handler should compare against -- not yet
+ * fixed per explicit instruction.
+ *
+ * @param <NodeIDType> the type used to identify nodes in the system.
+ */
+public class BlueGreenPrimaryBackupManager<NodeIDType> {
+
+  private enum Role {
+    BACKUP,
+    PRIMARY_CANDIDATE,
+    PRIMARY
+  }
+
+  private final NodeIDType myNodeID;
+  private final Stringifiable<NodeIDType> unstringer;
+  private final XdnApp app;
+  private final PaxosManager<NodeIDType> paxosManager;
+  private final Messenger<NodeIDType, JSONObject> messenger;
+  private final ConcurrentHashMap<Long, RequestAndCallback> forwardedRequests =
+      new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, AbstractStateDiffRecorder.LiveDirType>
+      currentLiveDirType = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, ReentrantLock> snpDiffApplyLocks =
+      new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, AtomicBoolean> snpDiffApplyStopFlags =
+      new ConcurrentHashMap<>();
+
+  private record RequestAndCallback(
+      Request request, ExecutedCallback callback, long forwardStartNanos, boolean isWriteRequest) {}
+
+  private final Logger logger =
+      Logger.getLogger(BlueGreenPrimaryBackupManager.class.getSimpleName());
+
+  // -------------------------------------------------------------------------
+  // Per-service protocol state, keyed by serviceName.
+  // -------------------------------------------------------------------------
+  /** Keep track of the nodes in the replica group */
+  private final ConcurrentHashMap<String, Set<NodeIDType>> replicaGroups =
+      new ConcurrentHashMap<>();
+
+  /** Placement epoch currently known for this service (set of nodes hosting it). */
+  private final ConcurrentHashMap<String, Integer> currPlacement = new ConcurrentHashMap<>();
+
+  /** Node ID of the current primary for this service. */
+  private final ConcurrentHashMap<String, NodeIDType> currPrimaryID = new ConcurrentHashMap<>();
+
+  /** This node's current role for the service. */
+  private final ConcurrentHashMap<String, Role> currentRole = new ConcurrentHashMap<>();
+
+  /** Epoch of the current primary within the current placement. */
+  private final ConcurrentHashMap<String, Integer> currPlacementEpoch = new ConcurrentHashMap<>();
+
+  // Count of state diffs commited so far, used for gap detection.
+  private final ConcurrentHashMap<String, Integer> cmtDiffCount = new ConcurrentHashMap<>();
+  // Count of state diffs applied to `snp/` from `cmtDiff/`
+  private final ConcurrentHashMap<String, Integer> snpDiffCount = new ConcurrentHashMap<>();
+  // stateDiffCount at the time the backup last switched live containers (blue/green).
+  private final ConcurrentHashMap<String, Integer> liveDiffCount = new ConcurrentHashMap<>();
+
+  /**
+   * Per-service single thread executor: serializes captureStateDiff() + propose(). TODO: not
+   * recreated/drained on epoch change -- see handleBlueGreenStartEpochPacket.
+   */
+  private final ConcurrentHashMap<String, ExecutorService> captureExecutors =
+      new ConcurrentHashMap<>();
+
+  /**
+   * Next stateDiff count to hand out for a service, advanced eagerly at assignment time (unlike
+   * cmtDiffCount, which only updates after Paxos commit). Only ever touched from within that
+   * service's captureExecutors task.
+   */
+  private final ConcurrentHashMap<String, Integer> nextAssignedCount = new ConcurrentHashMap<>();
+
+  /**
+   * Atomically hands out the next stateDiff count for a service and advances the counter in one
+   * step. Must only be called from within that service's captureExecutors task.
+   */
+  private int assignNextCount(String serviceName) {
+    return nextAssignedCount.merge(serviceName, 1, Integer::sum) - 1;
+  }
+
+  /** Flags used to stop the coordinator-status background poller per service. */
+  private final ConcurrentHashMap<String, AtomicBoolean> coordinatorPollerStopFlags =
+      new ConcurrentHashMap<>();
+
+  /** Flags used to stop the backup blue/green poller per service. */
+  private final ConcurrentHashMap<String, AtomicBoolean> backupPollerStopFlags =
+      new ConcurrentHashMap<>();
+
+  // TODO: thread pool for coordinator polling / backup polling background
+  //  threads. Using a simple cached pool here as a placeholder.
+  private final ExecutorService backgroundThreadPool = Executors.newCachedThreadPool();
+
+  public BlueGreenPrimaryBackupManager(
+      NodeIDType myNodeID,
+      Stringifiable<NodeIDType> unstringer,
+      XdnApp app,
+      PaxosManager<NodeIDType> paxosManager,
+      Messenger<NodeIDType, JSONObject> messenger) {
+    this.myNodeID = myNodeID;
+    this.unstringer = unstringer;
+    this.app = app;
+    this.paxosManager = paxosManager;
+    this.messenger = messenger;
+  }
+
+  // =========================================================================
+  // Upon createReplicaGroup(serviceName, epoch, initialState, nodes, placementMetadata)
+  // =========================================================================
+
+  public boolean createReplicaGroup(
+      String serviceName,
+      int epoch,
+      String initialState,
+      Set<NodeIDType> nodes,
+      String placementMetadata) {
+
+    boolean serviceAlreadyExists = currentRole.containsKey(serviceName);
+    if (!serviceAlreadyExists) {
+      startPollingForCoordinatorStatus(serviceName);
+    }
+
+    if (epoch < currPlacement.getOrDefault(serviceName, Integer.MIN_VALUE)) {
+      return true;
+    }
+
+    paxosManager.createPaxosInstanceForcibly(
+        serviceName,
+        epoch,
+        nodes,
+        app,
+        initialState, // passes "xdn:init:..." or "xdn:final:..." directly
+        // XdnApp.restore() routes these to NonDeterministicService.restore()
+        // which calls createServiceInstance() (no container started yet)
+        0L // timeout — clamped internally to PC.CAN_CREATE_TIMEOUT
+        );
+    replicaGroups.put(serviceName, nodes);
+
+    NodeIDType preferredCoordinator = null;
+    if (placementMetadata != null) {
+      try {
+        JSONObject json = new JSONObject(placementMetadata);
+        String preferredCoordinatorNodeId =
+            json.getString(AbstractDemandProfile.Keys.PREFERRED_COORDINATOR.toString());
+        preferredCoordinator = unstringer.valueOf(preferredCoordinatorNodeId);
+      } catch (JSONException e) {
+        logger.log(
+            Level.WARNING,
+            "{0}:BlueGreenPrimaryBackupManager failed to parse preferred coordinator "
+                + "in placement metadata: {1}",
+            new Object[] {myNodeID, e});
+      }
+    }
+
+    if (preferredCoordinator == null || !preferredCoordinator.equals(myNodeID)) {
+      return true;
+    }
+
+    int attempt = 0;
+    int attemptLimit = 10; // TODO: move to config
+    while (++attempt <= attemptLimit) {
+      if (myNodeID.equals(paxosManager.getPaxosCoordinator(serviceName))) {
+        break;
+      }
+      paxosManager.tryToBePaxosCoordinator(serviceName);
+      // TODO: sleep between attempts (e.g. Thread.sleep) -- omitted for
+      //  now since this whole method is allowed to block per design
+      //  discussion, but a backoff is still needed here.
+    }
+
+    return true;
+  }
+
+  // =========================================================================
+  // Upon startPollingForCoordinatorStatus(serviceName) -- background thread
+  // =========================================================================
+
+  private void startPollingForCoordinatorStatus(String serviceName) {
+    AtomicBoolean stopFlag = new AtomicBoolean(false);
+    coordinatorPollerStopFlags.put(serviceName, stopFlag);
+
+    currentRole.put(serviceName, Role.BACKUP);
+
+    backgroundThreadPool.submit(
+        () -> {
+          while (!stopFlag.get()) {
+            NodeIDType coordinator = paxosManager.getPaxosCoordinator(serviceName);
+            Integer placement = paxosManager.getVersion(serviceName);
+
+            if (coordinator == null || placement == null) {
+              sleepQuietly(1000); // TODO: tune poll interval
+              continue;
+            }
+
+            Integer currentPlacementVal = currPlacement.get(serviceName);
+            int nextPrimaryEpoch;
+            if (currentPlacementVal == null || placement > currentPlacementVal) {
+              nextPrimaryEpoch = 0;
+            } else if (placement.equals(currentPlacementVal)) {
+
+              if (myNodeID.equals(currPrimaryID.get(serviceName))) {
+                continue;
+              }
+
+              nextPrimaryEpoch = currPlacementEpoch.getOrDefault(serviceName, -1) + 1;
+            } else {
+              sleepQuietly(1000);
+              continue;
+            }
+
+            if (myNodeID.equals(coordinator)) {
+              currentRole.put(serviceName, Role.PRIMARY_CANDIDATE);
+              BlueGreenStartEpochPacket startPacket =
+                  new BlueGreenStartEpochPacket(
+                      serviceName, placement, nextPrimaryEpoch, myNodeID.toString());
+              paxosManager.propose(
+                  serviceName,
+                  startPacket,
+                  (executedRequest, handled) -> {
+                    // Success
+                  });
+            }
+
+            sleepQuietly(1000); // TODO: tune poll interval
+          }
+        });
+  }
+
+  // =========================================================================
+  // Upon Notify(BlueGreenStartEpochPacket packet)
+  // =========================================================================
+
+  private boolean handleBlueGreenStartEpochPacket(BlueGreenStartEpochPacket packet) {
+    String serviceName = packet.getServiceName();
+    logger.log(
+        Level.FINE,
+        "{0}:PBM handleBlueGreenStartEpochPacket fired for {1} packet={2}",
+        new Object[] {myNodeID, serviceName, packet.getNextPrimaryID()});
+
+    boolean isNewService =
+        currPlacement.get(serviceName) == null
+            || currPrimaryID.get(serviceName) == null
+            || currPlacementEpoch.get(serviceName) == null;
+    Integer curPlacementVal = currPlacement.get(serviceName);
+    boolean isNewPlacement = curPlacementVal == null || packet.getNextPlacement() > curPlacementVal;
+
+    NodeIDType oldPrimaryID = currPrimaryID.get(serviceName);
+    boolean isOldPrimary = myNodeID.equals(oldPrimaryID);
+
+    NodeIDType nextPrimaryID = unstringer.valueOf(packet.getNextPrimaryID());
+    boolean isNewPrimary = myNodeID.equals(nextPrimaryID);
+
+    boolean isNewRoleTheSame = (isOldPrimary && isNewPrimary) || (!isOldPrimary && !isNewPrimary);
+
+    logger.log(
+        Level.WARNING,
+        "{0}:PBM handleBlueGreenStartEpochPacket-{1} placement={2}->{3} primary={4}->{5} ",
+        new Object[] {
+          myNodeID,
+          serviceName,
+          currPlacement.get(serviceName),
+          packet.getNextPlacement(),
+          currPrimaryID.get(serviceName),
+          packet.getNextPrimaryID()
+        });
+
+    if (isNewService || isNewPlacement) {
+      currPlacement.put(serviceName, packet.getNextPlacement());
+      currPrimaryID.put(serviceName, nextPrimaryID);
+      currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
+      cmtDiffCount.put(serviceName, -1);
+      snpDiffCount.put(serviceName, -1);
+      // TODO: nextAssignedCount is reset here, but the per-service
+      //  captureExecutors entry is NOT recreated/drained on epoch change.
+      //  A write request already queued onto the old epoch's executor task
+      //  will still run after this reset, reading the NEW pEpoch/placement
+      //  (captured at task run-time, not submit-time) against the freshly
+      //  reset counter -- producing a count/epoch combination that doesn't
+      //  correspond to either epoch cleanly. Same class of gap as the
+      //  existing "no drain-before-stop when switching blue/green backup
+      //  containers" note above; needs a drain-old-executor-before-reset
+      //  step (or an epoch-stamped rejection check inside the submitted
+      //  task) once reconfiguration teardown (stopOldContainer) is designed.
+      nextAssignedCount.put(serviceName, 0);
+      snpDiffApplyLocks.put(serviceName, new ReentrantLock());
+      AtomicBoolean stopFlag = new AtomicBoolean(false);
+      snpDiffApplyStopFlags.put(serviceName, stopFlag);
+      startSnpDiffApplyThread(serviceName, stopFlag);
+    } else if (packet.getNextPlacement() == curPlacementVal) {
+      currPrimaryID.put(serviceName, nextPrimaryID);
+      currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
+    }
+
+    if (isNewRoleTheSame) {
+      // Even if role is the same, a backup with eventual consistency
+      // needs to start its container if it hasn't done so yet
+      if (!isNewPrimary
+          && isEventualConsistency(serviceName)
+          && currentLiveDirType.get(serviceName) == null
+          && backupPollerStopFlags.get(serviceName) == null) {
+        initializeBackupContainer(serviceName);
+      }
+      return true;
+    }
+
+    stopOldContainer(serviceName); // Blocking
+
+    if (isNewPrimary) {
+      currentRole.put(serviceName, Role.PRIMARY);
+      initializePrimaryContainer(serviceName); // Blocking
+    } else if (isEventualConsistency(serviceName)) {
+      initializeBackupContainer(serviceName); // Runs in background
+    }
+
+    return true;
+  }
+
+  // =========================================================================
+  // Upon initializePrimaryContainer(serviceName)
+  // =========================================================================
+
+  private void initializePrimaryContainer(String serviceName) {
+    // Starts container + recorder via NonDeterministicService.startContainerAsPrimary()
+    this.app.restore(serviceName, ServiceProperty.NON_DETERMINISTIC_START_PRIMARY_PREFIX);
+
+    // TODO: stateful container healthcheck is already done inside startService()
+    //  before non-stateful containers start. This waitUntilReady() call is therefore
+    //  redundant for the stateful container — only the non-stateful containers
+    //  actually need to be waited on here. Refactor waitUntilReady() to skip
+    //  already-healthy containers, or split into stateful/non-stateful variants.
+    //  NOTE: Also consider XdnApp.waitUntilReady
+    boolean ready = this.app.waitUntilReady(serviceName);
+    if (!ready) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:BlueGreenPrimaryBackupManager initializePrimaryContainer() "
+              + "container not ready for {1}",
+          new Object[] {myNodeID, serviceName});
+      return;
+    }
+
+    captureExecutors
+        .computeIfAbsent(serviceName, k -> Executors.newSingleThreadExecutor())
+        .submit(
+            () -> {
+              int bootstrapCount = assignNextCount(serviceName);
+
+              byte[] diff = this.app.captureStatediff(serviceName);
+              byte[] finalDiff = diff == null ? new byte[0] : diff;
+
+              logger.log(
+                  Level.WARNING,
+                  "{0} proposing stateDiff count={3} to {2} ",
+                  new Object[] {myNodeID, finalDiff.length, serviceName, bootstrapCount});
+
+              proposeStateDiff(
+                  serviceName,
+                  currPlacement.get(serviceName),
+                  currPlacementEpoch.get(serviceName),
+                  bootstrapCount,
+                  finalDiff,
+                  (executedRequest, handled) ->
+                      logger.log(
+                          Level.WARNING,
+                          "{0} successfully proposed stateDiff count={3} to {2}",
+                          new Object[] {myNodeID, handled, serviceName, bootstrapCount}));
+            });
+  }
+
+  // =========================================================================
+  // Upon Notify(BlueGreenApplyStateDiffPacket packet)
+  // =========================================================================
+
+  private boolean handleBlueGreenApplyStateDiffPacket(BlueGreenApplyStateDiffPacket packet) {
+    String serviceName = packet.getServiceName();
+    logger.log(
+        Level.INFO,
+        "{0}:PBM handleBlueGreenApplyStateDiffPacket checks: "
+            + "packet.placement={1} currPlacement={2} "
+            + "packet.primaryID={3} currPrimaryID={4} "
+            + "packet.primaryEpoch={5} currPlacementEpoch={6}",
+        new Object[] {
+          myNodeID,
+          packet.getPlacement(),
+          currPlacement.getOrDefault(serviceName, -1),
+          packet.getPrimaryID(),
+          currPrimaryID.get(serviceName),
+          packet.getPrimaryEpoch(),
+          currPlacementEpoch.get(serviceName)
+        });
+
+    if (packet.getPlacement() != currPlacement.getOrDefault(serviceName, -1)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:PBM handleBlueGreenApplyStateDiffPacket placement mismatch for {1}",
+          new Object[] {myNodeID, serviceName});
+      throw new IllegalStateException("placement mismatch for " + serviceName);
+    }
+
+    NodeIDType packetPrimaryID = unstringer.valueOf(packet.getPrimaryID());
+    if (!packetPrimaryID.equals(currPrimaryID.get(serviceName))) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:PBM handleBlueGreenApplyStateDiffPacket primaryID mismatch for {1}",
+          new Object[] {myNodeID, serviceName});
+      throw new IllegalStateException("primaryID mismatch for " + serviceName);
+    }
+
+    Integer currPrimaryEpoch = currPlacementEpoch.get(serviceName);
+    if (currPrimaryEpoch == null || currPrimaryEpoch != packet.getPrimaryEpoch()) {
+      logger.log(
+          Level.WARNING,
+          "{0}:PBM handleBlueGreenApplyStateDiffPacket primaryEpoch mismatch for {1} "
+              + "{2} != {3}",
+          new Object[] {myNodeID, serviceName, currPrimaryEpoch, packet.getPrimaryEpoch()});
+    }
+
+    int currentCount = cmtDiffCount.getOrDefault(serviceName, 0);
+    int difference = packet.getStateDiffCount() - currentCount;
+
+    if (difference == 1) {
+      boolean applied;
+      if (!packet.isLargeDiff()) {
+        // Small diff - apply inline bytes
+        applied = app.saveStatediff(serviceName, packet.getStateDiff(), packet.getDiffFilename());
+      } else {
+        // Large diff - mv prpDiff/ -> cmtDiff/
+        String filename = packet.getDiffFilename();
+        String prpPath = app.getPrpDiffFilePath(serviceName, filename);
+
+        // Wait for file to appear (scp may still be in flight on non-primary nodes)
+        int maxWaitMs = 30_000;
+        int waitedMs = 0;
+        while (!new File(prpPath).exists() && waitedMs < maxWaitMs) {
+          sleepQuietly(500);
+          waitedMs += 500;
+        }
+
+        if (!new File(prpPath).exists()) {
+          logger.log(
+              Level.SEVERE,
+              "{0}:PBM handleBlueGreenApplyStateDiffPacket large diff file not found "
+                  + "after {1}ms: {2} for {3}",
+              new Object[] {myNodeID, maxWaitMs, prpPath, serviceName});
+          applied = false;
+        } else {
+          boolean moved = app.movePrpDiffToCmtDiff(serviceName, filename);
+          if (!moved) {
+            logger.log(
+                Level.SEVERE,
+                "{0}:PBM handleBlueGreenApplyStateDiffPacket failed to mv {1} for {2}",
+                new Object[] {myNodeID, filename, serviceName});
+            applied = false;
+          }
+
+          // File already in cmtDiff/ after mv - no further action needed here.
+          // applySnpDiff will be called by applyCmtDiffToSnpDiff before next backup refresh.
+          applied = true;
+        }
+      }
+
+      if (!applied) {
+        logger.log(
+            Level.WARNING,
+            "{0}:PBM handleBlueGreenApplyStateDiffPacket applyStatediff failed for {1} count={2}",
+            new Object[] {myNodeID, serviceName, packet.getStateDiffCount()});
+      }
+      cmtDiffCount.put(serviceName, packet.getStateDiffCount());
+    } else if (difference > 1) {
+      // Deliberate per design: any gap triggers this node to attempt
+      // to become the new primary itself, rather than resyncing.
+      logger.log(
+          Level.WARNING,
+          "{0}:PBM gap detected for {1}: expected next={2} but got={3} "
+              + "(missed {4} diff(s)) -- attempting to become new primary",
+          new Object[] {
+            myNodeID, serviceName, currentCount + 1, packet.getStateDiffCount(), difference - 1
+          });
+
+      currentRole.put(serviceName, Role.PRIMARY_CANDIDATE);
+      int nextEpoch = currPlacementEpoch.getOrDefault(serviceName, 0) + 1;
+      BlueGreenStartEpochPacket startPacket =
+          new BlueGreenStartEpochPacket(
+              serviceName, currPlacement.get(serviceName), nextEpoch, myNodeID.toString());
+      paxosManager.propose(
+          serviceName,
+          startPacket,
+          (executedRequest, handled) -> {
+            // Propose succeed
+          });
+    }
+    // difference <= 0: duplicate or stale diff -- deliberate no-op for now.
+
+    return true;
+  }
+
+  // =========================================================================
+  // Upon stopOldContainer(serviceName)
+  // =========================================================================
+
+  private void stopOldContainer(String serviceName) {
+    boolean isOldPrimary = myNodeID.equals(currPrimaryID.get(serviceName));
+
+    if (isOldPrimary) {
+      // TODO: stop stateDiffRecorder
+      // TODO: stop primary container via SandboxManager.stopService(...)
+      // TODO: clear "primaryLive/"
+    } else if (isEventualConsistency(serviceName)) {
+      AtomicBoolean backupStopFlag = backupPollerStopFlags.get(serviceName);
+      if (backupStopFlag != null) {
+        backupStopFlag.set(true);
+      }
+      // TODO: stop backupContainer
+      // TODO: clear "backupLive1/" and "backupLive2/"
+    }
+  }
+
+  // =========================================================================
+  // Upon initializeBackupContainer(serviceName) -- blue/green poller
+  // =========================================================================
+
+  private void initializeBackupContainer(String serviceName) {
+    AtomicBoolean stopFlag = new AtomicBoolean(false);
+    backupPollerStopFlags.put(serviceName, stopFlag);
+
+    backgroundThreadPool.submit(
+        () -> {
+          AbstractStateDiffRecorder.LiveDirType currentLiveType = null;
+          long lastSwitchTimeMs = 0;
+
+          try {
+            while (!stopFlag.get()) {
+              long now = System.currentTimeMillis();
+              logger.log(
+                  Level.FINE,
+                  "{0}:PBM initializeBackupContainer poller tick for {1} " + "currentLiveType={2}",
+                  new Object[] {myNodeID, serviceName, currentLiveType});
+              if (lastSwitchTimeMs != 0 && now - lastSwitchTimeMs < 30_000) {
+                sleepQuietly(1000);
+                continue;
+              }
+
+              // Decide next live type
+              AbstractStateDiffRecorder.LiveDirType nextLiveType =
+                  (currentLiveType == null
+                          || currentLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP2)
+                      ? AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                      : AbstractStateDiffRecorder.LiveDirType.BACKUP2;
+
+              String nextLivePrefix =
+                  nextLiveType == AbstractStateDiffRecorder.LiveDirType.BACKUP1
+                      ? ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX
+                      : ServiceProperty.NON_DETERMINISTIC_START_BACKUP2_PREFIX;
+
+              ReentrantLock snpLock = snpDiffApplyLocks.get(serviceName);
+              if (snpLock == null) {
+                // TODO: stop snpDiffApplyThread properly - not yet implemented
+                throw new IllegalStateException("snpDiffApplyLock is null for " + serviceName);
+              }
+
+              snpLock.lock();
+              int currentSnpDiffCount;
+              boolean started;
+              try {
+                currentSnpDiffCount = snpDiffCount.getOrDefault(serviceName, -1);
+                logger.log(
+                    Level.WARNING,
+                    "{0}:PBM initializeBackupContainer starting {1} "
+                        + "at snpDiffCount={2} for {3}",
+                    new Object[] {myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
+                started = this.app.restore(serviceName, nextLivePrefix);
+                liveDiffCount.put(serviceName, currentSnpDiffCount);
+              } finally {
+                snpLock.unlock();
+              }
+
+              if (!started) {
+                logger.log(
+                    Level.SEVERE,
+                    "{0}:PBM initializeBackupContainer failed to start {1} for {2}",
+                    new Object[] {myNodeID, nextLiveType, serviceName});
+                // Do NOT update lastSwitchTimeMs
+                app.stopBackupContainer(serviceName, nextLiveType);
+                sleepQuietly(5000);
+                continue;
+              }
+
+              // Wait for new container to be healthy
+              boolean ready = this.app.waitUntilReady(serviceName, nextLiveType);
+              if (!ready) {
+                logger.log(
+                    Level.SEVERE,
+                    "{0}:PBM initializeBackupContainer container failed healthcheck {1} for {2}",
+                    new Object[] {myNodeID, nextLiveType, serviceName});
+                app.stopBackupContainer(serviceName, nextLiveType);
+                sleepQuietly(5000);
+                continue;
+              }
+
+              // Reroute: update currentLiveDirType BEFORE liveDiffCount
+              // liveDiffCount already set inside the lock above
+              currentLiveDirType.put(serviceName, nextLiveType);
+
+              logger.log(
+                  Level.WARNING,
+                  "{0}:PBM initializeBackupContainer switched to {1} "
+                      + "liveDiffCount={2} for {3} — container healthy and serving requests",
+                  new Object[] {myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
+
+              // Record switchover to log file
+              String switchoverLog = app.getServiceBaseDir(serviceName) + "switchovers.log";
+              String logLine =
+                  System.currentTimeMillis()
+                      + " "
+                      + myNodeID.toString()
+                      + " "
+                      + nextLiveType.name().toLowerCase()
+                      + " "
+                      + currentSnpDiffCount
+                      + "\n";
+              try {
+                Files.writeString(
+                    java.nio.file.Path.of(switchoverLog),
+                    logLine,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+              } catch (java.io.IOException e) {
+                logger.log(
+                    Level.WARNING,
+                    "{0}:PBM initializeBackupContainer failed to write "
+                        + "switchover log for {1}: {2}",
+                    new Object[] {myNodeID, serviceName, e.getMessage()});
+              }
+
+              // Stop old container (skip on first iteration)
+              if (currentLiveType != null) {
+                logger.log(
+                    Level.WARNING,
+                    "{0}:PBM initializeBackupContainer stopping old {1} for {2}",
+                    new Object[] {myNodeID, currentLiveType, serviceName});
+                this.app.stopBackupContainer(serviceName, currentLiveType);
+              }
+
+              // Update tracking - only on success
+              currentLiveType = nextLiveType;
+              lastSwitchTimeMs = System.currentTimeMillis();
+            }
+          } catch (Throwable t) {
+            logger.log(
+                Level.SEVERE,
+                "{0}:PBM initializeBackupContainer poller for {1} died: {2}",
+                new Object[] {myNodeID, serviceName, t});
+          }
+        });
+  }
+
+  // =========================================================================
+  // Upon receiving request({clientHeader})
+  // =========================================================================
+
+  public boolean handleClientRequest(
+      String serviceName,
+      Request request,
+      Integer clientStateDiffCount,
+      boolean isWriteRequest,
+      ExecutedCallback callback) {
+
+    if (!currentRole.containsKey(serviceName)) {
+      if (request instanceof XdnHttpRequest xdnHttpRequest) {
+        ByteBuf content = Unpooled.copiedBuffer(("Service not found: " + serviceName).getBytes());
+        FullHttpResponse response =
+            new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND, content);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+        xdnHttpRequest.setHttpResponse(response);
+        callback.executed(xdnHttpRequest, true);
+      }
+
+      return true;
+    }
+
+    Role role = currentRole.get(serviceName);
+    logger.log(
+        Level.INFO,
+        "{0}:PBM handleClientRequest serviceName={1} role={2}",
+        new Object[] {myNodeID, serviceName, role});
+
+    if (role == Role.PRIMARY_CANDIDATE) {
+      if (request instanceof XdnHttpRequest xdnHttpRequest) {
+        ByteBuf content =
+            Unpooled.copiedBuffer("Service unavailable: primary election in progress".getBytes());
+        FullHttpResponse response =
+            new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1, HttpResponseStatus.SERVICE_UNAVAILABLE, content);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+        xdnHttpRequest.setHttpResponse(response);
+        callback.executed(xdnHttpRequest, true);
+      }
+      return true;
+    } else if (role == Role.PRIMARY) {
+      logger.log(
+          Level.INFO,
+          "{0}:PBM handleClientRequest PRIMARY executing request for {1}",
+          new Object[] {myNodeID, serviceName});
+
+      long reqId =
+          (request instanceof XdnHttpRequest xdnHttpRequest) ? xdnHttpRequest.getRequestID() : -1L;
+
+      long tExecuteStart = System.nanoTime();
+      app.execute(request);
+      long tExecuteEnd = System.nanoTime();
+
+      if (isEventualConsistency(serviceName) && !isWriteRequest) {
+        double dockerExecuteMs = (tExecuteEnd - tExecuteStart) / 1_000_000.0;
+        logger.log(
+            Level.WARNING,
+            "LATENCY_BREAKDOWN reqId={0} service={1} isWrite={2} count={3} "
+                + "dockerExecuteMs={4} captureMs={5} proposeAckMs={6}",
+            new Object[] {reqId, serviceName, isWriteRequest, -1, dockerExecuteMs, 0.0, 0.0});
+        callback.executed(request, true);
+        return true;
+      }
+
+      logger.log(
+          Level.INFO,
+          "{0}:PBM handleClientRequest PRIMARY executed, capturing diff for {1}",
+          new Object[] {myNodeID, serviceName});
+
+      captureExecutors
+          .computeIfAbsent(serviceName, k -> Executors.newSingleThreadExecutor())
+          .submit(
+              () -> {
+                int nextCount = assignNextCount(serviceName);
+
+                long tCaptureStart = System.nanoTime();
+                byte[] diff = app.captureStatediff(serviceName);
+                long tCaptureEnd = System.nanoTime();
+                logger.log(
+                    Level.INFO,
+                    "{0}:PBM handleClientRequest PRIMARY diff captured size={2} for {1}",
+                    new Object[] {myNodeID, serviceName, diff.length});
+
+                byte[] finalDiff = diff == null ? new byte[0] : diff;
+                // Do NOT update stateDiffCount here n let handleBlueGreenApplyStateDiffPacket
+                // update it after Paxos commits, uniformly on all nodes including primary.
+                int pEpoch = currPlacementEpoch.get(serviceName);
+                int placement = currPlacement.get(serviceName);
+
+                logger.log(
+                    Level.FINE,
+                    "{0}:PBM handleClientRequest PRIMARY proposing ApplyStateDiff count={2} for"
+                        + " {1}",
+                    new Object[] {myNodeID, serviceName, nextCount});
+
+                long tProposeStart = System.nanoTime();
+                proposeStateDiff(
+                    serviceName,
+                    placement,
+                    pEpoch,
+                    nextCount,
+                    finalDiff,
+                    (executedRequest, handled) -> {
+                      long tProposeEnd = System.nanoTime();
+                      logger.log(
+                          Level.INFO,
+                          "{0}:PBM handleClientRequest PRIMARY propose callback handled={2} for {1}"
+                              + " (count={3})",
+                          new Object[] {myNodeID, serviceName, handled, nextCount});
+
+                      double dockerExecuteMs = (tExecuteEnd - tExecuteStart) / 1_000_000.0;
+                      double captureMs = (tCaptureEnd - tCaptureStart) / 1_000_000.0;
+                      double proposeAckMs = (tProposeEnd - tProposeStart) / 1_000_000.0;
+                      logger.log(
+                          Level.WARNING,
+                          "LATENCY_BREAKDOWN reqId={0} service={1} isWrite={2} count={3} "
+                              + "dockerExecuteMs={4} captureMs={5} proposeAckMs={6}",
+                          new Object[] {
+                            reqId,
+                            serviceName,
+                            isWriteRequest,
+                            nextCount,
+                            dockerExecuteMs,
+                            captureMs,
+                            proposeAckMs
+                          });
+
+                      callback.executed(request, handled);
+                    });
+              });
+      return true;
+
+    } else if (role == Role.BACKUP) {
+      if (!isEventualConsistency(serviceName) || isWriteRequest) {
+        return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
+      }
+
+      Integer liveCount = liveDiffCount.get(serviceName);
+      if (liveCount == null || (clientStateDiffCount != null && clientStateDiffCount > liveCount)) {
+        return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
+      }
+
+      AbstractStateDiffRecorder.LiveDirType liveType = currentLiveDirType.get(serviceName);
+      if (liveType == null) {
+        if (request instanceof XdnHttpRequest xdnHttpRequest) {
+          ByteBuf content =
+              Unpooled.copiedBuffer(
+                  "Service unavailable: backup container not yet ready".getBytes());
+          FullHttpResponse response =
+              new DefaultFullHttpResponse(
+                  HttpVersion.HTTP_1_1, HttpResponseStatus.SERVICE_UNAVAILABLE, content);
+          response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
+          xdnHttpRequest.setHttpResponse(response);
+          callback.executed(xdnHttpRequest, true);
+        }
+        return true;
+      }
+
+      Integer backupPort = app.getActiveBackupPort(serviceName, liveType);
+      if (backupPort == null) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:PBM handleClientRequest backup port not found for {1} type={2}",
+            new Object[] {myNodeID, serviceName, liveType});
+        return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
+      }
+
+      return app.forwardToBackupContainer(serviceName, backupPort, request, callback);
+    }
+
+    throw new IllegalStateException("Unhandled role " + role + " for service " + serviceName);
+  }
+
+  // =========================================================================
+  // Upon startSnpDiffApplyThread(serviceName)
+  // =========================================================================
+
+  private void startSnpDiffApplyThread(String serviceName, AtomicBoolean stopFlag) {
+    String stateDiffDir = app.getStateDiffDir(serviceName);
+    backgroundThreadPool.submit(
+        () -> {
+          while (!stopFlag.get()) {
+            int nextCount = snpDiffCount.getOrDefault(serviceName, -1) + 1;
+
+            // Scan cmtDiff/ for file matching *:<nextCount>.diff
+            if (stateDiffDir == null) {
+              sleepQuietly(100);
+              continue;
+            }
+
+            File dir = new File(stateDiffDir);
+            final int count = nextCount;
+            File[] matches = dir.listFiles((d, name) -> name.endsWith(":" + count + ".diff"));
+
+            if (matches == null || matches.length == 0) {
+              sleepQuietly(100);
+              continue;
+            }
+
+            String filename = matches[0].getName();
+
+            ReentrantLock lock = snpDiffApplyLocks.get(serviceName);
+            if (lock == null) {
+              sleepQuietly(100);
+              continue;
+            }
+
+            lock.lock();
+            try {
+              logger.log(
+                  Level.FINEST,
+                  "{0}:PBM snpDiffApplyThread applying count={1} file={2} for {3}",
+                  new Object[] {myNodeID, nextCount, filename, serviceName});
+
+              boolean applied = app.applySnpDiff(serviceName, filename);
+              if (!applied) {
+                logger.log(
+                    Level.SEVERE,
+                    "{0}:PBM snpDiffApplyThread failed to apply count={1} for {2}",
+                    new Object[] {myNodeID, nextCount, serviceName});
+              } else {
+                snpDiffCount.put(serviceName, nextCount);
+                logger.log(
+                    Level.FINE,
+                    "{0}:PBM snpDiffApplyThread applied count={1} for {2} " + "snpDiffCount={3}",
+                    new Object[] {myNodeID, nextCount, serviceName, nextCount});
+              }
+            } finally {
+              lock.unlock();
+            }
+          }
+
+          logger.log(
+              Level.WARNING,
+              "{0}:PBM snpDiffApplyThread stopped for {1}",
+              new Object[] {myNodeID, serviceName});
+        });
+  }
+
+  // =========================================================================
+  // Dispatch entry point -- routes committed packets to the right handler.
+  // Called from XdnApp.execute() for Paxos-delivered BlueGreenPrimaryBackupPackets.
+  // =========================================================================
+
+  public boolean handleBlueGreenPrimaryBackupPacket(
+      BlueGreenPrimaryBackupPacket packet, ExecutedCallback callback) {
+    if (packet instanceof BlueGreenStartEpochPacket startEpochPacket) {
+      return handleBlueGreenStartEpochPacket(startEpochPacket);
+    }
+    if (packet instanceof BlueGreenApplyStateDiffPacket applyStateDiffPacket) {
+      return handleBlueGreenApplyStateDiffPacket(applyStateDiffPacket);
+    }
+    if (packet instanceof BlueGreenForwardedRequestPacket forwardedRequestPacket) {
+      return handleBlueGreenForwardedRequestPacket(forwardedRequestPacket);
+    }
+    if (packet instanceof BlueGreenResponsePacket responsePacket) {
+      return handleBlueGreenResponsePacket(responsePacket);
+    }
+
+    throw new RuntimeException(
+        "Unhandled BlueGreenPrimaryBackupPacket type: " + packet.getClass().getSimpleName());
+  }
+
+  // =========================================================================
+  // Helpers
+  // =========================================================================
+
+  private void proposeStateDiff(
+      String serviceName,
+      int placement,
+      int pEpoch,
+      int count,
+      byte[] diff,
+      ExecutedCallback callback) {
+    String filename = "p" + pEpoch + ":" + myNodeID.toString() + ":" + count + ".diff";
+    BlueGreenApplyStateDiffPacket applyPacket;
+
+    if (diff.length <= 500 * 1024) {
+      // Small diff — propose inline
+      applyPacket =
+          new BlueGreenApplyStateDiffPacket(
+              serviceName, placement, pEpoch, myNodeID.toString(), count, diff);
+    } else {
+      // Large diff — write to prpDiff/, scp to backups, propose with isLargeDiff=true
+      boolean written = app.writeToPrpDiff(serviceName, filename, diff);
+      if (!written) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:PBM proposeStateDiff failed to write large diff for {1}",
+            new Object[] {myNodeID, serviceName});
+        if (callback != null) callback.executed(null, false);
+        return;
+      }
+
+      String localPath = app.getPrpDiffFilePath(serviceName, filename);
+      boolean scpOk = scpToBackups(serviceName, localPath, filename);
+      if (!scpOk) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:PBM proposeStateDiff scp failed for {1} file={2}",
+            new Object[] {myNodeID, serviceName, filename});
+        if (callback != null) callback.executed(null, false);
+        return;
+      }
+
+      applyPacket =
+          new BlueGreenApplyStateDiffPacket(
+              serviceName, placement, pEpoch, myNodeID.toString(), count);
+    }
+
+    paxosManager.propose(
+        serviceName,
+        applyPacket,
+        (executedRequest, handled) -> {
+          if (callback != null) callback.executed(executedRequest, handled);
+        });
+  }
+
+  private boolean isEventualConsistency(String serviceName) {
+    ServiceInstance instance = this.app.getServiceInstance(serviceName);
+    if (instance == null) return false;
+    return instance.property.getConsistencyModel().equals(ConsistencyModel.EVENTUAL);
+  }
+
+  private boolean forwardRequestToPrimary(
+      String serviceName, Request request, ExecutedCallback callback, boolean isWriteRequest) {
+    NodeIDType primaryID = currPrimaryID.get(serviceName);
+    if (primaryID == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:PBM forwardRequestToPrimary unknown primary for {1}",
+          new Object[] {myNodeID, serviceName});
+      return false;
+    }
+
+    byte[] encodedRequest = request.toString().getBytes(StandardCharsets.ISO_8859_1);
+    BlueGreenForwardedRequestPacket forwardPacket =
+        new BlueGreenForwardedRequestPacket(serviceName, myNodeID.toString(), encodedRequest);
+
+    long forwardStartNanos = System.nanoTime();
+    forwardedRequests.put(
+        forwardPacket.getRequestID(),
+        new RequestAndCallback(request, callback, forwardStartNanos, isWriteRequest));
+
+    logger.log(
+        Level.INFO,
+        "{0}:PBM forwardRequestToPrimary forwarding to {1} for {2}",
+        new Object[] {myNodeID, primaryID, serviceName});
+
+    try {
+      messenger.send(new GenericMessagingTask<>(primaryID, forwardPacket));
+    } catch (IOException | JSONException e) {
+      forwardedRequests.remove(forwardPacket.getRequestID());
+      throw new RuntimeException(e);
+    }
+    return true;
+  }
+
+  private boolean handleBlueGreenForwardedRequestPacket(BlueGreenForwardedRequestPacket packet) {
+    String serviceName = packet.getServiceName();
+
+    logger.log(
+        Level.INFO,
+        "{0}:PBM handleBlueGreenForwardedRequestPacket from {1} for {2}",
+        new Object[] {myNodeID, packet.getEntryNodeId(), serviceName});
+
+    String encodedRequestStr =
+        new String(packet.getEncodedForwardedRequest(), StandardCharsets.ISO_8859_1);
+
+    Request request;
+    try {
+      request = app.getRequest(encodedRequestStr);
+    } catch (RequestParseException e) {
+      throw new RuntimeException(e);
+    }
+
+    if (request == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:PBM handleBlueGreenForwardedRequestPacket failed to parse request for {1}",
+          new Object[] {myNodeID, serviceName});
+      return false;
+    }
+
+    long localReqId =
+        (request instanceof XdnHttpRequest xdnHttpRequest) ? xdnHttpRequest.getRequestID() : -1L;
+    logger.log(
+        Level.WARNING,
+        "FORWARD_MAP forwardId={0} localReqId={1} service={2}",
+        new Object[] {packet.getRequestID(), localReqId, serviceName});
+
+    NodeIDType entryNodeID = unstringer.valueOf(packet.getEntryNodeId());
+    long originalRequestId = packet.getRequestID();
+
+    boolean isWriteRequest = false;
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      HttpMethod method = xdnHttpRequest.getHttpRequest().method();
+      isWriteRequest =
+          method.equals(HttpMethod.POST)
+              || method.equals(HttpMethod.PUT)
+              || method.equals(HttpMethod.DELETE)
+              || method.equals(HttpMethod.PATCH);
+    }
+
+    return handleClientRequest(
+        serviceName,
+        request,
+        null,
+        isWriteRequest,
+        (executedRequest, handled) -> {
+          byte[] encodedResponse = executedRequest.toString().getBytes(StandardCharsets.ISO_8859_1);
+
+          if (executedRequest instanceof XdnHttpRequest xhr) {
+            encodedResponse = xhr.toBytes(true);
+          }
+
+          BlueGreenResponsePacket responsePacket =
+              new BlueGreenResponsePacket(serviceName, originalRequestId, encodedResponse);
+
+          try {
+            messenger.send(new GenericMessagingTask<>(entryNodeID, responsePacket));
+          } catch (IOException | JSONException e) {
+            throw new RuntimeException(e);
+          }
+        });
+  }
+
+  private boolean handleBlueGreenResponsePacket(BlueGreenResponsePacket packet) {
+    logger.log(
+        Level.INFO,
+        "{0}:PBM handleBlueGreenResponsePacket for {1} requestId={2}",
+        new Object[] {myNodeID, packet.getServiceName(), packet.getRequestID()});
+
+    RequestAndCallback rc = forwardedRequests.remove(packet.getRequestID());
+    if (rc == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:PBM handleBlueGreenResponsePacket unknown requestId={1} for {2}",
+          new Object[] {myNodeID, packet.getRequestID(), packet.getServiceName()});
+      return false;
+    }
+
+    double forwardRoundTripMs = (System.nanoTime() - rc.forwardStartNanos()) / 1_000_000.0;
+    logger.log(
+        Level.WARNING,
+        "LATENCY_FORWARD forwardId={0} service={1} isWrite={2} forwardRoundTripMs={3}",
+        new Object[] {
+          packet.getRequestID(), packet.getServiceName(), rc.isWriteRequest(), forwardRoundTripMs
+        });
+
+    String encodedResponseStr =
+        new String(packet.getEncodedResponse(), StandardCharsets.ISO_8859_1);
+
+    Request response;
+    try {
+      response = app.getRequest(encodedResponseStr);
+      if (response instanceof edu.umass.cs.xdn.request.XdnHttpRequest) {
+        response = edu.umass.cs.xdn.request.XdnHttpRequest.createFromString(encodedResponseStr);
+      }
+    } catch (RequestParseException e) {
+      throw new RuntimeException(e);
+    }
+
+    if (response == null) {
+      logger.log(
+          Level.WARNING,
+          "{0}:PBM handleBlueGreenResponsePacket failed to parse response for {1}",
+          new Object[] {myNodeID, packet.getServiceName()});
+      return false;
+    }
+
+    rc.callback().executed(response, true);
+    return true;
+  }
+
+  private void sleepQuietly(long millis) {
+    try {
+      Thread.sleep(millis);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+  }
+
+  private boolean scpToBackups(String serviceName, String localPath, String filename) {
+    Set<NodeIDType> nodes = replicaGroups.get(serviceName);
+    if (nodes == null) return true;
+
+    String sshKey =
+        edu.umass.cs.utils.Config.getGlobalString(
+            edu.umass.cs.gigapaxos.PaxosConfig.PC.SSH_KEY_PATH);
+
+    // Cast unstringer to NodeConfig to get IP addresses
+    @SuppressWarnings("unchecked")
+    NodeConfig<NodeIDType> nodeConfig = (NodeConfig<NodeIDType>) unstringer;
+
+    // Run scp to all backup nodes in parallel
+    java.util.List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
+    java.util.concurrent.ExecutorService scpPool =
+        java.util.concurrent.Executors.newFixedThreadPool(nodes.size());
+
+    for (NodeIDType node : nodes) {
+      if (node.equals(myNodeID)) continue; // skip self
+
+      java.net.InetAddress addr = nodeConfig.getNodeAddress(node);
+      String ip = addr.getHostAddress();
+      String destPath =
+          app.getPrpDiffFilePath(node.toString().toLowerCase(), serviceName, filename);
+      String destDir = destPath.substring(0, destPath.lastIndexOf('/') + 1);
+
+      futures.add(
+          scpPool.submit(
+              () -> {
+                String cmd;
+                if (ip.equals("127.0.0.1") || ip.equals("localhost")) {
+                  // Same machine: use cp
+                  Shell.runCommand("mkdir -p " + destDir);
+                  cmd = String.format("cp %s %s", localPath, destPath);
+                } else {
+                  // Remote machine: use scp
+                  String scpOpts =
+                      (sshKey != null && !sshKey.isBlank())
+                          ? "-i " + sshKey + " -o StrictHostKeyChecking=no"
+                          : "-o StrictHostKeyChecking=no";
+                  String mkdirCmd = String.format("ssh %s %s mkdir -p %s", scpOpts, ip, destDir);
+                  int mkdirCode = Shell.runCommand(mkdirCmd);
+                  if (mkdirCode != 0) {
+                    logger.log(
+                        Level.WARNING,
+                        "{0}:PBM scpToBackups remote mkdir failed exit={1} cmd={2}",
+                        new Object[] {myNodeID, mkdirCode, mkdirCmd});
+                  }
+                  cmd = String.format("scp %s %s %s:%s", scpOpts, localPath, ip, destPath);
+                }
+                logger.log(
+                    Level.WARNING, "{0}:PBM scpToBackups cmd={1}", new Object[] {myNodeID, cmd});
+                int code = Shell.runCommand(cmd);
+                if (code != 0) {
+                  logger.log(
+                      Level.SEVERE,
+                      "{0}:PBM scpToBackups failed exit={1} cmd={2}",
+                      new Object[] {myNodeID, code, cmd});
+                }
+                return code == 0;
+              }));
+    }
+
+    scpPool.shutdown();
+    boolean allOk = true;
+    for (java.util.concurrent.Future<Boolean> f : futures) {
+      try {
+        if (!f.get()) allOk = false;
+      } catch (Exception e) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:PBM scpToBackups exception: {1}",
+            new Object[] {myNodeID, e.getMessage()});
+        allOk = false;
+      }
+    }
+    return allOk;
+  }
+
+  // =========================================================================
+  // Public Methods
+  // =========================================================================
+
+  public Set<NodeIDType> getReplicaGroup(String serviceName) {
+    return replicaGroups.get(serviceName);
+  }
+
+  public boolean isPrimary(String serviceName) {
+    return Role.PRIMARY.equals(currentRole.get(serviceName));
+  }
+
+  // =========================================================================
+  // PrimaryBackupMiddlewareApp — Replicable wrapper passed to PaxosManager.
+  // Intercepts committed BlueGreenPrimaryBackupPackets and routes them to the manager.
+  // Everything else is passed through to XdnApp.
+  // =========================================================================
+  public static class PrimaryBackupMiddlewareApp implements Replicable {
+    private final XdnApp xdnApp;
+    private BlueGreenPrimaryBackupManager<?> manager;
+    private final Logger logger =
+        Logger.getLogger(BlueGreenPrimaryBackupManager.class.getSimpleName());
+
+    public PrimaryBackupMiddlewareApp(XdnApp xdnApp) {
+      this.xdnApp = xdnApp;
+    }
+
+    public void setManager(BlueGreenPrimaryBackupManager<?> manager) {
+      this.manager = manager;
+    }
+
+    @Override
+    public boolean execute(Request request) {
+      logger.log(
+          Level.WARNING,
+          "PBM MiddlewareApp.execute() request={0}",
+          new Object[] {request.getClass().getSimpleName()});
+      return execute(request, true);
+    }
+
+    @Override
+    public boolean execute(Request request, boolean doNotReplyToClient) {
+      if (request == null) return true;
+      assert manager != null : "setManager() must be called before execute()";
+
+      if (request instanceof BlueGreenPrimaryBackupPacket packet) {
+        return manager.handleBlueGreenPrimaryBackupPacket(packet, null);
+      }
+
+      return xdnApp.execute(request, doNotReplyToClient);
+    }
+
+    @Override
+    public Request getRequest(String stringified) throws RequestParseException {
+      if (stringified == null || stringified.isEmpty()) return null;
+      BlueGreenPrimaryBackupPacketType packetType =
+          BlueGreenPrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(
+              stringified.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+      if (packetType != null) {
+        return BlueGreenPrimaryBackupPacket.createFromBytes(
+            stringified.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+      }
+      return xdnApp.getRequest(stringified);
+    }
+
+    @Override
+    public Set<IntegerPacketType> getRequestTypes() {
+      Set<IntegerPacketType> types = new HashSet<>(xdnApp.getRequestTypes());
+      types.addAll(java.util.Arrays.asList(BlueGreenPrimaryBackupPacketType.values()));
+      return types;
+    }
+
+    @Override
+    public String checkpoint(String name) {
+      return xdnApp.checkpoint(name);
+    }
+
+    @Override
+    public boolean restore(String name, String state) {
+      return xdnApp.restore(name, state);
+    }
+  }
+
+  // =========================================================================
+  // Paxos configuration required for primary-backup correctness.
+  // =========================================================================
+  public static void setupPaxosConfiguration() {
+    String[] args = {
+      String.format("%s=%b", PaxosConfig.PC.ENABLE_EMBEDDED_STORE_SHUTDOWN, true),
+      String.format("%s=%b", PaxosConfig.PC.ENABLE_STARTUP_LEADER_ELECTION, false),
+      String.format("%s=%b", PaxosConfig.PC.FORWARD_PREEMPTED_REQUESTS, false),
+      String.format("%s=%d", PaxosConfig.PC.PACKET_DEMULTIPLEXER_THREADS, 0),
+      String.format("%s=%b", PaxosConfig.PC.HIBERNATE_OPTION, false),
+      String.format("%s=%b", PaxosConfig.PC.BATCHING_ENABLED, true),
+    };
+    Config.register(args);
+  }
+}
