@@ -39,12 +39,12 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fuzz_differential import (  # noqa: E402
-    APPLY_BIN, APPLY_DIR, BASE_DIR, FUSELOG_BIN, MOUNT_DIR,
+    APPLY_BIN, APPLY_DIR, BACKEND, BASE_DIR, FUSELOG_BIN, MOUNT_DIR,
     STATEDIFF_FILE,
     OP_OVERWRITE, OP_EXTEND, OP_TRUNCATE, OP_UNLINK, OP_RENAME,
     OP_MKDIR, OP_RMDIR, OP_CHMOD, OP_CHOWN, OP_LINK, OP_SYMLINK,
     apply_op, compare_trees, dump_failure, ensure_clean_dirs,
-    harvest_statediff, log, op_summary, snapshot_tree,
+    harvest_statediff, log, op_summary, run_apply, snapshot_tree,
     start_fuselog, stop_fuselog,
 )
 
@@ -87,6 +87,12 @@ ALL_OP_TYPES = [
 # OP_TRUNCATE is intentionally excluded: a concurrent truncate + write
 # pair has the same push-vs-pwrite ordering race as overlapping writes,
 # and unlike writes, we can't sidestep it with thread-owned offsets.
+
+# The op list is built here rather than by fuzz_differential.pick_op(), so
+# the backend's unsupported-op mask is not inherited and is applied again.
+if BACKEND.unsupported_ops:
+    ALL_OP_TYPES = [o for o in ALL_OP_TYPES
+                    if o not in BACKEND.unsupported_ops]
 
 
 def gen_op(rng, thread_id):
@@ -253,14 +259,9 @@ def main():
         stop_fuselog(proc)
         proc = None
 
-        env = os.environ.copy()
-        env["FUSELOG_STATEDIFF_FILE"] = str(STATEDIFF_FILE)
-        result = subprocess.run(
-            [str(APPLY_BIN), str(APPLY_DIR) + "/"],
-            env=env, capture_output=True, text=True,
-        )
+        result = run_apply()
         if result.returncode != 0:
-            log(f"fuselog-apply failed (rc={result.returncode}):")
+            log(f"{APPLY_BIN.name} failed (rc={result.returncode}):")
             log(result.stdout)
             log(result.stderr)
             dump = dump_failure(seed, all_ops, payload, fuselog_log_path)

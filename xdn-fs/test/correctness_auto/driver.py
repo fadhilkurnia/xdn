@@ -12,14 +12,21 @@ and report back the two things everything else in this project needs:
 
 Nothing else in this project (workload generator, harvester, checkers)
 should ever need to know it's specifically talking to a FUSE-based, C++
-implementation. Adding a second implementation later means writing one
-new Driver subclass; nothing else changes.
+implementation. Adding a second implementation means writing one new Driver
+subclass; nothing else changes.
+
+Two exist: FuselogV2Driver (FUSE mount, FLG3 batches) and EbpfDriver (VFS
+probes, VFS1 batches). They differ in what "writable_path" means -- a mount
+for the first, an ordinary traced directory for the second -- but both hand
+back the same DriverHandle, so the workload generator writes to it the same
+way either way.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -28,7 +35,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from parser import FuselogV2Parser, WireFormatParser
+from parser import FuselogV2Parser, Vfs1Parser, WireFormatParser
 
 
 @dataclass
@@ -36,6 +43,7 @@ class DriverHandle:
     writable_path: str
     harvest_socket_path: str
     parser: WireFormatParser
+    harvest_request: bytes = b"g\n"
 
 
 class Driver(ABC):
@@ -216,4 +224,154 @@ class FuselogV2Driver(Driver):
         raise TimeoutError(
             f"harvest socket at {self._socket_path} did not become ready "
             f"within {self.mount_wait_timeout}s"
+        )
+
+
+class EbpfDriver(Driver):
+    """Drives the eBPF VFS capturer (experiments/eBPF/statediff_vfs).
+
+    Differences from FuselogV2Driver that the harness has to care about:
+
+      - Nothing is mounted. The positional directory argument is an ordinary
+        directory that the capturer *observes* via VFS probes, so there is no
+        mount to wait for and none to unmount; os.path.ismount would never
+        become true and must not be used as the readiness signal. The socket
+        appearing is the only readiness signal there is.
+      - It must run as root, and this process must be its direct parent:
+        in socket mode statediff_vfs stops once it is reparented (that is
+        what --no-parent-check suppresses), so it cannot be launched through
+        sudo from an unprivileged harness. Fail early and clearly rather than
+        hanging on a socket that will never appear.
+      - SIGINT is the documented clean stop. SIGKILL would skip probe detach.
+      - Loading the skeleton and attaching ~20 fentry/fexit/kprobe handlers
+        takes appreciably longer than a FUSE mount, hence the larger default
+        timeout.
+    """
+
+    def __init__(self, ebpf_binary: str, work_root: str | None = None,
+                 extra_env: dict | None = None, start_timeout: float = 30.0,
+                 mmap_snapshot: bool = True):
+        self.ebpf_binary = ebpf_binary
+        self.work_root = work_root or tempfile.mkdtemp(prefix="ebpf_stress_")
+        self.extra_env = extra_env or {}
+        self.start_timeout = start_timeout
+        # mmap stores are invisible without this. Anything that maps its files
+        # -- SQLite's shm/WAL-index above all -- needs it, and it costs nothing
+        # for a workload that never mmaps, so it is on by default here even
+        # though the binary defaults it off.
+        self.mmap_snapshot = mmap_snapshot
+
+        self._proc: subprocess.Popen | None = None
+        self._data_dir: str | None = None
+        self._socket_path: str | None = None
+        self._log_path: str | None = None
+        self._log_file = None
+
+    def start(self) -> DriverHandle:
+        if os.geteuid() != 0:
+            raise RuntimeError(
+                "EbpfDriver must run as root: loading BPF programs needs "
+                "privilege, the harvest socket is created 0600 and root-owned, "
+                "and statediff_vfs exits in socket mode once reparented, so it "
+                "cannot be launched via sudo from an unprivileged harness -- "
+                "re-run the whole harness under sudo"
+            )
+
+        run_id = uuid.uuid4().hex[:12]
+        self._data_dir = os.path.join(self.work_root, f"data_{run_id}")
+        self._socket_path = os.path.join(
+            tempfile.gettempdir(), f"ebpf_test_{run_id}.sock"
+        )
+        # The capturer resolves and stats its target at startup, so the
+        # directory has to exist before it is launched.
+        os.makedirs(self._data_dir, exist_ok=True)
+
+        env = dict(os.environ)
+        env.update(self.extra_env)
+
+        cmd = [self.ebpf_binary]
+        if self.mmap_snapshot:
+            cmd.append("--mmap-snapshot")
+        cmd += ["--socket", self._socket_path, self._data_dir]
+
+        self._log_path = os.path.join(self.work_root, f"ebpf_{run_id}.log")
+        self._log_file = open(self._log_path, "w")
+        self._proc = subprocess.Popen(
+            cmd, env=env,
+            stdout=self._log_file, stderr=subprocess.STDOUT,
+        )
+
+        self._wait_for_socket()
+
+        return DriverHandle(
+            writable_path=self._data_dir,
+            harvest_socket_path=self._socket_path,
+            parser=Vfs1Parser(),
+            # statediff_vfs closes the connection on any byte that is not
+            # exactly 'g'; fuselog's "g\n" would kill the session.
+            harvest_request=b"g",
+        )
+
+    def stop(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.send_signal(signal.SIGINT)
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+
+        if self._socket_path and os.path.exists(self._socket_path):
+            try:
+                os.remove(self._socket_path)
+            except OSError:
+                pass
+
+        if self._log_file is not None:
+            self._log_file.close()
+
+    @property
+    def log_path(self) -> str | None:
+        """Path to the capturer's stdout+stderr log file for this run."""
+        return self._log_path
+
+    def cleanup_work_root(self) -> None:
+        shutil.rmtree(self.work_root, ignore_errors=True)
+
+    def process_output(self) -> str:
+        if self._log_path is None or not os.path.exists(self._log_path):
+            return ""
+        with open(self._log_path) as f:
+            return f.read()
+
+    def _wait_for_socket(self) -> None:
+        deadline = time.time() + self.start_timeout
+        while time.time() < deadline:
+            if os.path.exists(self._socket_path):
+                # The inode appears between bind() and listen(), so only a
+                # successful connect proves it will answer a harvest.
+                try:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.settimeout(0.2)
+                    s.connect(self._socket_path)
+                    s.close()
+                    return
+                except OSError:
+                    pass
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    f"statediff_vfs exited early (code {self._proc.returncode}) "
+                    f"before its harvest socket was ready\n"
+                    f"--- tail of {self._log_path} ---\n"
+                    f"{self.process_output()[-3000:]}"
+                )
+            time.sleep(0.05)
+        raise TimeoutError(
+            f"harvest socket at {self._socket_path} did not become ready "
+            f"within {self.start_timeout}s\n"
+            f"--- tail of {self._log_path} ---\n"
+            f"{self.process_output()[-3000:]}"
         )

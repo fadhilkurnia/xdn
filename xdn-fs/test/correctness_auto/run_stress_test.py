@@ -9,6 +9,13 @@ fid referenced by a statediff resolves in that same harvested batch's own
 file table. It does NOT replay batches through fuselog-apply; that's a
 separate concern this harness deliberately doesn't cover.
 
+Against the eBPF capturer the fid half is satisfied by construction -- VFS1
+inlines paths instead of carrying a fid table, so there is no table to tear --
+and what this run actually exercises is the harvest protocol under concurrent
+load plus Vfs1Parser's framing and path-safety checks. That is a genuinely
+weaker invariant than it is for fuselog, and is worth remembering when reading
+a green run.
+
 Exit code 0 = pass (invariant held for the whole run).
 Exit code 1 = fail (Tier-1 invariant violated, or a parse/protocol error
               occurred against the harvest socket).
@@ -18,17 +25,22 @@ Usage:
         --fuselog-binary /usr/local/bin/fuselog \
         --duration 15
 
+    python3 run_stress_test.py --backend ebpf \
+        --ebpf-binary experiments/eBPF/statediff_vfs \
+        --duration 15                        # must run as root
+
 See README.md for the full design rationale.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
 import time
 
-from driver import FuselogV2Driver
+from driver import EbpfDriver, FuselogV2Driver
 from harvester import Harvester
 from workload import WorkloadGenerator
 
@@ -36,7 +48,15 @@ from workload import WorkloadGenerator
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--fuselog-binary", required=True)
+    ap.add_argument("--backend",
+                     choices=("fuselog", "ebpf"),
+                     default=os.environ.get("CAPTURE_BACKEND", "fuselog"),
+                     help="which capturer to stress (default: $CAPTURE_BACKEND, "
+                          "else fuselog)")
+    ap.add_argument("--fuselog-binary",
+                     help="fuselog binary; required for --backend fuselog")
+    ap.add_argument("--ebpf-binary",
+                     help="statediff_vfs binary; required for --backend ebpf")
     ap.add_argument("--duration", type=float, default=15.0,
                      help="Max wall-clock seconds for the write/harvest "
                           "phase (default: 15)")
@@ -62,17 +82,26 @@ def main() -> int:
                           "(default: a fresh temp dir)")
     args = ap.parse_args()
 
-    driver = FuselogV2Driver(
-        fuselog_binary=args.fuselog_binary,
-        work_root=args.work_root,
-    )
+    if args.backend == "ebpf":
+        if not args.ebpf_binary:
+            ap.error("--ebpf-binary is required for --backend ebpf")
+        binary = args.ebpf_binary
+        driver = EbpfDriver(ebpf_binary=binary, work_root=args.work_root)
+    else:
+        if not args.fuselog_binary:
+            ap.error("--fuselog-binary is required for --backend fuselog")
+        binary = args.fuselog_binary
+        driver = FuselogV2Driver(fuselog_binary=binary,
+                                 work_root=args.work_root)
 
-    print(f"[stress] starting fuselogv2 ({args.fuselog_binary}) ...")
+    print(f"[stress] starting {args.backend} ({binary}) ...")
     handle = driver.start()
-    print(f"[stress] mounted at {handle.writable_path}, "
+    print(f"[stress] capture target at {handle.writable_path}, "
           f"harvest socket at {handle.harvest_socket_path}")
 
-    harvester = Harvester(handle.harvest_socket_path, handle.parser)
+    # The request bytes differ per capturer; the driver knows which.
+    harvester = Harvester(handle.harvest_socket_path, handle.parser,
+                          request=handle.harvest_request)
     workload = WorkloadGenerator(
         mount_path=handle.writable_path,
         num_hot_threads=args.num_hot_threads,
@@ -127,10 +156,12 @@ def main() -> int:
         if len(harvester.stats.violations) > 20:
             print(f"    ... and {len(harvester.stats.violations) - 20} more")
         if args.dump_fuselog_log:
-            print("\n[stress] fuselogv2 process output at time of failure:")
+            print(f"\n[stress] {args.backend} process output at time of "
+                  f"failure:")
             print(driver.process_output())
         else:
-            print(f"\n[stress] fuselogv2 log preserved at: {driver.log_path}")
+            print(f"\n[stress] {args.backend} log preserved at: "
+                  f"{driver.log_path}")
     else:
         print("\n[ok] Tier-1: no invariant violations across "
               f"{harvester.stats.batches_harvested} batches")

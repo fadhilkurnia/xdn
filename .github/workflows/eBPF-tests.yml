@@ -1,0 +1,265 @@
+# eBPF capturer tests.
+#
+# Mirrors .github/workflows/fuselog-tests.yml: the same harnesses under
+# xdn-fs/test/ are driven against the eBPF capturer via CAPTURE_BACKEND=ebpf.
+#
+# The one difference is coverage. The eBPF probe set has no hook for chmod,
+# chown, hardlink or symlink, so those operations are not generated and not
+# tested here; see EBPF_UNSUPPORTED_OPS in xdn-fs/test/capture_backend.py.
+# Every job needs root, because loading BPF programs is privileged.
+name: "eBPF tests"
+
+on:
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "experiments/eBPF/**"
+      - "xdn-fs/test/**"
+      - ".github/workflows/eBPF-tests.yml"
+  pull_request:
+    branches: ["master", "main"]
+    paths:
+      - "experiments/eBPF/**"
+      - "xdn-fs/test/**"
+      - ".github/workflows/eBPF-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ebpf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EBPF_DIR: experiments/eBPF
+
+jobs:
+  build:
+    name: "🏗️ build capturer"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: 📦 Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
+      - name: 🔎 Record kernel and BTF availability
+        run: |
+          uname -a
+          test -r /sys/kernel/btf/vmlinux \
+            || { echo "::error::no kernel BTF at /sys/kernel/btf/vmlinux"; exit 1; }
+          echo "BTF present: $(stat -c %s /sys/kernel/btf/vmlinux) bytes"
+      - name: ♻️ Cache fetched build deps
+        uses: actions/cache@v4
+        with:
+          path: experiments/eBPF/.deps
+          key: ebpf-deps-${{ hashFiles('experiments/eBPF/Makefile') }}
+      - name: 🏗️ make all
+        run: make -C "$EBPF_DIR" all
+      - name: ✅ Both binaries exist and run
+        run: |
+          set -e
+          "$EBPF_DIR/statediff_apply_vfs" 2>&1 | grep -q Usage
+          "$EBPF_DIR/statediff_vfs" 2>&1 | grep -q Usage
+
+  parser-selftest:
+    name: "🧪 parser + harness self-test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: 🧪 Run harness selftest (FLG3 + VFS1 suites)
+        run: python3 xdn-fs/test/correctness_auto/test_harness_selftest.py
+
+  differential:
+    name: "🧪 L3 differential"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: 📦 Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
+      - name: ♻️ Cache fetched build deps
+        uses: actions/cache@v4
+        with:
+          path: experiments/eBPF/.deps
+          key: ebpf-deps-${{ hashFiles('experiments/eBPF/Makefile') }}
+      - name: 🏗️ Build capturer
+        run: make -C "$EBPF_DIR" all
+      - name: 🧪 Run fuzz_differential.py over multiple seeds
+        run: |
+          set -e
+          for seed in 1 42 999 12345 31337; do
+            echo "=== seed=$seed ==="
+            sudo CAPTURE_BACKEND=ebpf \
+              ./xdn-fs/test/fuzz_differential.py --seed $seed --num-ops 1000
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-differential-failures
+          path: |
+            /tmp/fuselog-fuzz-fail-*/
+            /tmp/xdn-fuselog/fuselog.log
+          if-no-files-found: ignore
+
+  concurrent-disjoint:
+    name: "🧪 L4 concurrent (disjoint subtrees)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: 📦 Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
+      - name: ♻️ Cache fetched build deps
+        uses: actions/cache@v4
+        with:
+          path: experiments/eBPF/.deps
+          key: ebpf-deps-${{ hashFiles('experiments/eBPF/Makefile') }}
+      - name: 🏗️ Build capturer
+        run: make -C "$EBPF_DIR" all
+      - name: 🧪 Run fuzz_concurrent.py
+        run: |
+          set -e
+          for seed in 1 42 999 12345; do
+            sudo CAPTURE_BACKEND=ebpf \
+              ./xdn-fs/test/fuzz_concurrent.py --seed $seed --threads 4 \
+                --num-ops-per-thread 200
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-concurrent-disjoint-failures
+          path: |
+            /tmp/fuselog-fuzz-fail-*/
+            /tmp/xdn-fuselog/fuselog.log
+          if-no-files-found: ignore
+
+  concurrent-overlap:
+    name: "🧪 L4 concurrent (overlapping paths)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: 📦 Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
+      - name: ♻️ Cache fetched build deps
+        uses: actions/cache@v4
+        with:
+          path: experiments/eBPF/.deps
+          key: ebpf-deps-${{ hashFiles('experiments/eBPF/Makefile') }}
+      - name: 🏗️ Build capturer
+        run: make -C "$EBPF_DIR" all
+      - name: 🧪 Run fuzz_concurrent_overlap.py
+        run: |
+          set -e
+          for seed in 1 42 999 12345; do
+            sudo CAPTURE_BACKEND=ebpf \
+              ./xdn-fs/test/fuzz_concurrent_overlap.py \
+                --seed $seed --threads 4 --num-ops-per-thread 200
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-concurrent-overlap-failures
+          path: |
+            /tmp/fuselog-fuzz-fail-*/
+            /tmp/xdn-fuselog/fuselog.log
+          if-no-files-found: ignore
+
+  harvest-invariant:
+    name: "🧪 L4c harvest socket invariant"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: 📦 Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config
+      - name: ♻️ Cache fetched build deps
+        uses: actions/cache@v4
+        with:
+          path: experiments/eBPF/.deps
+          key: ebpf-deps-${{ hashFiles('experiments/eBPF/Makefile') }}
+      - name: 🏗️ Build capturer
+        run: make -C "$EBPF_DIR" all
+      - name: 🧪 Run harvest-socket stress test
+        run: |
+          sudo python3 xdn-fs/test/correctness_auto/run_stress_test.py \
+            --backend ebpf \
+            --ebpf-binary "$EBPF_DIR/statediff_vfs" \
+            --num-hot-threads 4 \
+            --duration 10 \
+            --work-root ${{ runner.temp }}/ebpf-harvest-invariant
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-harvest-invariant-failure
+          path: ${{ runner.temp }}/ebpf-harvest-invariant/
+          if-no-files-found: ignore
+
+  db-sqlite:
+    name: "🧪 L5 SQLite"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: 📦 Install build deps + python sqlite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev pkg-config \
+            python3 python3-dev
+      - name: ♻️ Cache fetched build deps
+        uses: actions/cache@v4
+        with:
+          path: experiments/eBPF/.deps
+          key: ebpf-deps-${{ hashFiles('experiments/eBPF/Makefile') }}
+      - name: 🏗️ Build capturer
+        run: make -C "$EBPF_DIR" all
+      - name: 🧪 Run fuzz_db.py --db sqlite over multiple seeds
+        run: |
+          set -e
+          for seed in 1 42 999; do
+            sudo CAPTURE_BACKEND=ebpf \
+              ./xdn-fs/test/fuzz_db.py --db sqlite --seed $seed --num-txns 200
+          done
+      - name: 🪲 Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-db-sqlite-failure-logs
+          path: /tmp/xdn-fuselog/fuselog.log
+          if-no-files-found: ignore
+
+  all-ebpf-tests:
+    name: "✅ all eBPF tests pass"
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - parser-selftest
+      - differential
+      - concurrent-disjoint
+      - concurrent-overlap
+      - harvest-invariant
+      - db-sqlite
+    if: always()
+    steps:
+      - name: Check all required jobs
+        run: |
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "::error::one or more eBPF test jobs failed or were cancelled"
+            exit 1
+          fi
+          echo "all eBPF test jobs passed"

@@ -1,0 +1,6 @@
+/.output/
+/statediff_vfs
+/statediff_apply_vfs
+__pycache__/
+/*.sd
+/.deps/

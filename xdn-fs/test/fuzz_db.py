@@ -30,7 +30,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fuzz_differential import (  # noqa: E402
     APPLY_BIN, APPLY_DIR, BASE_DIR, FUSELOG_BIN, MOUNT_DIR, STATEDIFF_FILE,
-    ensure_clean_dirs, harvest_statediff, log,
+    ensure_clean_dirs, harvest_statediff, log, run_apply,
     start_fuselog, stop_fuselog,
 )
 from fuzz_db_sqlite import SqliteAdapter  # noqa: E402
@@ -182,14 +182,9 @@ def main():
         fuselog_proc = None
 
         log(">> applying statediff to C/")
-        env = os.environ.copy()
-        env["FUSELOG_STATEDIFF_FILE"] = str(STATEDIFF_FILE)
-        result = subprocess.run(
-            [str(APPLY_BIN), str(APPLY_DIR) + "/"],
-            env=env, capture_output=True, text=True,
-        )
+        result = run_apply()
         if result.returncode != 0:
-            log(f"fuselog-apply failed (rc={result.returncode}):")
+            log(f"{APPLY_BIN.name} failed (rc={result.returncode}):")
             log(result.stdout)
             log(result.stderr)
             return 1

@@ -34,7 +34,8 @@ from fuzz_differential import (  # noqa: E402
     APPLY_BIN, APPLY_DIR, BASE_DIR, FUSELOG_BIN, MOUNT_DIR,
     PLAIN_DIR, STATEDIFF_FILE,
     apply_op, compare_trees, dump_failure, ensure_clean_dirs,
-    harvest_statediff, log, op_summary, pick_op, snapshot_tree,
+    harvest_statediff, log, op_summary, pick_op, run_apply,
+    snapshot_tree,
     start_fuselog, stop_fuselog, update_state,
 )
 
@@ -173,14 +174,9 @@ def main():
 
         snap_b = snapshot_tree(PLAIN_DIR)
 
-        env = os.environ.copy()
-        env["FUSELOG_STATEDIFF_FILE"] = str(STATEDIFF_FILE)
-        result = subprocess.run(
-            [str(APPLY_BIN), str(APPLY_DIR) + "/"],
-            env=env, capture_output=True, text=True,
-        )
+        result = run_apply()
         if result.returncode != 0:
-            log(f"fuselog-apply failed (rc={result.returncode}):")
+            log(f"{APPLY_BIN.name} failed (rc={result.returncode}):")
             log(result.stdout)
             log(result.stderr)
             dump = dump_failure(seed, all_ops, payload, fuselog_log_path)
