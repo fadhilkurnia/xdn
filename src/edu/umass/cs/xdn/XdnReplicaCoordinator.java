@@ -17,7 +17,6 @@ import edu.umass.cs.nio.interfaces.Stringifiable;
 import edu.umass.cs.pram.PramReplicaCoordinator;
 import edu.umass.cs.primarybackup.PrimaryBackupManager;
 import edu.umass.cs.primarybackup.PrimaryBackupReplicaCoordinator;
-import edu.umass.cs.primarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.primarybackup.packets.ChangePrimaryPacket;
 import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.AbstractReplicaCoordinator;
@@ -113,9 +112,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     System.out.printf(">> XdnReplicaCoordinator - init at node %s\n", myID);
 
     assert this.app instanceof XdnApp || this.app instanceof XdnGigapaxosApp
-            : "XdnReplicaCoordinator must be used with XdnApp or XdnGigapaxosApp";
+        : "XdnReplicaCoordinator must be used with XdnApp or XdnGigapaxosApp";
     assert myID.getClass().getSimpleName().equals(String.class.getSimpleName())
-            : "XdnReplicaCoordinator must use String as the NodeIDType";
+        : "XdnReplicaCoordinator must use String as the NodeIDType";
 
     this.myNodeID = myID.toString();
 
@@ -140,11 +139,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     if (this.app instanceof XdnApp xa) {
       BlueGreenPrimaryBackupManager.setupPaxosConfiguration();
       BlueGreenPrimaryBackupManager.PrimaryBackupMiddlewareApp preProcessedApp =
-              new BlueGreenPrimaryBackupManager.PrimaryBackupMiddlewareApp(xa);
+          new BlueGreenPrimaryBackupManager.PrimaryBackupMiddlewareApp(xa);
       paxosManager = new PaxosManager<>(myID, unstringer, messenger, preProcessedApp);
 
       BlueGreenPrimaryBackupCoordinator<NodeIDType> bgCoordinator =
-              new BlueGreenPrimaryBackupCoordinator<>(xa, myID, unstringer, messenger, paxosManager);
+          new BlueGreenPrimaryBackupCoordinator<>(xa, myID, unstringer, messenger, paxosManager);
       this.primaryBackupCoordinator = bgCoordinator;
 
     } else {
@@ -154,26 +153,26 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       paxosManager = new PaxosManager<>(myID, unstringer, messenger, preProcessedApp);
 
       PrimaryBackupReplicaCoordinator<NodeIDType> oldCoordinator =
-              new PrimaryBackupReplicaCoordinator<>(
-                      preProcessedApp, myID, unstringer, messenger, paxosManager);
+          new PrimaryBackupReplicaCoordinator<>(
+              preProcessedApp, myID, unstringer, messenger, paxosManager);
       this.primaryBackupCoordinator = oldCoordinator;
     }
 
     // Initialize the remaining wrapped coordinators -- unchanged, generic across both app types.
     PaxosReplicaCoordinator<NodeIDType> paxosReplicaCoordinator =
-            new PaxosReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
+        new PaxosReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
     AwReplicaCoordinator<NodeIDType> awReplicaCoordinator =
-            new AwReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
+        new AwReplicaCoordinator<>(app, myID, unstringer, messenger, paxosManager);
     PramReplicaCoordinator<NodeIDType> pramReplicaCoordinator =
-            new PramReplicaCoordinator<>(app, myID, unstringer, messenger);
+        new PramReplicaCoordinator<>(app, myID, unstringer, messenger);
     BayouReplicaCoordinator<NodeIDType> bayouReplicaCoordinator =
-            new BayouReplicaCoordinator<>(app, myID, unstringer, messenger);
+        new BayouReplicaCoordinator<>(app, myID, unstringer, messenger);
     CausalReplicaCoordinator<NodeIDType> causalReplicaCoordinator =
-            new CausalReplicaCoordinator<>(app, myID, unstringer, messenger);
+        new CausalReplicaCoordinator<>(app, myID, unstringer, messenger);
     LazyReplicaCoordinator<NodeIDType> lazyReplicaCoordinator =
-            new LazyReplicaCoordinator<>(app, myID, unstringer, messenger);
+        new LazyReplicaCoordinator<>(app, myID, unstringer, messenger);
     StatefulClusterReplicaCoordinator<NodeIDType> statefulClusterCoordinator =
-            new StatefulClusterReplicaCoordinator<>(app, myID, unstringer, messenger);
+        new StatefulClusterReplicaCoordinator<>(app, myID, unstringer, messenger);
 
     this.paxosCoordinator = paxosReplicaCoordinator;
     this.chainReplicationCoordinator = null; // not used for now
@@ -464,7 +463,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // reassignment isn't implemented for it yet, so this block naturally no-ops for XdnApp
     // deployments (the instanceof check below is simply false).
     if (coordinator instanceof PrimaryBackupReplicaCoordinator<NodeIDType> pb
-            && setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
+        && setCoordinatorNodeRequest.getNewCoordinatorNodeId().equals(myNodeID)) {
       ChangePrimaryPacket cpPacket = new ChangePrimaryPacket(serviceName, myNodeID);
       try {
         if (pb.isPrimary(serviceName)) {
@@ -574,9 +573,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // prepare for the response
     String protocolName = coordinator != null ? coordinator.getClass().getSimpleName() : "?";
     String requestedConsistency =
-            currServiceProperty.isClusterManaged()
-                    ? "cluster-managed"
-                    : currServiceProperty.getConsistencyModel().toString();
+        currServiceProperty.isClusterManaged()
+            ? "cluster-managed"
+            : currServiceProperty.getConsistencyModel().toString();
     String offeredConsistency = getConsistencyModelFromCoordinator(serviceName, coordinator);
     String roleName = "replica";
 
@@ -631,8 +630,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       imageNames = new ArrayList<>();
       entryPorts = new ArrayList<>();
       for (var c : instance.property.getComponents()) {
-        var componentName =
-                c.getComponentName() != null ? c.getComponentName() : c.getImageName();
+        var componentName = c.getComponentName() != null ? c.getComponentName() : c.getImageName();
         componentNames.add(componentName);
         imageNames.add(c.getImageName());
         entryPorts.add(c.getEntryPort());
@@ -646,23 +644,23 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     }
 
     request.setContainerMetadata(
-            epoch,
-            isDeterministic,
-            entryComponent,
-            stateDirectory,
-            statefulComponent,
-            componentNames,
-            imageNames,
-            entryPorts,
-            containerIds,
-            createdAtInfo,
-            containerStatus);
+        epoch,
+        isDeterministic,
+        entryComponent,
+        stateDirectory,
+        statefulComponent,
+        componentNames,
+        imageNames,
+        entryPorts,
+        containerIds,
+        createdAtInfo,
+        containerStatus);
 
     request.setRequestBehaviors(currServiceProperty.getRequestMatchers());
     // TODO: XdnApp has no equivalent of getBandwidthSnapshot() yet -- bandwidth info is
     //  currently only populated for XdnGigapaxosApp-based deployments.
     if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>
-            && this.app instanceof XdnGigapaxosApp xga2) {
+        && this.app instanceof XdnGigapaxosApp xga2) {
       request.setBandwidth(xga2.getBandwidthSnapshot(serviceName));
     }
     request.setResponse(

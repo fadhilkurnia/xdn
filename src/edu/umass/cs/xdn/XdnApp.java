@@ -1,5 +1,6 @@
 package edu.umass.cs.xdn;
 
+import edu.umass.cs.bluegreenprimarybackup.interfaces.BlueGreenBackupableApplication;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
@@ -9,7 +10,6 @@ import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.interfaces.InitialStateValidator;
 import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
-import edu.umass.cs.bluegreenprimarybackup.interfaces.BlueGreenBackupableApplication;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;

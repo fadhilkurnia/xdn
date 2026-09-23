@@ -15,7 +15,7 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnApp;
-import edu.umass.cs.xdn.bluegreenprimarybackup.packets.*;
+import edu.umass.cs.bluegreenprimarybackup.packets.*;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.service.ConsistencyModel;
