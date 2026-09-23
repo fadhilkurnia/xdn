@@ -80,6 +80,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   private static final long PAXOS_LEADER_CHANGE_TIMEOUT_MS = 10_000L;
 
   private final String myNodeID;
+  private final Replicable rawApp;
 
   // list of all coordination managers supported in XDN
   private final AbstractReplicaCoordinator<NodeIDType> primaryBackupCoordinator;
@@ -108,10 +109,11 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       Stringifiable<NodeIDType> unstringer,
       Messenger<NodeIDType, JSONObject> messenger) {
     super(app, messenger);
+    this.rawApp = app;
 
     System.out.printf(">> XdnReplicaCoordinator - init at node %s\n", myID);
 
-    assert this.app instanceof XdnApp || this.app instanceof XdnGigapaxosApp
+    assert this.rawApp instanceof XdnApp || this.rawApp instanceof XdnGigapaxosApp
         : "XdnReplicaCoordinator must be used with XdnApp or XdnGigapaxosApp";
     assert myID.getClass().getSimpleName().equals(String.class.getSimpleName())
         : "XdnReplicaCoordinator must use String as the NodeIDType";
@@ -121,7 +123,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // TODO: XdnApp has no equivalent of checkSystemRequirements() yet -- this
     //  startup validation (checking required tools/binaries are available)
     //  is currently only performed for XdnGigapaxosApp-based deployments.
-    if (this.app instanceof XdnGigapaxosApp) {
+    if (this.rawApp instanceof XdnGigapaxosApp) {
       try {
         if (!XdnGigapaxosApp.checkSystemRequirements())
           throw new AssertionError("system requirement is unsatisfied");
@@ -136,7 +138,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // app. The Middleware app does Primary Backup logic before handing/forwarding some of the
     // AppRequest to the actual App: XdnGigapaxosApp or XdnApp.
     PaxosManager<NodeIDType> paxosManager;
-    if (this.app instanceof XdnApp xa) {
+    if (this.rawApp instanceof XdnApp xa) {
       BlueGreenPrimaryBackupManager.setupPaxosConfiguration();
       BlueGreenPrimaryBackupManager.PrimaryBackupMiddlewareApp preProcessedApp =
           new BlueGreenPrimaryBackupManager.PrimaryBackupMiddlewareApp(xa);
@@ -147,7 +149,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       this.primaryBackupCoordinator = bgCoordinator;
 
     } else {
-      XdnGigapaxosApp xga = (XdnGigapaxosApp) this.app;
+      XdnGigapaxosApp xga = (XdnGigapaxosApp) this.rawApp;
       PrimaryBackupManager.setupPaxosConfiguration();
       Replicable preProcessedApp = PrimaryBackupManager.PrimaryBackupMiddlewareApp.wrapApp(xga);
       paxosManager = new PaxosManager<>(myID, unstringer, messenger, preProcessedApp);
@@ -324,9 +326,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     long endPrepReqMatcherTimeNs = System.nanoTime();
 
     // cache the request in the app, avoiding expensive deserialization
-    if (this.app instanceof XdnApp xa) {
+    if (this.rawApp instanceof XdnApp xa) {
       xa.cacheRequest(gpRequest.getRequest());
-    } else if (this.app instanceof XdnGigapaxosApp xga) {
+    } else if (this.rawApp instanceof XdnGigapaxosApp xga) {
       xga.cacheRequest(gpRequest.getRequest());
     }
     long endReqCacheTimeNs = System.nanoTime();
@@ -557,12 +559,12 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // it would otherwise report a stale role. Report honestly that this replica no longer hosts the
     // service. Active backups still host it -- they keep a service instance (just no container).
     // after
-    if (this.app instanceof XdnApp xa0 && !xa0.hostsService(serviceName)) {
+    if (this.rawApp instanceof XdnApp xa0 && !xa0.hostsService(serviceName)) {
       request.setHttpErrorCode(404);
       request.setErrorMessage("Replica no longer hosts service '" + serviceName + "'");
       callback.executed(request, true);
       return;
-    } else if (this.app instanceof XdnGigapaxosApp xga0 && !xga0.hostsService(serviceName)) {
+    } else if (this.rawApp instanceof XdnGigapaxosApp xga0 && !xga0.hostsService(serviceName)) {
       request.setHttpErrorCode(404);
       request.setErrorMessage("Replica no longer hosts service '" + serviceName + "'");
       callback.executed(request, true);
@@ -602,13 +604,13 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     List<String> containerStatus = null;
     ServiceInstance instance = null;
     Integer epoch = null;
-    if (this.app instanceof XdnApp xa1) {
+    if (this.rawApp instanceof XdnApp xa1) {
       containerIds = xa1.getContainerIds(serviceName);
       createdAtInfo = xa1.getContainerCreatedAtInfo(serviceName);
       containerStatus = xa1.getContainerStatus(serviceName);
       instance = xa1.getServiceInstance(serviceName);
       epoch = xa1.getEpoch(serviceName);
-    } else if (this.app instanceof XdnGigapaxosApp xga1) {
+    } else if (this.rawApp instanceof XdnGigapaxosApp xga1) {
       containerIds = xga1.getContainerIds(serviceName);
       createdAtInfo = xga1.getContainerCreatedAtInfo(serviceName);
       containerStatus = xga1.getContainerStatus(serviceName);
@@ -660,7 +662,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // TODO: XdnApp has no equivalent of getBandwidthSnapshot() yet -- bandwidth info is
     //  currently only populated for XdnGigapaxosApp-based deployments.
     if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>
-        && this.app instanceof XdnGigapaxosApp xga2) {
+        && this.rawApp instanceof XdnGigapaxosApp xga2) {
       request.setBandwidth(xga2.getBandwidthSnapshot(serviceName));
     }
     request.setResponse(
@@ -951,9 +953,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
   public boolean deleteFinalState(String serviceName, int epoch) {
     // App-level cleanup: remove this epoch's containers and state directories.
     boolean isAppStateDeleted = false;
-    if (this.app instanceof XdnApp xa) {
+    if (this.rawApp instanceof XdnApp xa) {
       isAppStateDeleted = xa.deleteFinalState(serviceName, epoch);
-    } else if (this.app instanceof XdnGigapaxosApp xga) {
+    } else if (this.rawApp instanceof XdnGigapaxosApp xga) {
       isAppStateDeleted = xga.deleteFinalState(serviceName, epoch);
     }
 
@@ -1005,9 +1007,9 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
       return coordinator;
     }
     ServiceInstance instance = null;
-    if (this.app instanceof XdnApp xa) {
+    if (this.rawApp instanceof XdnApp xa) {
       instance = xa.getServiceInstance(serviceName);
-    } else if (this.app instanceof XdnGigapaxosApp xga) {
+    } else if (this.rawApp instanceof XdnGigapaxosApp xga) {
       instance = xga.getServiceInstance(serviceName);
     }
     if (instance == null || instance.property == null) {
