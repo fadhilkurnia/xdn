@@ -1,4 +1,4 @@
-package edu.umass.cs.xdn.bluegreenprimarybackup;
+package edu.umass.cs.bluegreenprimarybackup;
 
 import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
@@ -12,9 +12,9 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.XdnApp;
-import edu.umass.cs.xdn.bluegreenprimarybackup.packets.BlueGreenApplyStateDiffPacket;
-import edu.umass.cs.xdn.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacket;
-import edu.umass.cs.xdn.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacketType;
+import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenApplyStateDiffPacket;
+import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacket;
+import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacketType;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.handler.codec.http.HttpMethod;
 import java.io.IOException;

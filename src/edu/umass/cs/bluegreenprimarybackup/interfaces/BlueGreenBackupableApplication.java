@@ -1,4 +1,4 @@
-package edu.umass.cs.xdn.bluegreenprimarybackup.interfaces;
+package edu.umass.cs.bluegreenprimarybackup.interfaces;
 
 /**
  * BlueGreenBackupableApplication is intended for PrimaryBackupReplicaCoordinator so that a primary

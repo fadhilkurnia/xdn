@@ -1,4 +1,4 @@
-package edu.umass.cs.xdn.bluegreenprimarybackup.packets;
+package edu.umass.cs.bluegreenprimarybackup.packets;
 
 import edu.umass.cs.nio.interfaces.IntegerPacketType;
 import edu.umass.cs.utils.IntegerPacketTypeMap;

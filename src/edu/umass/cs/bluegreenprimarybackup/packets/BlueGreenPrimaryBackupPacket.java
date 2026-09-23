@@ -1,4 +1,4 @@
-package edu.umass.cs.xdn.bluegreenprimarybackup.packets;
+package edu.umass.cs.bluegreenprimarybackup.packets;
 
 import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
 import java.nio.ByteBuffer;

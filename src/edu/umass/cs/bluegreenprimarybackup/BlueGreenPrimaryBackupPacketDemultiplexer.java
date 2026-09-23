@@ -1,10 +1,10 @@
-package edu.umass.cs.xdn.bluegreenprimarybackup;
+package edu.umass.cs.bluegreenprimarybackup;
 
 import edu.umass.cs.nio.AbstractPacketDemultiplexer;
 import edu.umass.cs.nio.nioutils.NIOHeader;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
-import edu.umass.cs.xdn.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacket;
-import edu.umass.cs.xdn.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacketType;
+import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacket;
+import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacketType;
 import java.io.IOException;
 
 /**

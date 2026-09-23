@@ -1,5 +1,6 @@
-package edu.umass.cs.xdn.bluegreenprimarybackup;
+package edu.umass.cs.bluegreenprimarybackup;
 
+import edu.umass.cs.bluegreenprimarybackup.packets.*;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
@@ -964,7 +965,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   // =========================================================================
 
   public boolean handleBlueGreenPrimaryBackupPacket(
-      BlueGreenPrimaryBackupPacket packet, ExecutedCallback callback) {
+          BlueGreenPrimaryBackupPacket packet, ExecutedCallback callback) {
     if (packet instanceof BlueGreenStartEpochPacket startEpochPacket) {
       return handleBlueGreenStartEpochPacket(startEpochPacket);
     }
