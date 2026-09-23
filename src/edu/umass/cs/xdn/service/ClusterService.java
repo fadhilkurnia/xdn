@@ -1,7 +1,10 @@
 package edu.umass.cs.xdn.service;
 
 import edu.umass.cs.gigapaxos.interfaces.Request;
+import edu.umass.cs.reconfiguration.ReconfigurationConfig;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
+import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.XdnBandwidthProfiler;
 import edu.umass.cs.xdn.XdnHttpForwarderClient;
 import edu.umass.cs.xdn.cluster.ClusterTopology;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
@@ -75,6 +78,11 @@ public class ClusterService {
 
   private final SandboxManager sandboxManager;
 
+  private final XdnBandwidthProfiler bandwidthProfiler;
+
+  // serviceName -> probe container name, needed to remove it on service deletion
+  private final Map<String, String> probeContainerNames = new ConcurrentHashMap<>();
+
   public ClusterService(
       String myNodeId,
       Map<Long, Request> requestCache,
@@ -85,6 +93,15 @@ public class ClusterService {
     this.sandboxManager = sandboxManager;
     this.clusterTopologies = clusterTopologies;
     this.httpForwarderClient = new XdnHttpForwarderClient();
+    this.bandwidthProfiler = new XdnBandwidthProfiler(myNodeId);
+  }
+
+  /**
+   * Returns this replica's bandwidth edge snapshot for a profiled service, or null when not
+   * profiled (tracer disabled, probe failed, or service not hosted here).
+   */
+  public org.json.JSONObject getBandwidthSnapshot(String serviceName) {
+    return this.bandwidthProfiler.snapshot(serviceName);
   }
 
   // -------------------------------------------------------------------------
@@ -263,6 +280,25 @@ public class ClusterService {
 
     serviceInstances.put(name, instance);
     servicePlacementEpoch.put(name, epoch);
+
+    // Attach the bandwidth probe sidecar and start profiling this replica's traffic. Any
+    // failure here only disables profiling; the service itself is unaffected.
+    if (Config.getGlobalBoolean(ReconfigurationConfig.RC.XDN_CLUSTER_BW_TRACER_ENABLED)) {
+      String probeImage =
+          Config.getGlobalString(ReconfigurationConfig.RC.XDN_CLUSTER_BW_PROBE_IMAGE);
+      String clusterContainerName = containerNames.get(0);
+      String probeName = "bwprobe." + clusterContainerName;
+      if (sandboxManager.startSidecarContainer(probeImage, probeName, clusterContainerName, null)) {
+        probeContainerNames.put(name, probeName);
+        bandwidthProfiler.register(name, probeName, topology.clusterSize(), allocatedPort);
+      } else {
+        logger.log(
+            Level.WARNING,
+            "{0}:ClusterService bandwidth probe failed to start; profiling disabled for {1}",
+            new Object[] {myNodeId, name});
+      }
+    }
+
     return true;
   }
 
@@ -309,6 +345,12 @@ public class ClusterService {
       servicePlacementEpoch.remove(name);
       clusterTopologies.remove(name);
       sandboxManager.deleteClusterNetwork(name);
+
+      bandwidthProfiler.deregister(name);
+      String probeName = probeContainerNames.remove(name);
+      if (probeName != null) {
+        sandboxManager.stopContainer(probeName);
+      }
     }
     return deleted;
   }

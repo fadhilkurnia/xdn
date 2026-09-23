@@ -24,6 +24,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.json.JSONObject;
 
 /**
  * XdnApp is the top-level GigaPaxos APPLICATION class for XDN.
@@ -399,7 +400,7 @@ public class XdnApp
   }
 
   // -------------------------------------------------------------------------
-  // ClusterTopologyAware interface
+  // ClusterTopologyAware interface (Cluster Service only)
   // -------------------------------------------------------------------------
 
   @Override
@@ -554,6 +555,10 @@ public class XdnApp
       case NON_DETERMINISTIC -> nonDeterministicService.getServiceInstance(serviceName);
       case CLUSTER -> clusterService.getServiceInstance(serviceName);
     };
+  }
+
+  public JSONObject getBandwidthSnapshot(String serviceName) {
+    return clusterService.getBandwidthSnapshot(serviceName);
   }
 
   // -------------------------------------------------------------------------

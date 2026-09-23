@@ -149,6 +149,45 @@ public class DockerSandboxManager extends SandboxManager {
     return false;
   }
 
+  @Override
+  public boolean startSidecarContainer(
+      String imageName,
+      String containerName,
+      String namespaceOwnerContainerName,
+      Map<String, String> env) {
+    Shell.runCommand("docker container rm --force " + containerName, true);
+
+    List<String> cmd = new ArrayList<>();
+    cmd.add("docker");
+    cmd.add("run");
+    cmd.add("-d");
+    cmd.add("--restart");
+    cmd.add("unless-stopped");
+    cmd.add("--name=" + containerName);
+    cmd.add("--network=container:" + namespaceOwnerContainerName);
+    if (env != null) {
+      for (Map.Entry<String, String> e : env.entrySet()) {
+        cmd.add("--env");
+        cmd.add(e.getKey() + "=" + e.getValue());
+      }
+    }
+    cmd.add(imageName);
+
+    int exitCode = Shell.runCommand(cmd, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:DockerSandboxManager failed to start sidecar {1} sharing namespace of {2}",
+          new Object[] {nodeId, containerName, namespaceOwnerContainerName});
+      return false;
+    }
+    logger.log(
+        Level.INFO,
+        "{0}:DockerSandboxManager - {1} sidecar started (sharing namespace of {2})",
+        new Object[] {nodeId, containerName, namespaceOwnerContainerName});
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Container lifecycle
   // -------------------------------------------------------------------------

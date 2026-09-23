@@ -3,6 +3,7 @@ package edu.umass.cs.xdn.sandbox;
 import edu.umass.cs.xdn.XdnConfig;
 import edu.umass.cs.xdn.service.ServiceInstance;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SandboxManager is the abstract interface for managing isolated execution environments (sandboxes)
@@ -86,6 +87,24 @@ public abstract class SandboxManager {
    * @return true iff the cluster network was removed (or was already gone)
    */
   public abstract boolean deleteClusterNetwork(String serviceName);
+
+  /**
+   * Starts a sidecar container sharing the exact network namespace of an already-running container
+   * (same IP, same interface, sees the same traffic) -- used for passive, external observation of a
+   * service's traffic without modifying the service itself.
+   *
+   * @param imageName sidecar's image
+   * @param containerName name to give the sidecar container
+   * @param namespaceOwnerContainerName the already-running container whose network namespace this
+   *     sidecar should join
+   * @param env environment variables for the sidecar, or null for none
+   * @return true iff the sidecar started successfully
+   */
+  public abstract boolean startSidecarContainer(
+      String imageName,
+      String containerName,
+      String namespaceOwnerContainerName,
+      Map<String, String> env);
 
   // -------------------------------------------------------------------------
   // Container lifecycle

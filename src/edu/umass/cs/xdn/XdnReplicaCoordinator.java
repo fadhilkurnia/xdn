@@ -659,12 +659,15 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
         containerStatus);
 
     request.setRequestBehaviors(currServiceProperty.getRequestMatchers());
-    // TODO: XdnApp has no equivalent of getBandwidthSnapshot() yet -- bandwidth info is
-    //  currently only populated for XdnGigapaxosApp-based deployments.
+
     if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>
+        && this.rawApp instanceof XdnApp xa2) {
+      request.setBandwidth(xa2.getBandwidthSnapshot(serviceName));
+    } else if (coordinator instanceof StatefulClusterReplicaCoordinator<NodeIDType>
         && this.rawApp instanceof XdnGigapaxosApp xga2) {
       request.setBandwidth(xga2.getBandwidthSnapshot(serviceName));
     }
+
     request.setResponse(
         this.myNodeID, protocolName, requestedConsistency, offeredConsistency, roleName);
     callback.executed(request, true);
