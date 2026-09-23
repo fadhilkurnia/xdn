@@ -10,6 +10,8 @@ import edu.umass.cs.reconfiguration.AbstractReconfiguratorDB;
 import edu.umass.cs.reconfiguration.interfaces.InitialStateValidator;
 import edu.umass.cs.reconfiguration.interfaces.Reconfigurable;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
+import edu.umass.cs.xdn.cluster.ClusterTopology;
+import edu.umass.cs.xdn.cluster.ClusterTopologyAware;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
@@ -178,11 +180,11 @@ public class XdnApp
     if (state == null) {
       ServiceType type = serviceRegistry.get(name);
       if (type == null) return true;
-      boolean result =
-          switch (type) {
-            case DETERMINISTIC -> deterministicService.restore(name, null);
-            case NON_DETERMINISTIC -> nonDeterministicService.restore(name, null);
-          };
+      boolean result = switch (type) {
+                case DETERMINISTIC -> deterministicService.restore(name, state);
+                case NON_DETERMINISTIC -> nonDeterministicService.restore(name, state);
+                case CLUSTER -> clusterService.restore(name, state);
+              };
       if (result) serviceRegistry.remove(name);
       return result;
     }
@@ -203,8 +205,7 @@ public class XdnApp
       case DETERMINISTIC -> deterministicService.restore(name, null);
       case NON_DETERMINISTIC -> nonDeterministicService.restore(name, null);
       case CLUSTER -> clusterService.restore(name, null);
-    }
-    ;
+    };
   }
 
   @Override
