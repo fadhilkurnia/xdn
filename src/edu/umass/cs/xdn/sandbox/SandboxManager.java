@@ -68,6 +68,25 @@ public abstract class SandboxManager {
    */
   public abstract boolean deleteNetwork(String serviceName);
 
+  /**
+   * Ensures a cluster-wide network exists for a cluster-managed service, so that replicas hosted on
+   * different nodes can discover and reach each other by name. Unlike {@link #createNetwork}, this
+   * network is not confined to a single node -- how that's actually achieved (e.g. Docker Swarm
+   * overlay networking) is up to each sandbox implementation.
+   *
+   * @param serviceName name of the service
+   * @return true iff the cluster network exists (was already there, or was just created)
+   */
+  public abstract boolean createClusterNetwork(String serviceName);
+
+  /**
+   * Removes the cluster-wide network for a cluster-managed service.
+   *
+   * @param serviceName name of the service
+   * @return true iff the cluster network was removed (or was already gone)
+   */
+  public abstract boolean deleteClusterNetwork(String serviceName);
+
   // -------------------------------------------------------------------------
   // Container lifecycle
   // -------------------------------------------------------------------------

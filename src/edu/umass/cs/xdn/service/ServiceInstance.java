@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn.service;
 
 import java.util.List;
+import java.util.Map;
 
 public class ServiceInstance {
   public final ServiceProperty property;
@@ -9,6 +10,19 @@ public class ServiceInstance {
 
   /** port in which this service receives HTTP request forwarded by XDN */
   public int allocatedHttpPort;
+
+  /**
+   * Network alias this container should be reachable by on its network (e.g. "replica-0"). Null for
+   * ordinary, non-cluster-managed services, which don't need to be discoverable by name -- only
+   * cluster-managed services (where replicas talk to each other directly) set this.
+   */
+  public String networkAlias;
+
+  /**
+   * Additional environment variables to merge into the cluster-member component's env at container
+   * start (e.g. XDN_CLUSTER_ORDINAL, XDN_CLUSTER_PEERS). Null for ordinary services.
+   */
+  public Map<String, String> extraEnv;
 
   /* Initialization Status.
    * Needed as indicator if non-deterministic initialization was successful or not.

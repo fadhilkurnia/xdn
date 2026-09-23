@@ -37,11 +37,16 @@ import java.util.logging.Logger;
  * populated on the first restore() call per service.
  */
 public class XdnApp
-    implements Replicable, Reconfigurable, BlueGreenBackupableApplication, InitialStateValidator {
+    implements Replicable,
+        Reconfigurable,
+        BlueGreenBackupableApplication,
+        InitialStateValidator,
+        ClusterTopologyAware {
 
   public enum ServiceType {
     DETERMINISTIC,
-    NON_DETERMINISTIC
+    NON_DETERMINISTIC,
+    CLUSTER
   }
 
   private final Set<String> internalGpGroups;
@@ -51,9 +56,13 @@ public class XdnApp
   // Registry: populated on first restore() per service
   private final Map<String, ServiceType> serviceRegistry = new ConcurrentHashMap<>();
 
-  // The two service handlers
+  // The three service handlers
   private final DeterministicService deterministicService;
   private final NonDeterministicService nonDeterministicService;
+  private final ClusterService clusterService;
+
+  // serviceName -> topology pushed by StatefulClusterReplicaCoordinator before restore()
+  private final Map<String, ClusterTopology> clusterTopologies = new ConcurrentHashMap<>();
 
   private final SandboxManager sandboxManager;
 
@@ -101,6 +110,8 @@ public class XdnApp
     this.deterministicService = new DeterministicService(myNodeId, requestCache, sandboxManager);
     this.nonDeterministicService =
         new NonDeterministicService(myNodeId, requestCache, sandboxManager, recorder);
+    this.clusterService =
+        new ClusterService(myNodeId, requestCache, sandboxManager, clusterTopologies);
 
     this.packetTypes = new HashSet<>();
     this.packetTypes.add(XdnRequestType.XDN_SERVICE_HTTP_REQUEST);
@@ -130,6 +141,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.execute(request);
       case NON_DETERMINISTIC -> nonDeterministicService.execute(request);
+      case CLUSTER -> clusterService.execute(request);
     };
   }
 
@@ -154,6 +166,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.checkpoint(name);
       case NON_DETERMINISTIC -> NonDeterministicService.CHECKPOINT_STUB;
+      case CLUSTER -> ClusterService.CHECKPOINT_STUB;
     };
   }
 
@@ -186,10 +199,12 @@ public class XdnApp
       return false;
     }
 
-    return switch (type) {
-      case DETERMINISTIC -> deterministicService.restore(name, state);
-      case NON_DETERMINISTIC -> nonDeterministicService.restore(name, state);
-    };
+    switch (type) {
+      case DETERMINISTIC -> deterministicService.restore(name, null);
+      case NON_DETERMINISTIC -> nonDeterministicService.restore(name, null);
+      case CLUSTER -> clusterService.restore(name, null);
+    }
+    ;
   }
 
   @Override
@@ -258,6 +273,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.getStopRequest(name, epoch);
       case NON_DETERMINISTIC -> nonDeterministicService.getStopRequest(name, epoch);
+      case CLUSTER -> clusterService.getStopRequest(name, epoch);
     };
   }
 
@@ -276,6 +292,8 @@ public class XdnApp
         // this is a safety fallback only
       case DETERMINISTIC -> deterministicService.checkpoint(name);
       case NON_DETERMINISTIC -> nonDeterministicService.getFinalState(name, epoch);
+        // Cluster-managed: the service replicates itself, XDN has no final state to hand off
+      case CLUSTER -> null;
     };
   }
 
@@ -292,6 +310,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.deleteFinalState(name, epoch);
       case NON_DETERMINISTIC -> nonDeterministicService.deleteFinalState(name, epoch);
+      case CLUSTER -> clusterService.deleteFinalState(name, epoch);
     };
   }
 
@@ -302,6 +321,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.getEpoch(name);
       case NON_DETERMINISTIC -> nonDeterministicService.getEpoch(name);
+      case CLUSTER -> clusterService.getEpoch(name);
     };
   }
 
@@ -374,6 +394,20 @@ public class XdnApp
                 + "Ensure the image is accessible at Docker Hub or your registry.");
       }
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // ClusterTopologyAware interface
+  // -------------------------------------------------------------------------
+
+  @Override
+  public void setClusterTopology(String serviceName, ClusterTopology topology) {
+    clusterTopologies.put(serviceName, topology);
+  }
+
+  @Override
+  public void clearClusterTopology(String serviceName) {
+    clusterTopologies.remove(serviceName);
   }
 
   // -------------------------------------------------------------------------
@@ -506,6 +540,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.hostsService(serviceName);
       case NON_DETERMINISTIC -> nonDeterministicService.hostsService(serviceName);
+      case CLUSTER -> clusterService.hostsService(serviceName);
     };
   }
 
@@ -515,6 +550,7 @@ public class XdnApp
     return switch (type) {
       case DETERMINISTIC -> deterministicService.getServiceInstance(serviceName);
       case NON_DETERMINISTIC -> nonDeterministicService.getServiceInstance(serviceName);
+      case CLUSTER -> clusterService.getServiceInstance(serviceName);
     };
   }
 
@@ -560,6 +596,9 @@ public class XdnApp
             "{0}:XdnApp could not parse ServiceProperty; " + "defaulting to NON_DETERMINISTIC",
             new Object[] {myNodeId});
         return ServiceType.NON_DETERMINISTIC;
+      }
+      if (property.isClusterManaged()) {
+        return ServiceType.CLUSTER;
       }
       return property.isDeterministic() ? ServiceType.DETERMINISTIC : ServiceType.NON_DETERMINISTIC;
     } catch (Exception e) {
