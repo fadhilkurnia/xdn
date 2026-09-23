@@ -21,8 +21,8 @@ import org.junit.jupiter.api.*;
  * cleans up after itself via @AfterEach.
  *
  * <p>Images used: - michael2718/bookcatalog-nd:5 (SQLite single-component) -
- * michael2718/bookcatalog-nd:1 + mysql:8.0.41-debian (MySQL multi-component) -
- * michael2718/bookcatalog-nd:1 + postgres:17.4-bookworm (PostgreSQL multi-component)
+ * michael2718/bookcatalog-nd:5 + mysql:8.0.41-debian (MySQL multi-component) -
+ * michael2718/bookcatalog-nd:5 + postgres:17.4-bookworm (PostgreSQL multi-component)
  *
  * <p>Run via: ant xdn-unit-tests
  */
