@@ -180,11 +180,12 @@ public class XdnApp
     if (state == null) {
       ServiceType type = serviceRegistry.get(name);
       if (type == null) return true;
-      boolean result = switch (type) {
-                case DETERMINISTIC -> deterministicService.restore(name, state);
-                case NON_DETERMINISTIC -> nonDeterministicService.restore(name, state);
-                case CLUSTER -> clusterService.restore(name, state);
-              };
+      boolean result =
+          switch (type) {
+            case DETERMINISTIC -> deterministicService.restore(name, state);
+            case NON_DETERMINISTIC -> nonDeterministicService.restore(name, state);
+            case CLUSTER -> clusterService.restore(name, state);
+          };
       if (result) serviceRegistry.remove(name);
       return result;
     }
@@ -201,10 +202,10 @@ public class XdnApp
       return false;
     }
 
-    switch (type) {
-      case DETERMINISTIC -> deterministicService.restore(name, null);
-      case NON_DETERMINISTIC -> nonDeterministicService.restore(name, null);
-      case CLUSTER -> clusterService.restore(name, null);
+    return switch (type) {
+      case DETERMINISTIC -> deterministicService.restore(name, state);
+      case NON_DETERMINISTIC -> nonDeterministicService.restore(name, state);
+      case CLUSTER -> clusterService.restore(name, state);
     };
   }
 
