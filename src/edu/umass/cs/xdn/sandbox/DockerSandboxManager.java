@@ -243,12 +243,7 @@ public class DockerSandboxManager extends SandboxManager {
       Integer allocatedPortForComponent = component.isEntryComponent() ? allocatedPort : null;
       Integer exposedPort = component.getExposedPort();
 
-      // A stateful component is always the cluster member, if one exists.
       Map<String, String> env = component.getEnvironmentVariables();
-      if (instance.extraEnv != null) {
-        env = new HashMap<>(env != null ? env : Map.of());
-        env.putAll(instance.extraEnv);
-      }
 
       boolean started =
           runDockerContainer(
@@ -302,13 +297,7 @@ public class DockerSandboxManager extends SandboxManager {
       Integer allocatedPortForComponent = component.isEntryComponent() ? allocatedPort : null;
       Integer exposedPort = component.getExposedPort();
 
-      // No stateful component exists for this service -- the entry component is the
-      // cluster-member fallback, matching XdnGigapaxosApp's clusterMember = stateful ?? entry.
       Map<String, String> env = component.getEnvironmentVariables();
-      if (instance.extraEnv != null && statefulIdx == -1 && component.isEntryComponent()) {
-        env = new HashMap<>(env != null ? env : Map.of());
-        env.putAll(instance.extraEnv);
-      }
 
       boolean started =
           runDockerContainer(
