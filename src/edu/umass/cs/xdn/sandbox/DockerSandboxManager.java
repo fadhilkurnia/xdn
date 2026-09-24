@@ -202,6 +202,13 @@ public class DockerSandboxManager extends SandboxManager {
       ServiceInstance instance, int epoch, String mountPath, int allocatedPort) {
     // Same as startService(instance, epoch, mountPath) but uses explicit
     // allocatedPort instead of instance.allocatedHttpPort for the entry component.
+
+    // Cluster-managed services start differently. Sidecars must share the cluster member's
+    // network namespace, which the generic per-component loop below does not do.
+    if (instance.property.isClusterManaged()) {
+      return startClusterService(instance, mountPath, allocatedPort);
+    }
+
     String serviceName = instance.serviceName;
     String networkName = instance.networkName;
     String stateDirMountTarget = instance.property.getStatefulComponentDirectory();
@@ -333,6 +340,101 @@ public class DockerSandboxManager extends SandboxManager {
   @Override
   public boolean startService(ServiceInstance instance, int epoch, String mountPath) {
     return startService(instance, epoch, mountPath, instance.allocatedHttpPort);
+  }
+
+  /**
+   * Starts a cluster-managed service.
+   *
+   * <p>The cluster member (the stateful component, or the entry component when nothing is stateful)
+   * joins the shared overlay network under its stable alias and carries the XDN_CLUSTER_*
+   * environment. Every other component is a sidecar that shares the member's network namespace, so
+   * it reaches the member at 127.0.0.1. A sidecar in that namespace has no network of its own, so
+   * the entry component's port is published on the member.
+   *
+   * <p>Mirrors XdnGigapaxosApp.initContainerizedClusterService.
+   */
+  private boolean startClusterService(
+      ServiceInstance instance, String mountPath, int allocatedPort) {
+    List<ServiceComponent> components = instance.property.getComponents();
+    ServiceComponent entry = instance.property.getEntryComponent();
+    ServiceComponent member = instance.property.getStatefulComponent();
+    if (member == null) {
+      member = entry;
+    }
+    int memberIdx = components.indexOf(member);
+    String memberName = instance.containerNames.get(memberIdx);
+    String imageName = member.getImageName();
+
+    String healthcheckCmd = member.getHealthcheckCommand();
+    if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
+      healthcheckCmd = ServiceComponent.inferHealthcheckCmd(imageName);
+    }
+
+    Map<String, String> env = new HashMap<>();
+    if (member.getEnvironmentVariables() != null) {
+      env.putAll(member.getEnvironmentVariables());
+    }
+    if (instance.extraEnv != null) {
+      env.putAll(instance.extraEnv);
+    }
+
+    boolean stateful = member.isStateful();
+    if (stateful) {
+      Shell.runCommand("mkdir -p " + mountPath, true);
+    }
+    Integer publishedPort = entry != null ? entry.getEntryPort() : null;
+
+    boolean started =
+        runDockerContainer(
+            imageName,
+            memberName,
+            instance.networkName,
+            member.getComponentName(),
+            member.getExposedPort(),
+            publishedPort,
+            publishedPort != null ? allocatedPort : null,
+            stateful ? mountPath : null,
+            stateful ? instance.property.getStatefulComponentDirectory() : null,
+            env,
+            healthcheckCmd,
+            instance.networkAlias);
+    if (!started) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:DockerSandboxManager failed to start cluster member {1} for {2}",
+          new Object[] {nodeId, memberName, instance.serviceName});
+      return false;
+    }
+
+    boolean requireConsecutive = ServiceComponent.requiresConsecutiveHealthyCheck(imageName);
+    if (!waitUntilReady(memberName, healthcheckCmd, requireConsecutive)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:DockerSandboxManager cluster member {1} failed healthcheck for {2}",
+          new Object[] {nodeId, memberName, instance.serviceName});
+      return false;
+    }
+
+    for (int i = 0; i < components.size(); i++) {
+      if (i == memberIdx) {
+        continue;
+      }
+      ServiceComponent sidecar = components.get(i);
+      boolean sidecarStarted =
+          startSidecarContainer(
+              sidecar.getImageName(),
+              instance.containerNames.get(i),
+              memberName,
+              sidecar.getEnvironmentVariables());
+      if (!sidecarStarted) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:DockerSandboxManager failed to start cluster sidecar {1} for {2}",
+            new Object[] {nodeId, instance.containerNames.get(i), instance.serviceName});
+        return false;
+      }
+    }
+    return true;
   }
 
   @Override

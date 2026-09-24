@@ -64,6 +64,12 @@ public class ClusterService {
   // serviceName → ServiceInstance (contains property, port, container names, etc.)
   private final Map<String, ServiceInstance> serviceInstances = new ConcurrentHashMap<>();
 
+  // One lock per service name. GigaPaxos re-sends START_EPOCH every 16 seconds until it is
+  // acked, and a cluster start can take longer than that, so restore() can be entered again
+  // for the same service while the first call is still running. The lock makes the repeat
+  // wait, and restore() then returns without touching Docker.
+  private final Map<String, Object> initLocks = new ConcurrentHashMap<>();
+
   // Shared HTTP request cache (keyed by requestID, shared with XdnApp)
   private final Map<Long, Request> requestCache;
 
@@ -184,7 +190,18 @@ public class ClusterService {
     }
 
     if (state.startsWith(ServiceProperty.XDN_INITIAL_STATE_PREFIX)) {
-      return createAndStart(name, state);
+      // A repeated init must not run createAndStart again. It wipes the state directory and
+      // force-removes the containers, which would destroy the first call's work in progress.
+      synchronized (initLocks.computeIfAbsent(name, k -> new Object())) {
+        if (serviceInstances.containsKey(name)) {
+          logger.log(
+              Level.INFO,
+              "{0}:ClusterService restore() {1} already started, ignoring duplicate init",
+              new Object[] {myNodeId, name});
+          return true;
+        }
+        return createAndStart(name, state);
+      }
     }
 
     logger.log(
