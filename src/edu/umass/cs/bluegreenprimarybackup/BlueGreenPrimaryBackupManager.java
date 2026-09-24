@@ -1301,7 +1301,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   // =========================================================================
   public static class PrimaryBackupMiddlewareApp implements Replicable {
     private final XdnApp xdnApp;
-    private BlueGreenPrimaryBackupManager<?> manager;
+    private volatile BlueGreenPrimaryBackupManager<?> manager;
     private final Logger logger =
         Logger.getLogger(BlueGreenPrimaryBackupManager.class.getSimpleName());
 
@@ -1325,9 +1325,12 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     @Override
     public boolean execute(Request request, boolean doNotReplyToClient) {
       if (request == null) return true;
-      assert manager != null : "setManager() must be called before execute()";
 
       if (request instanceof BlueGreenPrimaryBackupPacket packet) {
+        // Only Blue-Green packets need the manager. Plain requests must not depend on it, because
+        // gigapaxos replays its log inside the PaxosManager constructor, before the manager can
+        // be wired, and a failing execute() there makes the replay drop the request.
+        assert manager != null : "setManager() must be called before execute()";
         return manager.handleBlueGreenPrimaryBackupPacket(packet, null);
       }
 

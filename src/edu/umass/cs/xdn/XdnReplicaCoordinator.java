@@ -146,6 +146,12 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
       BlueGreenPrimaryBackupCoordinator<NodeIDType> bgCoordinator =
           new BlueGreenPrimaryBackupCoordinator<>(xa, myID, unstringer, messenger, paxosManager);
+      // The middleware routes BlueGreenPrimaryBackupPackets to the manager, so it needs a
+      // reference to it. PrimaryBackupManager wires this in its own constructor, but the
+      // Blue-Green manager is never given the middleware, so wire it here. Gigapaxos replays its
+      // log inside the PaxosManager constructor above, before this line runs, so the middleware
+      // must not require the manager for plain requests.
+      preProcessedApp.setManager(bgCoordinator.getBlueGreenPrimaryBackupManager());
       this.primaryBackupCoordinator = bgCoordinator;
 
     } else {
