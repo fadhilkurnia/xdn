@@ -37,20 +37,19 @@ import java.util.logging.Logger;
  * there is no "primary" or "backup" here, every replica starts its container the same way, as soon
  * as it's told to.
  *
- * <p>Each replica runs one cluster member. That is the stateful component, or the entry
- * component when nothing is stateful. Every other component is a sidecar that shares the
- * member's network namespace, and the entry component's port is published on the member.
- * DockerSandboxManager builds this layout, the same way XdnGigapaxosApp does. Known limitation,
- * the bandwidth probe attaches to the first component's container, which is not necessarily the
- * member.
+ * <p>Each replica runs one cluster member. That is the stateful component, or the entry component
+ * when nothing is stateful. Every other component is a sidecar that shares the member's network
+ * namespace, and the entry component's port is published on the member. DockerSandboxManager builds
+ * this layout, the same way XdnGigapaxosApp does. Known limitation, the bandwidth probe attaches to
+ * the first component's container, which is not necessarily the member.
  *
  * <p>Lifecycle
  *
  * <ul>
- *   <li>restore("xdn:init:...") starts the containers through createAndStart(). It blocks until
- *       the member passes its health check, which can outlast GigaPaxos' 16 second START_EPOCH
- *       retry. A repeated init for a service that is already started waits for the first call
- *       and then returns without touching Docker.
+ *   <li>restore("xdn:init:...") starts the containers through createAndStart(). It blocks until the
+ *       member passes its health check, which can outlast GigaPaxos' 16 second START_EPOCH retry. A
+ *       repeated init for a service that is already started waits for the first call and then
+ *       returns without touching Docker.
  *   <li>restore(null) stops and removes the containers (epoch end).
  *   <li>execute(XdnHttpRequest) forwards to the local container and returns the response.
  *   <li>execute(XdnStopRequest) stops the containers.
@@ -190,8 +189,8 @@ public class ClusterService {
    * <ul>
    *   <li>null stops and removes the containers (epoch end).
    *   <li>xdn:init:... starts the containers with no role confirmation. GigaPaxos re-sends
-   *       START_EPOCH until it is acked, so a repeated init for a service that is already
-   *       started waits for the first call and then returns true without touching Docker.
+   *       START_EPOCH until it is acked, so a repeated init for a service that is already started
+   *       waits for the first call and then returns true without touching Docker.
    * </ul>
    *
    * <p>Anything else (final-state revival, checkpoint restoration) is not supported: cluster-
@@ -266,10 +265,10 @@ public class ClusterService {
   // -------------------------------------------------------------------------
 
   /**
-   * Creates a fresh service instance and starts its containers on the shared cluster network,
-   * with a network alias and XDN_CLUSTER_* env vars derived from this replica's topology (pushed
-   * earlier by StatefulClusterReplicaCoordinator via XdnApp.setClusterTopology()). Blocks until
-   * the cluster member is healthy. Only called from restore(), which holds the per-service lock.
+   * Creates a fresh service instance and starts its containers on the shared cluster network, with
+   * a network alias and XDN_CLUSTER_* env vars derived from this replica's topology (pushed earlier
+   * by StatefulClusterReplicaCoordinator via XdnApp.setClusterTopology()). Blocks until the cluster
+   * member is healthy. Only called from restore(), which holds the per-service lock.
    *
    * <p>Format: xdn:init:<servicePropertyJSON>
    */
@@ -339,9 +338,9 @@ public class ClusterService {
 
   /**
    * Builds the XDN_CLUSTER_* environment variables the cluster member reads to discover its own
-   * identity and peers. They depend only on the topology and the peer port. Which component is
-   * the member is decided in DockerSandboxManager, which merges these variables into that
-   * component's environment.
+   * identity and peers. They depend only on the topology and the peer port. Which component is the
+   * member is decided in DockerSandboxManager, which merges these variables into that component's
+   * environment.
    */
   private Map<String, String> buildClusterEnv(ServiceProperty property, ClusterTopology topology) {
     Map<String, String> env = new LinkedHashMap<>();
