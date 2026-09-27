@@ -506,7 +506,10 @@ public class DockerSandboxManager extends SandboxManager {
    */
   @Override
   public String captureStateSnapshot(String serviceName, int epoch) {
-    String stateDir = getStateDirectory(serviceName, epoch);
+    return captureStateSnapshot(serviceName, epoch, getStateDirectory(serviceName, epoch));
+  }
+
+  public String captureStateSnapshot(String serviceName, int epoch, String sourceDir) {
     String stagingDir =
         String.format("%s%s/%s/%d/staging/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
     String tarDir = String.format("%s%s/%s/%d/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
@@ -518,7 +521,7 @@ public class DockerSandboxManager extends SandboxManager {
     Shell.runCommand("mkdir -p " + tarDir);
 
     // Copy state into staging dir with retries
-    String rsyncCmd = String.format("rsync -a %s %s", stateDir, stagingDir);
+    String rsyncCmd = String.format("rsync -a %s %s", sourceDir, stagingDir);
     boolean copied = false;
     for (int attempt = 1; attempt <= 10; attempt++) {
       int exitCode = Shell.runCommand(rsyncCmd, true);

@@ -187,6 +187,8 @@ public abstract class SandboxManager {
    */
   public abstract String captureStateSnapshot(String serviceName, int epoch);
 
+  public abstract String captureStateSnapshot(String serviceName, int epoch, String sourceDir);
+
   /**
    * Restores the service's state directory from a Base64-encoded tar archive or a URL pointing to a
    * large checkpoint. Used when a new replica joins (restore("xdn:final:...")).
