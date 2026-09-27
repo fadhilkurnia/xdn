@@ -15,7 +15,6 @@ import edu.umass.cs.reconfiguration.reconfigurationutils.AbstractDemandProfile;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
 import edu.umass.cs.xdn.XdnApp;
-import edu.umass.cs.bluegreenprimarybackup.packets.*;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.service.ConsistencyModel;
@@ -358,7 +357,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       // Even if role is the same, a backup with eventual consistency
       // needs to start its container if it hasn't done so yet
       if (!isNewPrimary
-          && isEventualConsistency(serviceName)
+          && isSequentialConsistency(serviceName)
           && currentLiveDirType.get(serviceName) == null
           && backupPollerStopFlags.get(serviceName) == null) {
         initializeBackupContainer(serviceName);
@@ -371,7 +370,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     if (isNewPrimary) {
       currentRole.put(serviceName, Role.PRIMARY);
       initializePrimaryContainer(serviceName); // Blocking
-    } else if (isEventualConsistency(serviceName)) {
+    } else if (isSequentialConsistency(serviceName)) {
       initializeBackupContainer(serviceName); // Runs in background
     }
 
@@ -568,7 +567,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       // TODO: stop stateDiffRecorder
       // TODO: stop primary container via SandboxManager.stopService(...)
       // TODO: clear "primaryLive/"
-    } else if (isEventualConsistency(serviceName)) {
+    } else if (isSequentialConsistency(serviceName)) {
       AtomicBoolean backupStopFlag = backupPollerStopFlags.get(serviceName);
       if (backupStopFlag != null) {
         backupStopFlag.set(true);
@@ -773,7 +772,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       app.execute(request);
       long tExecuteEnd = System.nanoTime();
 
-      if (isEventualConsistency(serviceName) && !isWriteRequest) {
+      if (isSequentialConsistency(serviceName) && !isWriteRequest) {
         double dockerExecuteMs = (tExecuteEnd - tExecuteStart) / 1_000_000.0;
         logger.log(
             Level.WARNING,
@@ -853,7 +852,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       return true;
 
     } else if (role == Role.BACKUP) {
-      if (!isEventualConsistency(serviceName) || isWriteRequest) {
+      if (!isSequentialConsistency(serviceName) || isWriteRequest) {
         return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
       }
 
@@ -1038,10 +1037,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         });
   }
 
-  private boolean isEventualConsistency(String serviceName) {
+  private boolean isSequentialConsistency(String serviceName) {
     ServiceInstance instance = this.app.getServiceInstance(serviceName);
     if (instance == null) return false;
-    return instance.property.getConsistencyModel().equals(ConsistencyModel.EVENTUAL);
+    return instance.property.getConsistencyModel().equals(ConsistencyModel.SEQUENTIAL);
   }
 
   private boolean forwardRequestToPrimary(
