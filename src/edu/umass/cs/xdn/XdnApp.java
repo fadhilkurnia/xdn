@@ -1,6 +1,7 @@
 package edu.umass.cs.xdn;
 
 import edu.umass.cs.bluegreenprimarybackup.interfaces.BlueGreenBackupableApplication;
+import edu.umass.cs.eventual.interfaces.CheckpointableApplication;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Replicable;
@@ -42,6 +43,7 @@ import org.json.JSONObject;
 public class XdnApp
     implements Replicable,
         Reconfigurable,
+        CheckpointableApplication,
         BlueGreenBackupableApplication,
         InitialStateValidator,
         ClusterTopologyAware {
@@ -679,5 +681,26 @@ public class XdnApp
               + "(2) Docker requires sudo\n"
               + "(3) Docker daemon is not running");
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Public methods used by CheckpointableApplication
+  // -------------------------------------------------------------------------
+  @Override
+  public byte[] captureCheckpoint(String serviceName) {
+    if (serviceRegistry.get(serviceName) != ServiceType.NON_DETERMINISTIC) return null;
+    return nonDeterministicService.captureLazyAntiEntropyCheckpoint(serviceName);
+  }
+
+  @Override
+  public boolean applyCheckpoint(String serviceName, byte[] checkpoint) {
+    if (serviceRegistry.get(serviceName) != ServiceType.NON_DETERMINISTIC) return false;
+    return nonDeterministicService.applyLazyAntiEntropyCheckpoint(serviceName, checkpoint);
+  }
+
+  @Override
+  public byte[] getStateDigest(String serviceName) {
+    if (serviceRegistry.get(serviceName) != ServiceType.NON_DETERMINISTIC) return null;
+    return nonDeterministicService.getLazyAntiEntropyStateDigest(serviceName);
   }
 }

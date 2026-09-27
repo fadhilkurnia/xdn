@@ -3,6 +3,7 @@ package edu.umass.cs.xdn.service;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
 import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
+import edu.umass.cs.utils.ZipFiles;
 import edu.umass.cs.xdn.XdnHttpForwarderClient;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
@@ -12,15 +13,23 @@ import edu.umass.cs.xdn.sandbox.SandboxManager;
 import edu.umass.cs.xdn.utils.Shell;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
+import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * NonDeterministicService handles all non-deterministic services in XDN.
@@ -441,11 +450,19 @@ public class NonDeterministicService {
     return true;
   }
 
+  private final ConcurrentHashMap<String, Object> serviceInitLocks = new ConcurrentHashMap<>();
+
   /**
    * Starts the Docker container on the primary. Called from restore("nondeter:start:") after PBM
    * confirms this node is primary.
    */
   private boolean startContainerAsPrimary(String name) {
+    synchronized (serviceInitLocks.computeIfAbsent(name, k -> new Object())) {
+      return startContainerAsPrimaryLocked(name);
+    }
+  }
+
+  private boolean startContainerAsPrimaryLocked(String name) {
     ServiceInstance instance = serviceInstances.get(name);
     if (instance == null) {
       logger.log(
@@ -682,7 +699,10 @@ public class NonDeterministicService {
   private boolean captureFinalState(String name, int epoch) {
     ServiceInstance instance = serviceInstances.get(name);
     if (instance == null) return false;
-    String capturedPath = sandboxManager.captureStateSnapshot(name, epoch);
+    String primaryLiveDir =
+        stateDiffRecorder.getTargetDirectory(
+            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+    String capturedPath = sandboxManager.captureStateSnapshot(name, epoch, primaryLiveDir);
     return capturedPath != null;
   }
 
@@ -801,5 +821,129 @@ public class NonDeterministicService {
           new Object[] {myNodeId, name, e.getMessage()});
       return false;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Public: LazyReplicaCoordinator (anti entropy)
+  // -------------------------------------------------------------------------
+  public byte[] getLazyAntiEntropyStateDigest(String name) {
+    ServiceInstance instance = serviceInstances.get(name);
+    if (instance == null) return null;
+    if (!instance.property.getConsistencyModel().equals(ConsistencyModel.EVENTUAL)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:NonDeterministicService refusing Lazy-only digest for non-EVENTUAL service {1}",
+          new Object[] {myNodeId, name});
+      return null;
+    }
+    Integer epoch = servicePlacementEpoch.get(name);
+    if (epoch == null) return null;
+    String primaryLiveDir =
+        stateDiffRecorder.getTargetDirectory(
+            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+    Path mountDir = Paths.get(primaryLiveDir);
+    if (!Files.isDirectory(mountDir)) return null;
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      List<Path> paths;
+      try (var walked = Files.walk(mountDir)) {
+        paths =
+            walked
+                .sorted(Comparator.comparing(p -> mountDir.relativize(p).toString()))
+                .collect(Collectors.toList());
+      }
+      for (Path path : paths) {
+        String relative = mountDir.relativize(path).toString();
+        if (relative.isEmpty()) continue;
+        digest.update(relative.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0);
+        if (Files.isRegularFile(path)) digest.update(Files.readAllBytes(path));
+      }
+      return digest.digest();
+    } catch (NoSuchAlgorithmException | IOException e) {
+      return null;
+    }
+  }
+
+  public byte[] captureLazyAntiEntropyCheckpoint(String name) {
+    ServiceInstance instance = serviceInstances.get(name);
+    if (instance == null) return null;
+    if (!instance.property.getConsistencyModel().equals(ConsistencyModel.EVENTUAL)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:NonDeterministicService refusing Lazy-only checkpoint capture for "
+              + "non-EVENTUAL service {1}",
+          new Object[] {myNodeId, name});
+      return null;
+    }
+    String tarPath = captureCheckpointTar(name);
+    if (tarPath == null) return null;
+    try {
+      return Files.readAllBytes(Paths.get(tarPath));
+    } catch (IOException e) {
+      return null;
+    }
+  }
+
+  private String captureCheckpointTar(String name) {
+    Integer epoch = servicePlacementEpoch.get(name);
+    ServiceInstance instance = serviceInstances.get(name);
+    if (epoch == null || instance == null) return null;
+    String primaryLiveDir =
+        stateDiffRecorder.getTargetDirectory(
+            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+    String captureDirPath = String.format("/tmp/xdn/eventual/%s/%s/cap/", myNodeId, name);
+    Shell.runCommand("rm -rf " + captureDirPath, true);
+    Shell.runCommand("mkdir -p " + captureDirPath, true);
+    String copyCommand = String.format("rsync -a %s %s", primaryLiveDir, captureDirPath);
+    int attempts = 0;
+    while (true) {
+      if (++attempts >= 10) return null;
+      if (Shell.runCommand(copyCommand, true) == 0) break;
+    }
+    String tarPath = String.format("/tmp/xdn/eventual/%s/%s/ckpt.tar", myNodeId, name);
+    Shell.runCommand("rm -f " + tarPath, true);
+    ZipFiles.zipDirectory(new File(captureDirPath), tarPath);
+    return tarPath;
+  }
+
+  public boolean applyLazyAntiEntropyCheckpoint(String name, byte[] checkpoint) {
+    ServiceInstance instance = serviceInstances.get(name);
+    if (instance == null) return false;
+    if (!instance.property.getConsistencyModel().equals(ConsistencyModel.EVENTUAL)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:NonDeterministicService refusing Lazy-only checkpoint install for "
+              + "non-EVENTUAL service {1}",
+          new Object[] {myNodeId, name});
+      return false;
+    }
+    if (checkpoint == null || checkpoint.length == 0) return false;
+    String tarPath = String.format("/tmp/xdn/eventual/%s/%s/rcv_ckpt.tar", myNodeId, name);
+    try {
+      Files.createDirectories(Paths.get(tarPath).getParent());
+      Files.write(
+          Paths.get(tarPath),
+          checkpoint,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.TRUNCATE_EXISTING);
+    } catch (IOException e) {
+      return false;
+    }
+    return installCheckpointTar(name, tarPath);
+  }
+
+  private boolean installCheckpointTar(String name, String tarPath) {
+    Integer epoch = servicePlacementEpoch.get(name);
+    ServiceInstance instance = serviceInstances.get(name);
+    if (epoch == null || instance == null) return false;
+    if (!stopContainerInstance(name, epoch)) return false;
+    String primaryLiveDir =
+        stateDiffRecorder.getTargetDirectory(
+            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+    Shell.runCommand("rm -rf " + primaryLiveDir, true);
+    Shell.runCommand("mkdir -p " + primaryLiveDir, true);
+    ZipFiles.unzip(tarPath, primaryLiveDir);
+    return sandboxManager.startService(instance, epoch, primaryLiveDir);
   }
 }
