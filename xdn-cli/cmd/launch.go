@@ -295,30 +295,30 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 	// Note: Healthcheck endpoint is currently made optional
 	// The following code forces healthcheck to all images
 	/*
-	if propMap["components"] == nil {
-		if propMap["mode"] != "cluster" && propMap["healthcheck"] == nil {
-			imageName, _ := propMap["image"].(string)
-			if !hasInferableHealthcheck(imageName) {
-				return prop, fmt.Errorf(
-					"a healthcheck is required: add a 'healthcheck' field (path or command) to the service properties file")
+		if propMap["components"] == nil {
+			if propMap["mode"] != "cluster" && propMap["healthcheck"] == nil {
+				imageName, _ := propMap["image"].(string)
+				if !hasInferableHealthcheck(imageName) {
+					return prop, fmt.Errorf(
+						"a healthcheck is required: add a 'healthcheck' field (path or command) to the service properties file")
+				}
 			}
-		}
-	} else if propMap["mode"] != "cluster" {
-		componentsForCheck := propMap["components"].([]interface{})
-		for _, components := range componentsForCheck {
-			for componentName, componentPropIf := range components.(map[string]interface{}) {
-				componentProp := componentPropIf.(map[string]interface{})
-				if componentProp["healthcheck"] == nil {
-					componentImage, _ := componentProp["image"].(string)
-					if !hasInferableHealthcheck(componentImage) {
-						return prop, fmt.Errorf(
-							"component %q: a healthcheck is required: add a 'healthcheck' field (path or command)",
-							componentName)
+		} else if propMap["mode"] != "cluster" {
+			componentsForCheck := propMap["components"].([]interface{})
+			for _, components := range componentsForCheck {
+				for componentName, componentPropIf := range components.(map[string]interface{}) {
+					componentProp := componentPropIf.(map[string]interface{})
+					if componentProp["healthcheck"] == nil {
+						componentImage, _ := componentProp["image"].(string)
+						if !hasInferableHealthcheck(componentImage) {
+							return prop, fmt.Errorf(
+								"component %q: a healthcheck is required: add a 'healthcheck' field (path or command)",
+								componentName)
+						}
 					}
 				}
 			}
 		}
-	}
 	*/
 
 	if propMap["components"] == nil {
