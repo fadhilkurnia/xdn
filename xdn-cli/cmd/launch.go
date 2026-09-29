@@ -292,6 +292,9 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 		return prop, err
 	}
 
+	// Note: Healthcheck endpoint is currently made optional
+	// The following code forces healthcheck to all images
+	/*
 	if propMap["components"] == nil {
 		if propMap["mode"] != "cluster" && propMap["healthcheck"] == nil {
 			imageName, _ := propMap["image"].(string)
@@ -316,6 +319,7 @@ func parseDeclaredPropertiesFromFile(fileName string) (CommonProperties, error) 
 			}
 		}
 	}
+	*/
 
 	if propMap["components"] == nil {
 		prop.serviceName = propMap["name"].(string)
