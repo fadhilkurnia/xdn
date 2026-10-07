@@ -225,7 +225,7 @@ public class NonDeterministicService {
   }
 
   // -------------------------------------------------------------------------
-  // BlueGreenBackupableApplication methods
+  // BackupableApplication methods
   // -------------------------------------------------------------------------
 
   /**

@@ -1,6 +1,6 @@
 package edu.umass.cs.xdn;
 
-import edu.umass.cs.bluegreenprimarybackup.interfaces.BlueGreenBackupableApplication;
+import edu.umass.cs.bluegreenprimarybackup.interfaces.BackupableApplication;
 import edu.umass.cs.eventual.interfaces.CheckpointableApplication;
 import edu.umass.cs.gigapaxos.PaxosConfig;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
@@ -44,7 +44,7 @@ public class XdnApp
     implements Replicable,
         Reconfigurable,
         CheckpointableApplication,
-        BlueGreenBackupableApplication,
+        BackupableApplication,
         InitialStateValidator,
         ClusterTopologyAware {
 
@@ -331,7 +331,7 @@ public class XdnApp
   }
 
   // -------------------------------------------------------------------------
-  // BlueGreenBackupableApplication interface (non-deterministic path only)
+  // BackupableApplication interface (non-deterministic path only)
   // -------------------------------------------------------------------------
 
   @Override

@@ -1,5 +1,8 @@
 package edu.umass.cs.bluegreenprimarybackup;
 
+import edu.umass.cs.bluegreenprimarybackup.packets.ApplyStateDiffPacket;
+import edu.umass.cs.bluegreenprimarybackup.packets.PrimaryBackupPacket;
+import edu.umass.cs.bluegreenprimarybackup.packets.PrimaryBackupPacketType;
 import edu.umass.cs.gigapaxos.PaxosManager;
 import edu.umass.cs.gigapaxos.interfaces.ExecutedCallback;
 import edu.umass.cs.gigapaxos.interfaces.Request;
@@ -12,9 +15,6 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.XdnApp;
-import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenApplyStateDiffPacket;
-import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacket;
-import edu.umass.cs.bluegreenprimarybackup.packets.BlueGreenPrimaryBackupPacketType;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import io.netty.handler.codec.http.HttpMethod;
 import java.io.IOException;
@@ -26,7 +26,7 @@ import org.json.JSONObject;
  * BlueGreenPrimaryBackupCoordinator is the {@link AbstractReplicaCoordinator} implementation for
  * primary-backup replication in XDN. It handles non-deterministic services where only the primary
  * executes client requests, and state diffs are replicated to backups via Paxos-ordered {@link
- * BlueGreenApplyStateDiffPacket}s.
+ * ApplyStateDiffPacket}s.
  *
  * <p>This class is intentionally a thin unwrap-and-delegate layer: it satisfies GigaPaxos's {@link
  * AbstractReplicaCoordinator} contract, but all actual primary-backup protocol state and logic
@@ -44,7 +44,7 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
       java.util.logging.Logger.getLogger(BlueGreenPrimaryBackupCoordinator.class.getSimpleName());
 
   /**
-   * @param app the replicated application — must implement {@code BlueGreenBackupableApplication}.
+   * @param app the replicated application — must implement {@code BackupableApplication}.
    * @param myID this node's ID.
    * @param unstringer deserializer for {@code NodeIDType}.
    * @param messenger messenger for inter-node communication.
@@ -73,8 +73,8 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
   @Override
   public Set<IntegerPacketType> getRequestTypes() {
     Set<IntegerPacketType> types = new HashSet<>();
-    types.add(BlueGreenPrimaryBackupPacketType.PB2_START_EPOCH_PACKET);
-    types.add(BlueGreenPrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET);
+    types.add(PrimaryBackupPacketType.PB2_START_EPOCH_PACKET);
+    types.add(PrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET);
     types.add(ReconfigurationPacket.PacketType.REPLICABLE_CLIENT_REQUEST);
     // TODO: add app.getRequestTypes() once `app` field accessibility is
     //  confirmed (AbstractReplicaCoordinator stores it as `this.app`,
@@ -86,9 +86,9 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
   public boolean coordinateRequest(Request request, ExecutedCallback callback)
       throws IOException, RequestParseException {
 
-    // BlueGreenPrimaryBackupPacket: BlueGreenStartEpochPacket / BlueGreenApplyStateDiffPacket,
+    // PrimaryBackupPacket: StartEpochPacket / ApplyStateDiffPacket,
     // committed via Paxos and delivered here on commit.
-    if (request instanceof BlueGreenPrimaryBackupPacket packet) {
+    if (request instanceof PrimaryBackupPacket packet) {
       return this.pbManager.handleBlueGreenPrimaryBackupPacket(packet, callback);
     }
 
@@ -132,7 +132,7 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
                 + "Request must use either %s, %s, or %s.",
             request.getClass().getSimpleName(),
             ReplicableClientRequest.class.getSimpleName(),
-            BlueGreenPrimaryBackupPacket.class.getSimpleName(),
+            PrimaryBackupPacket.class.getSimpleName(),
             ReconfigurableRequest.class.getSimpleName()));
   }
 

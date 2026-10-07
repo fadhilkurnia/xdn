@@ -12,19 +12,19 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * BlueGreenResponsePacket is sent directly (not via Paxos) from the primary back to the backup that
+ * ResponsePacket is sent directly (not via Paxos) from the primary back to the backup that
  * forwarded a client request, carrying the computed response.
  *
  * <p>Wire format: [4 bytes packetType][8 bytes requestId] [4 bytes serviceName length][serviceName
  * bytes] [4 bytes encodedResponse length][encodedResponse bytes]
  */
-public class BlueGreenResponsePacket extends BlueGreenPrimaryBackupPacket implements Byteable {
+public class ResponsePacket extends PrimaryBackupPacket implements Byteable {
 
   private final long requestId;
   private final String serviceName;
   private final byte[] encodedResponse;
 
-  public BlueGreenResponsePacket(String serviceName, long requestId, byte[] encodedResponse) {
+  public ResponsePacket(String serviceName, long requestId, byte[] encodedResponse) {
     assert serviceName != null;
     assert encodedResponse != null;
 
@@ -35,7 +35,7 @@ public class BlueGreenResponsePacket extends BlueGreenPrimaryBackupPacket implem
 
   @Override
   public IntegerPacketType getRequestType() {
-    return BlueGreenPrimaryBackupPacketType.PB2_RESPONSE_PACKET;
+    return PrimaryBackupPacketType.PB2_RESPONSE_PACKET;
   }
 
   @Override
@@ -61,7 +61,7 @@ public class BlueGreenResponsePacket extends BlueGreenPrimaryBackupPacket implem
   public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
-    BlueGreenResponsePacket that = (BlueGreenResponsePacket) o;
+    ResponsePacket that = (ResponsePacket) o;
     return requestId == that.requestId
         && Objects.equals(serviceName, that.serviceName)
         && Arrays.equals(encodedResponse, that.encodedResponse);
@@ -101,12 +101,12 @@ public class BlueGreenResponsePacket extends BlueGreenPrimaryBackupPacket implem
     }
   }
 
-  public static BlueGreenResponsePacket createFromBytes(byte[] encodedPacket) {
+  public static ResponsePacket createFromBytes(byte[] encodedPacket) {
     assert encodedPacket != null && encodedPacket.length >= 4;
 
     ByteBuffer buffer = ByteBuffer.wrap(encodedPacket);
     int packetType = buffer.getInt();
-    assert packetType == BlueGreenPrimaryBackupPacketType.PB2_RESPONSE_PACKET.getInt()
+    assert packetType == PrimaryBackupPacketType.PB2_RESPONSE_PACKET.getInt()
         : "invalid packet header: " + packetType;
 
     long requestId = buffer.getLong();
@@ -120,6 +120,6 @@ public class BlueGreenResponsePacket extends BlueGreenPrimaryBackupPacket implem
     byte[] encodedResponse = new byte[encodedResponseLen];
     buffer.get(encodedResponse);
 
-    return new BlueGreenResponsePacket(serviceName, requestId, encodedResponse);
+    return new ResponsePacket(serviceName, requestId, encodedResponse);
   }
 }
