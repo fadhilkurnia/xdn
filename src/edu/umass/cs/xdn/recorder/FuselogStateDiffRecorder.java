@@ -97,7 +97,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   protected FuselogStateDiffRecorder(
       String nodeID, String binPath, String applyBinPath, boolean writebackDefault) {
-    super(nodeID, workingBasePath + nodeID + "/");
+    super(nodeID, workingBasePath);
     this.binPath = binPath;
     this.applyBinPath = applyBinPath;
     this.writebackDefault = writebackDefault;
@@ -133,7 +133,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // Create working mount dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/mnt/
-    this.baseMountDirPath = this.baseDirectoryPath + "mnt/";
+    this.baseMountDirPath = workingBasePath + nodeID + "/mnt/";
     try {
       Files.createDirectories(Paths.get(this.baseMountDirPath));
     } catch (IOException e) {
@@ -1286,7 +1286,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // Prepare the backup replicas' target directory on each backup node, which is where we will
     // sync the data from current replica and also where fuselog-apply will apply the stateDiff.
     // e.g., backup-node1 => /tmp/xdn/state/fuselog/backup-node1/mnt/<serviceName>/e<epoch>/
-    String currentReplica = this.baseDirectoryPath;
+    String currentReplica = workingBasePath + this.nodeID + "/";
     Map<String, String> backupIdToTargetPaths = new HashMap<>();
     backupNodes.forEach(
         node ->

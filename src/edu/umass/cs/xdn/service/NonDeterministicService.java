@@ -200,7 +200,7 @@ public class NonDeterministicService {
       return startContainerAsPrimary(name);
     }
 
-    if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PREFIX)) {
+    if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP_PB_PREFIX)) {
       AbstractStateDiffRecorder.LiveDirType backup = null;
       if (state.startsWith(ServiceProperty.NON_DETERMINISTIC_START_BACKUP1_PREFIX)) {
         backup = AbstractStateDiffRecorder.LiveDirType.BACKUP1;
