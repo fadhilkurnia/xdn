@@ -59,10 +59,6 @@ import org.json.JSONObject;
  * the background startPollingForCoordinatorStatus() poller, both of which may call
  * tryToBePaxosCoordinator()/getPaxosCoordinator() concurrently.
  *
- * <p>TODO: see BlueGreenApplyStateDiffPacket's javadoc for an unresolved question about which field
- * name (currPlacementEpoch) the Notify(ApplyStateDiff) handler should compare against -- not yet
- * fixed per explicit instruction.
- *
  * @param <NodeIDType> the type used to identify nodes in the system.
  */
 public class BlueGreenPrimaryBackupManager<NodeIDType> {
@@ -110,14 +106,14 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   private final ConcurrentHashMap<String, Role> currentRole = new ConcurrentHashMap<>();
 
   /** Epoch of the current primary within the current placement. */
-  private final ConcurrentHashMap<String, Integer> currPlacementEpoch = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, Integer> currPrimaryEpoch = new ConcurrentHashMap<>();
 
   // Count of state diffs commited so far, used for gap detection.
-  private final ConcurrentHashMap<String, Integer> cmtDiffCount = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, Integer> cmtStateDiffCount = new ConcurrentHashMap<>();
   // Count of state diffs applied to `snp/` from `cmtDiff/`
-  private final ConcurrentHashMap<String, Integer> snpDiffCount = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, Integer> snpStateDiffCount = new ConcurrentHashMap<>();
   // stateDiffCount at the time the backup last switched live containers (blue/green).
-  private final ConcurrentHashMap<String, Integer> liveDiffCount = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, Integer> liveStateDiffCount = new ConcurrentHashMap<>();
 
   /**
    * Per-service single thread executor: serializes captureStateDiff() + propose(). TODO: not
@@ -128,7 +124,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
 
   /**
    * Next stateDiff count to hand out for a service, advanced eagerly at assignment time (unlike
-   * cmtDiffCount, which only updates after Paxos commit). Only ever touched from within that
+   * cmtStateDiffCount, which only updates after Paxos commit). Only ever touched from within that
    * service's captureExecutors task.
    */
   private final ConcurrentHashMap<String, Integer> nextAssignedCount = new ConcurrentHashMap<>();
@@ -264,7 +260,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                 continue;
               }
 
-              nextPrimaryEpoch = currPlacementEpoch.getOrDefault(serviceName, -1) + 1;
+              nextPrimaryEpoch = currPrimaryEpoch.getOrDefault(serviceName, -1) + 1;
             } else {
               sleepQuietly(1000);
               continue;
@@ -302,7 +298,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     boolean isNewService =
         currPlacement.get(serviceName) == null
             || currPrimaryID.get(serviceName) == null
-            || currPlacementEpoch.get(serviceName) == null;
+            || currPrimaryEpoch.get(serviceName) == null;
     Integer curPlacementVal = currPlacement.get(serviceName);
     boolean isNewPlacement = curPlacementVal == null || packet.getNextPlacement() > curPlacementVal;
 
@@ -329,9 +325,9 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     if (isNewService || isNewPlacement) {
       currPlacement.put(serviceName, packet.getNextPlacement());
       currPrimaryID.put(serviceName, nextPrimaryID);
-      currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
-      cmtDiffCount.put(serviceName, -1);
-      snpDiffCount.put(serviceName, -1);
+      currPrimaryEpoch.put(serviceName, packet.getNextPrimaryEpoch());
+      cmtStateDiffCount.put(serviceName, -1);
+      snpStateDiffCount.put(serviceName, -1);
       // TODO: nextAssignedCount is reset here, but the per-service
       //  captureExecutors entry is NOT recreated/drained on epoch change.
       //  A write request already queued onto the old epoch's executor task
@@ -350,7 +346,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       startSnpDiffApplyThread(serviceName, stopFlag);
     } else if (packet.getNextPlacement() == curPlacementVal) {
       currPrimaryID.put(serviceName, nextPrimaryID);
-      currPlacementEpoch.put(serviceName, packet.getNextPrimaryEpoch());
+      currPrimaryEpoch.put(serviceName, packet.getNextPrimaryEpoch());
     }
 
     if (isNewRoleTheSame) {
@@ -418,7 +414,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
               proposeStateDiff(
                   serviceName,
                   currPlacement.get(serviceName),
-                  currPlacementEpoch.get(serviceName),
+                  currPrimaryEpoch.get(serviceName),
                   bootstrapCount,
                   finalDiff,
                   (executedRequest, handled) ->
@@ -440,7 +436,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         "{0}:PBM handleBlueGreenApplyStateDiffPacket checks: "
             + "packet.placement={1} currPlacement={2} "
             + "packet.primaryID={3} currPrimaryID={4} "
-            + "packet.primaryEpoch={5} currPlacementEpoch={6}",
+            + "packet.primaryEpoch={5} currPrimaryEpoch={6}",
         new Object[] {
           myNodeID,
           packet.getPlacement(),
@@ -448,7 +444,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           packet.getPrimaryID(),
           currPrimaryID.get(serviceName),
           packet.getPrimaryEpoch(),
-          currPlacementEpoch.get(serviceName)
+          currPrimaryEpoch.get(serviceName)
         });
 
     if (packet.getPlacement() != currPlacement.getOrDefault(serviceName, -1)) {
@@ -468,7 +464,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       throw new IllegalStateException("primaryID mismatch for " + serviceName);
     }
 
-    Integer currPrimaryEpoch = currPlacementEpoch.get(serviceName);
+    Integer currPrimaryEpoch = this.currPrimaryEpoch.get(serviceName);
     if (currPrimaryEpoch == null || currPrimaryEpoch != packet.getPrimaryEpoch()) {
       logger.log(
           Level.WARNING,
@@ -477,7 +473,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           new Object[] {myNodeID, serviceName, currPrimaryEpoch, packet.getPrimaryEpoch()});
     }
 
-    int currentCount = cmtDiffCount.getOrDefault(serviceName, 0);
+    int currentCount = cmtStateDiffCount.getOrDefault(serviceName, 0);
     int difference = packet.getStateDiffCount() - currentCount;
 
     if (difference == 1) {
@@ -527,7 +523,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
             "{0}:PBM handleBlueGreenApplyStateDiffPacket applyStatediff failed for {1} count={2}",
             new Object[] {myNodeID, serviceName, packet.getStateDiffCount()});
       }
-      cmtDiffCount.put(serviceName, packet.getStateDiffCount());
+      cmtStateDiffCount.put(serviceName, packet.getStateDiffCount());
     } else if (difference > 1) {
       // Deliberate per design: any gap triggers this node to attempt
       // to become the new primary itself, rather than resyncing.
@@ -540,7 +536,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           });
 
       currentRole.put(serviceName, Role.PRIMARY_CANDIDATE);
-      int nextEpoch = currPlacementEpoch.getOrDefault(serviceName, 0) + 1;
+      int nextEpoch = this.currPrimaryEpoch.getOrDefault(serviceName, 0) + 1;
       BlueGreenStartEpochPacket startPacket =
           new BlueGreenStartEpochPacket(
               serviceName, currPlacement.get(serviceName), nextEpoch, myNodeID.toString());
@@ -624,14 +620,14 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
               int currentSnpDiffCount;
               boolean started;
               try {
-                currentSnpDiffCount = snpDiffCount.getOrDefault(serviceName, -1);
+                currentSnpDiffCount = snpStateDiffCount.getOrDefault(serviceName, -1);
                 logger.log(
                     Level.WARNING,
                     "{0}:PBM initializeBackupContainer starting {1} "
-                        + "at snpDiffCount={2} for {3}",
+                        + "at snpStateDiffCount={2} for {3}",
                     new Object[] {myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
                 started = this.app.restore(serviceName, nextLivePrefix);
-                liveDiffCount.put(serviceName, currentSnpDiffCount);
+                liveStateDiffCount.put(serviceName, currentSnpDiffCount);
               } finally {
                 snpLock.unlock();
               }
@@ -659,14 +655,14 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                 continue;
               }
 
-              // Reroute: update currentLiveDirType BEFORE liveDiffCount
-              // liveDiffCount already set inside the lock above
+              // Reroute: update currentLiveDirType BEFORE liveStateDiffCount
+              // liveStateDiffCount already set inside the lock above
               currentLiveDirType.put(serviceName, nextLiveType);
 
               logger.log(
                   Level.WARNING,
                   "{0}:PBM initializeBackupContainer switched to {1} "
-                      + "liveDiffCount={2} for {3} — container healthy and serving requests",
+                      + "liveStateDiffCount={2} for {3} — container healthy and serving requests",
                   new Object[] {myNodeID, nextLiveType, currentSnpDiffCount, serviceName});
 
               // Record switchover to log file
@@ -805,7 +801,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                 byte[] finalDiff = diff == null ? new byte[0] : diff;
                 // Do NOT update stateDiffCount here n let handleBlueGreenApplyStateDiffPacket
                 // update it after Paxos commits, uniformly on all nodes including primary.
-                int pEpoch = currPlacementEpoch.get(serviceName);
+                int pEpoch = currPrimaryEpoch.get(serviceName);
                 int placement = currPlacement.get(serviceName);
 
                 logger.log(
@@ -856,7 +852,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
       }
 
-      Integer liveCount = liveDiffCount.get(serviceName);
+      Integer liveCount = liveStateDiffCount.get(serviceName);
       if (liveCount == null || (clientStateDiffCount != null && clientStateDiffCount > liveCount)) {
         return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
       }
@@ -901,7 +897,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     backgroundThreadPool.submit(
         () -> {
           while (!stopFlag.get()) {
-            int nextCount = snpDiffCount.getOrDefault(serviceName, -1) + 1;
+            int nextCount = snpStateDiffCount.getOrDefault(serviceName, -1) + 1;
 
             // Scan cmtDiff/ for file matching *:<nextCount>.diff
             if (stateDiffDir == null) {
@@ -940,10 +936,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                     "{0}:PBM snpDiffApplyThread failed to apply count={1} for {2}",
                     new Object[] {myNodeID, nextCount, serviceName});
               } else {
-                snpDiffCount.put(serviceName, nextCount);
+                snpStateDiffCount.put(serviceName, nextCount);
                 logger.log(
                     Level.FINE,
-                    "{0}:PBM snpDiffApplyThread applied count={1} for {2} " + "snpDiffCount={3}",
+                    "{0}:PBM snpDiffApplyThread applied count={1} for {2} " + "snpStateDiffCount={3}",
                     new Object[] {myNodeID, nextCount, serviceName, nextCount});
               }
             } finally {
