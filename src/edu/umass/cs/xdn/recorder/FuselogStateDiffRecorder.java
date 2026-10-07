@@ -401,6 +401,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // preInitialization is only called on the primary — mounts fuselog on primaryLive/.
     // snapshot/ is seeded by the caller (NonDeterministicService) via rsync before this runs.
+    // primaryLive/ is deliberately not deleted here, so the seed stays visible through the mount.
     //
     // TODO: this new-design path does not yet carry #92/#93's perf work (coalescing default,
     // writeback-cache toggle, daemon-log/compression env vars) from preInitializationOld — those
@@ -410,7 +411,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     String socketFile = getSocketPath(serviceName, placementEpoch);
 
     Shell.runCommand("sudo umount " + primaryLiveDir);
-    Shell.runCommand("rm -rf " + primaryLiveDir);
     int code = Shell.runCommand("mkdir -p " + primaryLiveDir);
     if (code != 0) {
       String errMessage =

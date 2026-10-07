@@ -478,13 +478,27 @@ public class NonDeterministicService {
     if (epoch == null) return false;
 
     // Step 1: rsync snapshot/ -> primaryLive/ to seed the FUSE mount with latest state.
-    // For a brand-new service, snapshot/ is empty — this is a no-op.
+    // --delete makes primaryLive/ match snapshot/ exactly. For a brand-new service, snapshot/
+    // is empty, so primaryLive/ ends up empty.
     String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch);
     String primaryLiveDir =
         stateDiffRecorder.getTargetDirectory(
             name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+
+    // A fuselog mount from an earlier run may still be on primaryLive/. The rsync below would
+    // write through it, and --delete would remove files through it. Unmount first, and stop if
+    // the directory is still a mount point.
+    Shell.runCommand("sudo umount " + primaryLiveDir);
+    if (Shell.runCommand("mountpoint -q " + primaryLiveDir) == 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:NonDeterministicService {1} is still a mount point, refusing to seed it for {2}",
+          new Object[] {myNodeId, primaryLiveDir, name});
+      return false;
+    }
+
     Shell.runCommand("mkdir -p " + primaryLiveDir);
-    Shell.runCommand(String.format("rsync -a %s %s", snapshotDir, primaryLiveDir));
+    Shell.runCommand(String.format("rsync -a --delete %s %s", snapshotDir, primaryLiveDir));
 
     // Step 2: Mount fuselog on primaryLive/ — start capturing writes.
     boolean preInit = stateDiffRecorder.preInitialization(name, epoch);
