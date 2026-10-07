@@ -664,6 +664,22 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
+  public boolean stopPrimaryRecorder(String serviceName, int placementEpoch) {
+    Map<Integer, SocketChannel> epochMap = serviceFsSocket.get(serviceName);
+    if (epochMap != null) {
+      SocketChannel sc = epochMap.remove(placementEpoch);
+      if (sc != null) {
+        try {
+          sc.close();
+        } catch (IOException ignored) {
+        }
+      }
+    }
+    String primaryLiveDir = getTargetDirectory(serviceName, placementEpoch, LiveDirType.PRIMARY);
+    return Shell.runCommand("sudo umount " + primaryLiveDir, true) == 0;
+  }
+
+  @Override
   public boolean saveStateDiff(
       String serviceName, int placementEpoch, byte[] encodedState, String filename) {
     assert serviceName != null : "serviceName should not be null";

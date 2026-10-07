@@ -149,6 +149,21 @@ public abstract class AbstractStateDiffRecorder {
     return Shell.runCommand(String.format("mv %s %s", src, dest)) == 0;
   }
 
+  // Deletes one stateDiff file from cmtDiff/. Returns false if the file did not exist.
+  public boolean deleteStateDiff(String serviceName, int placementEpoch, String filename) {
+    try {
+      return java.nio.file.Files.deleteIfExists(
+          java.nio.file.Path.of(getStateDiffDir(serviceName, placementEpoch) + filename));
+    } catch (java.io.IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  // Unmounts the primary live directory and stops capturing. Keeps snp/ and the diff files.
+  public boolean stopPrimaryRecorder(String serviceName, int placementEpoch) {
+    throw new UnsupportedOperationException("not supported by " + getClass().getSimpleName());
+  }
+
   // -------------------------------------------------------------------------
   // Abstract function for the new Primary-Backup (with read-only backup containers)
   // -------------------------------------------------------------------------

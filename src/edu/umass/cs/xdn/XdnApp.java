@@ -572,6 +572,19 @@ public class XdnApp
     return nonDeterministicService.stopContainerAsBackup(serviceName, backup);
   }
 
+  public boolean stopPrimaryContainer(String serviceName) {
+    return nonDeterministicService.stopContainerAsPrimary(serviceName);
+  }
+
+  public void initializeLiveDirectory(
+      String serviceName, AbstractStateDiffRecorder.LiveDirType type) {
+    nonDeterministicService.initializeLiveDirectory(serviceName, type);
+  }
+
+  public boolean deleteStateDiff(String serviceName, String filename) {
+    return nonDeterministicService.deleteStateDiff(serviceName, filename);
+  }
+
   public Integer getActiveBackupPort(
       String serviceName, AbstractStateDiffRecorder.LiveDirType backup) {
     return nonDeterministicService.getActiveBackupPort(serviceName, backup);
