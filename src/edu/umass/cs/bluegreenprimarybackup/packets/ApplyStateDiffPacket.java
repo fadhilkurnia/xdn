@@ -13,7 +13,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * BlueGreenApplyStateDiffPacket carries a state diff captured by the primary, to be applied by all
+ * ApplyStateDiffPacket carries a state diff captured by the primary, to be applied by all
  * replicas (including the primary itself, per the design decision that the primary also applies its
  * own diffs to snapshot/).
  *
@@ -41,7 +41,7 @@ import java.util.UUID;
  * primaryID length][primaryID bytes][4 bytes stateDiffCount] [4 bytes stateDiff length][stateDiff
  * bytes]
  */
-public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
+public class ApplyStateDiffPacket extends PrimaryBackupPacket
     implements Byteable {
 
   private final long packetId;
@@ -53,7 +53,7 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
   private final byte[] stateDiff;
   private final boolean isLargeDiff;
 
-  public BlueGreenApplyStateDiffPacket(
+  public ApplyStateDiffPacket(
       String serviceName,
       int placement,
       int primaryEpoch,
@@ -71,7 +71,7 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
         false);
   }
 
-  public BlueGreenApplyStateDiffPacket(
+  public ApplyStateDiffPacket(
       String serviceName, int placement, int primaryEpoch, String primaryID, int stateDiffCount) {
     this(
         Math.abs(UUID.randomUUID().getLeastSignificantBits()),
@@ -84,7 +84,7 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
         true);
   }
 
-  private BlueGreenApplyStateDiffPacket(
+  private ApplyStateDiffPacket(
       long packetId,
       String serviceName,
       int placement,
@@ -110,7 +110,7 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
 
   @Override
   public IntegerPacketType getRequestType() {
-    return BlueGreenPrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET;
+    return PrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET;
   }
 
   @Override
@@ -160,7 +160,7 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
   public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
-    BlueGreenApplyStateDiffPacket that = (BlueGreenApplyStateDiffPacket) o;
+    ApplyStateDiffPacket that = (ApplyStateDiffPacket) o;
     return packetId == that.packetId
         && placement == that.placement
         && primaryEpoch == that.primaryEpoch
@@ -215,12 +215,12 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
     }
   }
 
-  public static BlueGreenApplyStateDiffPacket createFromBytes(byte[] encodedPacket) {
+  public static ApplyStateDiffPacket createFromBytes(byte[] encodedPacket) {
     assert encodedPacket != null && encodedPacket.length >= 4;
 
     ByteBuffer buffer = ByteBuffer.wrap(encodedPacket);
     int packetType = buffer.getInt();
-    assert packetType == BlueGreenPrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET.getInt()
+    assert packetType == PrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET.getInt()
         : "invalid packet header: " + packetType;
 
     long packetId = buffer.getLong();
@@ -246,7 +246,7 @@ public class BlueGreenApplyStateDiffPacket extends BlueGreenPrimaryBackupPacket
     byte[] stateDiff = new byte[stateDiffLen];
     buffer.get(stateDiff);
 
-    return new BlueGreenApplyStateDiffPacket(
+    return new ApplyStateDiffPacket(
         packetId,
         serviceName,
         placement,

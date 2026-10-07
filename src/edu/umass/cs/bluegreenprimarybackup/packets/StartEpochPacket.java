@@ -12,7 +12,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * BlueGreenStartEpochPacket announces that a node has become (or is about to become) primary for a
+ * StartEpochPacket announces that a node has become (or is about to become) primary for a
  * given service, under a given placement.
  *
  * <p>Corresponds to the "StartPrimaryEpoch{nextPrimaryEpoch, nextPrimaryID, nextPlacement}" packet
@@ -23,7 +23,7 @@ import java.util.UUID;
  * serviceName length] [serviceName bytes][4 bytes nextPlacement][4 bytes nextPrimaryEpoch] [4 bytes
  * nextPrimaryID length][nextPrimaryID bytes]
  */
-public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket implements Byteable {
+public class StartEpochPacket extends PrimaryBackupPacket implements Byteable {
 
   private final long packetId;
   private final String serviceName;
@@ -31,7 +31,7 @@ public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket impl
   private final int nextPrimaryEpoch;
   private final String nextPrimaryID;
 
-  public BlueGreenStartEpochPacket(
+  public StartEpochPacket(
       String serviceName, int nextPlacement, int nextPrimaryEpoch, String nextPrimaryID) {
     this(
         Math.abs(UUID.randomUUID().getLeastSignificantBits()),
@@ -41,7 +41,7 @@ public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket impl
         nextPrimaryID);
   }
 
-  private BlueGreenStartEpochPacket(
+  private StartEpochPacket(
       long packetId,
       String serviceName,
       int nextPlacement,
@@ -60,7 +60,7 @@ public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket impl
 
   @Override
   public IntegerPacketType getRequestType() {
-    return BlueGreenPrimaryBackupPacketType.PB2_START_EPOCH_PACKET;
+    return PrimaryBackupPacketType.PB2_START_EPOCH_PACKET;
   }
 
   @Override
@@ -94,7 +94,7 @@ public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket impl
   public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
-    BlueGreenStartEpochPacket that = (BlueGreenStartEpochPacket) o;
+    StartEpochPacket that = (StartEpochPacket) o;
     return packetId == that.packetId
         && nextPlacement == that.nextPlacement
         && nextPrimaryEpoch == that.nextPrimaryEpoch
@@ -138,12 +138,12 @@ public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket impl
     }
   }
 
-  public static BlueGreenStartEpochPacket createFromBytes(byte[] encodedPacket) {
+  public static StartEpochPacket createFromBytes(byte[] encodedPacket) {
     assert encodedPacket != null && encodedPacket.length >= 4;
 
     ByteBuffer buffer = ByteBuffer.wrap(encodedPacket);
     int packetType = buffer.getInt();
-    assert packetType == BlueGreenPrimaryBackupPacketType.PB2_START_EPOCH_PACKET.getInt()
+    assert packetType == PrimaryBackupPacketType.PB2_START_EPOCH_PACKET.getInt()
         : "invalid packet header: " + packetType;
 
     long packetId = buffer.getLong();
@@ -161,7 +161,7 @@ public class BlueGreenStartEpochPacket extends BlueGreenPrimaryBackupPacket impl
     buffer.get(nextPrimaryIDBytes);
     String nextPrimaryID = new String(nextPrimaryIDBytes, StandardCharsets.UTF_8);
 
-    return new BlueGreenStartEpochPacket(
+    return new StartEpochPacket(
         packetId, serviceName, nextPlacement, nextPrimaryEpoch, nextPrimaryID);
   }
 }

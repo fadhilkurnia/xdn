@@ -6,7 +6,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * BlueGreenPrimaryBackupPacketType enumerates the packet types used by the xdn primary-backup
+ * PrimaryBackupPacketType enumerates the packet types used by the xdn primary-backup
  * protocol. Integer range is deliberately disjoint from the old
  * edu.umass.cs.primarybackup.packets.PrimaryBackupPacketType range (35400-35406) to avoid any
  * accidental collision if both packages are ever loaded in the same JVM.
@@ -14,7 +14,7 @@ import java.util.Map;
  * <p>TODO: confirm this integer range does not collide with any other packet type registry in the
  * system before this is used in a real deployment.
  */
-public enum BlueGreenPrimaryBackupPacketType implements IntegerPacketType {
+public enum PrimaryBackupPacketType implements IntegerPacketType {
 
   // Primary -> All Replicas (proposed via Paxos)
   PB2_START_EPOCH_PACKET(35500),
@@ -25,12 +25,12 @@ public enum BlueGreenPrimaryBackupPacketType implements IntegerPacketType {
   PB2_FORWARDED_REQUEST_PACKET(35502),
   PB2_RESPONSE_PACKET(35503);
 
-  private static final Map<Integer, BlueGreenPrimaryBackupPacketType> numbers = new HashMap<>();
+  private static final Map<Integer, PrimaryBackupPacketType> numbers = new HashMap<>();
 
   static {
-    for (BlueGreenPrimaryBackupPacketType type : BlueGreenPrimaryBackupPacketType.values()) {
-      if (!BlueGreenPrimaryBackupPacketType.numbers.containsKey(type.number)) {
-        BlueGreenPrimaryBackupPacketType.numbers.put(type.number, type);
+    for (PrimaryBackupPacketType type : PrimaryBackupPacketType.values()) {
+      if (!PrimaryBackupPacketType.numbers.containsKey(type.number)) {
+        PrimaryBackupPacketType.numbers.put(type.number, type);
       } else {
         assert (false) : "Duplicate or inconsistent enum type";
         throw new RuntimeException("Duplicate or inconsistent enum type");
@@ -40,7 +40,7 @@ public enum BlueGreenPrimaryBackupPacketType implements IntegerPacketType {
 
   private final int number;
 
-  BlueGreenPrimaryBackupPacketType(int number) {
+  PrimaryBackupPacketType(int number) {
     this.number = number;
   }
 
@@ -49,6 +49,6 @@ public enum BlueGreenPrimaryBackupPacketType implements IntegerPacketType {
     return this.number;
   }
 
-  public static final IntegerPacketTypeMap<BlueGreenPrimaryBackupPacketType> intToType =
-      new IntegerPacketTypeMap<>(BlueGreenPrimaryBackupPacketType.values());
+  public static final IntegerPacketTypeMap<PrimaryBackupPacketType> intToType =
+      new IntegerPacketTypeMap<>(PrimaryBackupPacketType.values());
 }

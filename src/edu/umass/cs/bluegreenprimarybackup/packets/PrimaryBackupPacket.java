@@ -4,7 +4,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReplicableRequest;
 import java.nio.ByteBuffer;
 
 /**
- * BlueGreenPrimaryBackupPacket is the abstract base class for all packets used by the xdn
+ * PrimaryBackupPacket is the abstract base class for all packets used by the xdn
  * primary-backup protocol. This is a from-scratch implementation, independent of
  * edu.umass.cs.primarybackup.packets.PrimaryBackupPacket, per the decision to keep the new design
  * fully self-contained.
@@ -12,21 +12,21 @@ import java.nio.ByteBuffer;
  * <p>Encoding is plain Java (DataOutputStream/ByteBuffer based via Byteable), not protobuf, for
  * now.
  */
-public abstract class BlueGreenPrimaryBackupPacket implements ReplicableRequest {
+public abstract class PrimaryBackupPacket implements ReplicableRequest {
 
   /**
    * Reads the first 4 bytes of an encoded packet to determine its type, without fully deserializing
-   * it. Returns null if the bytes don't look like a known BlueGreenPrimaryBackupPacketType.
+   * it. Returns null if the bytes don't look like a known PrimaryBackupPacketType.
    *
    * @param encodedPacket the raw encoded packet bytes.
    * @return the packet type, or null if unrecognized.
    */
-  public static BlueGreenPrimaryBackupPacketType getQuickPacketTypeFromEncodedPacket(
+  public static PrimaryBackupPacketType getQuickPacketTypeFromEncodedPacket(
       byte[] encodedPacket) {
     if (encodedPacket == null || encodedPacket.length < 4) return null;
     ByteBuffer headerBuffer = ByteBuffer.wrap(encodedPacket);
     int packetType = headerBuffer.getInt(0);
-    return BlueGreenPrimaryBackupPacketType.intToType.get(packetType);
+    return PrimaryBackupPacketType.intToType.get(packetType);
   }
 
   /**
@@ -36,29 +36,29 @@ public abstract class BlueGreenPrimaryBackupPacket implements ReplicableRequest 
    * @return the deserialized packet.
    * @throws RuntimeException if the packet type is unrecognized or unimplemented.
    */
-  public static BlueGreenPrimaryBackupPacket createFromBytes(byte[] encodedPacket) {
-    BlueGreenPrimaryBackupPacketType packetType =
-        BlueGreenPrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(encodedPacket);
-    assert packetType != null : "Invalid encoded BlueGreenPrimaryBackupPacket";
+  public static PrimaryBackupPacket createFromBytes(byte[] encodedPacket) {
+    PrimaryBackupPacketType packetType =
+        PrimaryBackupPacket.getQuickPacketTypeFromEncodedPacket(encodedPacket);
+    assert packetType != null : "Invalid encoded PrimaryBackupPacket";
 
     // TODO: add cases here as more packet types are implemented
-    //  (e.g. ChangePrimaryPacket, BlueGreenForwardedRequestPacket, BlueGreenResponsePacket
+    //  (e.g. ChangePrimaryPacket, ForwardedRequestPacket, ResponsePacket
     //  equivalents) once the steady-state write-forwarding design is
     //  finalized.
-    if (packetType.equals(BlueGreenPrimaryBackupPacketType.PB2_START_EPOCH_PACKET)) {
-      return BlueGreenStartEpochPacket.createFromBytes(encodedPacket);
+    if (packetType.equals(PrimaryBackupPacketType.PB2_START_EPOCH_PACKET)) {
+      return StartEpochPacket.createFromBytes(encodedPacket);
     }
 
-    if (packetType.equals(BlueGreenPrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET)) {
-      return BlueGreenApplyStateDiffPacket.createFromBytes(encodedPacket);
+    if (packetType.equals(PrimaryBackupPacketType.PB2_APPLY_STATE_DIFF_PACKET)) {
+      return ApplyStateDiffPacket.createFromBytes(encodedPacket);
     }
 
-    if (packetType.equals(BlueGreenPrimaryBackupPacketType.PB2_FORWARDED_REQUEST_PACKET)) {
-      return BlueGreenForwardedRequestPacket.createFromBytes(encodedPacket);
+    if (packetType.equals(PrimaryBackupPacketType.PB2_FORWARDED_REQUEST_PACKET)) {
+      return ForwardedRequestPacket.createFromBytes(encodedPacket);
     }
 
-    if (packetType.equals(BlueGreenPrimaryBackupPacketType.PB2_RESPONSE_PACKET)) {
-      return BlueGreenResponsePacket.createFromBytes(encodedPacket);
+    if (packetType.equals(PrimaryBackupPacketType.PB2_RESPONSE_PACKET)) {
+      return ResponsePacket.createFromBytes(encodedPacket);
     }
 
     throw new RuntimeException(

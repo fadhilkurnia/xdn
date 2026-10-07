@@ -13,14 +13,14 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * BlueGreenForwardedRequestPacket is sent directly (not via Paxos) from a backup node to the
+ * ForwardedRequestPacket is sent directly (not via Paxos) from a backup node to the
  * primary, carrying a client request that the backup cannot execute locally.
  *
  * <p>Wire format: [4 bytes packetType][8 bytes packetId] [4 bytes serviceName length][serviceName
  * bytes] [4 bytes entryNodeId length][entryNodeId bytes] [4 bytes encodedRequest
  * length][encodedRequest bytes]
  */
-public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacket
+public class ForwardedRequestPacket extends PrimaryBackupPacket
     implements Byteable {
 
   private final long packetId;
@@ -28,7 +28,7 @@ public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacke
   private final String entryNodeId;
   private final byte[] encodedForwardedRequest;
 
-  public BlueGreenForwardedRequestPacket(
+  public ForwardedRequestPacket(
       String serviceName, String entryNodeId, byte[] encodedForwardedRequest) {
     this(
         Math.abs(UUID.randomUUID().getLeastSignificantBits()),
@@ -37,7 +37,7 @@ public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacke
         encodedForwardedRequest);
   }
 
-  private BlueGreenForwardedRequestPacket(
+  private ForwardedRequestPacket(
       long packetId, String serviceName, String entryNodeId, byte[] encodedForwardedRequest) {
     assert packetId > 0;
     assert serviceName != null;
@@ -52,7 +52,7 @@ public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacke
 
   @Override
   public IntegerPacketType getRequestType() {
-    return BlueGreenPrimaryBackupPacketType.PB2_FORWARDED_REQUEST_PACKET;
+    return PrimaryBackupPacketType.PB2_FORWARDED_REQUEST_PACKET;
   }
 
   @Override
@@ -82,7 +82,7 @@ public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacke
   public boolean equals(Object o) {
     if (this == o) return true;
     if (o == null || getClass() != o.getClass()) return false;
-    BlueGreenForwardedRequestPacket that = (BlueGreenForwardedRequestPacket) o;
+    ForwardedRequestPacket that = (ForwardedRequestPacket) o;
     return packetId == that.packetId
         && Objects.equals(serviceName, that.serviceName)
         && Objects.equals(entryNodeId, that.entryNodeId)
@@ -127,12 +127,12 @@ public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacke
     }
   }
 
-  public static BlueGreenForwardedRequestPacket createFromBytes(byte[] encodedPacket) {
+  public static ForwardedRequestPacket createFromBytes(byte[] encodedPacket) {
     assert encodedPacket != null && encodedPacket.length >= 4;
 
     ByteBuffer buffer = ByteBuffer.wrap(encodedPacket);
     int packetType = buffer.getInt();
-    assert packetType == BlueGreenPrimaryBackupPacketType.PB2_FORWARDED_REQUEST_PACKET.getInt()
+    assert packetType == PrimaryBackupPacketType.PB2_FORWARDED_REQUEST_PACKET.getInt()
         : "invalid packet header: " + packetType;
 
     long packetId = buffer.getLong();
@@ -151,6 +151,6 @@ public class BlueGreenForwardedRequestPacket extends BlueGreenPrimaryBackupPacke
     byte[] encodedRequest = new byte[encodedRequestLen];
     buffer.get(encodedRequest);
 
-    return new BlueGreenForwardedRequestPacket(packetId, serviceName, entryNodeId, encodedRequest);
+    return new ForwardedRequestPacket(packetId, serviceName, entryNodeId, encodedRequest);
   }
 }
