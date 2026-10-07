@@ -11,6 +11,7 @@ import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn.request.XdnStopRequest;
 import edu.umass.cs.xdn.sandbox.SandboxManager;
 import edu.umass.cs.xdn.utils.Shell;
+import edu.umass.cs.xdn.utils.ShellOutput;
 import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import java.io.File;
@@ -602,6 +603,64 @@ public class NonDeterministicService {
     }
     backupInstances.remove(name + suffix);
 
+    return true;
+  }
+
+  public boolean deleteStateDiff(String serviceName, String filename) {
+    Integer epoch = servicePlacementEpoch.get(serviceName);
+    if (epoch == null) return false;
+    return stateDiffRecorder.deleteStateDiff(serviceName, epoch, filename);
+  }
+
+  public void initializeLiveDirectory(String name, AbstractStateDiffRecorder.LiveDirType type) {
+    Integer epoch = servicePlacementEpoch.get(name);
+    if (epoch == null) throw new IllegalStateException("no placement epoch for " + name);
+
+    String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch); // ends with "/"
+    String liveDir = stateDiffRecorder.getTargetDirectory(name, epoch, type); // ends with "/"
+
+    // Refuse if a running container uses liveDir.
+    ShellOutput ps = Shell.runCommandWithOutput("docker ps -q");
+    if (ps.exitCode != 0) {
+      throw new IllegalStateException("docker ps failed: " + ps.stderr.trim());
+    }
+    if (!ps.stdout.isBlank()) {
+      String details = Shell.runCommandWithOutput("docker inspect " + ps.stdout.trim()).stdout;
+      String dir = liveDir.replaceAll("/+$", "");
+      if (details.contains("\"" + dir + "\"") || details.contains("\"" + dir + "/\"")) {
+        throw new IllegalStateException(liveDir + " is already mounted by a running container");
+      }
+    }
+
+    // The primary directory gets a fuselog mount. Writing into it would record diffs.
+    if (type == AbstractStateDiffRecorder.LiveDirType.PRIMARY
+        && Shell.runCommand("mountpoint -q " + liveDir) == 0) {
+      throw new IllegalStateException(liveDir + " is still a mount point");
+    }
+
+    if (Shell.runCommand("mkdir -p " + liveDir) != 0
+        || Shell.runCommand(String.format("rsync -a --delete %s %s", snapshotDir, liveDir)) != 0) {
+      throw new IllegalStateException("failed to copy " + snapshotDir + " to " + liveDir);
+    }
+  }
+
+  public boolean stopContainerAsPrimary(String name) {
+    ServiceInstance instance = serviceInstances.get(name);
+    if (instance == null) return false;
+    Integer epoch = servicePlacementEpoch.get(name);
+    if (epoch == null) return false;
+
+    for (String containerName : instance.containerNames) {
+      sandboxManager.stopContainer(containerName);
+    }
+
+    // If the unmount fails, stop here. Never rm -rf a live mount.
+    if (!stateDiffRecorder.stopPrimaryRecorder(name, epoch)) return false;
+
+    String primaryLiveDir =
+        stateDiffRecorder.getTargetDirectory(
+            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
+    Shell.runCommand("rm -rf " + primaryLiveDir);
     return true;
   }
 
