@@ -430,7 +430,7 @@ For the cluster-launch demo specifically, `bin/xdn-cluster-up.sh` is a thinner h
 ## Host tuning (latency experiments)
 `bin/xdn-host-tune.sh` keeps replica hosts out of deep C-states (holds
 `/dev/cpu_dma_latency` at 0, performance governor); without it, idle wake-ups at
-thread hand-offs add ~0.5 ms per request on CloudLab xl170. `gpServer.sh start`
+thread hand-offs can add ~0.5 ms per request on bare-metal hosts. `gpServer.sh start`
 and `xdn-cluster-up.sh` call it on every node (opt out: `XDN_HOST_TUNE=0`);
 `gpServer.sh stop|forceclear` reverts it. See `eval/README.md`.
 

@@ -8,8 +8,8 @@
 #
 # Why: each XDN request crosses many thread hand-offs (Netty, coordinator, Paxos, NIO
 # reader/worker/logger/sender, on every replica). On an idle host every hand-off wakes a
-# core from a deep C-state (C6 exit is ~130 us on Xeon E5 v4), which added ~460 us to a
-# ~750 us request on CloudLab xl170 (eval/datasets/cloudlab-netlat/2026-10-08-xdn-breakdown).
+# core from a deep C-state, which can cost over 100 us per wake-up on server CPUs and
+# added roughly half a millisecond to a sub-millisecond request in our measurements.
 # Holding /dev/cpu_dma_latency at 0 removes that; it costs idle power, nothing else.
 #
 # Environment:

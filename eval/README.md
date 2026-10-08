@@ -10,10 +10,10 @@ determinism: **deterministic** apps use active replication (Paxos/RSM) and
 Every XDN host that runs a replica must keep its CPUs out of deep idle states
 while an experiment runs. A request crosses many thread hand-offs (Netty,
 coordinator, Paxos, NIO reader/worker/logger/sender, on every replica); on an
-idle host each hand-off wakes a core from C6 (about 130 us exit latency on
-Xeon E5 v4), which added ~460 us to a ~750 us request on CloudLab xl170
-(see `eval/datasets/cloudlab-netlat/2026-10-08-xdn-breakdown/`). Numbers taken
-without this tuning are not comparable with numbers taken with it.
+idle host each hand-off wakes a core from a deep C-state, which can cost over
+100 us per wake-up on server CPUs and added roughly half a millisecond to a
+sub-millisecond request in our measurements. Numbers taken without this tuning
+are not comparable with numbers taken with it.
 
 `bin/xdn-host-tune.sh on|off|status` does this on the host: it holds
 `/dev/cpu_dma_latency` at 0 (a detached holder process), sets the
@@ -26,7 +26,7 @@ It is invoked automatically:
 - `bin/xdn-cluster-up.sh` runs it on every node before launching Java.
 
 Opt out with `XDN_HOST_TUNE=0`. `XDN_HOST_TUNE_BUSY_POLL_US=50` additionally
-enables kernel busy polling; measured on xl170 it gave no further gain once
+enables kernel busy polling; in our measurements it gave no further gain once
 C-states were off, so it stays off by default. Scripts that stop a pod
 without gpServer (for example a hand-written pod-stop) should run
 `bin/xdn-host-tune.sh off` on each host. Ad-hoc latency probes (sockperf,
