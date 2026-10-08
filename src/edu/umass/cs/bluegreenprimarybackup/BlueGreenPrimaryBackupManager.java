@@ -217,6 +217,29 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     return model == ConsistencyModel.LINEARIZABLE || model == ConsistencyModel.LINEARIZABILITY;
   }
 
+  private boolean isSequential(String serviceName) {
+    return getConsistencyModel(serviceName) == ConsistencyModel.SEQUENTIAL;
+  }
+
+  /** The cookie that carries "<placement>.<count>" of the client's latest write. */
+  private static String stateDiffCookieName(String serviceName) {
+    return "XDN-PB-SC-" + serviceName;
+  }
+
+  /** Parses "<placement>.<count>". Returns null unless both parts are non-negative integers. */
+  private static int[] parseStateDiffCookie(String raw) {
+    int dot = raw.indexOf('.');
+    if (dot <= 0 || dot == raw.length() - 1) return null;
+    try {
+      int placement = Integer.parseInt(raw.substring(0, dot));
+      int count = Integer.parseInt(raw.substring(dot + 1));
+      if (placement < 0 || count < 0) return null;
+      return new int[] {placement, count};
+    } catch (NumberFormatException e) {
+      return null;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Dispatcher loop. One thread per service, started by createReplicaGroup().
   // -------------------------------------------------------------------------
@@ -635,6 +658,49 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                     });
   }
 
+  /**
+   * Like release(), but a replicated write in a SEQUENTIAL service also gets the cookie that names
+   * the diff it is in. A failure to stamp never blocks the client's answer.
+   */
+  private ExecutedCallback releaseWithMark(
+          Collection<PendingWrite> writes, String serviceName, int placement, int count) {
+    ExecutedCallback plain = release(writes);
+    return (ignored, handled) -> {
+      if (handled) {
+        try {
+          if (isSequential(serviceName)) {
+            String value = placement + "." + count;
+            for (PendingWrite w : writes) {
+              stampStateDiffCookie(w.request(), stateDiffCookieName(serviceName), value);
+            }
+          }
+        } catch (Throwable t) {
+          logger.log(Level.WARNING, myNodeID + ":PBM could not stamp cookie for " + serviceName, t);
+        }
+      }
+      plain.executed(ignored, handled);
+    };
+  }
+
+  /** Stamps every write inside the request. Reads and the bootstrap entry are left alone. */
+  private void stampStateDiffCookie(Request request, String name, String value) {
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      if (!isWriteRequest(xdnHttpRequest)) return;
+      if (xdnHttpRequest.getHttpResponse() == null) {
+        logger.log(
+                Level.WARNING,
+                "{0}:PBM write has no response to stamp for {1}",
+                new Object[] {myNodeID, xdnHttpRequest.getServiceName()});
+        return;
+      }
+      xdnHttpRequest.setResponseCookie(name, value);
+    } else if (request instanceof XdnHttpRequestBatch batch) {
+      for (XdnHttpRequest inner : batch.getRequestList()) {
+        stampStateDiffCookie(inner, name, value);
+      }
+    }
+  }
+
   private void startCaptureLoop(String serviceName, int placement, int pEpoch) {
     stopCaptureLoop(serviceName);
     BlockingQueue<PendingWrite> queue =
@@ -682,7 +748,12 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         try {
           // An empty batch is the idle capture. It proposes only when the diff is not empty.
           if (captureAndProposeStateDiff(
-                  serviceName, bPlacement, bPEpoch, count, release(batch), batch.isEmpty())) {
+                  serviceName,
+                  bPlacement,
+                  bPEpoch,
+                  count,
+                  releaseWithMark(batch, serviceName, bPlacement, count),
+                  batch.isEmpty())) {
             count++;
           }
         } catch (Throwable t) {
@@ -783,12 +854,14 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
 
     if (isNewService || isNewPlacement) {
       // New service or new placement epoch
+      // Reset the live count before the placement, so a reader never pairs the new placement
+      // with the old count.
+      liveStateDiffCount.put(serviceName, -1);
       currPlacement.put(serviceName, p.getNextPlacement());
       currPrimaryID.put(serviceName, nextPrimaryID);
       currPrimaryEpoch.put(serviceName, p.getNextPrimaryEpoch());
       cmtStateDiffCount.put(serviceName, -1);
       snpStateDiffCount.put(serviceName, -1);
-      liveStateDiffCount.put(serviceName, -1);
       snpDiffApplyLocks.put(serviceName, new ReentrantLock());
       startApplyThread(serviceName); // a fresh queue and thread for this placement
     } else {
@@ -1013,7 +1086,6 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   public boolean handleClientRequest(
           String serviceName,
           Request request,
-          Integer clientStateDiffCount, // unused until the cookie exists
           boolean isWriteRequest,
           ExecutedCallback callback) {
 
@@ -1075,7 +1147,22 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
       }
 
-      // Every other model serves reads from the live backup container
+      // SEQUENTIAL. A client that wrote must not read older state than its own write.
+      // The count is read here, before the container type below, because the writer sets the
+      // type first.
+      if (isSequential(serviceName) && readNeedsPrimary(serviceName, request)) {
+        if (currPrimaryID.get(serviceName) == null) {
+          replyWithStatus(
+                  request,
+                  callback,
+                  HttpResponseStatus.SERVICE_UNAVAILABLE,
+                  "Service unavailable: primary unknown");
+          return true;
+        }
+        return forwardRequestToPrimary(serviceName, request, callback, false);
+      }
+
+      // Every other case serves reads from the live backup container
       LiveDirType liveType = currentLiveDirType.get(serviceName);
       if (liveType == null) {
         replyWithStatus(
@@ -1136,6 +1223,54 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         setStatusResponse(inner, status, message);
       }
     }
+  }
+
+  /**
+   * True when a backup cannot serve this read from its live container without risking a state
+   * older than the client's own latest write. A batch needs the primary if any request does.
+   */
+  private boolean readNeedsPrimary(String serviceName, Request request) {
+    // Placement first, then count. handleStartEpochPacket resets the count before the placement.
+    Integer placement = currPlacement.get(serviceName);
+    Integer liveCount = liveStateDiffCount.get(serviceName);
+    int curPlacement = (placement == null) ? -1 : placement;
+    int curCount = (liveCount == null) ? -1 : liveCount;
+
+    List<XdnHttpRequest> requests = new ArrayList<>();
+    if (request instanceof XdnHttpRequestBatch batch) {
+      requests.addAll(batch.getRequestList());
+    } else if (request instanceof XdnHttpRequest single) {
+      requests.add(single);
+    }
+
+    String cookieName = stateDiffCookieName(serviceName);
+    for (XdnHttpRequest r : requests) {
+      String raw = r.getCookieValue(cookieName);
+      if (raw == null) continue;
+
+      int[] mark = parseStateDiffCookie(raw);
+      if (mark == null) {
+        logger.log(
+                Level.WARNING,
+                "{0}:PBM malformed cookie for {1} value={2}, forwarding read to the primary",
+                new Object[] {myNodeID, serviceName, raw});
+        return true;
+      }
+      if (mark[0] < curPlacement) continue; // older placement, serve locally
+      if (mark[0] > curPlacement || mark[1] > curCount) {
+        logger.log(
+                Level.INFO,
+                "{0}:PBM forwarding read to the primary for {1} cookie={2} livePlacement={3}"
+                        + " liveCount={4}",
+                new Object[] {myNodeID, serviceName, raw, curPlacement, curCount});
+        return true;
+      }
+    }
+    logger.log(
+            Level.FINE,
+            "{0}:PBM serving read locally for {1} livePlacement={2} liveCount={3}",
+            new Object[] {myNodeID, serviceName, curPlacement, curCount});
+    return false;
   }
 
   /**
@@ -1269,7 +1404,6 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     return handleClientRequest(
         serviceName,
         request,
-        null,
         isWriteRequest,
             (executedRequest, handled) -> {
               if (!handled) {

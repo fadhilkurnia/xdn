@@ -94,15 +94,9 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
     if (request instanceof ReplicableClientRequest rcr) {
       String serviceName = rcr.getServiceName();
 
-      // TODO: extract clientStateDiffCount and isWriteRequest from the
-      //  unwrapped request. The exact shape of the client request type
-      //  in xdn (e.g. XdnHttpRequest) and where the client-supplied
-      //  stateDiffCount cookie/header lives was not traced in this
-      //  pass -- placeholders below.
-      Integer clientStateDiffCount = null; // TODO: extract from request headers/cookie
       boolean isWriteRequest = BlueGreenPrimaryBackupManager.isWriteRequest(rcr.getRequest());
       return this.pbManager.handleClientRequest(
-          serviceName, rcr.getRequest(), clientStateDiffCount, isWriteRequest, callback);
+              serviceName, rcr.getRequest(), isWriteRequest, callback);
     }
 
     // ReconfigurableRequest: e.g. stop requests during reconfiguration.
