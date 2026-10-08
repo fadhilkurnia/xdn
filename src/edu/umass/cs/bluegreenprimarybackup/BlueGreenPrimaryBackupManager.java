@@ -748,8 +748,24 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   }
 
   private void handleDiffCommittedEvent(String serviceName, DiffCommittedEvent event) {
+    // Paxos may have committed the diff while handleApplyStateDiffPacket dropped it
+    // (stale epoch or a gap). Only a diff that was kept counts as replicated.
+    boolean applied =
+            event.placement() == currPlacement.get(serviceName)
+                    && event.pEpoch() == currPrimaryEpoch.get(serviceName)
+                    && event.count() <= cmtStateDiffCount.get(serviceName);
+    boolean handled = event.handled() && applied;
+    if (event.handled() && !applied) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM committed diff was not applied for {1} placement={2} pEpoch={3} count={4},"
+                      + " answering its writes as not handled",
+              new Object[] {
+                      myNodeID, serviceName, event.placement(), event.pEpoch(), event.count()
+              });
+    }
     if (event.callback() != null) {
-      event.callback().executed(null, event.handled());
+      event.callback().executed(null, handled);
     }
   }
 
@@ -1110,6 +1126,18 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     request.setHttpResponse(response);
   }
 
+  /** Sets the same status response on one request or on every request of a batch. */
+  private void setStatusResponseOn(
+          Request request, HttpResponseStatus status, String message) {
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      setStatusResponse(xdnHttpRequest, status, message);
+    } else if (request instanceof XdnHttpRequestBatch batch) {
+      for (XdnHttpRequest inner : batch.getRequestList()) {
+        setStatusResponse(inner, status, message);
+      }
+    }
+  }
+
   /**
    * A single request is a write if its HTTP method is POST, PUT, DELETE or PATCH. A batch is a
    * write if any request inside it is a write. Anything else is not a write.
@@ -1243,8 +1271,15 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         request,
         null,
         isWriteRequest,
-        (executedRequest, handled) -> {
-          byte[] encodedResponse = executedRequest.toString().getBytes(StandardCharsets.ISO_8859_1);
+            (executedRequest, handled) -> {
+              if (!handled) {
+                // The write was not replicated. Do not let the entry node answer it as a success.
+                setStatusResponseOn(
+                        executedRequest,
+                        HttpResponseStatus.SERVICE_UNAVAILABLE,
+                        "Service unavailable: write was not replicated");
+              }
+              byte[] encodedResponse = executedRequest.toString().getBytes(StandardCharsets.ISO_8859_1);
 
           if (executedRequest instanceof XdnHttpRequest xhr) {
             encodedResponse = xhr.toBytes(true);
