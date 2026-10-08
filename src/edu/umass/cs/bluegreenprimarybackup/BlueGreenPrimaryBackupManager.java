@@ -18,6 +18,7 @@ import edu.umass.cs.xdn.XdnApp;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder.LiveDirType;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
+import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
 import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
@@ -548,8 +549,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
             (currLiveDir == LiveDirType.BACKUP1) ? LiveDirType.BACKUP2 : LiveDirType.BACKUP1;
 
     // Update currentLiveDirType before liveStateDiffCount is trusted by readers
-    liveStateDiffCount.put(serviceName, event.stateDiffCount);
     currentLiveDirType.put(serviceName, currLiveDir);
+    liveStateDiffCount.put(serviceName, event.stateDiffCount);
     logSwitchover(serviceName, currLiveDir, event.stateDiffCount);
     if (prevLiveDir != null) {
       this.app.stopBackupContainer(serviceName, prevLiveDir);
@@ -1084,17 +1085,49 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     throw new IllegalStateException("Unhandled role " + role + " for service " + serviceName);
   }
 
-  /** Answers an HTTP request with a plain status and message. Other request types are ignored. */
+  /** Answers an HTTP request or a batch of them with a plain status and message. */
   private void replyWithStatus(
           Request request, ExecutedCallback callback, HttpResponseStatus status, String message) {
-    if (!(request instanceof XdnHttpRequest xdnHttpRequest)) {
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      setStatusResponse(xdnHttpRequest, status, message);
+      callback.executed(xdnHttpRequest, true);
       return;
     }
+    if (request instanceof XdnHttpRequestBatch batch) {
+      // Each request in the batch needs its own response object
+      for (XdnHttpRequest inner : batch.getRequestList()) {
+        setStatusResponse(inner, status, message);
+      }
+      callback.executed(batch, true);
+    }
+  }
+
+  private void setStatusResponse(
+          XdnHttpRequest request, HttpResponseStatus status, String message) {
     ByteBuf content = Unpooled.copiedBuffer(message.getBytes(StandardCharsets.UTF_8));
     FullHttpResponse response = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, status, content);
     response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes());
-    xdnHttpRequest.setHttpResponse(response);
-    callback.executed(xdnHttpRequest, true);
+    request.setHttpResponse(response);
+  }
+
+  /**
+   * A single request is a write if its HTTP method is POST, PUT, DELETE or PATCH. A batch is a
+   * write if any request inside it is a write. Anything else is not a write.
+   */
+  public static boolean isWriteRequest(Request request) {
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      HttpMethod method = xdnHttpRequest.getHttpRequest().method();
+      return method.equals(HttpMethod.POST)
+              || method.equals(HttpMethod.PUT)
+              || method.equals(HttpMethod.DELETE)
+              || method.equals(HttpMethod.PATCH);
+    }
+    if (request instanceof XdnHttpRequestBatch batch) {
+      for (XdnHttpRequest inner : batch.getRequestList()) {
+        if (isWriteRequest(inner)) return true;
+      }
+    }
+    return false;
   }
 
   // =========================================================================
@@ -1203,15 +1236,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     NodeIDType entryNodeID = unstringer.valueOf(packet.getEntryNodeId());
     long originalRequestId = packet.getRequestID();
 
-    boolean isWriteRequest = false;
-    if (request instanceof XdnHttpRequest xdnHttpRequest) {
-      HttpMethod method = xdnHttpRequest.getHttpRequest().method();
-      isWriteRequest =
-          method.equals(HttpMethod.POST)
-              || method.equals(HttpMethod.PUT)
-              || method.equals(HttpMethod.DELETE)
-              || method.equals(HttpMethod.PATCH);
-    }
+    boolean isWriteRequest = isWriteRequest(request);
 
     return handleClientRequest(
         serviceName,
@@ -1223,6 +1248,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
 
           if (executedRequest instanceof XdnHttpRequest xhr) {
             encodedResponse = xhr.toBytes(true);
+          } else if (executedRequest instanceof XdnHttpRequestBatch batch) {
+            encodedResponse = batch.toBytes(true);
           }
 
           ResponsePacket responsePacket =
@@ -1265,8 +1292,11 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     Request response;
     try {
       response = app.getRequest(encodedResponseStr);
-      if (response instanceof edu.umass.cs.xdn.request.XdnHttpRequest) {
-        response = edu.umass.cs.xdn.request.XdnHttpRequest.createFromString(encodedResponseStr);
+      if (response instanceof XdnHttpRequestBatch) {
+        // getRequest() may return the cached batch without the primary's responses
+        response = XdnHttpRequestBatch.createFromBytes(packet.getEncodedResponse());
+      } else if (response instanceof XdnHttpRequest) {
+        response = XdnHttpRequest.createFromString(encodedResponseStr);
       }
     } catch (RequestParseException e) {
       throw new RuntimeException(e);

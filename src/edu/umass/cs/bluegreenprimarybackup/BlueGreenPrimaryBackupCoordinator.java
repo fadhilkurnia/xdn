@@ -15,8 +15,6 @@ import edu.umass.cs.reconfiguration.reconfigurationpackets.ReconfigurationPacket
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.xdn.XdnApp;
-import edu.umass.cs.xdn.request.XdnHttpRequest;
-import io.netty.handler.codec.http.HttpMethod;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
@@ -102,15 +100,7 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
       //  stateDiffCount cookie/header lives was not traced in this
       //  pass -- placeholders below.
       Integer clientStateDiffCount = null; // TODO: extract from request headers/cookie
-      boolean isWriteRequest = false;
-      if (rcr.getRequest() instanceof XdnHttpRequest xdnHttpRequest) {
-        HttpMethod method = xdnHttpRequest.getHttpRequest().method();
-        isWriteRequest =
-            method.equals(HttpMethod.POST)
-                || method.equals(HttpMethod.PUT)
-                || method.equals(HttpMethod.DELETE)
-                || method.equals(HttpMethod.PATCH);
-      }
+      boolean isWriteRequest = BlueGreenPrimaryBackupManager.isWriteRequest(rcr.getRequest());
       return this.pbManager.handleClientRequest(
           serviceName, rcr.getRequest(), clientStateDiffCount, isWriteRequest, callback);
     }

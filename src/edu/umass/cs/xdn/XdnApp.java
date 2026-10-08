@@ -592,9 +592,14 @@ public class XdnApp
 
   public boolean forwardToBackupContainer(
       String serviceName, int port, Request request, ExecutedCallback callback) {
-    if (!(request instanceof XdnHttpRequest xdnHttpRequest)) return false;
-    return nonDeterministicService.forwardToBackupContainer(
-        serviceName, port, xdnHttpRequest, callback);
+    if (request instanceof XdnHttpRequest xdnHttpRequest) {
+      return nonDeterministicService.forwardToBackupContainer(
+          serviceName, port, xdnHttpRequest, callback);
+    }
+    if (request instanceof XdnHttpRequestBatch batch) {
+      return nonDeterministicService.forwardToBackupContainer(serviceName, port, batch, callback);
+    }
+    return false;
   }
 
   public String getStateDiffDir(String serviceName) {
