@@ -896,6 +896,45 @@ public class NonDeterministicService {
     }
   }
 
+  public boolean forwardToBackupContainer(
+      String name, int port, XdnHttpRequestBatch batch, ExecutedCallback callback) {
+    try {
+      List<XdnHttpRequest> inner = batch.getRequestList();
+      List<FullHttpRequest> requests = new java.util.ArrayList<>();
+      for (XdnHttpRequest r : inner) {
+        requests.add(copyHttpRequest(r));
+      }
+      List<FullHttpResponse> responses =
+          httpForwarderClient.executePipelined("127.0.0.1", port, requests);
+
+      // Check everything before touching the batch, so a bad result leaves it unchanged
+      boolean isComplete = responses.size() == inner.size();
+      for (FullHttpResponse response : responses) {
+        if (response == null) isComplete = false;
+      }
+      if (!isComplete) {
+        logger.log(
+            Level.WARNING,
+            "{0}:NonDeterministicService forwardToBackupContainer incomplete batch response for"
+                + " {1}",
+            new Object[] {myNodeId, name});
+        return false;
+      }
+
+      for (int i = 0; i < inner.size(); i++) {
+        inner.get(i).setHttpResponse(responses.get(i));
+      }
+      callback.executed(batch, true);
+      return true;
+    } catch (Exception e) {
+      logger.log(
+          Level.WARNING,
+          "{0}:NonDeterministicService forwardToBackupContainer batch failed for {1}: {2}",
+          new Object[] {myNodeId, name, e.getMessage()});
+      return false;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Public: LazyReplicaCoordinator (anti entropy)
   // -------------------------------------------------------------------------
