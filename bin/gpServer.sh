@@ -478,6 +478,7 @@ function start_server {
       echo "$JAVA $DEBUG_ARGS $JVMARGS \
         edu.umass.cs.reconfiguration.ReconfigurableNode $server&"
     fi
+    [[ "${XDN_HOST_TUNE:-1}" != 0 ]] && bash "$(dirname "$0")/xdn-host-tune.sh" on >/dev/null
     $JAVA $DEBUG_ARGS $JVMARGS \
       edu.umass.cs.reconfiguration.ReconfigurableNode $server&
   else
@@ -504,7 +505,8 @@ function start_server {
       edu.umass.cs.reconfiguration.ReconfigurableNode \
       $REMOTE_APP_ARGS $server \""
     
-    $SSH $username@$address "cd $INSTALL_PATH; sudo \
+    $SSH $username@$address "cd $INSTALL_PATH; \
+      [[ \"${XDN_HOST_TUNE:-1}\" != 0 ]] && XDN_HOST_TUNE_BUSY_POLL_US=${XDN_HOST_TUNE_BUSY_POLL_US:-0} bash bin/xdn-host-tune.sh on >/dev/null; sudo \
       $JAVA $DEBUG_ARGS $REMOTE_JVMARGS \
       -cp \`ls jars/*|awk '{printf \$0\":\"}'\` \
       edu.umass.cs.reconfiguration.ReconfigurableNode \
@@ -550,12 +552,13 @@ function stop_servers {
         '{print \$2}'\` 2>/dev/null\""
       $SSH $username@$address "sudo kill -9 \`sudo ps -ef|\
         grep \"$KILL_TARGET\"|grep -v grep|awk \
-        '{print \$2}'\` 2>/dev/null"
+        '{print \$2}'\` 2>/dev/null; cd $INSTALL_PATH && bash bin/xdn-host-tune.sh off >/dev/null 2>&1"
     fi
   done
   if [[ `echo $pids|sed s/" *"//g` != "" ]]; then
     echo killing $foundservers
     kill -9 $pids 2>/dev/null
+    bash "$(dirname "$0")/xdn-host-tune.sh" off >/dev/null 2>&1
   fi
 }
 
