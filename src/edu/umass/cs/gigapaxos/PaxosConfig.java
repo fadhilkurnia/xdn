@@ -859,9 +859,10 @@ public class PaxosConfig {
 		 * 180 us per append on ext3/SATA SSD). Files created with this option
 		 * carry a header and a CRC32 per record; readers stop at the first zero
 		 * length or CRC mismatch instead of at the physical end of file. Older
-		 * files without the header remain readable.
+		 * files without the header remain readable. Set to false to keep the
+		 * legacy growing-file format.
 		 */
-		JOURNAL_PREALLOCATE(false),
+		JOURNAL_PREALLOCATE(true),
 
 		/**
 		 * 
