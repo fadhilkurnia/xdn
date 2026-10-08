@@ -54,6 +54,8 @@ import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.zip.CRC32;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -702,6 +704,18 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		private final String logfilePrefix;
 		private String curLogfile = null;
 		private FileOutputStream fos;
+		// JOURNAL_PREALLOCATE: the current file is written through raf instead of fos
+		private RandomAccessFile raf;
+		private boolean crcFormat = false;
+		private final ExecutorService spareMaker = JOURNAL_PREALLOCATE ? Executors
+				.newSingleThreadExecutor(new ThreadFactory() {
+					public Thread newThread(Runnable r) {
+						Thread t = Executors.defaultThreadFactory().newThread(r);
+						t.setName("JournalSpareMaker");
+						t.setDaemon(true);
+						return t;
+					}
+				}) : null;
 		private long curLogfileSize = 0;
 		private int numLogfiles = 0;
 		private int numOngoingGCs = 0;
@@ -716,7 +730,66 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			this.logfilePrefix = PREFIX + myID + POSTPREFIX;
 			assert (this.logdir != null && this.logfilePrefix != null);
 			this.curLogfile = generateLogfileName();
+			new File(this.getSpareName()).delete();
 			this.fos = createLogfile(curLogfile, true);
+		}
+
+		private String getSpareName() {
+			return this.logdir + "spare.tmp";
+		}
+
+		boolean isOpen() {
+			return this.fos != null || this.raf != null;
+		}
+
+		/** Builds the on-disk record for the current file's format. */
+		byte[] record(byte[] bytes) {
+			return JournalFormat.record(bytes, this.crcFormat);
+		}
+
+		/** Size the preallocated file gets: the roll threshold plus slack for the batch that crosses it. */
+		private static final long PREALLOC_SIZE = MAX_LOG_FILE_SIZE + 16L * 1024 * 1024;
+
+		/** Writes header + zeros up to PREALLOC_SIZE and syncs; the metadata is then stable for all later appends. */
+		private static void fillPreallocated(File f) throws IOException {
+			try (FileOutputStream out = new FileOutputStream(f, false)) {
+				out.write(JournalFormat.HEADER);
+				byte[] zeros = new byte[1 << 20];
+				for (long written = JournalFormat.HEADER_SIZE; written < PREALLOC_SIZE; written += zeros.length)
+					out.write(zeros, 0, (int) Math.min(zeros.length, PREALLOC_SIZE - written));
+				out.getFD().sync();
+			}
+		}
+
+		/** Prepares the next preallocated file in the background so that rolling does not stall the logger. */
+		private void prepareSpare() {
+			final File spare = new File(this.getSpareName());
+			this.spareMaker.execute(new Runnable() {
+				public void run() {
+					try {
+						File tmp = new File(spare.toString() + ".part");
+						fillPreallocated(tmp);
+						if (!tmp.renameTo(spare))
+							tmp.delete();
+					} catch (IOException e) {
+						log.log(Level.WARNING, "{0} unable to prepare spare journal file: {1}",
+								new Object[] { Journaler.this, e });
+					}
+				}
+			});
+		}
+
+		/** Creates a preallocated, header-carrying log file (from the spare when available). */
+		private RandomAccessFile createPreallocatedLogfile(String filename) throws IOException {
+			File f = new File(filename);
+			f.getParentFile().mkdirs();
+			File spare = new File(this.getSpareName());
+			if (!(spare.exists() && spare.length() >= PREALLOC_SIZE && spare.renameTo(f)))
+				fillPreallocated(f);
+			RandomAccessFile r = new RandomAccessFile(f, "rw");
+			r.seek(JournalFormat.HEADER_SIZE);
+			this.prepareSpare();
+			return r;
 		}
 
 		private static final String getJournalLogDir(String logdir, Object myID) {
@@ -749,9 +822,21 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			if (deleteEmpty)
 				this.deleteEmptyLogfiles();
 			try {
+				if (JOURNAL_PREALLOCATE) {
+					this.raf = this.createPreallocatedLogfile(filename);
+					this.fos = null;
+					this.crcFormat = true;
+					this.curLogfileSize = JournalFormat.HEADER_SIZE;
+					this.numLogfiles++;
+					log.log(Level.INFO, "{0} created new preallocated log file {1}",
+							new Object[] { this, this.curLogfile });
+					return null;
+				}
 				new File(filename).getParentFile().mkdirs();
 				(new FileWriter(filename, false)).close();
 				this.fos = new FileOutputStream(new File(filename));
+				this.raf = null;
+				this.crcFormat = false;
 				this.curLogfileSize = 0;
 				this.numLogfiles++;
 				log.log(Level.INFO, "{0} created new log file {1}",
@@ -802,19 +887,27 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				// check again here
 				if (curLogfileSize > MAX_LOG_FILE_SIZE) {
 					try {
-						if (FLUSH_FCLOSE)
-							fos.flush();
-						if (SYNC_FCLOSE)
-							fos.getFD().sync();
-						fos.close();
+						if (raf != null) {
+							if (SYNC_FCLOSE)
+								raf.getChannel().force(false);
+							raf.close();
+							raf = null;
+						} else {
+							if (FLUSH_FCLOSE)
+								fos.flush();
+							if (SYNC_FCLOSE)
+								fos.getFD().sync();
+							fos.close();
+						}
 						fos = createLogfile(curLogfile = generateLogfileName());
-						curLogfileSize = 0;
+						if (fos != null)
+							curLogfileSize = 0;
 					} catch (IOException e) {
 						log.severe(this + " unable to close existing log file "
 								+ this.curLogfile);
 						e.printStackTrace();
 					} finally {
-						if (fos == null)
+						if (!isOpen())
 							Util.suicide(this + " unable to open log file "
 									+ this.curLogfile + "; exiting");
 					}
@@ -825,12 +918,19 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		private void appendToLogFile(byte[] bytes, String paxosID)
 				throws IOException {
 			synchronized (fosLock) {
-				fos.write(bytes);
-				if (FLUSH)
-					fos.flush();
-				// will sync to disk but will be slow as hell
-				if (SYNC)
-					fos.getFD().sync();
+				if (raf != null) {
+					// preallocated file: size is fixed, so a data-only sync suffices
+					raf.write(bytes);
+					if (SYNC)
+						raf.getChannel().force(false);
+				} else {
+					fos.write(bytes);
+					if (FLUSH)
+						fos.flush();
+					// will sync to disk but will be slow as hell
+					if (SYNC)
+						fos.getFD().sync();
+				}
 				curLogfileSize += bytes.length;
 				this.fidMap.add(this.curLogfile, paxosID);
 			}
@@ -976,7 +1076,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 	private PendingLogTask[] journal(LogMessagingTask[] packets) {
 		if (!ENABLE_JOURNALING)
 			return new PendingLogTask[0]; // no error
-		if (this.journaler.fos == null)
+		if (!this.journaler.isOpen())
 			return null; // error
 		boolean amCoordinator = false, isAccept = false;
 		PendingLogTask[] pending = new PendingLogTask[packets.length];
@@ -1009,9 +1109,8 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 						bytes = deflate(bytes);
 
 					// format: <size><message>*
-					ByteBuffer bbuf = ByteBuffer.allocate(4 + bytes.length);
-					bbuf.putInt(bytes.length);
-					bbuf.put(bytes);
+					// [length][bytes] plus a CRC32 when the current file is preallocated
+					byte[] record = this.journaler.record(bytes);
 
 					if (ALL_BUT_APPEND)
 						continue;
@@ -1034,10 +1133,10 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 						this.messageLog.add(packets[i].logMsg,
 								this.journaler.curLogfile,
 								this.journaler.curLogfileSize, bytes.length);
-					SQLPaxosLogger.this.journaler.appendToLogFile(bbuf.array(),
+					SQLPaxosLogger.this.journaler.appendToLogFile(record,
 							pkt.logMsg.getPaxosID());
 					assert (pending[i] == null || this.journaler.curLogfileSize == pending[i].logfileOffset
-							+ bbuf.capacity());
+							+ record.length);
 				}
 
 			} catch (IOException ioe) {
@@ -1140,6 +1239,87 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 	private static final boolean DB_INDEX_JOURNAL = Config
 			.getGlobalBoolean(PC.DB_INDEX_JOURNAL);
 	private static final boolean SYNC = Config.getGlobalBoolean(PC.SYNC);
+	private static final boolean JOURNAL_PREALLOCATE = Config
+			.getGlobalBoolean(PC.JOURNAL_PREALLOCATE);
+
+	/**
+	 * On-disk layout of a journal file created with {@link PC#JOURNAL_PREALLOCATE}:
+	 * an 8-byte header (MAGIC, 0) followed by records [int length][bytes][int crc32].
+	 * Legacy files have no header and records [int length][bytes]. The logical end
+	 * of a preallocated file is the first zero length (zero-filled space) or a
+	 * record whose CRC does not match (torn write); the physical end also ends it.
+	 */
+	static final class JournalFormat {
+		static final int MAGIC = 0x47504A31; // "GPJ1"
+		static final int HEADER_SIZE = 8;
+		static final byte[] HEADER = ByteBuffer.allocate(HEADER_SIZE).putInt(MAGIC).putInt(0).array();
+
+		/** True if the file starts with the header; leaves the file pointer unchanged. */
+		static boolean hasHeader(RandomAccessFile raf) throws IOException {
+			if (raf.length() < HEADER_SIZE)
+				return false;
+			long pos = raf.getFilePointer();
+			raf.seek(0);
+			int magic = raf.readInt();
+			raf.seek(pos);
+			return magic == MAGIC;
+		}
+
+		/** Positions after the header if there is one; returns whether records carry a CRC. */
+		static boolean skipHeader(RandomAccessFile raf) throws IOException {
+			boolean crc = hasHeader(raf);
+			if (crc && raf.getFilePointer() < HEADER_SIZE)
+				raf.seek(HEADER_SIZE);
+			return crc;
+		}
+
+		static int crc32(byte[] bytes) {
+			CRC32 c = new CRC32();
+			c.update(bytes, 0, bytes.length);
+			return (int) c.getValue();
+		}
+
+		static byte[] record(byte[] bytes, boolean crcFormat) {
+			ByteBuffer bbuf = ByteBuffer.allocate(4 + bytes.length + (crcFormat ? 4 : 0));
+			bbuf.putInt(bytes.length).put(bytes);
+			if (crcFormat)
+				bbuf.putInt(crc32(bytes));
+			return bbuf.array();
+		}
+
+		/**
+		 * Reads the next record, or returns null at the logical end of the log (zero
+		 * length, CRC mismatch, or physical EOF). On null the file pointer is moved
+		 * to the physical end so callers that test {@code getFilePointer()==length()}
+		 * see the file as exhausted.
+		 */
+		static byte[] readRecord(RandomAccessFile raf, boolean crcFormat, Object logContext)
+				throws IOException {
+			long start = raf.getFilePointer();
+			if (raf.length() - start < 4)
+				return end(raf);
+			int length = raf.readInt();
+			if (length <= 0 || raf.length() - raf.getFilePointer() < length + (crcFormat ? 4 : 0)) {
+				if (length != 0)
+					log.log(Level.WARNING, "{0} truncated journal record at offset {1}; treating as end of log",
+							new Object[] { logContext, start });
+				return end(raf);
+			}
+			byte[] msg = new byte[length];
+			raf.readFully(msg);
+			if (crcFormat && raf.readInt() != crc32(msg)) {
+				log.log(Level.WARNING, "{0} journal record CRC mismatch at offset {1}; treating as end of log",
+						new Object[] { logContext, start });
+				return end(raf);
+			}
+			return msg;
+		}
+
+		private static byte[] end(RandomAccessFile raf) throws IOException {
+			raf.seek(raf.length());
+			return null;
+		}
+	}
 	private static final boolean SYNC_FCLOSE = Config
 			.getGlobalBoolean(PC.SYNC_FCLOSE);
 	private static final boolean FLUSH_FCLOSE = Config
@@ -2665,6 +2845,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 	private File[] logfiles = null;
 	private int logfileIndex = 0;
 	RandomAccessFile curRAF = null;
+	boolean curCrcFormat = false;
 
 	public boolean initiateReadMessages() {
 		if (isClosed())
@@ -2712,11 +2893,12 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 
 					this.logfileIndex = i;
 					curRAF = new RandomAccessFile(logfiles[i], "r");
+					curCrcFormat = JournalFormat.skipHeader(curRAF);
 					log.log(Level.FINEST,
 							"{0} rolling forward logged messages from file {1}",
 							new Object[] { this.journaler,
 									this.logfiles[this.logfileIndex] });
-				} catch (FileNotFoundException e) {
+				} catch (IOException e) {
 					e.printStackTrace();
 				}
 		}
@@ -2848,7 +3030,10 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 						this.curRAF.close();
 						this.curRAF = null;
 						// move on to the next file
-						if (this.logfileIndex + 1 < this.logfiles.length) this.curRAF = new RandomAccessFile(this.logfiles[++this.logfileIndex], "r");
+						if (this.logfileIndex + 1 < this.logfiles.length) {
+							this.curRAF = new RandomAccessFile(this.logfiles[++this.logfileIndex], "r");
+							this.curCrcFormat = JournalFormat.skipHeader(this.curRAF);
+						}
 
 						if (this.curRAF != null)
 							log.log(Level.INFO, "{0} rolling forward logged messages from file {1}", new Object[]{this.journaler, this.logfiles[this.logfileIndex]});
@@ -2858,12 +3043,12 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 					curFile = this.logfiles[this.logfileIndex];
 
 					long msgOffset = this.curRAF.getFilePointer();
-					int msgLength = this.curRAF.readInt();
+					byte[] msg = JournalFormat.readRecord(this.curRAF, this.curCrcFormat, this);
+					if (msg == null)
+						continue; // logical end of this file; the loop above moves to the next file
+					int msgLength = msg.length;
 
 					log.log(Level.FINEST, "{0} reading from offset {1} of length {2} from file {3}", new Object[]{this, msgOffset, msgLength, this.logfiles[this.logfileIndex]});
-
-					byte[] msg = new byte[msgLength];
-					this.curRAF.readFully(msg);
 					// packetStr = new String(msg, CHARSET);
 					packetBytes = msg;
 
@@ -3456,11 +3641,17 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			long t = System.currentTimeMillis();
 			raf = new RandomAccessFile(file.toString(), "r");
 			rafTmp = new RandomAccessFile(tmpFile.toString(), "rw");
+			boolean crcFormat = JournalFormat.skipHeader(raf);
+			if (crcFormat) {
+				rafTmp.write(JournalFormat.HEADER);
+				tmpFileSize += JournalFormat.HEADER_SIZE;
+			}
 			while (raf.getFilePointer() < raf.length()) {
 				long offset = rafTmp.getFilePointer();
-				int length = raf.readInt();
-				byte[] msg = new byte[length];
-				raf.readFully(msg);
+				byte[] msg = JournalFormat.readRecord(raf, crcFormat, file);
+				if (msg == null)
+					break;
+				int length = msg.length;
 				PaxosPacket pp = packetizer != null ? packetizer
 						.stringToPaxosPacket(msg
 						// new String(msg, CHARSET)
@@ -3477,12 +3668,10 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 								length));
 
 				if (isLogMsgNeeded(pp, msgLog)) {
-					ByteBuffer bbuf = ByteBuffer.allocate(length + 4);
-					bbuf.putInt(length);
-					bbuf.put(msg);
-					rafTmp.write(bbuf.array());
+					byte[] record = JournalFormat.record(msg, crcFormat);
+					rafTmp.write(record);
 					neededAtAll = true;
-					tmpFileSize += bbuf.capacity();
+					tmpFileSize += record.length;
 				} else {
 					compacted = true;
 					log.log(Level.FINE,
@@ -3588,11 +3777,13 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		HashMap<String, ArrayList<LogIndexEntry>> logIndexEntries = new HashMap<String, ArrayList<LogIndexEntry>>();
 		try {
 			rafTmp = new RandomAccessFile(tmpFile.toString(), "r");
+			boolean crcFormat = JournalFormat.skipHeader(rafTmp);
 			while (rafTmp.getFilePointer() < rafTmp.length()) {
 				long offset = rafTmp.getFilePointer();
-				int length = rafTmp.readInt();
-				byte[] msg = new byte[length];
-				rafTmp.readFully(msg);
+				byte[] msg = JournalFormat.readRecord(rafTmp, crcFormat, tmpFile);
+				if (msg == null)
+					break;
+				int length = msg.length;
 				PaxosPacket pp = packetizer != null ? packetizer
 						.stringToPaxosPacket(msg
 						// new String(msg, CHARSET)
