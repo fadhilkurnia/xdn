@@ -157,8 +157,11 @@ public class JSONMessenger<NodeIDType> implements
 			try {
 				if (msg instanceof JSONObject) {
 					message = ((JSONObject) (msg)).toString();
-				} else if (!(msg instanceof byte[] && msg instanceof Byteable))
-					// we no longer require msg to be JSON at all
+				} else if (!(msg instanceof byte[]) && !(msg instanceof Byteable))
+					// we no longer require msg to be JSON at all; Byteable packets are
+					// serialized with toBytes() below, so do not stringify them here
+					// (the JSON toString of a Paxos accept carrying an HTTP request
+					// costs tens of microseconds and was discarded).
 					message = msg.toString();
 			} catch (Exception je) {
 				log.severe("JSONMessenger" + getMyID()
