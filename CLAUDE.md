@@ -427,6 +427,13 @@ For the cluster-launch demo specifically, `bin/xdn-cluster-up.sh` is a thinner h
 - **geo-demand-smoke.yml**: End-to-end smoke test for demand-driven replica reconfiguration — boots a local cluster from `conf/gigapaxos.xdn.local.geodemand.properties`, drives biased traffic via `eval/geo_demand_smoke.py`, and asserts the active set advances past `epoch=0` and contains the expected us-east-1 nodes (including leader)
 - **test-report.yml**: JUnit test-result reporter (currently disabled — `if: false` — gated on the XDN test workflow)
 
+## Host tuning (latency experiments)
+`bin/xdn-host-tune.sh` keeps replica hosts out of deep C-states (holds
+`/dev/cpu_dma_latency` at 0, performance governor); without it, idle wake-ups at
+thread hand-offs can add ~0.5 ms per request on bare-metal hosts. `gpServer.sh start`
+and `xdn-cluster-up.sh` call it on every node (opt out: `XDN_HOST_TUNE=0`);
+`gpServer.sh stop|forceclear` reverts it. See `eval/README.md`.
+
 ## Conventions
 - Java code follows Google Java Style (enforced by formatter)
 - Service names: lowercase, no special characters

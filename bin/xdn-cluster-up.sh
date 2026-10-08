@@ -22,12 +22,14 @@ set -euo pipefail
 REMOTE=/users/fadhil/xdn-cl
 CFG=conf/gigapaxos.xdn.cluster-launch.cloudlab.properties
 JF='-ea -Djavax.net.ssl.keyStorePassword=qwerty -Djavax.net.ssl.trustStorePassword=qwerty -Djavax.net.ssl.keyStore=conf/keyStore.jks -Djavax.net.ssl.trustStore=conf/trustStore.jks -Djava.util.logging.config.file=conf/logging.properties -Dlog4j.configuration=conf/log4j.properties -DgigapaxosConfig='"$CFG"' -Djdk.httpclient.allowRestrictedHeaders=connection,content-length,host --add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio.channels.spi=ALL-UNNAMED'
+JF=\"$JF ${XDN_CLUSTER_JVM_EXTRA:-}\"  # extra JVM flags, e.g. -DXDN_TIMING_HEADERS=true
 
 echo "[1/3] starting RC (node 0) on 10.10.1.4 and ARs (nodes 1,2,3) on .1/.2/.3 ..."
 for pair in "10.10.1.4 0" "10.10.1.1 1" "10.10.1.2 2" "10.10.1.3 3"; do
   read ip nid <<<"$pair"
   ssh -fn -o BatchMode=yes "$ip" "
     cd $REMOTE && mkdir -p logs
+    [ \"${XDN_HOST_TUNE:-1}\" != 0 ] && XDN_HOST_TUNE_BUSY_POLL_US=${XDN_HOST_TUNE_BUSY_POLL_US:-0} bash bin/xdn-host-tune.sh on >/dev/null 2>&1
     nohup java $JF -cp \$(ls jars/*.jar | tr '\n' ':') \
       edu.umass.cs.reconfiguration.ReconfigurableNode $nid \
       > logs/node-$nid.log 2> logs/node-$nid.err < /dev/null &
