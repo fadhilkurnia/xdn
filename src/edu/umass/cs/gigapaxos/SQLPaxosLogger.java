@@ -731,6 +731,8 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			assert (this.logdir != null && this.logfilePrefix != null);
 			this.curLogfile = generateLogfileName();
 			new File(this.getSpareName()).delete();
+			if (JOURNAL_PREALLOCATE)
+				this.trimLeftoverPreallocated();
 			this.fos = createLogfile(curLogfile, true);
 		}
 
@@ -750,15 +752,93 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 		/** Size the preallocated file gets: the roll threshold plus slack for the batch that crosses it. */
 		private static final long PREALLOC_SIZE = MAX_LOG_FILE_SIZE + 16L * 1024 * 1024;
 
-		/** Writes header + zeros up to PREALLOC_SIZE and syncs; the metadata is then stable for all later appends. */
-		private static void fillPreallocated(File f) throws IOException {
+		/*
+		 * Bytes written between syncs while filling, and the pause between chunks when
+		 * filling in the background. The logger fsyncs every batch while the spare is
+		 * being filled; on ext4 (data=ordered) an fsync also has to write out every other
+		 * dirty page in the running transaction, so dumping 80 MB of zeros at once stalls
+		 * journaling for seconds on a slow disk. Syncing per small chunk bounds that wait,
+		 * and the pause keeps the disk mostly available for the logger.
+		 */
+		private static final int FILL_CHUNK_SIZE = 2 << 20;
+		private static final long FILL_PAUSE_MS = 5;
+
+		/**
+		 * Writes header + zeros up to PREALLOC_SIZE and syncs; the metadata is then stable
+		 * for all later appends. Paced when filling in the background (the spare is only
+		 * needed at the next roll), as fast as the disk allows otherwise.
+		 */
+		private static void fillPreallocated(File f, boolean paced) throws IOException {
 			try (FileOutputStream out = new FileOutputStream(f, false)) {
 				out.write(JournalFormat.HEADER);
-				byte[] zeros = new byte[1 << 20];
-				for (long written = JournalFormat.HEADER_SIZE; written < PREALLOC_SIZE; written += zeros.length)
-					out.write(zeros, 0, (int) Math.min(zeros.length, PREALLOC_SIZE - written));
-				out.getFD().sync();
+				byte[] zeros = new byte[FILL_CHUNK_SIZE];
+				for (long written = JournalFormat.HEADER_SIZE; written < PREALLOC_SIZE;) {
+					int n = (int) Math.min(zeros.length, PREALLOC_SIZE - written);
+					out.write(zeros, 0, n);
+					out.getFD().sync();
+					written += n;
+					if (paced && written < PREALLOC_SIZE)
+						try {
+							Thread.sleep(FILL_PAUSE_MS);
+						} catch (InterruptedException e) {
+							Thread.currentThread().interrupt();
+							throw new IOException("interrupted while filling " + f);
+						}
+				}
 			}
+		}
+
+		/**
+		 * Cuts a preallocated file that is no longer appended to down to its logical size,
+		 * so that compaction, merging and GC see the real size (otherwise every rolled
+		 * file looks full) and the unused tail returns to the filesystem.
+		 */
+		private void trimPreallocated(File f, long logicalSize) {
+			try (RandomAccessFile r = new RandomAccessFile(f, "rw")) {
+				if (r.length() > logicalSize) {
+					r.setLength(logicalSize);
+					r.getChannel().force(true);
+				}
+			} catch (IOException e) {
+				// best effort: an untrimmed file only looks bigger than it is
+				log.log(Level.WARNING, "{0} unable to trim preallocated log file {1}: {2}",
+						new Object[] { this, f, e });
+			}
+		}
+
+		/** Finds the logical end of a header-carrying file by walking its records. */
+		private static long logicalSize(File f) throws IOException {
+			try (RandomAccessFile r = new RandomAccessFile(f, "r")) {
+				if (!JournalFormat.skipHeader(r))
+					return r.length();
+				long end = r.getFilePointer();
+				while (JournalFormat.readRecord(r, true, f) != null)
+					end = r.getFilePointer();
+				return end;
+			}
+		}
+
+		/**
+		 * Trims files left at their preallocated size by a previous run (the file that was
+		 * current when the process stopped). Rolled files are trimmed as they roll.
+		 */
+		private void trimLeftoverPreallocated() {
+			File[] files = new File(this.logdir).listFiles(new FileFilter() {
+				@Override
+				public boolean accept(File pathname) {
+					return pathname.isFile() && pathname.length() == PREALLOC_SIZE
+							&& pathname.toString().startsWith(Journaler.this.getLogfilePrefix());
+				}
+			});
+			if (files == null)
+				return;
+			for (File f : files)
+				try {
+					trimPreallocated(f, logicalSize(f));
+				} catch (IOException e) {
+					log.log(Level.WARNING, "{0} unable to size leftover preallocated log file {1}: {2}",
+							new Object[] { this, f, e });
+				}
 		}
 
 		/** Prepares the next preallocated file in the background so that rolling does not stall the logger. */
@@ -768,7 +848,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 				public void run() {
 					try {
 						File tmp = new File(spare.toString() + ".part");
-						fillPreallocated(tmp);
+						fillPreallocated(tmp, true);
 						if (!tmp.renameTo(spare))
 							tmp.delete();
 					} catch (IOException e) {
@@ -785,7 +865,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 			f.getParentFile().mkdirs();
 			File spare = new File(this.getSpareName());
 			if (!(spare.exists() && spare.length() >= PREALLOC_SIZE && spare.renameTo(f)))
-				fillPreallocated(f);
+				fillPreallocated(f, false);
 			RandomAccessFile r = new RandomAccessFile(f, "rw");
 			r.seek(JournalFormat.HEADER_SIZE);
 			this.prepareSpare();
@@ -892,6 +972,7 @@ public class SQLPaxosLogger extends AbstractPaxosLogger {
 								raf.getChannel().force(false);
 							raf.close();
 							raf = null;
+							trimPreallocated(new File(curLogfile), curLogfileSize);
 						} else {
 							if (FLUSH_FCLOSE)
 								fos.flush();
