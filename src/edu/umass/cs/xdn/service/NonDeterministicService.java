@@ -541,16 +541,14 @@ public class NonDeterministicService {
     Integer epoch = servicePlacementEpoch.get(name);
     if (epoch == null) return false;
 
-    // Step 1: rsync snapshot/ -> backupLive1/ or backupLive2/
-    String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch);
+    // Step 1: Check if the live directory was already seeded from snp/ by initializeLiveDirectory()
     String backupLiveDir = stateDiffRecorder.getTargetDirectory(name, epoch, backup);
-    Shell.runCommand("mkdir -p " + backupLiveDir);
-    int rsyncCode = Shell.runCommand(String.format("rsync -a %s %s", snapshotDir, backupLiveDir));
-    if (rsyncCode != 0) {
+    if (!new java.io.File(backupLiveDir).isDirectory()) {
       logger.log(
           Level.SEVERE,
-          "{0}:NonDeterministicService startContainerAsBackup() rsync failed for {1}",
-          new Object[] {myNodeId, name});
+          "{0}:NonDeterministicService startContainerAsBackup() {2} is missing for {1},"
+              + " initializeLiveDirectory() must run first",
+          new Object[] {myNodeId, name, backupLiveDir});
       return false;
     }
 
