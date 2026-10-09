@@ -853,5 +853,143 @@
    "fsync_avg_ms": 0.212,
    "cpu_loops_per_500ms": 5282041
   }
+ },
+ {
+  "date": "2026-10-09",
+  "timestamp": "2026-10-09T14:39:45.460502+00:00",
+  "head_sha": "c298a96a0205008b2ce19e2824b7ebdb7e4a2524",
+  "base_sha": "d68172d5c12f80e42e691e2b9621fe09fa518a4e",
+  "head": {
+   "perfcatalog": {
+    "p50_ms": 1.86,
+    "p99_ms": 8.7,
+    "max_tput_rps": 1027.2,
+    "rounds": {
+     "p50": 3,
+     "tput": 1
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 1.896,
+     "requests": 12141,
+     "stages_p50_ms": {
+      "acquire": 0.003,
+      "callback": 1.545,
+      "container": 0.6,
+      "copyreq": 0.01,
+      "proxy": 0.61,
+      "respwait": 0.347,
+      "write": 0.244
+     }
+    }
+   },
+   "perfcatalognd": {
+    "p50_ms": 2.59,
+    "p99_ms": 8.59,
+    "max_tput_rps": 853.3,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 2.698,
+     "requests": 9874,
+     "stages_p50_ms": {
+      "acquire": 0.001,
+      "callback": 2.138,
+      "container": 0.83,
+      "copyreq": 0.0,
+      "proxy": 0.83,
+      "respwait": 0.694,
+      "write": 0.088
+     },
+     "pbm_p50_ms": {
+      "queue_wait": 0.03,
+      "exec": 0.93,
+      "capture_wait": 0.03,
+      "capture": 0.15,
+      "propose_prep": 0.01,
+      "paxos": 0.59,
+      "total": 1.87
+     }
+    }
+   }
+  },
+  "base": {
+   "perfcatalog": {
+    "p50_ms": 1.91,
+    "p99_ms": 8.87,
+    "max_tput_rps": 1015.4,
+    "rounds": {
+     "p50": 3,
+     "tput": 1
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 1.927,
+     "requests": 12131,
+     "stages_p50_ms": {
+      "acquire": 0.002,
+      "callback": 1.574,
+      "container": 0.61,
+      "copyreq": 0.01,
+      "proxy": 0.62,
+      "respwait": 0.353,
+      "write": 0.249
+     }
+    }
+   },
+   "perfcatalognd": {
+    "p50_ms": 2.59,
+    "p99_ms": 8.96,
+    "max_tput_rps": 854.0,
+    "rounds": {
+     "p50": 3,
+     "tput": 2
+    },
+    "errors": [],
+    "flow": {
+     "client_p50_ms": 2.713,
+     "requests": 9722,
+     "stages_p50_ms": {
+      "acquire": 0.001,
+      "callback": 2.154,
+      "container": 0.83,
+      "copyreq": 0.0,
+      "proxy": 0.84,
+      "respwait": 0.697,
+      "write": 0.092
+     },
+     "pbm_p50_ms": {
+      "queue_wait": 0.03,
+      "exec": 0.94,
+      "capture_wait": 0.03,
+      "capture": 0.15,
+      "propose_prep": 0.01,
+      "paxos": 0.6,
+      "total": 1.88
+     }
+    }
+   }
+  },
+  "delta_pct": {
+   "perfcatalog": {
+    "p50_pct": -2.6,
+    "p99_pct": -1.9,
+    "tput_pct": 1.2
+   },
+   "perfcatalognd": {
+    "p50_pct": 0.0,
+    "p99_pct": -4.1,
+    "tput_pct": -0.1
+   }
+  },
+  "regression": false,
+  "regressions": [],
+  "calibration": {
+   "fsync_avg_ms": 0.355,
+   "cpu_loops_per_500ms": 5423189
+  }
  }
 ]
