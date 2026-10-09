@@ -1,0 +1,137 @@
+name: "XDN PB cookie test"
+
+# Runs only XdnPbSequentialCookieTest, on XdnApp (the Blue-Green primary-backup manager).
+# The test also skips itself unless XDN_TEST_GIGAPAXOS_CONFIG is gigapaxos.xdn.new-local.properties.
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths: &paths
+      - "src/**"
+      - "test/**"
+      - "test-gigapaxos/**"
+      - "lib/**"
+      - "conf/**"
+      - "build.xml"
+      - "build.properties"
+      - "testing.properties"
+      - "bin/**"
+      - "xdn-cli/**"
+      - "xdn-fs/**"
+      - ".github/workflows/xdn-pb-cookie-test.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths: *paths
+
+concurrency:
+  group: xdn-pb-cookie-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+
+jobs:
+  pb-cookie-test:
+    name: "XdnPbSequentialCookieTest (XdnApp)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        java-version: '21'
+        distribution: 'oracle'
+
+    - name: 📦 Set up Docker
+      uses: docker-practice/actions-setup-docker@master
+      timeout-minutes: 12
+
+    - name: 📦 Verify Docker and pre-pull test image
+      run: |
+        set -x
+        docker version
+        docker run --rm hello-world
+        docker pull fadhilkurnia/xdn-bookcatalog
+
+    - name: 🔄 Set up Rsync
+      uses: GuillaumeFalourd/setup-rsync@v1.2
+
+    - name: 🔄 Set up Fuse
+      run: |
+        set -x
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libfuse3-dev libzstd-dev fuse3
+        sudo modprobe fuse
+        sudo sed -i 's/#user_allow_other/user_allow_other/g' /etc/fuse.conf
+        ls -l /dev/fuse
+        grep user_allow_other /etc/fuse.conf
+        fusermount3 -V
+
+    - name: 🐹 Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: xdn-cli/go.mod
+
+    - name: 🦀 Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: 🏗️ Build jar and prepare binaries
+      run: |
+        set -x
+        ant jar
+        bash bin/build_xdn_cli.sh
+        bash bin/build_xdn_fuselog.sh install
+        ln -sf "$(pwd)/bin/xdnd" /usr/local/bin/xdnd
+
+    - name: 🏗️ Compile tests
+      run: ant xdn-compile-tests
+
+    - name: 🧪 Run XdnPbSequentialCookieTest (XdnApp)
+      env:
+        XDN_TEST_GIGAPAXOS_CONFIG: gigapaxos.xdn.new-local.properties
+      run: |
+        set -o pipefail
+        bin/run_xdn_tests.sh XdnPbSequentialCookieTest 2>&1 | tee junit-test-output.log
+
+    - name: 📝 Reporting the test results ...
+      uses: dorny/test-reporter@v2
+      if: ${{ !cancelled() }}
+      with:
+        name: 'XdnPbSequentialCookieTest'
+        path: 'out/**/*.xml'
+        reporter: 'java-junit'
+
+    - name: 🪲 Debug info on failure
+      if: failure()
+      run: |
+        echo "=== System Information ==="
+        uname -a
+        free -h
+        df -h
+        mount | grep fuse || true
+        echo "=== Per-method test logs ==="
+        for f in out/junit5-test-output/*.log; do
+          [ -f "$f" ] || continue
+          echo "============ BEGIN $f ============"
+          cat "$f"
+          echo "============ END $f ============"
+        done
+        echo "=== docker ps ==="
+        docker ps -a || true
+        echo "=== dmesg tail ==="
+        dmesg | tail -n 100 || true
+
+    - name: 📦 Upload test output on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: 'pb-cookie-test-output'
+        path: |
+          out/
+          junit-test-output.log
+        if-no-files-found: ignore
