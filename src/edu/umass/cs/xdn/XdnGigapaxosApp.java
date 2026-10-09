@@ -601,7 +601,7 @@ public class XdnGigapaxosApp
       System.out.println("Running postInitialization() in backup");
       int placementEpoch = 0;
 
-      return this.stateDiffRecorder.postInitialization(name, placementEpoch);
+      return this.stateDiffRecorder.postInitializationOld(name, placementEpoch);
     }
 
     // Case-8: handle start a created service (non-deterministic init)
@@ -790,18 +790,18 @@ public class XdnGigapaxosApp
 
       // prepare statediff directory, if required
       String stateDirMountSource =
-          stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
+          stateDiffRecorder.getTargetDirectoryOld(serviceName, newPlacementEpoch);
       String stateDirMountTarget = property.getStatefulComponentDirectory();
       if (!property.isDeterministic()) {
-        stateDiffRecorder.preInitialization(serviceName, newPlacementEpoch);
+        stateDiffRecorder.preInitializationOld(serviceName, newPlacementEpoch);
       }
 
       // Validates the previous epoch final state, then put it into the to-be-mounted dir.
       // First, prepare the mounted dir.
       if (!property.isDeterministic()) {
-        stateDiffRecorder.removeServiceRecorder(serviceName, newPlacementEpoch);
+        stateDiffRecorder.removeServiceRecorderOld(serviceName, newPlacementEpoch);
       }
-      String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, newPlacementEpoch);
+      String mountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, newPlacementEpoch);
       String removeDirCommand = String.format("rm -rf %s", mountDir);
       int rmDirRetCode = Shell.runCommand(removeDirCommand);
       assert rmDirRetCode == 0;
@@ -869,9 +869,9 @@ public class XdnGigapaxosApp
       // their state via the cluster's own protocol, so the recorder is skipped entirely.
       if (!property.isClusterManaged()) {
         if (!property.isDeterministic()) {
-          stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
+          stateDiffRecorder.preInitializationOld(serviceName, initialPlacementEpoch);
         } else {
-          String dir = stateDiffRecorder.getTargetDirectory(serviceName, initialPlacementEpoch);
+          String dir = stateDiffRecorder.getTargetDirectoryOld(serviceName, initialPlacementEpoch);
           Shell.runCommand("rm -rf " + dir);
           Shell.runCommand("mkdir -p " + dir);
         }
@@ -992,14 +992,14 @@ public class XdnGigapaxosApp
 
     // TODO: prepare statediff directory, if required
     String stateDirMountSource =
-        stateDiffRecorder.getTargetDirectory(serviceName, initialPlacementEpoch);
+        stateDiffRecorder.getTargetDirectoryOld(serviceName, initialPlacementEpoch);
     String stateDirMountTarget = service.property.getStatefulComponentDirectory();
 
     // TODO: Fix ordering. Must be:
     // preInitialization -> startContainer -> postInitialization
     if (!service.property.isDeterministic()) {
-      stateDiffRecorder.preInitialization(serviceName, initialPlacementEpoch);
-      stateDiffRecorder.postInitialization(serviceName, initialPlacementEpoch);
+      stateDiffRecorder.preInitializationOld(serviceName, initialPlacementEpoch);
+      stateDiffRecorder.postInitializationOld(serviceName, initialPlacementEpoch);
       // Docker Desktop (macOS) validates bind sources eagerly at `docker run` (Linux dockerd
       // would auto-create them as root), so ensure the mount source exists even when the
       // recorder implementation did not create it.
@@ -1458,19 +1458,20 @@ public class XdnGigapaxosApp
     }
 
     // prepare statediff directory, if required
-    String stateDirMountSource = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
+    String stateDirMountSource =
+        stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     String stateDirMountTarget = property.getStatefulComponentDirectory();
     if (!property.isDeterministic()) {
-      stateDiffRecorder.preInitialization(serviceName, placementEpoch);
+      stateDiffRecorder.preInitializationOld(serviceName, placementEpoch);
     }
 
     // Validates the previous epoch final state, then put it into the to-be-mounted dir.
     // First, prepare the mounted dir.
     // TODO: test with fuse
     if (!property.isDeterministic()) {
-      stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+      stateDiffRecorder.removeServiceRecorderOld(serviceName, placementEpoch);
     }
-    String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
+    String mountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     String removeDirCommand = String.format("rm -rf %s", mountDir);
     int rmDirRetCode = Shell.runCommand(removeDirCommand);
     assert rmDirRetCode == 0;
@@ -1598,7 +1599,7 @@ public class XdnGigapaxosApp
           "WARNING: non-deterministic service can generate different " + "initial state");
     }
     if (!property.isDeterministic()) {
-      stateDiffRecorder.postInitialization(serviceName, placementEpoch);
+      stateDiffRecorder.postInitializationOld(serviceName, placementEpoch);
     }
 
     this.services.put(serviceName, service);
@@ -1640,7 +1641,8 @@ public class XdnGigapaxosApp
 
     // get the container names and mount dir, then remove the in-memory service metadata
     List<String> toBeRemovedContainerNames = serviceInstance.containerNames;
-    String toBeRemovedMountDir = stateDiffRecorder.getTargetDirectory(serviceName, placementEpoch);
+    String toBeRemovedMountDir =
+        stateDiffRecorder.getTargetDirectoryOld(serviceName, placementEpoch);
     this.serviceInstances.get(serviceName).remove(placementEpoch);
     if (this.serviceInstances.get(serviceName).isEmpty()) {
       this.serviceInstances.remove(serviceName);
@@ -1675,7 +1677,7 @@ public class XdnGigapaxosApp
 
     // clean the mounted dir for this epoch
     if (!serviceInstance.property.isDeterministic()) {
-      stateDiffRecorder.removeServiceRecorder(serviceName, placementEpoch);
+      stateDiffRecorder.removeServiceRecorderOld(serviceName, placementEpoch);
     }
     String removeDirCommand = String.format("rm -rf %s", toBeRemovedMountDir);
     int code = Shell.runCommand(removeDirCommand);
@@ -2204,7 +2206,7 @@ public class XdnGigapaxosApp
       return null;
     }
 
-    byte[] stateDiff = stateDiffRecorder.captureStateDiff(serviceName, currentPlacementEpoch);
+    byte[] stateDiff = stateDiffRecorder.captureStateDiffOld(serviceName, currentPlacementEpoch);
     if (stateDiff == null) {
       logger.log(
           Level.WARNING,
@@ -2335,7 +2337,7 @@ public class XdnGigapaxosApp
   public byte[] getStateDigest(String serviceName) {
     Integer epoch = this.getEpoch(serviceName);
     if (epoch == null) return null;
-    Path mountDir = Paths.get(stateDiffRecorder.getTargetDirectory(serviceName, epoch));
+    Path mountDir = Paths.get(stateDiffRecorder.getTargetDirectoryOld(serviceName, epoch));
     if (!Files.isDirectory(mountDir)) return null;
     try {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -2380,7 +2382,7 @@ public class XdnGigapaxosApp
 
     // Copy the state with rsync (see captureContainerizedServiceFinalState for why rsync
     // and not `cp -a`), retrying since the service may be mutating background files.
-    String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
+    String mountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, epoch);
     String copyCommand = String.format("rsync -a %s %s", mountDir, captureDirPath);
     int attempts = 0;
     while (true) {
@@ -2434,7 +2436,7 @@ public class XdnGigapaxosApp
     }
 
     // Replace the state directory with the checkpoint contents.
-    String mountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
+    String mountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, epoch);
     int code = Shell.runCommand(String.format("rm -rf %s", mountDir), true);
     assert code == 0;
     code = Shell.runCommand(String.format("mkdir -p %s", mountDir), true);
@@ -2654,7 +2656,7 @@ public class XdnGigapaxosApp
     // /app/data/... and the app sees an empty state dir. rsync's trailing-slash
     // semantics ("copy the directory's CONTENTS") are well-defined and identical
     // across GNU/Linux and BSD/macOS, regardless of whether the dest exists.
-    String hostMountDir = stateDiffRecorder.getTargetDirectory(serviceName, epoch);
+    String hostMountDir = stateDiffRecorder.getTargetDirectoryOld(serviceName, epoch);
     String stateCopyCommand = String.format("rsync -a %s %s", hostMountDir, finalStateDirPath);
     int count = 0;
     while (true) {

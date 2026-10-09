@@ -21,6 +21,7 @@ import edu.umass.cs.reconfiguration.interfaces.ReconfigurableRequest;
 import edu.umass.cs.reconfiguration.reconfigurationpackets.ReplicableClientRequest;
 import edu.umass.cs.reconfiguration.reconfigurationutils.RequestParseException;
 import edu.umass.cs.utils.Config;
+import edu.umass.cs.xdn.XdnApp;
 import edu.umass.cs.xdn.interfaces.behavior.BehavioralRequest;
 
 import java.io.IOException;
@@ -41,6 +42,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import edu.umass.cs.xdn.service.ServiceProperty;
 import org.json.JSONObject;
 
 /**
@@ -672,7 +674,17 @@ public class LazyReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinat
 
         // Creating a replica group is a special case for reconfiguration where we reconfigure
         // from nothing to something. In that case, we call app.restore(.) with initialState.
-        return this.app.restore(serviceName, state);
+        boolean initialized = this.app.restore(serviceName, state);
+        if (!initialized) return false;
+
+        // Additional logic for XdnApp because NonDeterminsticService requires delibrately starting
+        // the container after loading them
+        if (this.app instanceof XdnApp xa
+                && xa.getServiceType(serviceName) == XdnApp.ServiceType.NON_DETERMINISTIC) {
+            Thread.ofVirtual().start(() ->
+                    this.app.restore(serviceName, ServiceProperty.NON_DETERMINISTIC_START_PRIMARY_PREFIX));
+        }
+        return true;
     }
 
     @Override

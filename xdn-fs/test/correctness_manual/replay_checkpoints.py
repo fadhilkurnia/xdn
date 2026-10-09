@@ -72,7 +72,7 @@ Usage:
   # p<epoch>:<primary>:<count>.diff pattern regardless of <primary>.
   python3 replay_checkpoints.py \
       --app bookcatalog-nd-mysql \
-      --cmtdiff-dir /tmp/xdn2/state/east1a/bookcatalog-nd/e0/cmtDiff \
+      --cmtdiff-dir /tmp/xdn/state/east1a/bookcatalog-nd/e0/cmtDiff \
       --skip-app-filter \
       --checkpoints 577,980,1200 \
       --out-dir replays/xdn_prod_repro

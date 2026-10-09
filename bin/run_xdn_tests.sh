@@ -14,6 +14,12 @@ TEST_CLASSES_DIR="build/test-classes"
 OUTPUT_DIR="out/junit5-test-output"
 TEST_PATTERN="${1:-Xdn*Test}"
 VERBOSE="${VERBOSE:-false}"
+XDN_TEST_GIGAPAXOS_CONFIG="${XDN_TEST_GIGAPAXOS_CONFIG:-}"
+
+EXTRA_JVM_ARGS=()
+if [ -n "$XDN_TEST_GIGAPAXOS_CONFIG" ]; then
+    EXTRA_JVM_ARGS+=("-DXDN_TEST_GIGAPAXOS_CONFIG=$XDN_TEST_GIGAPAXOS_CONFIG")
+fi
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -60,13 +66,13 @@ for CLASS_FILE in $TEST_CLASSES; do
         set +e
 
         if [ "$VERBOSE" = "true" ]; then
-            java -cp "$CLASSPATH" \
+            java -cp "$CLASSPATH" "${EXTRA_JVM_ARGS[@]}" \
                 org.junit.platform.console.ConsoleLauncher execute \
                 --select-method "$CLASS_NAME#$METHOD" \
                 --details=verbose \
                 --reports-dir="$REPORTS_DIR" 2>&1 | tee "$LOG_FILE"
         else
-            java -cp "$CLASSPATH" \
+            java -cp "$CLASSPATH" "${EXTRA_JVM_ARGS[@]}" \
                 org.junit.platform.console.ConsoleLauncher execute \
                 --select-method "$CLASS_NAME#$METHOD" \
                 --details=verbose \

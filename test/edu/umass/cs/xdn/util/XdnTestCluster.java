@@ -502,8 +502,18 @@ public class XdnTestCluster implements AutoCloseable {
     return ACTIVE_REPLICA_BASE_PORT + replicaIndex + HTTP_PORT_OFFSET;
   }
 
+  /**
+   * Name of the gigapaxos properties file this cluster starts with. Defaults to
+   * "gigapaxos.xdn.local.properties" (XdnGigapaxosApp-based), overridable via
+   * -DXDN_TEST_GIGAPAXOS_CONFIG=<filename> so the same test classes can run against a different
+   * config (e.g. "gigapaxos.xdn.new-local.properties", XdnApp-based).
+   */
+  private static String gigapaxosConfigFileName() {
+    return System.getProperty("XDN_TEST_GIGAPAXOS_CONFIG", "gigapaxos.xdn.local.properties");
+  }
+
   private static void configureGigapaxos() {
-    Path configPath = Paths.get("conf", "gigapaxos.xdn.local.properties").toAbsolutePath();
+    Path configPath = Paths.get("conf", gigapaxosConfigFileName()).toAbsolutePath();
     System.setProperty(PaxosConfig.GIGAPAXOS_CONFIG_FILE_KEY, configPath.toString());
     Config.register(
         new String[] {
@@ -562,9 +572,10 @@ public class XdnTestCluster implements AutoCloseable {
   private final Map<String, Process> nodeProcesses = new LinkedHashMap<>();
 
   /** Spawns a node as a separate OS process on the shared local config and /tmp state dirs. */
+  // after
   private void spawnNodeProcess(String activeId) throws IOException {
     String javaBin = Paths.get(System.getProperty("java.home"), "bin", "java").toString();
-    Path configPath = Paths.get("conf", "gigapaxos.xdn.local.properties").toAbsolutePath();
+    Path configPath = Paths.get("conf", gigapaxosConfigFileName()).toAbsolutePath();
     Path logPath = Paths.get("out", "junit5-test-output", "node-process-" + activeId + ".log");
     Files.createDirectories(logPath.getParent());
     ProcessBuilder builder =
