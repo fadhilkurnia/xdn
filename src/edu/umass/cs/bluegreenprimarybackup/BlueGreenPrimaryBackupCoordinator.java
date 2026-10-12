@@ -18,6 +18,8 @@ import edu.umass.cs.xdn.XdnApp;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
+
+import edu.umass.cs.xdn.request.XdnStopRequest;
 import org.json.JSONObject;
 
 /**
@@ -90,6 +92,14 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
       return this.pbManager.handleBlueGreenPrimaryBackupPacket(packet, callback);
     }
 
+    // XdnStopRequest: the stop of a service deletion or a reconfiguration. XdnReplicaCoordinator
+    // wraps it in a ReplicableClientRequest, so check it before the client branch below.
+    Request unwrapped =
+            (request instanceof ReplicableClientRequest wrapped) ? wrapped.getRequest() : request;
+    if (unwrapped instanceof XdnStopRequest stop) {
+      return this.pbManager.handleStopRequest(stop, callback);
+    }
+
     // ReplicableClientRequest: an actual end-user request.
     if (request instanceof ReplicableClientRequest rcr) {
       String serviceName = rcr.getServiceName();
@@ -135,9 +145,7 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
 
   @Override
   public boolean deleteReplicaGroup(String serviceName, int epoch) {
-    // TODO: delegate to BlueGreenPrimaryBackupManager.deleteReplicaGroup() once
-    //  the teardown/Upon deleteReplicaGroup event is designed.
-    return false;
+    return this.pbManager.deleteReplicaGroup(serviceName, epoch);
   }
 
   @Override
