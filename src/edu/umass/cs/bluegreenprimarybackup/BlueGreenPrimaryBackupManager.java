@@ -218,6 +218,9 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   /** A committed stop request, queued for the dispatcher thread. */
   private record StopEvent(XdnStopRequest stop) {}
 
+  /** Asks the dispatcher to forget the service. The future completes when the teardown is done. */
+  private record DropEvent(CompletableFuture<Boolean> result) {}
+
   /** The ActiveReplica callback of one stop request, answered once the stop work is finished. */
   private record PendingStopCallback(XdnStopRequest stop, ExecutedCallback callback) {}
 
@@ -352,6 +355,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         } else if (event instanceof StopEvent e) {
           // Blocking. Stops containers.
           handleStopEvent(serviceName, e);
+        } else if (event instanceof DropEvent e) {
+          // Blocking. Forgets the service. This thread ends right after.
+          handleDropEvent(serviceName, queue, e);
+          return;
         } else {
           throw new RuntimeException(
                   "Unknown Dispatcher Event: " + event.getClass().getSimpleName());
@@ -362,6 +369,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           e.result.complete(false);
         } else if (event instanceof RefreshBackupStartEvent e) {
           scheduleRefresh(serviceName, e.liveDir);
+        } else if (event instanceof DropEvent e) {
+          e.result().complete(false);
         }
       }
     }
@@ -1753,6 +1762,33 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     return true;
   }
 
+  private static final long TEARDOWN_TIMEOUT_SECONDS = 30;
+
+  /**
+   * Called from deleteFinalState. Returns true when this node has forgotten the service. Returns
+   * false on timeout, so ActiveReplica does not ack the drop and the reconfigurator resends it.
+   */
+  public boolean tearDown(String serviceName) {
+    BlockingQueue<Object> queue = eventQueues.get(serviceName);
+    if (queue == null) return true; // this node holds nothing for the service
+    DropEvent drop = new DropEvent(new CompletableFuture<>());
+    queue.add(drop);
+    try {
+      return drop.result().get(TEARDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM teardown of {1} timed out after {2}s",
+              new Object[] {myNodeID, serviceName, TEARDOWN_TIMEOUT_SECONDS});
+      return false;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return false;
+    } catch (ExecutionException e) {
+      return false;
+    }
+  }
+
   /**
    * Stop work, on the dispatcher thread. Every step runs on its own, so one failure does not skip
    * the rest. The callbacks fire at the end even if a step failed, because the reconfigurator
@@ -1763,7 +1799,12 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     synchronized (state) {
       if (state.done) return; // duplicate
     }
+    runStopWork(serviceName);
+    completeStop(serviceName, state);
+  }
 
+  /** Marks the service STOPPED, then stops the background work and the containers. */
+  private void runStopWork(String serviceName) {
     Role previousRole = currentRole.get(serviceName);
     currentRole.put(serviceName, Role.STOPPED); // clients get a 503 from here on
     logger.log(
@@ -1771,6 +1812,13 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
             "{0}:PBM stopping {1}, previous role={2}",
             new Object[] {myNodeID, serviceName, previousRole});
 
+    stopBackgroundWork(serviceName);
+    runStopStep(
+            serviceName, "stop containers", () -> stopContainersForStop(serviceName, previousRole));
+  }
+
+  /** Safe to call twice. Every step only removes and cancels what is still registered. */
+  private void stopBackgroundWork(String serviceName) {
     runStopStep(
             serviceName,
             "cancel coordinator poller",
@@ -1786,9 +1834,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
               ExecutorService executor = refreshBackupExecutors.remove(serviceName);
               if (executor != null) executor.shutdownNow();
             });
-    runStopStep(
-            serviceName, "stop containers", () -> stopContainersForStop(serviceName, previousRole));
+  }
 
+  /** Sets done and fires the pending StopEpoch callbacks. */
+  private void completeStop(String serviceName, StopState state) {
     List<PendingStopCallback> toFire;
     synchronized (state) {
       state.done = true;
@@ -1816,6 +1865,75 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
               Level.SEVERE,
               myNodeID + ":PBM stop step '" + stepName + "' failed for " + serviceName,
               t);
+    }
+  }
+
+  /**
+   * Drop work, on the dispatcher thread. If the stop work has not run on this node yet (a lagging
+   * node), it runs here first, so the containers are never deleted under a running stop.
+   */
+  private void handleDropEvent(
+          String serviceName, BlockingQueue<Object> queue, DropEvent event) {
+    boolean ok = true;
+    try {
+      StopState state = stopStates.computeIfAbsent(serviceName, k -> new StopState());
+      boolean stopDone;
+      synchronized (state) {
+        stopDone = state.done;
+      }
+      if (!stopDone) {
+        logger.log(
+                Level.WARNING,
+                "{0}:PBM drop arrived before the stop work finished for {1}, running it now",
+                new Object[] {myNodeID, serviceName});
+        runStopWork(serviceName);
+        completeStop(serviceName, state);
+      }
+      forgetService(serviceName);
+    } catch (Throwable t) {
+      ok = false;
+      logger.log(Level.SEVERE, myNodeID + ":PBM drop failed for " + serviceName, t);
+    }
+
+    // Nothing else will read this queue. Answer whatever is left in it.
+    Object left;
+    while ((left = queue.poll()) != null) {
+      if (left instanceof CreateReplicaGroupEvent<?> c) {
+        c.result.complete(false);
+      } else if (left instanceof DropEvent d) {
+        d.result().complete(true);
+      }
+    }
+    event.result().complete(ok);
+    logger.log(
+            Level.INFO,
+            "{0}:PBM drop finished for {1}, ok={2}",
+            new Object[] {myNodeID, serviceName, ok});
+  }
+
+  /** Clears every per-service map, so a later create starts from nothing. */
+  private void forgetService(String serviceName) {
+    try {
+      stopBackgroundWork(serviceName); // in case an earlier step failed
+      releaseInFlightDiffs(serviceName, null);
+
+      replicaGroups.remove(serviceName);
+      currPlacement.remove(serviceName);
+      currPrimaryID.remove(serviceName);
+      currentRole.remove(serviceName);
+      currPrimaryEpoch.remove(serviceName);
+      cmtStateDiffCount.remove(serviceName);
+      snpStateDiffCount.remove(serviceName);
+      liveStateDiffCount.remove(serviceName);
+      currentLiveDirType.remove(serviceName);
+      snpDiffApplyLocks.remove(serviceName);
+      doneQueues.remove(serviceName);
+      inFlightDiffs.remove(serviceName);
+      stopStates.remove(serviceName);
+    } finally {
+      // Last, and always. A later create then builds a fresh queue and a fresh dispatcher thread.
+      eventQueues.remove(serviceName);
+      dispatcherThreads.remove(serviceName);
     }
   }
 

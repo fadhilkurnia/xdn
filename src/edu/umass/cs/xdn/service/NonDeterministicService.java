@@ -759,6 +759,11 @@ public class NonDeterministicService {
       serviceInstances.remove(name);
       servicePlacementEpoch.remove(name);
       stateDiffRecorder.removeServiceRecorder(name, epoch);
+      // Nothing else removes the empty e<epoch> directory made by getStateDirectory()
+      String stateDir =
+          ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+              .getStateDirectory(name, epoch);
+      Shell.runCommand("rm -rf " + stateDir);
     }
     return deleted;
   }
