@@ -32,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -127,6 +128,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, Future<?>> captureLoops = new ConcurrentHashMap<>();
 
+  /** Diffs handed to Paxos whose client callbacks have not been answered yet, per service. */
+  private final ConcurrentHashMap<String, Set<InFlightDiff>> inFlightDiffs =
+          new ConcurrentHashMap<>();
+
   private final ConcurrentHashMap<String, ScheduledFuture<?>> coordinatorStatusPollers =
           new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, ScheduledFuture<?>> refreshTimers =
@@ -204,6 +209,24 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   }
 
   private record SnpApplyItem(String filename, int count, boolean isLargeDiff, byte[] diff) {}
+
+  /** One proposed diff. Its clients are answered at most once, whoever gets there first. */
+  private static final class InFlightDiff {
+    final Thread owner; // the capture loop thread that proposed it
+    private final ExecutedCallback callback;
+    private final AtomicBoolean answered = new AtomicBoolean(false);
+
+    InFlightDiff(Thread owner, ExecutedCallback callback) {
+      this.owner = owner;
+      this.callback = callback;
+    }
+
+    void answer(Request request, boolean handled) {
+      if (answered.compareAndSet(false, true)) {
+        callback.executed(request, handled);
+      }
+    }
+  }
 
   private ConsistencyModel getConsistencyModel(String serviceName) {
     ServiceInstance instance = this.app.getServiceInstance(serviceName);
@@ -721,6 +744,34 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       queue.drainTo(left);
       release(left).executed(null, false); // no longer primary, these writes are not replicated
     }
+    // Diffs already handed to Paxos may never be decided, so answer their clients too
+    releaseInFlightDiffs(serviceName, null);
+  }
+
+  /**
+   * Answers in-flight diffs as not handled. A null owner answers every in-flight diff of the
+   * service, otherwise only the ones proposed by that capture loop thread.
+   */
+  private void releaseInFlightDiffs(String serviceName, Thread owner) {
+    Set<InFlightDiff> inFlight = inFlightDiffs.get(serviceName);
+    if (inFlight == null) return;
+    int released = 0;
+    for (InFlightDiff diff : inFlight) {
+      if (owner != null && diff.owner != owner) continue;
+      if (!inFlight.remove(diff)) continue;
+      released++;
+      try {
+        diff.answer(null, false);
+      } catch (Throwable t) {
+        logger.log(Level.WARNING, myNodeID + ":PBM callback failed for one in-flight diff", t);
+      }
+    }
+    if (released > 0) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM released {1} in-flight diff(s) as not handled for {2}",
+              new Object[] {myNodeID, released, serviceName});
+    }
   }
 
   private void captureLoop(
@@ -771,6 +822,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       Thread.currentThread().interrupt();
     } finally {
       release(pending).executed(null, false);
+      // A diff proposed just as the loop was stopped may have missed the stop's own release
+      releaseInFlightDiffs(serviceName, Thread.currentThread());
     }
   }
 
@@ -808,13 +861,46 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                       serviceName, placement, pEpoch, myNodeID.toString(), stateDiffCount);
     }
 
-    paxosManager.propose(
-            serviceName,
-            packet,
-            (executedRequest, handled) ->
-                    eventQueues
-                            .get(serviceName)
-                            .add(new DiffCommittedEvent(placement, pEpoch, stateDiffCount, handled, callback)));
+    // Track the diff until its clients are answered, so a stop can answer it if Paxos never does
+    Set<InFlightDiff> inFlightSet =
+            inFlightDiffs.computeIfAbsent(serviceName, k -> ConcurrentHashMap.newKeySet());
+    InFlightDiff inFlight = new InFlightDiff(Thread.currentThread(), callback);
+    ExecutedCallback once =
+            (executedRequest, handled) -> {
+              inFlightSet.remove(inFlight);
+              inFlight.answer(executedRequest, handled);
+            };
+    inFlightSet.add(inFlight);
+
+    String proposedTo;
+    try {
+      proposedTo =
+              paxosManager.propose(
+                      serviceName,
+                      packet,
+                      (executedRequest, handled) ->
+                              eventQueues
+                                      .get(serviceName)
+                                      .add(
+                                              new DiffCommittedEvent(
+                                                      placement, pEpoch, stateDiffCount, handled, once)));
+    } catch (RuntimeException | Error e) {
+      // The caller's catch block answers the clients, so do not leave them in the set
+      inFlightSet.remove(inFlight);
+      throw e;
+    }
+
+    if (proposedTo == null) {
+      // No local paxos instance, so the callback was never registered. Answer through the
+      // dispatcher, the same way as the capture error path.
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM propose returned null for {1} count={2}, answering its writes as not handled",
+              new Object[] {myNodeID, serviceName, stateDiffCount});
+      eventQueues
+              .get(serviceName)
+              .add(new DiffCommittedEvent(placement, pEpoch, stateDiffCount, false, once));
+    }
     return true;
   }
 
