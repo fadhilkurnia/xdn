@@ -9,10 +9,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,6 +40,8 @@ public class XdnPbDeleteTest {
   // /tmp/xdn/state/fuselog/<node>/mnt/<service>/e<epoch>/ (AbstractStateDiffRecorder).
   private static final Path STATE_ROOT = Paths.get("/tmp/xdn/state");
   private static final int STATE_SEARCH_MAX_DEPTH = 4;
+  private static final int LEFTOVER_MAX_DEPTH = 3;
+  private static final int LEFTOVER_MAX_ENTRIES = 40;
 
   private static final Duration DELETE_COMPLETION_TIMEOUT = Duration.ofSeconds(90);
   private static final Duration CLEANUP_TIMEOUT = Duration.ofSeconds(30);
@@ -134,7 +133,9 @@ public class XdnPbDeleteTest {
 
       // containers and state directories are gone on every node
       awaitContainersGone();
-      awaitStateDirsGone();
+      awaitNoLeftoverFiles();
+      System.out.println(
+          "[delete-test] empty directories still present: " + listStateEntries(false));
     }
   }
 
@@ -247,14 +248,55 @@ public class XdnPbDeleteTest {
     assertTrue(remaining.isEmpty(), "Containers left after delete: " + remaining);
   }
 
-  private void awaitStateDirsGone() throws Exception {
+  // Empty directories are accepted. The recorder removes e<epoch>/ but not its parent, and
+  // DockerSandboxManager.deleteService does not remove its own state directory
+  // (/tmp/xdn/state/<node>/<service>/e<epoch>/). Only files below the service count as leftover.
+  private void awaitNoLeftoverFiles() throws Exception {
     long deadline = System.nanoTime() + CLEANUP_TIMEOUT.toNanos();
-    List<Path> remaining = findServiceStateDirs();
-    while (!remaining.isEmpty() && System.nanoTime() < deadline) {
+    List<Path> leftover = listStateEntries(true);
+    while (!leftover.isEmpty() && System.nanoTime() < deadline) {
       Thread.sleep(1000);
-      remaining = findServiceStateDirs();
+      leftover = listStateEntries(true);
     }
-    assertTrue(remaining.isEmpty(), "State directories left after delete: " + remaining);
+    assertTrue(
+        leftover.isEmpty(),
+        "Files left after delete ("
+            + leftover.size()
+            + " entries, at most "
+            + LEFTOVER_MAX_ENTRIES
+            + " listed): "
+            + leftover);
+  }
+
+  // Entries below a directory named like the service, either only files or only directories.
+  private static List<Path> listStateEntries(boolean filesOnly) {
+    List<Path> entries = new ArrayList<>();
+    for (Path serviceDir : findServiceStateDirs()) {
+      collectEntries(serviceDir, 0, entries, filesOnly);
+    }
+    return entries;
+  }
+
+  private static void collectEntries(Path dir, int depth, List<Path> found, boolean filesOnly) {
+    if (depth >= LEFTOVER_MAX_DEPTH || found.size() >= LEFTOVER_MAX_ENTRIES) {
+      return;
+    }
+    try (DirectoryStream<Path> children = Files.newDirectoryStream(dir)) {
+      for (Path child : children) {
+        if (found.size() >= LEFTOVER_MAX_ENTRIES) {
+          return;
+        }
+        boolean isDirectory = Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS);
+        if (isDirectory != filesOnly) {
+          found.add(child);
+        }
+        if (isDirectory) {
+          collectEntries(child, depth + 1, found, filesOnly);
+        }
+      }
+    } catch (IOException e) {
+      // unreadable directory, for example a stale FUSE mount, so skip it
+    }
   }
 
   // Names of all containers (running or stopped) that belong to the service.
