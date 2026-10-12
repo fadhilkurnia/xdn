@@ -98,11 +98,19 @@ jobs:
         set -o pipefail
         bin/run_xdn_tests.sh XdnPbDeleteTest 2>&1 | tee junit-test-output.log
 
+    - name: 🧪 Run XdnPbRecreateTest (XdnApp)
+      if: ${{ !cancelled() }}
+      env:
+        XDN_TEST_GIGAPAXOS_CONFIG: gigapaxos.xdn.new-local.properties
+      run: |
+        set -o pipefail
+        bin/run_xdn_tests.sh XdnPbRecreateTest 2>&1 | tee -a junit-test-output.log
+
     - name: 📝 Reporting the test results ...
       uses: dorny/test-reporter@v2
       if: ${{ !cancelled() }}
       with:
-        name: 'XdnPbDeleteTest'
+        name: 'XdnPbDeleteTest and XdnPbRecreateTest'
         path: 'out/**/*.xml'
         reporter: 'java-junit'
 
