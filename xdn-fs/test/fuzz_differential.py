@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
-"""End-to-end differential tester for fuselog (Layer 3).
+"""End-to-end differential tester for a state-diff capturer (Layer 3).
 
-Mounts fuselog on /tmp/xdn-fuselog/A, mirrors random fs ops to a plain dir
-/tmp/xdn-fuselog/B, harvests the captured statediff over the unix socket,
-replays it via fuselog-apply onto /tmp/xdn-fuselog/C, then walks all three
-trees and asserts they're byte-identical.
+Captures mutations under /tmp/xdn-fuselog/A, mirrors the same random fs ops
+to a plain dir /tmp/xdn-fuselog/B, harvests the captured statediff over the
+unix socket, replays it onto /tmp/xdn-fuselog/C, then walks all three trees
+and asserts they're byte-identical.
 
 Three assertions fail differently:
-  - A != B   fuselog FUSE handlers diverge from plain POSIX semantics
+  - A != B   the capturer's own filesystem handlers diverge from plain POSIX
+             semantics (only meaningful when A is a real mount -- see below)
   - A != C   statediff capture is missing or corrupting data
   - B != C   independent confirmation; helps localize the bug above
 
+Which capturer runs is chosen with CAPTURE_BACKEND (see capture_backend.py):
+
+  fuselog (default)  Mounts fuselog over A and replays with fuselog-apply.
+                     All three assertions apply.
+  ebpf               Attaches VFS probes and traces A as an ordinary
+                     directory, replaying with statediff_apply_vfs. A == B
+                     holds by construction so that leg is skipped, and
+                     chmod/chown/hardlink/symlink are not generated because
+                     the probe set cannot observe them.
+
 Requires:
-  - fuselog and fuselog-apply binaries built (./bin/build_xdn_fuselog.sh cpp)
-  - fusermount3 in PATH
-  - Linux (FUSE)
+  - Linux, and the selected backend's two binaries:
+      fuselog:  ./bin/build_xdn_fuselog.sh cpp, plus fusermount3 in PATH
+      ebpf:     make -C experiments/eBPF all, kernel BTF, and root
 
 Run:
   ./xdn-fs/test/fuzz_differential.py                # 1000 ops, time-based seed
   ./xdn-fs/test/fuzz_differential.py --num-ops 100  # quick smoke
   ./xdn-fs/test/fuzz_differential.py --seed 12345   # replay a specific seed
+  CAPTURE_BACKEND=ebpf sudo -E ./xdn-fs/test/fuzz_differential.py
 """
 
 import argparse
@@ -38,20 +50,45 @@ import sys
 import time
 from pathlib import Path
 
+import capture_backend
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 BASE_DIR = Path("/tmp/xdn-fuselog")
-MOUNT_DIR = BASE_DIR / "A"          # fuselog mount (live)
+MOUNT_DIR = BASE_DIR / "A"          # live capture target: a fuselog mount,
+                                    # or a plain traced dir under eBPF
 PLAIN_DIR = BASE_DIR / "B"          # plain dir oracle
-APPLY_DIR = BASE_DIR / "C"          # fuselog-apply target
+APPLY_DIR = BASE_DIR / "C"          # replay target
 SOCKET_PATH = BASE_DIR / "test.sock"
 STATEDIFF_FILE = BASE_DIR / "statediff.bin"
+
+# The capture mechanism under test. CAPTURE_BACKEND=ebpf swaps start/stop and
+# replay and narrows the generated op set; the default leaves every fuselog
+# code path exactly as it was. capture_backend.py documents what differs.
+BACKEND = capture_backend.get_backend()
+
+# A failed capture is reported in the length field rather than by closing the
+# connection: UINT64_MAX by statediff_vfs, a negative signed length by fuselog.
+# The length is read unsigned here, so the sentinel arrives as 2**64-1 and has
+# to be checked explicitly.
+CAPTURE_FAILED_SIZE = (1 << 64) - 1
+# Mirrors MAX_STATEDIFF_BYTES in correctness_auto/harvester.py.
+MAX_PLAUSIBLE_BATCH = 2 * 1024 * 1024 * 1024
+
+
+class CaptureFailed(RuntimeError):
+    """Raised when the capturer reports lost events, leaving the batch unusable.
+
+    Distinct from a comparison failure: only that fidelity could not be
+    tested this run, not that it is wrong."""
 
 # FUSELOG_BIN env override lets the same harness A/B the high-level `fuselog`
 # against the low-level `fusenode` recorder without forking op-gen/oracle
 # logic. Only the mounted binary changes; everything else stays identical.
-FUSELOG_BIN = Path(os.environ.get("FUSELOG_BIN", PROJECT_ROOT / "bin" / "fuselog"))
-APPLY_BIN = Path(os.environ.get("FUSELOG_APPLY_BIN", PROJECT_ROOT / "bin" / "fuselog-apply"))
+# Both names are re-exported here because fuzz_concurrent*.py and fuzz_db.py
+# import them for their own binary-existence checks.
+FUSELOG_BIN = BACKEND.capture_bin
+APPLY_BIN = BACKEND.apply_bin
 
 FILE_NAMES = ["a", "b", "c"]            # leaf names for files/symlinks/hardlinks
 DIR_NAMES = ["x", "y"]                  # leaf names for directories
@@ -85,18 +122,10 @@ def log(msg):
 
 
 def ensure_clean_dirs():
-    """Recreate BASE_DIR from scratch. Tolerates a stale fuselog mount
-    from a previous crashed run."""
+    """Recreate BASE_DIR from scratch. Tolerates capture state left behind by
+    a previous crashed run -- a stale fuselog mount over MOUNT_DIR, say."""
     if BASE_DIR.exists():
-        # If MOUNT_DIR is still a live fuselog mount, unmount aggressively.
-        try:
-            subprocess.run(["fusermount3", "-u", "-q", str(MOUNT_DIR)],
-                           check=False)
-            # Lazy unmount in case the above failed because of EBUSY.
-            subprocess.run(["fusermount3", "-u", "-z", "-q", str(MOUNT_DIR)],
-                           check=False)
-        except FileNotFoundError:
-            pass
+        BACKEND.force_cleanup(MOUNT_DIR)
         shutil.rmtree(BASE_DIR, ignore_errors=True)
         # If rmtree couldn't fully remove BASE_DIR (e.g. lingering mount),
         # fall back to clearing its contents one level at a time.
@@ -108,62 +137,49 @@ def ensure_clean_dirs():
             except OSError:
                 pass
     BASE_DIR.mkdir(parents=True, exist_ok=True)
+    # A root-owned tree is left behind by the eBPF backend and cannot be
+    # removed by a later unprivileged run. Errors are ignored above, so the
+    # cause would otherwise surface as an opaque PermissionError later.
+    if not os.access(BASE_DIR, os.W_OK):
+        raise RuntimeError(
+            f"{BASE_DIR} exists but is not writable by uid {os.geteuid()}; "
+            f"it was most likely left behind by a root (eBPF) run. "
+            f"Remove it and retry:  sudo rm -rf {BASE_DIR}")
     for d in (MOUNT_DIR, PLAIN_DIR, APPLY_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
 def start_fuselog(allow_other=False):
-    """Launch fuselog -f mounted on MOUNT_DIR, return Popen.
+    """Start the selected capture backend over MOUNT_DIR; return its Popen.
+
+    Still named for the fuselog mount it used to start unconditionally,
+    because fuzz_concurrent.py, fuzz_concurrent_overlap.py and fuzz_db.py
+    import it under this name. What it actually launches now depends on
+    CAPTURE_BACKEND.
 
     `allow_other=True` adds -o allow_other so other UIDs (e.g. a docker
-    container running as a different user) can access the mount. The
-    host must have `user_allow_other` enabled in /etc/fuse.conf."""
-    env = os.environ.copy()
-    env["FUSELOG_SOCKET_FILE"] = str(SOCKET_PATH)
-    env["FUSELOG_CAPTURE"] = "true"
-    env["WRITE_COALESCING"] = "true"
-    env["FUSELOG_PRUNE"] = "true"
-    env["FUSELOG_COMPRESSION"] = "false"
-    # FUSELOG_DISABLE_SIMD is honoured by compute_diff_dispatch; propagate.
-    if os.environ.get("FUSELOG_DISABLE_SIMD"):
-        env["FUSELOG_DISABLE_SIMD"] = os.environ["FUSELOG_DISABLE_SIMD"]
-    fuselog_log = open(BASE_DIR / "fuselog.log", "w")
-    cmd = [str(FUSELOG_BIN), "-f"]
-    if allow_other:
-        cmd += ["-o", "allow_other"]
-    cmd.append(str(MOUNT_DIR))
-    proc = subprocess.Popen(
-        cmd,
-        env=env,
-        stdout=fuselog_log,
-        stderr=subprocess.STDOUT,
-    )
-    # Wait for the socket file to appear: proves init() finished.
-    for _ in range(100):
-        if SOCKET_PATH.exists():
-            return proc
-        if proc.poll() is not None:
-            raise RuntimeError(
-                f"fuselog exited early with code {proc.returncode}; "
-                f"see {BASE_DIR}/fuselog.log")
-        time.sleep(0.05)
-    proc.terminate()
-    raise RuntimeError("fuselog did not create socket within 5s")
+    container running as a different user) can access the mount. The host
+    must have `user_allow_other` enabled in /etc/fuse.conf. Backends that
+    mount nothing ignore it -- an ordinary directory is already reachable."""
+    return BACKEND.start(MOUNT_DIR, SOCKET_PATH, BASE_DIR / "fuselog.log",
+                         allow_other=allow_other)
 
 
 def stop_fuselog(proc):
-    """Unmount and wait for the fuselog process to exit."""
-    if proc is None or proc.poll() is not None:
-        return
-    subprocess.run(["fusermount3", "-u", str(MOUNT_DIR)], check=False)
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    """Stop the capture backend and wait for its process to exit."""
+    BACKEND.stop(proc, MOUNT_DIR)
+
+
+def run_apply(statediff_file=None, apply_dir=None):
+    """Replay a harvested batch onto apply_dir, defaulting to this run's.
+
+    The backends disagree about how a replay is invoked: fuselog-apply reads
+    the batch path from FUSELOG_STATEDIFF_FILE and wants a trailing-slash
+    target, statediff_apply_vfs takes both positionally. Callers go through
+    here instead of building that command themselves."""
+    return BACKEND.run_apply(
+        STATEDIFF_FILE if statediff_file is None else statediff_file,
+        APPLY_DIR if apply_dir is None else apply_dir)
 
 
 def harvest_statediff():
@@ -185,6 +201,15 @@ def harvest_statediff():
             raise RuntimeError("connection closed while reading size header")
         pos += n
     (size,) = struct.unpack("<Q", header)
+    if size == CAPTURE_FAILED_SIZE:
+        raise CaptureFailed(
+            "capturer signalled capture loss (length sentinel UINT64_MAX); "
+            "its stats counters are cumulative, so a single lost event "
+            "anywhere in the run poisons every later harvest")
+    if size > MAX_PLAUSIBLE_BATCH:
+        raise CaptureFailed(
+            f"implausible batch length {size} from the harvest socket "
+            f"(ceiling {MAX_PLAUSIBLE_BATCH}) -- desynced stream?")
 
     payload = bytearray(size)
     view = memoryview(payload)
@@ -196,6 +221,16 @@ def harvest_statediff():
         pos += n
     s.close()
     return bytes(payload)
+
+
+def tail_file(path, limit=4000):
+    """Last `limit` characters of a log file, for failure reports."""
+    try:
+        with open(path, errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        return f"(could not read {path}: {e})"
+    return text[-limit:] if len(text) > limit else text or "(empty)"
 
 
 def apply_op(op, base_dir):
@@ -296,6 +331,13 @@ def pick_op(rng, entries):
     # A/B the writeback path); op *semantics* are unchanged.
     if os.environ.get("FUZZ_NO_HARDLINK"):
         op_types = [o for o in op_types if o != OP_LINK]
+    # Ops the active backend cannot observe are dropped: A and B would be
+    # mutated while the capture stayed silent, so C would diverge over a gap
+    # the backend never claimed to cover. The eBPF probe set has no
+    # vfs_link/vfs_symlink/setattr hook, so chmod, chown, link and symlink are
+    # excluded -- recorded in capture_backend.EBPF_UNSUPPORTED_OPS.
+    if BACKEND.unsupported_ops:
+        op_types = [o for o in op_types if o not in BACKEND.unsupported_ops]
     cur_uid = os.getuid()
     cur_gid = os.getgid()
 
@@ -541,8 +583,15 @@ def dump_failure(seed, op_log, payload, fuselog_log_path):
     """Save artifacts for offline reproduction."""
     dump_dir = Path(f"/tmp/fuselog-fuzz-fail-{seed}")
     if dump_dir.exists():
-        shutil.rmtree(dump_dir)
-    dump_dir.mkdir(parents=True)
+        # A dump left by a root (eBPF) run cannot be removed by a later
+        # unprivileged one. Errors are ignored so that saving the artifacts is
+        # never what surfaces instead of the failure they describe; a
+        # pid-suffixed sibling is used if the original cannot be cleared.
+        shutil.rmtree(dump_dir, ignore_errors=True)
+    if dump_dir.exists():
+        dump_dir = Path(f"/tmp/fuselog-fuzz-fail-{seed}-{os.getpid()}")
+        shutil.rmtree(dump_dir, ignore_errors=True)
+    dump_dir.mkdir(parents=True, exist_ok=True)
     with open(dump_dir / "ops.log", "w") as f:
         f.write(f"seed={seed}\n")
         for i, line in enumerate(op_log):
@@ -569,9 +618,11 @@ def main():
                         help="Don't clean up dirs on success")
     args = parser.parse_args()
 
-    if not FUSELOG_BIN.exists() or not APPLY_BIN.exists():
-        log(f"error: binaries not found at {FUSELOG_BIN} / {APPLY_BIN}")
-        log("       run ./bin/build_xdn_fuselog.sh cpp first")
+    problem = BACKEND.preflight()
+    if problem:
+        log(f"error: [{BACKEND.name}] {problem}")
+        log("       build with ./bin/build_xdn_fuselog.sh cpp (fuselog)")
+        log("       or make -C experiments/eBPF all (ebpf)")
         return 2
 
     seed = args.seed if args.seed is not None else int(time.time())
@@ -579,6 +630,7 @@ def main():
     log(f" seed     = {seed}")
     log(f" num_ops  = {args.num_ops}")
     log(f" base_dir = {BASE_DIR}")
+    log(f" backend  = {BACKEND.name}")
     log(f"==================================================")
     rng = random.Random(seed)
 
@@ -616,7 +668,15 @@ def main():
         # Harvest BEFORE snapshot: snapshot may need to chmod some dirs
         # to traverse them, and those chmods would otherwise leak into
         # the captured statediff.
-        payload = harvest_statediff()
+        try:
+            payload = harvest_statediff()
+        except CaptureFailed as e:
+            log(f"CAPTURE LOST  seed={seed}: {e}")
+            log(f"--- {BACKEND.name} capture log: {fuselog_log_path} ---")
+            log(tail_file(fuselog_log_path))
+            log("(no comparison was made: the capturer never handed over a "
+                "batch, so this says nothing about replay fidelity)")
+            return 1
         with open(STATEDIFF_FILE, "wb") as f:
             f.write(payload)
         snap_a = snapshot_tree(MOUNT_DIR)
@@ -626,15 +686,9 @@ def main():
 
         snap_b = snapshot_tree(PLAIN_DIR)
 
-        # fuselog-apply needs trailing slash on target dir.
-        env = os.environ.copy()
-        env["FUSELOG_STATEDIFF_FILE"] = str(STATEDIFF_FILE)
-        result = subprocess.run(
-            [str(APPLY_BIN), str(APPLY_DIR) + "/"],
-            env=env, capture_output=True, text=True,
-        )
+        result = run_apply()
         if result.returncode != 0:
-            log(f"fuselog-apply failed (rc={result.returncode}):")
+            log(f"{APPLY_BIN.name} failed (rc={result.returncode}):")
             log(result.stdout)
             log(result.stderr)
             dump = dump_failure(seed, op_log, payload, fuselog_log_path)
@@ -643,7 +697,12 @@ def main():
 
         snap_c = snapshot_tree(APPLY_DIR)
 
-        diffs_ab = compare_trees("A", snap_a, "B", snap_b)
+        # A vs B is only meaningful when A is a filesystem in its own right.
+        # Where nothing is mounted, A is an ordinary directory observed from
+        # outside, so A == B holds by construction. A vs C is the assertion
+        # that matters and is made either way.
+        diffs_ab = (compare_trees("A", snap_a, "B", snap_b)
+                    if BACKEND.is_mount else [])
         diffs_ac = compare_trees("A", snap_a, "C", snap_c)
         diffs_bc = compare_trees("B", snap_b, "C", snap_c)
 

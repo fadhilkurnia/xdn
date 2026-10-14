@@ -13,6 +13,13 @@ Protocol confirmed from fuselogv2.cpp's sock_listener:
     wire format's own field lengths; the server does NOT close the
     connection afterwards)
   - close the connection ourselves once one batch has been fully parsed
+
+The eBPF capturer answers the same shape -- request byte, u64 length prefix,
+payload -- but is stricter about the request: statediff_vfs treats every byte
+it receives as a command and closes the connection on anything that is not
+'g', so the trailing newline fuselog tolerates would end the session. That is
+why the request is a constructor parameter instead of a hardcoded literal;
+pass request=b"g" for VFS1. See capture_backend.py.
 """
 
 from __future__ import annotations
@@ -64,9 +71,10 @@ class HarvesterStats:
 class Harvester:
     def __init__(self, socket_path: str, parser: WireFormatParser,
                  connect_timeout: float = 2.0, read_timeout: float = 10.0,
-                 keep_batches: bool = True):
+                 keep_batches: bool = True, request: bytes = b"g\n"):
         self.socket_path = socket_path
         self.parser = parser
+        self.request = request
         self.connect_timeout = connect_timeout
         self.read_timeout = read_timeout
         self.keep_batches = keep_batches
@@ -126,7 +134,7 @@ class Harvester:
         sock = self._sock
 
         try:
-            sock.sendall(b"g\n")
+            sock.sendall(self.request)
         except OSError:
             self._close_sock()
             raise
