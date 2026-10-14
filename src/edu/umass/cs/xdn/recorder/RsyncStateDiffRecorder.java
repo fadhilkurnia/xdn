@@ -183,6 +183,15 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
     String targetDiffFile =
         String.format("%s%s/e%d.diff", this.baseDiffDirPath, serviceName, placementEpoch);
 
+    // Self-sufficient directory setup: capture must not depend on which initialization
+    // path ran before it (fresh create, reconfiguration revive, or a protocol switch onto
+    // primary-backup). rsync only creates the final path component, so missing parents
+    // (snp/<svc>/, diff/<svc>/) otherwise fail the batch with exit 12. Against a fresh
+    // empty snapshot the first diff simply carries the full current state, which applies
+    // cleanly on backups restored from the same epoch final state.
+    Shell.runCommand("mkdir -p " + targetDestDir);
+    Shell.runCommand("mkdir -p " + String.format("%s%s/", this.baseDiffDirPath, serviceName));
+
     String command =
         String.format(
             "%s -ar --write-batch=%s %s %s",
@@ -220,6 +229,11 @@ public class RsyncStateDiffRecorder extends AbstractStateDiffRecorder {
         String.format("%s%s/e%d/", this.baseMountDirPath, serviceName, placementEpoch);
     String targetDiffFile =
         String.format("%s%s/e%d.diff", this.baseDiffDirPath, serviceName, placementEpoch);
+
+    // Same self-sufficiency as captureStateDiff: a backup applying its first diff after a
+    // reconfiguration or protocol switch may not have the diff/mnt trees yet.
+    Shell.runCommand("mkdir -p " + String.format("%s%s/", this.baseDiffDirPath, serviceName));
+    Shell.runCommand("mkdir -p " + targetDir);
 
     int retCode = Shell.runCommand("rm -rf " + targetDiffFile);
     assert retCode == 0;

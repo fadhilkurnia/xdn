@@ -865,9 +865,11 @@ public class HttpReconfigurator {
             // Parse active names from the body
             // example: `{"NODES" : ["AR0", "AR2", "AR3"]}`
             // example: `{"NODES" : ["AR0", "AR2", "AR3"], "COORDINATOR": "AR0"}`
+            // example: `{"NODES" : ["AR0", "AR2", "AR3"], "REPLICATION": "primary-backup"}`
             String contentBody = content.content().toString(StandardCharsets.ISO_8859_1);
             Set<String> nodeIds = new HashSet<>();
             String coordinatorId = null;
+            String replicationMode = null;
             try {
                 JSONObject contentJson = new JSONObject(contentBody);
                 JSONArray nodeIdArray = contentJson.getJSONArray("NODES");
@@ -877,12 +879,14 @@ public class HttpReconfigurator {
                 }
                 coordinatorId = contentJson.has("COORDINATOR") ?
                         contentJson.getString("COORDINATOR") : null;
+                replicationMode = contentJson.has("REPLICATION") ?
+                        contentJson.getString("REPLICATION") : null;
             } catch (JSONException e) {
                 return null;
             }
 
             return new SetReplicaPlacementRequest(
-                    sender, serviceName, nodeIds, coordinatorId);
+                    sender, serviceName, nodeIds, coordinatorId, replicationMode);
         }
 
         private GetReplicaPlacementRequest parseGetReplicaPlacementRequest(InetSocketAddress sender,
