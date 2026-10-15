@@ -38,7 +38,7 @@ import org.json.JSONObject;
 public class XdnTestCluster implements AutoCloseable {
 
   private static final String RECONFIGURATOR_ID = "RC0";
-  private static final List<String> ACTIVE_REPLICA_IDS = List.of("AR0", "AR1", "AR2");
+  private static final List<String> DEFAULT_ACTIVE_REPLICA_IDS = List.of("AR0", "AR1", "AR2");
   private static final String LOOPBACK = "127.0.0.1";
   private static final int RECONFIGURATOR_BASE_PORT = 3000;
   private static final int ACTIVE_REPLICA_BASE_PORT = 2000;
@@ -64,10 +64,24 @@ public class XdnTestCluster implements AutoCloseable {
   private final List<String> createdServices = new ArrayList<>();
   private static volatile boolean loggingConfigured = false;
 
+  private final List<String> activeReplicaIds;
+
+  /** Creates a cluster with the default three active replicas, AR0 to AR2. */
   public XdnTestCluster() {
-    for (int i = 0; i < ACTIVE_REPLICA_IDS.size(); i++) {
+    this(DEFAULT_ACTIVE_REPLICA_IDS);
+  }
+
+  /**
+   * Creates a cluster with the given active replicas. The replica at index i listens on port 2000
+   * plus i, and its HTTP frontend on 2300 plus i. The gigapaxos properties file must list the same
+   * names and ports.
+   */
+  public XdnTestCluster(List<String> activeReplicaIds) {
+    this.activeReplicaIds = List.copyOf(activeReplicaIds);
+    for (int i = 0; i < this.activeReplicaIds.size(); i++) {
       activeReplicas.put(
-          ACTIVE_REPLICA_IDS.get(i), new InetSocketAddress(LOOPBACK, ACTIVE_REPLICA_BASE_PORT + i));
+          this.activeReplicaIds.get(i),
+          new InetSocketAddress(LOOPBACK, ACTIVE_REPLICA_BASE_PORT + i));
     }
   }
 
@@ -85,7 +99,7 @@ public class XdnTestCluster implements AutoCloseable {
 
     registerNode(RECONFIGURATOR_ID, startNode(RECONFIGURATOR_ID));
     List<String> external = List.of(externalActiveIds);
-    for (String activeId : ACTIVE_REPLICA_IDS) {
+    for (String activeId : activeReplicaIds) {
       if (external.contains(activeId)) {
         // A replica that a test will restart must run as its own OS process from birth:
         // in-process teardown leaks shared-JVM state (embedded Derby keeps the paxos DB
@@ -99,7 +113,7 @@ public class XdnTestCluster implements AutoCloseable {
     }
 
     waitForPort(LOOPBACK, getReconfiguratorHttpPort(), PORT_WAIT_TIMEOUT);
-    for (String activeId : ACTIVE_REPLICA_IDS) {
+    for (String activeId : activeReplicaIds) {
       waitForPort(LOOPBACK, getActiveHttpPort(activeId), PORT_WAIT_TIMEOUT);
     }
   }
@@ -340,7 +354,7 @@ public class XdnTestCluster implements AutoCloseable {
   /** Invokes the service through the ActiveReplica HTTP frontend. */
   public HttpResponse<String> invokeService(String serviceName)
       throws IOException, InterruptedException {
-    int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.getFirst());
+    int httpPort = getActiveHttpPort(activeReplicaIds.getFirst());
     URI uri = URI.create("http://%s:%d/".formatted(LOOPBACK, httpPort));
     HttpRequest request =
         HttpRequest.newBuilder()
@@ -373,12 +387,12 @@ public class XdnTestCluster implements AutoCloseable {
   public HttpResponse<String> sendGetRequest(
       String serviceName, int replicaIdx, String endpoint, Duration timeout)
       throws IOException, InterruptedException {
-    assert replicaIdx >= 0 && replicaIdx < ACTIVE_REPLICA_IDS.size()
+    assert replicaIdx >= 0 && replicaIdx < activeReplicaIds.size()
         : String.format(
             "Invalid replicaIdx=%d, which is not between 0 and %d",
-            replicaIdx, ACTIVE_REPLICA_IDS.size() - 1);
+            replicaIdx, activeReplicaIds.size() - 1);
     Duration effectiveTimeout = timeout != null ? timeout : REQUEST_TIMEOUT;
-    int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.get(replicaIdx));
+    int httpPort = getActiveHttpPort(activeReplicaIds.get(replicaIdx));
     HttpRequest request =
         HttpRequest.newBuilder()
             .uri(URI.create("http://%s:%d%s".formatted(LOOPBACK, httpPort, endpoint)))
@@ -495,7 +509,7 @@ public class XdnTestCluster implements AutoCloseable {
   }
 
   public int getActiveHttpPort(String activeId) {
-    int replicaIndex = ACTIVE_REPLICA_IDS.indexOf(activeId);
+    int replicaIndex = activeReplicaIds.indexOf(activeId);
     if (replicaIndex < 0) {
       throw new IllegalArgumentException("Unknown active replica id: " + activeId);
     }
@@ -547,7 +561,7 @@ public class XdnTestCluster implements AutoCloseable {
    * production systemd restart exactly.
    */
   public void restartActiveReplica(int replicaIdx) throws Exception {
-    String activeId = ACTIVE_REPLICA_IDS.get(replicaIdx);
+    String activeId = activeReplicaIds.get(replicaIdx);
     Process process = nodeProcesses.get(activeId);
     if (process == null) {
       throw new IllegalStateException(
@@ -617,7 +631,7 @@ public class XdnTestCluster implements AutoCloseable {
       String serviceName, int replicaIdx, String endpoint, String jsonBody, Duration timeout)
       throws IOException, InterruptedException {
     Duration effectiveTimeout = timeout != null ? timeout : REQUEST_TIMEOUT;
-    int httpPort = getActiveHttpPort(ACTIVE_REPLICA_IDS.get(replicaIdx));
+    int httpPort = getActiveHttpPort(activeReplicaIds.get(replicaIdx));
     HttpRequest request =
         HttpRequest.newBuilder()
             .uri(URI.create("http://%s:%d%s".formatted(LOOPBACK, httpPort, endpoint)))
