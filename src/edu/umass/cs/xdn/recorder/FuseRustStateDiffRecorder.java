@@ -138,13 +138,51 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public String getTargetDirectory(String serviceName, int placementEpoch) {
+  public boolean preInitialization(String serviceName, int placementEpoch) {
+    return preInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean postInitialization(String serviceName, int placementEpoch) {
+    return postInitializationOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+    return captureStateDiffOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
+    return removeServiceRecorderOld(serviceName, placementEpoch);
+  }
+
+  @Override
+  public boolean saveStateDiff(
+      String serviceName, int placementEpoch, byte[] encodedState, String filename) {
+    // TODO: implement saveStateDiff for this recorder type
+    return true;
+  }
+
+  @Override
+  public boolean applySnpDiff(String serviceName, int placementEpoch, String filename) {
+    // TODO: implement applySnpDiff for this recorder type
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Deprecated / Legacy - used only by XdnGigapaxosApp's current (old primary-backup)
+  // code paths. Do not delete: still actively called in production.
+  // -------------------------------------------------------------------------
+
+  @Override
+  public String getTargetDirectoryOld(String serviceName, int placementEpoch) {
     // location: /tmp/xdn/state/fuserust/<node-id>/mnt/<service-name>/e<epoch>/
     return String.format("%s%s/e%d/", baseMountDirPath, serviceName, placementEpoch);
   }
 
   @Override
-  public boolean preInitialization(String serviceName, int placementEpoch) {
+  public boolean preInitializationOld(String serviceName, int placementEpoch) {
     if (this.serviceFsSocket.containsKey(serviceName)
         && this.serviceFsSocket.get(serviceName).containsKey((placementEpoch))) {
 
@@ -162,7 +200,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // create target mnt dir, if not exist
     // e.g., /tmp/xdn/state/fuserust/node1/mnt/service1/
-    String targetDirPath = this.getTargetDirectory(serviceName, placementEpoch);
+    String targetDirPath = this.getTargetDirectoryOld(serviceName, placementEpoch);
     File targetDir = new File(targetDirPath);
     if (!targetDir.exists()) {
       logger.log(
@@ -212,8 +250,8 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean postInitialization(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+  public boolean postInitializationOld(String serviceName, int placementEpoch) {
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     String captureSocketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
 
     // initialize file system in the mnt dir, with socket
@@ -270,7 +308,7 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public byte[] captureStateDiff(String serviceName, int placementEpoch) {
+  public byte[] captureStateDiffOld(String serviceName, int placementEpoch) {
     Map<Integer, SocketPair> epochToChannelMap = this.serviceFsSocket.get(serviceName);
     assert epochToChannelMap != null : "unknown fs socket client for " + serviceName;
     SocketChannel socketChannel = epochToChannelMap.get(placementEpoch).getCaptureSocket();
@@ -390,8 +428,8 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
   }
 
   @Override
-  public boolean removeServiceRecorder(String serviceName, int placementEpoch) {
-    String targetDir = this.getTargetDirectory(serviceName, placementEpoch);
+  public boolean removeServiceRecorderOld(String serviceName, int placementEpoch) {
+    String targetDir = this.getTargetDirectoryOld(serviceName, placementEpoch);
     int umountRetCode = Shell.runCommand("fusermount -u " + targetDir, false);
     int rmRetCode = Shell.runCommand("rm -rf " + targetDir, false);
     assert rmRetCode == 0;
@@ -410,10 +448,6 @@ public class FuseRustStateDiffRecorder extends AbstractStateDiffRecorder {
             placementEpoch));
     return true;
   }
-
-  /**********************************************************************************************
-   *                        Non-Deterministic Initialization Methods                            *
-   *********************************************************************************************/
 
   @Override
   public void initContainerSync(
