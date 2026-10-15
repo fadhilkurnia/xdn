@@ -3,6 +3,7 @@ package edu.umass.cs.xdn.sandbox;
 import edu.umass.cs.gigapaxos.paxosutil.LargeCheckpointer;
 import edu.umass.cs.xdn.service.ServiceComponent;
 import edu.umass.cs.xdn.service.ServiceInstance;
+import edu.umass.cs.xdn.service.ServiceProperty;
 import edu.umass.cs.xdn.utils.Shell;
 import edu.umass.cs.xdn.utils.Utils;
 import java.io.File;
@@ -560,13 +561,19 @@ public class DockerSandboxManager extends SandboxManager {
     return tarPath;
   }
 
+  @Override
+  public boolean restoreStateFromSnapshot(String serviceName, int epoch, String encodedState) {
+    return restoreStateFromSnapshot(
+        serviceName, epoch, encodedState, getStateDirectory(serviceName, epoch));
+  }
+
   /**
    * Restores the state directory from a Base64-encoded tar or a URL. Handles both inline (≤500KB)
    * and large (url:) state formats.
    */
   @Override
-  public boolean restoreStateFromSnapshot(String serviceName, int epoch, String encodedState) {
-    String stateDir = getStateDirectory(serviceName, epoch);
+  public boolean restoreStateFromSnapshot(
+      String serviceName, int epoch, String encodedState, String stateDir) {
     String tarDir = String.format("%s%s/%s/%d/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
     String tarPath = tarDir + "rcv_final_state.tar";
 
@@ -619,6 +626,15 @@ public class DockerSandboxManager extends SandboxManager {
   }
 
   /**
+   * Returns the absolute path to the final state directory of a service epoch. Format:
+   * /tmp/xdn/final/<nodeId>/<serviceName>/<epoch>/ It holds final_state.tar, staging/ and
+   * rcv_final_state.tar.
+   */
+  public String getFinalStateDirectory(String serviceName, int epoch) {
+    return String.format("%s%s/%s/%d/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
+  }
+
+  /**
    * Produces the final state string for reconfiguration. Inline Base64 for small states, URL via
    * LargeCheckpointer for large ones.
    *
@@ -631,9 +647,7 @@ public class DockerSandboxManager extends SandboxManager {
   public String buildFinalStateString(
       String serviceName, int epoch, String tarPath, String servicePropertyJson) {
     File archive = new File(tarPath);
-    String prefix =
-        String.format(
-            "%s%d:", edu.umass.cs.xdn.service.ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX, epoch);
+    String prefix = String.format("%s%d", ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX, epoch);
 
     if (archive.length() <= MAX_INLINE_STATE_BYTES) {
       try {

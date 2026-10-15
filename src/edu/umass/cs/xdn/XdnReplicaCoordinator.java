@@ -960,6 +960,14 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
 
   @Override
   public boolean deleteFinalState(String serviceName, int epoch) {
+    // Blue-Green services first stop their own threads and containers. If that does not finish,
+    // return false so ActiveReplica does not ack the drop and the reconfigurator resends it.
+    AbstractReplicaCoordinator<NodeIDType> perService = this.serviceCoordinator.get(serviceName);
+    if (perService instanceof BlueGreenPrimaryBackupCoordinator<NodeIDType> bgCoordinator
+        && !bgCoordinator.tearDownService(serviceName, epoch)) {
+      return false;
+    }
+
     // App-level cleanup: remove this epoch's containers and state directories.
     boolean isAppStateDeleted = false;
     if (this.rawApp instanceof XdnApp xa) {

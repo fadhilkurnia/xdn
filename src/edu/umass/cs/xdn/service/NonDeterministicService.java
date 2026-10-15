@@ -327,7 +327,7 @@ public class NonDeterministicService {
     }
 
     String finalStatePrefix =
-        String.format("%s%d:", ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX, epoch);
+        String.format("%s%d", ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX, epoch);
 
     java.io.File archive = new java.io.File(finalStatePath);
     int maxInlineBytes = 62500; // ~500 KB
@@ -720,12 +720,14 @@ public class NonDeterministicService {
       return false;
     }
 
-    // Pre-initialize the recorder for the new epoch
-    stateDiffRecorder.preInitialization(name, newEpoch);
-    stateDiffRecorder.removeServiceRecorder(name, newEpoch);
+    // Create the new epoch's directories, then seed snp/ with the previous epoch's final state.
+    // No container is started here. The Blue-Green manager drives that after the epoch starts.
+    sandboxManager.prepareStateDirectory(name, newEpoch);
+    stateDiffRecorder.prepareServiceDirectories(name, newEpoch);
 
-    // Restore the state directory from Base64 tar or URL
-    boolean stateRestored = sandboxManager.restoreStateFromSnapshot(name, newEpoch, encodedState);
+    String snapshotDir = stateDiffRecorder.getSnapshotDir(name, newEpoch);
+    boolean stateRestored =
+        sandboxManager.restoreStateFromSnapshot(name, newEpoch, encodedState, snapshotDir);
     if (!stateRestored) return false;
 
     int allocatedPort = sandboxManager.allocatePort();
@@ -733,12 +735,6 @@ public class NonDeterministicService {
     List<String> containerNames = buildContainerNames(name, newEpoch, property);
     ServiceInstance instance =
         new ServiceInstance(property, name, networkName, allocatedPort, containerNames);
-
-    sandboxManager.createNetwork(name);
-    boolean started = sandboxManager.startService(instance, newEpoch);
-    if (!started) return false;
-
-    stateDiffRecorder.postInitialization(name, newEpoch);
 
     serviceInstances.put(name, instance);
     servicePlacementEpoch.put(name, newEpoch);
@@ -752,28 +748,61 @@ public class NonDeterministicService {
   }
 
   private boolean deleteContainerInstance(String name, int epoch) {
+    Integer liveEpoch = servicePlacementEpoch.get(name);
+    if (liveEpoch != null && liveEpoch != epoch) {
+      // A drop for an older epoch on a node that already moved on. The old containers went with
+      // the stop. Remove only the old epoch's directories and keep the live instance.
+      stateDiffRecorder.removeServiceRecorder(name, epoch);
+      Shell.runCommand(
+          "rm -rf "
+              + ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+                  .getStateDirectory(name, epoch));
+      Shell.runCommand(
+          "rm -rf "
+              + ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+                  .getFinalStateDirectory(name, epoch));
+      return true;
+    }
+
     ServiceInstance instance = serviceInstances.get(name);
     if (instance == null) return true;
+
     boolean deleted = sandboxManager.deleteService(instance);
     if (deleted) {
       serviceInstances.remove(name);
       servicePlacementEpoch.remove(name);
       stateDiffRecorder.removeServiceRecorder(name, epoch);
+      // Nothing else removes the empty e<epoch> directory made by getStateDirectory()
+      String stateDir =
+          ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+              .getStateDirectory(name, epoch);
+      Shell.runCommand("rm -rf " + stateDir);
+      // The final state tar, its staging copy and any received tar of this epoch
+      Shell.runCommand(
+          "rm -rf "
+              + ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+                  .getFinalStateDirectory(name, epoch));
     }
     return deleted;
   }
 
+  /** Captures the final state of the current placement epoch. Called by the manager's stop work. */
+  public boolean captureFinalState(String name) {
+    Integer epoch = servicePlacementEpoch.get(name);
+    if (epoch == null) return false;
+    return captureFinalState(name, epoch);
+  }
+
   /**
-   * Captures the current state directory into a tar archive. Called from execute(XdnStopRequest)
-   * and getFinalState().
+   * Tars the contents of snp/ into the final state archive. Called by the stop work through the
+   * overload above, and by getFinalState() when the stop work left no tar. snp/ holds every
+   * committed diff after the drain, and nothing writes it once the apply thread is stopped.
    */
   private boolean captureFinalState(String name, int epoch) {
     ServiceInstance instance = serviceInstances.get(name);
     if (instance == null) return false;
-    String primaryLiveDir =
-        stateDiffRecorder.getTargetDirectory(
-            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
-    String capturedPath = sandboxManager.captureStateSnapshot(name, epoch, primaryLiveDir);
+    String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch);
+    String capturedPath = sandboxManager.captureStateSnapshot(name, epoch, snapshotDir);
     return capturedPath != null;
   }
 

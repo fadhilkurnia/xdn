@@ -19,6 +19,7 @@ import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder;
 import edu.umass.cs.xdn.recorder.AbstractStateDiffRecorder.LiveDirType;
 import edu.umass.cs.xdn.request.XdnHttpRequest;
 import edu.umass.cs.xdn.request.XdnHttpRequestBatch;
+import edu.umass.cs.xdn.request.XdnStopRequest;
 import edu.umass.cs.xdn.service.ConsistencyModel;
 import edu.umass.cs.xdn.service.ServiceInstance;
 import edu.umass.cs.xdn.service.ServiceProperty;
@@ -32,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -64,7 +66,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   private enum Role {
     BACKUP,
     PRIMARY_CANDIDATE,
-    PRIMARY
+    PRIMARY,
+    STOPPED
   }
 
   private final NodeIDType myNodeID;
@@ -126,6 +129,20 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   private final ConcurrentHashMap<String, BlockingQueue<PendingWrite>> doneQueues =
           new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, Future<?>> captureLoops = new ConcurrentHashMap<>();
+
+  /** Diffs handed to Paxos whose client callbacks have not been answered yet, per service. */
+  private final ConcurrentHashMap<String, Set<InFlightDiff>> inFlightDiffs =
+          new ConcurrentHashMap<>();
+
+  /** Stop bookkeeping per service. Created by the first stop request or the first stop event. */
+  private final ConcurrentHashMap<String, StopState> stopStates = new ConcurrentHashMap<>();
+
+  /**
+   * The newest placement this node created for the service. Set by the create event, so unlike
+   * currPlacement it is ahead as soon as the create is done. A drop for an older placement is
+   * ignored.
+   */
+  private final ConcurrentHashMap<String, Integer> createdPlacement = new ConcurrentHashMap<>();
 
   private final ConcurrentHashMap<String, ScheduledFuture<?>> coordinatorStatusPollers =
           new ConcurrentHashMap<>();
@@ -204,6 +221,39 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   }
 
   private record SnpApplyItem(String filename, int count, boolean isLargeDiff, byte[] diff) {}
+
+  /** A committed stop request, queued for the dispatcher thread. */
+  private record StopEvent(XdnStopRequest stop) {}
+
+  /** Asks the dispatcher to forget the service. The future completes when the teardown is done. */
+  private record DropEvent(int epoch, CompletableFuture<Boolean> result) {}
+
+  /** The ActiveReplica callback of one stop request, answered once the stop work is finished. */
+  private record PendingStopCallback(XdnStopRequest stop, ExecutedCallback callback) {}
+
+  /** Guarded by its own monitor. `done` and `pending` must only change under it. */
+  private static final class StopState {
+    boolean done = false;
+    final List<PendingStopCallback> pending = new ArrayList<>();
+  }
+
+  /** One proposed diff. Its clients are answered at most once, whoever gets there first. */
+  private static final class InFlightDiff {
+    final Thread owner; // the capture loop thread that proposed it
+    private final ExecutedCallback callback;
+    private final AtomicBoolean answered = new AtomicBoolean(false);
+
+    InFlightDiff(Thread owner, ExecutedCallback callback) {
+      this.owner = owner;
+      this.callback = callback;
+    }
+
+    void answer(Request request, boolean handled) {
+      if (answered.compareAndSet(false, true)) {
+        callback.executed(request, handled);
+      }
+    }
+  }
 
   private ConsistencyModel getConsistencyModel(String serviceName) {
     ServiceInstance instance = this.app.getServiceInstance(serviceName);
@@ -309,6 +359,14 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           handleRefreshBackupFailedEvent(serviceName, e);
         } else if (event instanceof DiffCommittedEvent e) {
           handleDiffCommittedEvent(serviceName, e);
+        } else if (event instanceof StopEvent e) {
+          // Blocking. Stops containers.
+          handleStopEvent(serviceName, e);
+        } else if (event instanceof DropEvent e) {
+          // Blocking. Forgets the service. This thread ends right after.
+          if (handleDropEvent(serviceName, queue, e)) {
+            return;
+          }
         } else {
           throw new RuntimeException(
                   "Unknown Dispatcher Event: " + event.getClass().getSimpleName());
@@ -319,6 +377,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           e.result.complete(false);
         } else if (event instanceof RefreshBackupStartEvent e) {
           scheduleRefresh(serviceName, e.liveDir);
+        } else if (event instanceof DropEvent e) {
+          e.result().complete(false);
         }
       }
     }
@@ -342,6 +402,17 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     paxosManager.createPaxosInstanceForcibly(
             serviceName, event.placement, nodes, app, event.initialState, 0L);
     replicaGroups.put(serviceName, nodes);
+    createdPlacement.put(serviceName, event.placement);
+
+    // A node that stays in the new placement is still STOPPED from the old one. Bring it back as a
+    // backup. handleStartEpochPacket then sees a newer placement and resets the counts, the lock
+    // and the apply thread. Runs on the dispatcher thread, so no poll event can slip in between.
+    if (currentRole.get(serviceName) == Role.STOPPED
+            && event.placement > currPlacement.get(serviceName)) {
+      stopStates.remove(serviceName); // else the next stop is treated as a duplicate
+      currentRole.put(serviceName, Role.BACKUP);
+      startPollingForCoordinatorStatus(serviceName); // the stop cancelled it
+    }
 
     // If the client names a preferred node as the primary, *try* to make that node the paxos
     // coordinator (the coordinator automatically becomes the primary).
@@ -369,19 +440,19 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
 
   private boolean handleCoordinatorStatusPolledEvent(
           String serviceName, CoordinatorStatusPolledEvent<?> event) {
-    if (event.coordinator == null || event.placement == null) {
+    if (currentRole.get(serviceName) == Role.STOPPED)
+      return true; // a poll queued before the stop must not bring the service back
+
+    if (event.coordinator == null || event.placement == null)
       return true;
-    }
 
     // StartEpochPacket is only proposed by the node designated as the primary
-    if (!myNodeID.equals(event.coordinator)) {
+    if (!myNodeID.equals(event.coordinator))
       return true;
-    }
 
     int curPlacement = currPlacement.get(serviceName);
-    if (event.placement < curPlacement) {
+    if (event.placement < curPlacement)
       return true; // stale
-    }
 
     int nextPrimaryEpoch;
     if (curPlacement < event.placement) {
@@ -401,6 +472,9 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   }
 
   private boolean handleApplyStateDiffPacket(String serviceName, ApplyStateDiffPacket p) {
+    if (currentRole.get(serviceName) == Role.STOPPED)
+      return true;
+
     // A diff from an old placement or an old primary epoch is stale. Drop it.
     if (p.getPlacement() != currPlacement.get(serviceName)
             || p.getPrimaryEpoch() != currPrimaryEpoch.get(serviceName)) {
@@ -721,6 +795,34 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       queue.drainTo(left);
       release(left).executed(null, false); // no longer primary, these writes are not replicated
     }
+    // Diffs already handed to Paxos may never be decided, so answer their clients too
+    releaseInFlightDiffs(serviceName, null);
+  }
+
+  /**
+   * Answers in-flight diffs as not handled. A null owner answers every in-flight diff of the
+   * service, otherwise only the ones proposed by that capture loop thread.
+   */
+  private void releaseInFlightDiffs(String serviceName, Thread owner) {
+    Set<InFlightDiff> inFlight = inFlightDiffs.get(serviceName);
+    if (inFlight == null) return;
+    int released = 0;
+    for (InFlightDiff diff : inFlight) {
+      if (owner != null && diff.owner != owner) continue;
+      if (!inFlight.remove(diff)) continue;
+      released++;
+      try {
+        diff.answer(null, false);
+      } catch (Throwable t) {
+        logger.log(Level.WARNING, myNodeID + ":PBM callback failed for one in-flight diff", t);
+      }
+    }
+    if (released > 0) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM released {1} in-flight diff(s) as not handled for {2}",
+              new Object[] {myNodeID, released, serviceName});
+    }
   }
 
   private void captureLoop(
@@ -771,6 +873,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       Thread.currentThread().interrupt();
     } finally {
       release(pending).executed(null, false);
+      // A diff proposed just as the loop was stopped may have missed the stop's own release
+      releaseInFlightDiffs(serviceName, Thread.currentThread());
     }
   }
 
@@ -808,13 +912,46 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
                       serviceName, placement, pEpoch, myNodeID.toString(), stateDiffCount);
     }
 
-    paxosManager.propose(
-            serviceName,
-            packet,
-            (executedRequest, handled) ->
-                    eventQueues
-                            .get(serviceName)
-                            .add(new DiffCommittedEvent(placement, pEpoch, stateDiffCount, handled, callback)));
+    // Track the diff until its clients are answered, so a stop can answer it if Paxos never does
+    Set<InFlightDiff> inFlightSet =
+            inFlightDiffs.computeIfAbsent(serviceName, k -> ConcurrentHashMap.newKeySet());
+    InFlightDiff inFlight = new InFlightDiff(Thread.currentThread(), callback);
+    ExecutedCallback once =
+            (executedRequest, handled) -> {
+              inFlightSet.remove(inFlight);
+              inFlight.answer(executedRequest, handled);
+            };
+    inFlightSet.add(inFlight);
+
+    String proposedTo;
+    try {
+      proposedTo =
+              paxosManager.propose(
+                      serviceName,
+                      packet,
+                      (executedRequest, handled) ->
+                              eventQueues
+                                      .get(serviceName)
+                                      .add(
+                                              new DiffCommittedEvent(
+                                                      placement, pEpoch, stateDiffCount, handled, once)));
+    } catch (RuntimeException | Error e) {
+      // The caller's catch block answers the clients, so do not leave them in the set
+      inFlightSet.remove(inFlight);
+      throw e;
+    }
+
+    if (proposedTo == null) {
+      // No local paxos instance, so the callback was never registered. Answer through the
+      // dispatcher, the same way as the capture error path.
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM propose returned null for {1} count={2}, answering its writes as not handled",
+              new Object[] {myNodeID, serviceName, stateDiffCount});
+      eventQueues
+              .get(serviceName)
+              .add(new DiffCommittedEvent(placement, pEpoch, stateDiffCount, false, once));
+    }
     return true;
   }
 
@@ -843,6 +980,9 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   private static final long SNP_CATCH_UP_TIMEOUT_MS = 60_000;
 
   private boolean handleStartEpochPacket(String serviceName, StartEpochPacket p) {
+    if (currentRole.get(serviceName) == Role.STOPPED)
+      return true;
+
     boolean isNewService =
             (currPlacement.get(serviceName) == -1)
                     || (currPrimaryEpoch.get(serviceName) == -1)
@@ -1105,6 +1245,15 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
               callback,
               HttpResponseStatus.SERVICE_UNAVAILABLE,
               "Service unavailable: primary election in progress");
+      return true;
+    }
+
+    if (role == Role.STOPPED) {
+      replyWithStatus(
+              request,
+              callback,
+              HttpResponseStatus.SERVICE_UNAVAILABLE,
+              "Service unavailable: service is stopped");
       return true;
     }
 
@@ -1575,6 +1724,364 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   }
 
   // =========================================================================
+  // Stop (service deletion and, later, reconfiguration)
+  // =========================================================================
+
+  /**
+   * Called by the coordinator when ActiveReplica asks to stop the service. The callback is kept
+   * until the stop work of this node is finished. It fires with `handled=true`, which makes
+   * ActiveReplica send AckStopEpoch to the reconfigurator.
+   */
+  public boolean handleStopRequest(XdnStopRequest stop, ExecutedCallback callback) {
+    String serviceName = stop.getServiceName();
+    StopState state = stopStates.computeIfAbsent(serviceName, k -> new StopState());
+
+    boolean alreadyDone;
+    synchronized (state) {
+      alreadyDone = state.done;
+      if (!alreadyDone && callback != null) {
+        state.pending.add(new PendingStopCallback(stop, callback));
+      }
+    }
+    if (alreadyDone) {
+      // A resent StopEpoch for a service this node already stopped
+      if (callback != null) callback.executed(stop, true);
+      return true;
+    }
+
+    // Propose again even if an earlier proposal exists, because that one may have been lost.
+    // Paxos gets a no-op callback. The ActiveReplica callback is answered by the stop work.
+    String proposedTo =
+            paxosManager.proposeStop(serviceName, stop.getEpochNumber(), stop, (r, handled) -> {});
+    if (proposedTo == null) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM proposeStop returned null for {1} epoch={2}, keeping the callback pending",
+              new Object[] {myNodeID, serviceName, stop.getEpochNumber()});
+    }
+    return true;
+  }
+
+  /** Called when the committed stop executes on this node. Only queues the work. */
+  public void handleStopExecuted(XdnStopRequest stop) {
+    BlockingQueue<Object> queue = eventQueues.get(stop.getServiceName());
+    if (queue == null) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM stop executed but there is no event queue for {1}",
+              new Object[] {myNodeID, stop.getServiceName()});
+      return;
+    }
+    queue.add(new StopEvent(stop));
+  }
+
+  /** Called by ActiveReplica after the stop work fired its callback. */
+  public boolean deleteReplicaGroup(String serviceName, int epoch) {
+    replicaGroups.remove(serviceName); // getReplicaGroup() now returns null
+    return true;
+  }
+
+  private static final long TEARDOWN_TIMEOUT_SECONDS = 30;
+
+  /**
+   * Called from deleteFinalState. Returns true when this node has forgotten the service. Returns
+   * false on timeout, so ActiveReplica does not ack the drop and the reconfigurator resends it.
+   */
+  public boolean tearDown(String serviceName, int epoch) {
+    BlockingQueue<Object> queue = eventQueues.get(serviceName);
+    if (queue == null) return true; // this node holds nothing for the service
+    DropEvent drop = new DropEvent(epoch, new CompletableFuture<>());
+    queue.add(drop);
+    try {
+      return drop.result().get(TEARDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      logger.log(
+              Level.WARNING,
+              "{0}:PBM teardown of {1} timed out after {2}s",
+              new Object[] {myNodeID, serviceName, TEARDOWN_TIMEOUT_SECONDS});
+      return false;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return false;
+    } catch (ExecutionException e) {
+      return false;
+    }
+  }
+
+  /**
+   * Stop work, on the dispatcher thread. Every step runs on its own, so one failure does not skip
+   * the rest. The callbacks fire at the end even if a step failed, because the reconfigurator
+   * resends StopEpoch forever until it gets an ack.
+   */
+  private void handleStopEvent(String serviceName, StopEvent event) {
+    StopState state = stopStates.computeIfAbsent(serviceName, k -> new StopState());
+    synchronized (state) {
+      if (state.done) return; // duplicate
+    }
+    runStopWork(serviceName);
+    completeStop(serviceName, state);
+  }
+
+  /** Marks the service STOPPED, then stops the background work and the containers. */
+  private void runStopWork(String serviceName) {
+    Role previousRole = currentRole.get(serviceName);
+    currentRole.put(serviceName, Role.STOPPED); // clients get a 503 from here on
+    logger.log(
+            Level.INFO,
+            "{0}:PBM stopping {1}, previous role={2}",
+            new Object[] {myNodeID, serviceName, previousRole});
+
+    // The order matters. The drain needs the capture loop stopped, so the committed count cannot
+    // grow, and the apply thread alive, so snp/ can reach it. The capture needs both finished.
+    runStopStep(
+            serviceName,
+            "cancel coordinator poller",
+            () -> stopPollingForCoordinatorStatus(serviceName));
+    runStopStep(serviceName, "stop capture loop", () -> stopCaptureLoop(serviceName));
+    boolean drained = drainSnpBeforeStop(serviceName);
+    runStopStep(serviceName, "stop apply thread", () -> stopApplyThread(serviceName));
+    runStopStep(serviceName, "cancel backup refresh", () -> cancelBackupRefresh(serviceName));
+    if (drained) {
+      runStopStep(serviceName, "capture final state", () -> captureFinalStateForStop(serviceName));
+    } else {
+      logger.log(
+              Level.SEVERE,
+              "{0}:PBM skipping the final state capture for {1}, the drain did not finish",
+              new Object[] {myNodeID, serviceName});
+    }
+    runStopStep(
+            serviceName, "stop containers", () -> stopContainersForStop(serviceName, previousRole));
+  }
+
+  /**
+   * Waits until snp/ holds every committed diff. A timeout means snp/ is behind diffs that clients
+   * were told were committed, so the final state would silently lose writes. This is a prototype,
+   * so the node exits instead of acking. The reconfigurator then resends the stop to another node.
+   *
+   * @return true when snp/ caught up, false when the thread was interrupted
+   */
+  private boolean drainSnpBeforeStop(String serviceName) {
+    logger.log(
+            Level.INFO,
+            "{0}:PBM drain for {1} starts, snp={2} cmt={3}",
+            new Object[] {
+                    myNodeID,
+                    serviceName,
+                    snpStateDiffCount.get(serviceName),
+                    cmtStateDiffCount.get(serviceName)
+            });
+    try {
+      waitForSnpCatchUp(serviceName);
+    } catch (IllegalStateException e) {
+      if (Thread.currentThread().isInterrupted()) {
+        logger.log(Level.SEVERE, myNodeID + ":PBM drain interrupted for " + serviceName, e);
+        return false;
+      }
+      logger.log(
+              Level.SEVERE,
+              myNodeID
+                      + ":PBM snp/ did not catch up for "
+                      + serviceName
+                      + ", snp="
+                      + snpStateDiffCount.get(serviceName)
+                      + " cmt="
+                      + cmtStateDiffCount.get(serviceName)
+                      + ", exiting",
+              e);
+      System.exit(1);
+    }
+    logger.log(
+            Level.INFO,
+            "{0}:PBM drain for {1} done, snp={2} cmt={3}",
+            new Object[] {
+                    myNodeID,
+                    serviceName,
+                    snpStateDiffCount.get(serviceName),
+                    cmtStateDiffCount.get(serviceName)
+            });
+    return true;
+  }
+
+  /**
+   * Tars snp/ for the new placement. A failure is not fatal. snp/ is complete and frozen here, so
+   * getFinalState() captures it again when a node asks for the state.
+   */
+  private void captureFinalStateForStop(String serviceName) {
+    if (!app.captureFinalState(serviceName)) {
+      logger.log(
+              Level.SEVERE,
+              "{0}:PBM final state capture failed for {1}, getFinalState will retry it",
+              new Object[] {myNodeID, serviceName});
+    }
+  }
+
+  /** Safe to call twice. Every step only removes and cancels what is still registered. */
+  private void stopBackgroundWork(String serviceName) {
+    runStopStep(
+            serviceName,
+            "cancel coordinator poller",
+            () -> stopPollingForCoordinatorStatus(serviceName));
+    runStopStep(serviceName, "stop capture loop", () -> stopCaptureLoop(serviceName));
+    runStopStep(serviceName, "stop apply thread", () -> stopApplyThread(serviceName));
+    runStopStep(serviceName, "cancel backup refresh", () -> cancelBackupRefresh(serviceName));
+  }
+
+  private void cancelBackupRefresh(String serviceName) {
+    ScheduledFuture<?> timer = refreshTimers.remove(serviceName);
+    if (timer != null) timer.cancel(false);
+    ExecutorService executor = refreshBackupExecutors.remove(serviceName);
+    if (executor != null) executor.shutdownNow();
+  }
+
+  /** Sets done and fires the pending StopEpoch callbacks. */
+  private void completeStop(String serviceName, StopState state) {
+    List<PendingStopCallback> toFire;
+    synchronized (state) {
+      state.done = true;
+      toFire = new ArrayList<>(state.pending);
+      state.pending.clear();
+    }
+    for (PendingStopCallback pending : toFire) {
+      try {
+        pending.callback().executed(pending.stop(), true);
+      } catch (Throwable t) {
+        logger.log(Level.WARNING, myNodeID + ":PBM stop callback failed for " + serviceName, t);
+      }
+    }
+    logger.log(
+            Level.INFO,
+            "{0}:PBM stop finished for {1}, answered {2} callback(s)",
+            new Object[] {myNodeID, serviceName, toFire.size()});
+  }
+
+  private void runStopStep(String serviceName, String stepName, Runnable step) {
+    try {
+      step.run();
+    } catch (Throwable t) {
+      logger.log(
+              Level.SEVERE,
+              myNodeID + ":PBM stop step '" + stepName + "' failed for " + serviceName,
+              t);
+    }
+  }
+
+  /**
+   * Drop work, on the dispatcher thread. If the stop work has not run on this node yet (a lagging
+   * node), it runs here first, so the containers are never deleted under a running stop.
+   */
+  private boolean handleDropEvent(
+          String serviceName, BlockingQueue<Object> queue, DropEvent event) {
+    // A staying node already created the next placement. The drop is for the old one, so the
+    // service stays. Returns false so the dispatcher thread keeps running.
+    Integer created = createdPlacement.get(serviceName);
+    if (created != null && created > event.epoch()) {
+      logger.log(
+              Level.INFO,
+              "{0}:PBM ignoring the drop of placement {1} for {2}, placement {3} is live",
+              new Object[] {myNodeID, event.epoch(), serviceName, created});
+      event.result().complete(true);
+      return false;
+    }
+
+    boolean ok = true;
+    try {
+      StopState state = stopStates.computeIfAbsent(serviceName, k -> new StopState());
+      boolean stopDone;
+      synchronized (state) {
+        stopDone = state.done;
+      }
+      if (!stopDone) {
+        logger.log(
+                Level.WARNING,
+                "{0}:PBM drop arrived before the stop work finished for {1}, running it now",
+                new Object[] {myNodeID, serviceName});
+        runStopWork(serviceName);
+        completeStop(serviceName, state);
+      }
+      forgetService(serviceName);
+    } catch (Throwable t) {
+      ok = false;
+      logger.log(Level.SEVERE, myNodeID + ":PBM drop failed for " + serviceName, t);
+    }
+
+    // Nothing else will read this queue. Answer whatever is left in it.
+    Object left;
+    while ((left = queue.poll()) != null) {
+      if (left instanceof CreateReplicaGroupEvent<?> c) {
+        c.result.complete(false);
+      } else if (left instanceof DropEvent d) {
+        d.result().complete(true);
+      }
+    }
+    event.result().complete(ok);
+    logger.log(
+            Level.INFO,
+            "{0}:PBM drop finished for {1}, ok={2}",
+            new Object[] {myNodeID, serviceName, ok});
+
+    return true;
+  }
+
+  /** Clears every per-service map, so a later create starts from nothing. */
+  private void forgetService(String serviceName) {
+    try {
+      stopBackgroundWork(serviceName); // in case an earlier step failed
+      releaseInFlightDiffs(serviceName, null);
+
+      replicaGroups.remove(serviceName);
+      createdPlacement.remove(serviceName);
+      currPlacement.remove(serviceName);
+      currPrimaryID.remove(serviceName);
+      currentRole.remove(serviceName);
+      currPrimaryEpoch.remove(serviceName);
+      cmtStateDiffCount.remove(serviceName);
+      snpStateDiffCount.remove(serviceName);
+      liveStateDiffCount.remove(serviceName);
+      currentLiveDirType.remove(serviceName);
+      snpDiffApplyLocks.remove(serviceName);
+      doneQueues.remove(serviceName);
+      inFlightDiffs.remove(serviceName);
+      stopStates.remove(serviceName);
+    } finally {
+      // Last, and always. A later create then builds a fresh queue and a fresh dispatcher thread.
+      eventQueues.remove(serviceName);
+      dispatcherThreads.remove(serviceName);
+    }
+  }
+
+  private void stopContainersForStop(String serviceName, Role previousRole) {
+    if (previousRole == Role.PRIMARY || previousRole == Role.PRIMARY_CANDIDATE) {
+      if (previousRole == Role.PRIMARY_CANDIDATE) {
+        logger.log(
+                Level.WARNING,
+                "{0}:PBM {1} was a primary candidate when the stop ran, trying the primary stop",
+                new Object[] {myNodeID, serviceName});
+      }
+      boolean stopped = app.stopPrimaryContainer(serviceName);
+      if (!stopped) {
+        logger.log(
+                previousRole == Role.PRIMARY ? Level.SEVERE : Level.WARNING,
+                "{0}:PBM the primary stop returned false for {1}",
+                new Object[] {myNodeID, serviceName});
+      }
+    } else if (previousRole == Role.BACKUP) {
+      for (LiveDirType type : new LiveDirType[] {LiveDirType.BACKUP1, LiveDirType.BACKUP2}) {
+        try {
+          if (!app.stopBackupContainer(serviceName, type)) {
+            logger.log(
+                    Level.SEVERE,
+                    "{0}:PBM the stop of {2} returned false for {1}",
+                    new Object[] {myNodeID, serviceName, type});
+          }
+        } catch (Throwable t) {
+          logger.log(
+                  Level.SEVERE, myNodeID + ":PBM failed to stop " + type + " of " + serviceName, t);
+        }
+      }
+    }
+  }
+
+  // =========================================================================
   // PrimaryBackupMiddlewareApp — Replicable wrapper passed to PaxosManager.
   // Intercepts committed BlueGreenPrimaryBackupPackets and routes them to the manager.
   // Everything else is passed through to XdnApp.
@@ -1621,6 +2128,21 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         return m.handleBlueGreenPrimaryBackupPacket(packet, null);
       }
 
+      if (request instanceof XdnStopRequest stop) {
+        // The committed stop of a service deletion or a reconfiguration. The manager does the stop
+        // work, so the app-level stop execution is not used. Same replay guard as above.
+        BlueGreenPrimaryBackupManager<?> m = manager;
+        if (m == null) {
+          logger.log(
+                  Level.WARNING,
+                  "PBM MiddlewareApp dropping the stop of {0}, manager not wired yet",
+                  new Object[] {stop.getServiceName()});
+          return true;
+        }
+        m.handleStopExecuted(stop);
+        return true;
+      }
+
       return xdnApp.execute(request, doNotReplyToClient);
     }
 
@@ -1651,6 +2173,13 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
 
     @Override
     public boolean restore(String name, String state) {
+      if (state == null) {
+        // GigaPaxos calls restore(name, null) from PaxosInstanceStateMachine.kill right after a stop
+        // executes, to delete the app state. BlueGreenPrimaryBackupManager owns that lifecycle, so
+        // this stays a no-op. Returning true is what ends the retry loop in nullifyAppState.
+        return true;
+      }
+
       return xdnApp.restore(name, state);
     }
   }
