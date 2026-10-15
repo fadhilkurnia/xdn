@@ -1,0 +1,22 @@
+---
+name: bookcatalog-nd
+image: michael2718/bookcatalog-nd:5
+stateful: true
+entry: true
+port: 80
+state: /app/data/
+deterministic: false
+consistency: sequential
+healthcheck:
+  path: /api/books
+
+requests:
+  - path_prefix: "/"
+    methods: "GET,OPTIONS,HEAD"
+    behavior: read_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: write_only
+  - path_prefix: "/"
+    methods: "PUT,POST,DELETE"
+    behavior: monotonic
