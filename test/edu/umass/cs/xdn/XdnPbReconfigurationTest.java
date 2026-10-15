@@ -292,7 +292,7 @@ public class XdnPbReconfigurationTest {
         if (books.statusCode() != 200) {
           return node + " /api/books answered HTTP " + books.statusCode();
         }
-      } catch (IOException | RuntimeException e) {
+      } catch (IOException | JSONException | RuntimeException e) {
         return node + " failed: " + e;
       }
     }
@@ -327,7 +327,7 @@ public class XdnPbReconfigurationTest {
         ids.add(nodes.getJSONObject(i).getString("ID"));
       }
       return new Placement(root.getInt("EPOCH"), ids);
-    } catch (IOException | RuntimeException e) {
+    } catch (IOException | JSONException | RuntimeException e) {
       return null;
     }
   }
