@@ -764,21 +764,32 @@ public class NonDeterministicService {
           ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
               .getStateDirectory(name, epoch);
       Shell.runCommand("rm -rf " + stateDir);
+      // The final state tar, its staging copy and any received tar of this epoch
+      Shell.runCommand(
+          "rm -rf "
+              + ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+                  .getFinalStateDirectory(name, epoch));
     }
     return deleted;
   }
 
+  /** Captures the final state of the current placement epoch. Called by the manager's stop work. */
+  public boolean captureFinalState(String name) {
+    Integer epoch = servicePlacementEpoch.get(name);
+    if (epoch == null) return false;
+    return captureFinalState(name, epoch);
+  }
+
   /**
-   * Captures the current state directory into a tar archive. Called from execute(XdnStopRequest)
-   * and getFinalState().
+   * Tars the contents of snp/ into the final state archive. Called by the stop work through the
+   * overload above, and by getFinalState() when the stop work left no tar. snp/ holds every
+   * committed diff after the drain, and nothing writes it once the apply thread is stopped.
    */
   private boolean captureFinalState(String name, int epoch) {
     ServiceInstance instance = serviceInstances.get(name);
     if (instance == null) return false;
-    String primaryLiveDir =
-        stateDiffRecorder.getTargetDirectory(
-            name, epoch, AbstractStateDiffRecorder.LiveDirType.PRIMARY);
-    String capturedPath = sandboxManager.captureStateSnapshot(name, epoch, primaryLiveDir);
+    String snapshotDir = stateDiffRecorder.getSnapshotDir(name, epoch);
+    String capturedPath = sandboxManager.captureStateSnapshot(name, epoch, snapshotDir);
     return capturedPath != null;
   }
 

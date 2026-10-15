@@ -576,6 +576,12 @@ public class XdnApp
     return nonDeterministicService.stopContainerAsPrimary(serviceName);
   }
 
+  public boolean captureFinalState(String serviceName) {
+    if (serviceRegistry.get(serviceName) != ServiceType.NON_DETERMINISTIC) return false;
+
+    return nonDeterministicService.captureFinalState(serviceName);
+  }
+
   public void initializeLiveDirectory(
       String serviceName, AbstractStateDiffRecorder.LiveDirType type) {
     nonDeterministicService.initializeLiveDirectory(serviceName, type);

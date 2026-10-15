@@ -1812,9 +1812,88 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
             "{0}:PBM stopping {1}, previous role={2}",
             new Object[] {myNodeID, serviceName, previousRole});
 
-    stopBackgroundWork(serviceName);
+    // The order matters. The drain needs the capture loop stopped, so the committed count cannot
+    // grow, and the apply thread alive, so snp/ can reach it. The capture needs both finished.
+    runStopStep(
+            serviceName,
+            "cancel coordinator poller",
+            () -> stopPollingForCoordinatorStatus(serviceName));
+    runStopStep(serviceName, "stop capture loop", () -> stopCaptureLoop(serviceName));
+    boolean drained = drainSnpBeforeStop(serviceName);
+    runStopStep(serviceName, "stop apply thread", () -> stopApplyThread(serviceName));
+    runStopStep(serviceName, "cancel backup refresh", () -> cancelBackupRefresh(serviceName));
+    if (drained) {
+      runStopStep(serviceName, "capture final state", () -> captureFinalStateForStop(serviceName));
+    } else {
+      logger.log(
+              Level.SEVERE,
+              "{0}:PBM skipping the final state capture for {1}, the drain did not finish",
+              new Object[] {myNodeID, serviceName});
+    }
     runStopStep(
             serviceName, "stop containers", () -> stopContainersForStop(serviceName, previousRole));
+  }
+
+  /**
+   * Waits until snp/ holds every committed diff. A timeout means snp/ is behind diffs that clients
+   * were told were committed, so the final state would silently lose writes. This is a prototype,
+   * so the node exits instead of acking. The reconfigurator then resends the stop to another node.
+   *
+   * @return true when snp/ caught up, false when the thread was interrupted
+   */
+  private boolean drainSnpBeforeStop(String serviceName) {
+    logger.log(
+            Level.INFO,
+            "{0}:PBM drain for {1} starts, snp={2} cmt={3}",
+            new Object[] {
+                    myNodeID,
+                    serviceName,
+                    snpStateDiffCount.get(serviceName),
+                    cmtStateDiffCount.get(serviceName)
+            });
+    try {
+      waitForSnpCatchUp(serviceName);
+    } catch (IllegalStateException e) {
+      if (Thread.currentThread().isInterrupted()) {
+        logger.log(Level.SEVERE, myNodeID + ":PBM drain interrupted for " + serviceName, e);
+        return false;
+      }
+      logger.log(
+              Level.SEVERE,
+              myNodeID
+                      + ":PBM snp/ did not catch up for "
+                      + serviceName
+                      + ", snp="
+                      + snpStateDiffCount.get(serviceName)
+                      + " cmt="
+                      + cmtStateDiffCount.get(serviceName)
+                      + ", exiting",
+              e);
+      System.exit(1);
+    }
+    logger.log(
+            Level.INFO,
+            "{0}:PBM drain for {1} done, snp={2} cmt={3}",
+            new Object[] {
+                    myNodeID,
+                    serviceName,
+                    snpStateDiffCount.get(serviceName),
+                    cmtStateDiffCount.get(serviceName)
+            });
+    return true;
+  }
+
+  /**
+   * Tars snp/ for the new placement. A failure is not fatal. snp/ is complete and frozen here, so
+   * getFinalState() captures it again when a node asks for the state.
+   */
+  private void captureFinalStateForStop(String serviceName) {
+    if (!app.captureFinalState(serviceName)) {
+      logger.log(
+              Level.SEVERE,
+              "{0}:PBM final state capture failed for {1}, getFinalState will retry it",
+              new Object[] {myNodeID, serviceName});
+    }
   }
 
   /** Safe to call twice. Every step only removes and cancels what is still registered. */
@@ -1825,15 +1904,14 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
             () -> stopPollingForCoordinatorStatus(serviceName));
     runStopStep(serviceName, "stop capture loop", () -> stopCaptureLoop(serviceName));
     runStopStep(serviceName, "stop apply thread", () -> stopApplyThread(serviceName));
-    runStopStep(
-            serviceName,
-            "cancel backup refresh",
-            () -> {
-              ScheduledFuture<?> timer = refreshTimers.remove(serviceName);
-              if (timer != null) timer.cancel(false);
-              ExecutorService executor = refreshBackupExecutors.remove(serviceName);
-              if (executor != null) executor.shutdownNow();
-            });
+    runStopStep(serviceName, "cancel backup refresh", () -> cancelBackupRefresh(serviceName));
+  }
+
+  private void cancelBackupRefresh(String serviceName) {
+    ScheduledFuture<?> timer = refreshTimers.remove(serviceName);
+    if (timer != null) timer.cancel(false);
+    ExecutorService executor = refreshBackupExecutors.remove(serviceName);
+    if (executor != null) executor.shutdownNow();
   }
 
   /** Sets done and fires the pending StopEpoch callbacks. */

@@ -619,6 +619,15 @@ public class DockerSandboxManager extends SandboxManager {
   }
 
   /**
+   * Returns the absolute path to the final state directory of a service epoch. Format:
+   * /tmp/xdn/final/<nodeId>/<serviceName>/<epoch>/ It holds final_state.tar, staging/ and
+   * rcv_final_state.tar.
+   */
+  public String getFinalStateDirectory(String serviceName, int epoch) {
+    return String.format("%s%s/%s/%d/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
+  }
+
+  /**
    * Produces the final state string for reconfiguration. Inline Base64 for small states, URL via
    * LargeCheckpointer for large ones.
    *
