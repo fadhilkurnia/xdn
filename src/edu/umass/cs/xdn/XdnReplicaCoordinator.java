@@ -964,7 +964,7 @@ public class XdnReplicaCoordinator<NodeIDType> extends AbstractReplicaCoordinato
     // return false so ActiveReplica does not ack the drop and the reconfigurator resends it.
     AbstractReplicaCoordinator<NodeIDType> perService = this.serviceCoordinator.get(serviceName);
     if (perService instanceof BlueGreenPrimaryBackupCoordinator<NodeIDType> bgCoordinator
-        && !bgCoordinator.tearDownService(serviceName)) {
+        && !bgCoordinator.tearDownService(serviceName, epoch)) {
       return false;
     }
 

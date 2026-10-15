@@ -748,8 +748,25 @@ public class NonDeterministicService {
   }
 
   private boolean deleteContainerInstance(String name, int epoch) {
+    Integer liveEpoch = servicePlacementEpoch.get(name);
+    if (liveEpoch != null && liveEpoch != epoch) {
+      // A drop for an older epoch on a node that already moved on. The old containers went with
+      // the stop. Remove only the old epoch's directories and keep the live instance.
+      stateDiffRecorder.removeServiceRecorder(name, epoch);
+      Shell.runCommand(
+          "rm -rf "
+              + ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+                  .getStateDirectory(name, epoch));
+      Shell.runCommand(
+          "rm -rf "
+              + ((edu.umass.cs.xdn.sandbox.DockerSandboxManager) sandboxManager)
+                  .getFinalStateDirectory(name, epoch));
+      return true;
+    }
+
     ServiceInstance instance = serviceInstances.get(name);
     if (instance == null) return true;
+
     boolean deleted = sandboxManager.deleteService(instance);
     if (deleted) {
       serviceInstances.remove(name);

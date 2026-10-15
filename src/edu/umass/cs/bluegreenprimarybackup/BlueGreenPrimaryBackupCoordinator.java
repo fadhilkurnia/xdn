@@ -157,8 +157,8 @@ public class BlueGreenPrimaryBackupCoordinator<NodeIDType>
   // Public Methods
   // =========================================================================
 
-  public boolean tearDownService(String serviceName) {
-    return this.pbManager.tearDown(serviceName);
+  public boolean tearDownService(String serviceName, int epoch) {
+    return this.pbManager.tearDown(serviceName, epoch);
   }
 
   public BlueGreenPrimaryBackupManager<NodeIDType> getBlueGreenPrimaryBackupManager() {

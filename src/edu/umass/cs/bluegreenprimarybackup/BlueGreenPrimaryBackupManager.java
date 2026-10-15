@@ -137,6 +137,13 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   /** Stop bookkeeping per service. Created by the first stop request or the first stop event. */
   private final ConcurrentHashMap<String, StopState> stopStates = new ConcurrentHashMap<>();
 
+  /**
+   * The newest placement this node created for the service. Set by the create event, so unlike
+   * currPlacement it is ahead as soon as the create is done. A drop for an older placement is
+   * ignored.
+   */
+  private final ConcurrentHashMap<String, Integer> createdPlacement = new ConcurrentHashMap<>();
+
   private final ConcurrentHashMap<String, ScheduledFuture<?>> coordinatorStatusPollers =
           new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, ScheduledFuture<?>> refreshTimers =
@@ -219,7 +226,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   private record StopEvent(XdnStopRequest stop) {}
 
   /** Asks the dispatcher to forget the service. The future completes when the teardown is done. */
-  private record DropEvent(CompletableFuture<Boolean> result) {}
+  private record DropEvent(int epoch, CompletableFuture<Boolean> result) {}
 
   /** The ActiveReplica callback of one stop request, answered once the stop work is finished. */
   private record PendingStopCallback(XdnStopRequest stop, ExecutedCallback callback) {}
@@ -357,8 +364,9 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
           handleStopEvent(serviceName, e);
         } else if (event instanceof DropEvent e) {
           // Blocking. Forgets the service. This thread ends right after.
-          handleDropEvent(serviceName, queue, e);
-          return;
+          if (handleDropEvent(serviceName, queue, e)) {
+            return;
+          }
         } else {
           throw new RuntimeException(
                   "Unknown Dispatcher Event: " + event.getClass().getSimpleName());
@@ -394,6 +402,17 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     paxosManager.createPaxosInstanceForcibly(
             serviceName, event.placement, nodes, app, event.initialState, 0L);
     replicaGroups.put(serviceName, nodes);
+    createdPlacement.put(serviceName, event.placement);
+
+    // A node that stays in the new placement is still STOPPED from the old one. Bring it back as a
+    // backup. handleStartEpochPacket then sees a newer placement and resets the counts, the lock
+    // and the apply thread. Runs on the dispatcher thread, so no poll event can slip in between.
+    if (currentRole.get(serviceName) == Role.STOPPED
+            && event.placement > currPlacement.get(serviceName)) {
+      stopStates.remove(serviceName); // else the next stop is treated as a duplicate
+      currentRole.put(serviceName, Role.BACKUP);
+      startPollingForCoordinatorStatus(serviceName); // the stop cancelled it
+    }
 
     // If the client names a preferred node as the primary, *try* to make that node the paxos
     // coordinator (the coordinator automatically becomes the primary).
@@ -1768,10 +1787,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
    * Called from deleteFinalState. Returns true when this node has forgotten the service. Returns
    * false on timeout, so ActiveReplica does not ack the drop and the reconfigurator resends it.
    */
-  public boolean tearDown(String serviceName) {
+  public boolean tearDown(String serviceName, int epoch) {
     BlockingQueue<Object> queue = eventQueues.get(serviceName);
     if (queue == null) return true; // this node holds nothing for the service
-    DropEvent drop = new DropEvent(new CompletableFuture<>());
+    DropEvent drop = new DropEvent(epoch, new CompletableFuture<>());
     queue.add(drop);
     try {
       return drop.result().get(TEARDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
@@ -1950,8 +1969,20 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
    * Drop work, on the dispatcher thread. If the stop work has not run on this node yet (a lagging
    * node), it runs here first, so the containers are never deleted under a running stop.
    */
-  private void handleDropEvent(
+  private boolean handleDropEvent(
           String serviceName, BlockingQueue<Object> queue, DropEvent event) {
+    // A staying node already created the next placement. The drop is for the old one, so the
+    // service stays. Returns false so the dispatcher thread keeps running.
+    Integer created = createdPlacement.get(serviceName);
+    if (created != null && created > event.epoch()) {
+      logger.log(
+              Level.INFO,
+              "{0}:PBM ignoring the drop of placement {1} for {2}, placement {3} is live",
+              new Object[] {myNodeID, event.epoch(), serviceName, created});
+      event.result().complete(true);
+      return false;
+    }
+
     boolean ok = true;
     try {
       StopState state = stopStates.computeIfAbsent(serviceName, k -> new StopState());
@@ -1987,6 +2018,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
             Level.INFO,
             "{0}:PBM drop finished for {1}, ok={2}",
             new Object[] {myNodeID, serviceName, ok});
+
+    return true;
   }
 
   /** Clears every per-service map, so a later create starts from nothing. */
@@ -1996,6 +2029,7 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
       releaseInFlightDiffs(serviceName, null);
 
       replicaGroups.remove(serviceName);
+      createdPlacement.remove(serviceName);
       currPlacement.remove(serviceName);
       currPrimaryID.remove(serviceName);
       currentRole.remove(serviceName);
