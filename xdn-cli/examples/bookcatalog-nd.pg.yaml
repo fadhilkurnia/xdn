@@ -22,7 +22,7 @@ components:
 state: postgres:/var/lib/postgresql/data/
 deterministic: false
 #consistency: linearizability
-consistency: eventual
+consistency: sequential
 
 requests:
   - path_prefix: "/"

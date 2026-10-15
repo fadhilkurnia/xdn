@@ -97,7 +97,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
   protected FuselogStateDiffRecorder(
       String nodeID, String binPath, String applyBinPath, boolean writebackDefault) {
-    super(nodeID, workingBasePath + nodeID + "/");
+    super(nodeID, workingBasePath);
     this.binPath = binPath;
     this.applyBinPath = applyBinPath;
     this.writebackDefault = writebackDefault;
@@ -133,7 +133,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     // Create working mount dir, if not yet exist.
     // e.g., /tmp/xdn/state/fuselog/node1/mnt/
-    this.baseMountDirPath = this.baseDirectoryPath + "mnt/";
+    this.baseMountDirPath = workingBasePath + nodeID + "/mnt/";
     try {
       Files.createDirectories(Paths.get(this.baseMountDirPath));
     } catch (IOException e) {
@@ -401,6 +401,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
   public boolean preInitialization(String serviceName, int placementEpoch) {
     // preInitialization is only called on the primary — mounts fuselog on primaryLive/.
     // snapshot/ is seeded by the caller (NonDeterministicService) via rsync before this runs.
+    // primaryLive/ is deliberately not deleted here, so the seed stays visible through the mount.
     //
     // TODO: this new-design path does not yet carry #92/#93's perf work (coalescing default,
     // writeback-cache toggle, daemon-log/compression env vars) from preInitializationOld — those
@@ -410,7 +411,6 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     String socketFile = getSocketPath(serviceName, placementEpoch);
 
     Shell.runCommand("sudo umount " + primaryLiveDir);
-    Shell.runCommand("rm -rf " + primaryLiveDir);
     int code = Shell.runCommand("mkdir -p " + primaryLiveDir);
     if (code != 0) {
       String errMessage =
@@ -661,6 +661,22 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     }
 
     return true;
+  }
+
+  @Override
+  public boolean stopPrimaryRecorder(String serviceName, int placementEpoch) {
+    Map<Integer, SocketChannel> epochMap = serviceFsSocket.get(serviceName);
+    if (epochMap != null) {
+      SocketChannel sc = epochMap.remove(placementEpoch);
+      if (sc != null) {
+        try {
+          sc.close();
+        } catch (IOException ignored) {
+        }
+      }
+    }
+    String primaryLiveDir = getTargetDirectory(serviceName, placementEpoch, LiveDirType.PRIMARY);
+    return Shell.runCommand("sudo umount " + primaryLiveDir, true) == 0;
   }
 
   @Override
@@ -1270,7 +1286,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     // Prepare the backup replicas' target directory on each backup node, which is where we will
     // sync the data from current replica and also where fuselog-apply will apply the stateDiff.
     // e.g., backup-node1 => /tmp/xdn/state/fuselog/backup-node1/mnt/<serviceName>/e<epoch>/
-    String currentReplica = this.baseDirectoryPath;
+    String currentReplica = workingBasePath + this.nodeID + "/";
     Map<String, String> backupIdToTargetPaths = new HashMap<>();
     backupNodes.forEach(
         node ->

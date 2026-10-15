@@ -22,7 +22,7 @@ components:
 
 state: mysql:/var/lib/mysql/
 deterministic: false
-consistency: linearizability
+consistency: sequential
 #consistency: eventual
 
 requests:

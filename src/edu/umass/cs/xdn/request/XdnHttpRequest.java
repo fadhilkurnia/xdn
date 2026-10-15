@@ -451,6 +451,45 @@ public class XdnHttpRequest extends XdnRequest
     this.httpResponse.headers().add("Set-Cookie", ServerCookieEncoder.STRICT.encode(cookie));
   }
 
+  /** Returns the value of the named request cookie, or null if the cookie is absent. */
+  public String getCookieValue(String cookieName) {
+    assert cookieName != null;
+    String cookieRaw =
+        this.httpRequest.headers() != null ? this.httpRequest.headers().get("Cookie") : null;
+    if (cookieRaw == null || cookieRaw.isEmpty()) {
+      return null;
+    }
+    for (Cookie cookie : ServerCookieDecoder.STRICT.decode(cookieRaw)) {
+      if (cookie.name().equals(cookieName)) {
+        return cookie.value();
+      }
+    }
+    return null;
+  }
+
+  /** Adds a Set-Cookie to the response, replacing any earlier Set-Cookie of the same name. */
+  public void setResponseCookie(String cookieName, String cookieValue) {
+    assert cookieName != null && cookieValue != null;
+    assert this.httpResponse != null : "response cannot be null";
+    HttpHeaders headers = this.httpResponse.headers();
+
+    List<String> kept = new ArrayList<>();
+    for (String existing : headers.getAll("Set-Cookie")) {
+      if (!existing.startsWith(cookieName + "=")) {
+        kept.add(existing);
+      }
+    }
+    headers.remove("Set-Cookie");
+    for (String existing : kept) {
+      headers.add("Set-Cookie", existing);
+    }
+
+    Cookie cookie = new io.netty.handler.codec.http.cookie.DefaultCookie(cookieName, cookieValue);
+    cookie.setPath("/");
+    cookie.setHttpOnly(true);
+    headers.add("Set-Cookie", ServerCookieEncoder.STRICT.encode(cookie));
+  }
+
   // If this request named the service via the _xdnsvc URL query param, sets
   // Set-Cookie: XDN=<serviceName>; Path=/ on the given response so subsequent
   // browser requests (which drop query params on link clicks) still resolve.

@@ -115,7 +115,7 @@ jobs:
         if-no-files-found: ignore
 
   xdn-integration:
-    name: "${{ matrix.test_class }}"
+    name: "${{ matrix.test_class }} (${{ matrix.app_under_test }})"
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -135,9 +135,21 @@ jobs:
           - XdnClusterLaunchTest
           - XdnClusterBandwidthTest
           - XdnWordPressClusterTest
+        app_under_test:
+          - XdnGigapaxosApp
+          - XdnApp
 
     steps:
     - uses: actions/checkout@v5
+
+    - name: 🔧 Resolve gigapaxos config for this app
+      id: config
+      run: |
+        if [ "${{ matrix.app_under_test }}" = "XdnApp" ]; then
+          echo "file=gigapaxos.xdn.new-local.properties" >> "$GITHUB_OUTPUT"
+        else
+          echo "file=gigapaxos.xdn.local.properties" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Set up JDK 21
       uses: actions/setup-java@v5
@@ -218,7 +230,9 @@ jobs:
     - name: 🏗️ Compile tests
       run: ant xdn-compile-tests
 
-    - name: 🧪 Run ${{ matrix.test_class }}
+    - name: 🧪 Run ${{ matrix.test_class }} (${{ matrix.app_under_test }})
+      env:
+        XDN_TEST_GIGAPAXOS_CONFIG: ${{ steps.config.outputs.file }}
       run: |
         set -o pipefail
         bin/run_xdn_tests.sh ${{ matrix.test_class }} 2>&1 | tee junit-test-output.log
@@ -261,7 +275,7 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: 'integration-${{ matrix.test_class }}-output'
+        name: 'integration-${{ matrix.test_class }}-${{ matrix.app_under_test }}-output'
         path: |
           out/
           junit-test-output.log

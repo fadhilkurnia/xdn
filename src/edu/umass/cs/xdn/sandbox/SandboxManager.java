@@ -3,6 +3,7 @@ package edu.umass.cs.xdn.sandbox;
 import edu.umass.cs.xdn.XdnConfig;
 import edu.umass.cs.xdn.service.ServiceInstance;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SandboxManager is the abstract interface for managing isolated execution environments (sandboxes)
@@ -67,6 +68,43 @@ public abstract class SandboxManager {
    * @return true iff the network was deleted successfully
    */
   public abstract boolean deleteNetwork(String serviceName);
+
+  /**
+   * Ensures a cluster-wide network exists for a cluster-managed service, so that replicas hosted on
+   * different nodes can discover and reach each other by name. Unlike {@link #createNetwork}, this
+   * network is not confined to a single node -- how that's actually achieved (e.g. Docker Swarm
+   * overlay networking) is up to each sandbox implementation.
+   *
+   * @param serviceName name of the service
+   * @return true iff the cluster network exists (was already there, or was just created)
+   */
+  public abstract boolean createClusterNetwork(String serviceName);
+
+  /**
+   * Removes the cluster-wide network for a cluster-managed service.
+   *
+   * @param serviceName name of the service
+   * @return true iff the cluster network was removed (or was already gone)
+   */
+  public abstract boolean deleteClusterNetwork(String serviceName);
+
+  /**
+   * Starts a sidecar container sharing the exact network namespace of an already-running container
+   * (same IP, same interface, sees the same traffic) -- used for passive, external observation of a
+   * service's traffic without modifying the service itself.
+   *
+   * @param imageName sidecar's image
+   * @param containerName name to give the sidecar container
+   * @param namespaceOwnerContainerName the already-running container whose network namespace this
+   *     sidecar should join
+   * @param env environment variables for the sidecar, or null for none
+   * @return true iff the sidecar started successfully
+   */
+  public abstract boolean startSidecarContainer(
+      String imageName,
+      String containerName,
+      String namespaceOwnerContainerName,
+      Map<String, String> env);
 
   // -------------------------------------------------------------------------
   // Container lifecycle
@@ -148,6 +186,8 @@ public abstract class SandboxManager {
    * @return absolute path to the tar archive, or null on failure
    */
   public abstract String captureStateSnapshot(String serviceName, int epoch);
+
+  public abstract String captureStateSnapshot(String serviceName, int epoch, String sourceDir);
 
   /**
    * Restores the service's state directory from a Base64-encoded tar archive or a URL pointing to a

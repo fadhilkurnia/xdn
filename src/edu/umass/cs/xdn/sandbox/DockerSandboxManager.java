@@ -16,10 +16,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -117,6 +114,80 @@ public class DockerSandboxManager extends SandboxManager {
     return true;
   }
 
+  @Override
+  public boolean createClusterNetwork(String serviceName) {
+    String networkName = buildClusterNetworkName(serviceName);
+
+    if (Shell.runCommand("docker network inspect " + networkName, true) == 0) {
+      return true;
+    }
+    if (Shell.runCommand("docker network create -d overlay --attachable " + networkName, true)
+        == 0) {
+      return true;
+    }
+    if (Shell.runCommand("docker network inspect " + networkName, true) == 0) {
+      return true;
+    }
+    logger.log(
+        Level.WARNING,
+        "{0}:DockerSandboxManager failed to create cluster network {1}",
+        new Object[] {nodeId, networkName});
+    return false;
+  }
+
+  @Override
+  public boolean deleteClusterNetwork(String serviceName) {
+    String networkName = buildClusterNetworkName(serviceName);
+    int exitCode = Shell.runCommand("docker network rm " + networkName, true);
+    if (exitCode == 0 || Shell.runCommand("docker network inspect " + networkName, true) != 0) {
+      return true;
+    }
+    logger.log(
+        Level.WARNING,
+        "{0}:DockerSandboxManager failed to delete cluster network {1}",
+        new Object[] {nodeId, networkName});
+    return false;
+  }
+
+  @Override
+  public boolean startSidecarContainer(
+      String imageName,
+      String containerName,
+      String namespaceOwnerContainerName,
+      Map<String, String> env) {
+    Shell.runCommand("docker container rm --force " + containerName, true);
+
+    List<String> cmd = new ArrayList<>();
+    cmd.add("docker");
+    cmd.add("run");
+    cmd.add("-d");
+    cmd.add("--restart");
+    cmd.add("unless-stopped");
+    cmd.add("--name=" + containerName);
+    cmd.add("--network=container:" + namespaceOwnerContainerName);
+    if (env != null) {
+      for (Map.Entry<String, String> e : env.entrySet()) {
+        cmd.add("--env");
+        cmd.add(e.getKey() + "=" + e.getValue());
+      }
+    }
+    cmd.add(imageName);
+
+    int exitCode = Shell.runCommand(cmd, false);
+    if (exitCode != 0) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:DockerSandboxManager failed to start sidecar {1} sharing namespace of {2}",
+          new Object[] {nodeId, containerName, namespaceOwnerContainerName});
+      return false;
+    }
+    logger.log(
+        Level.INFO,
+        "{0}:DockerSandboxManager - {1} sidecar started (sharing namespace of {2})",
+        new Object[] {nodeId, containerName, namespaceOwnerContainerName});
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Container lifecycle
   // -------------------------------------------------------------------------
@@ -131,8 +202,15 @@ public class DockerSandboxManager extends SandboxManager {
       ServiceInstance instance, int epoch, String mountPath, int allocatedPort) {
     // Same as startService(instance, epoch, mountPath) but uses explicit
     // allocatedPort instead of instance.allocatedHttpPort for the entry component.
+
+    // Cluster-managed services start differently. Sidecars must share the cluster member's
+    // network namespace, which the generic per-component loop below does not do.
+    if (instance.property.isClusterManaged()) {
+      return startClusterService(instance, mountPath, allocatedPort);
+    }
+
     String serviceName = instance.serviceName;
-    String networkName = buildNetworkName(serviceName);
+    String networkName = instance.networkName;
     String stateDirMountTarget = instance.property.getStatefulComponentDirectory();
     List<ServiceComponent> components = instance.property.getComponents();
 
@@ -165,6 +243,8 @@ public class DockerSandboxManager extends SandboxManager {
       Integer allocatedPortForComponent = component.isEntryComponent() ? allocatedPort : null;
       Integer exposedPort = component.getExposedPort();
 
+      Map<String, String> env = component.getEnvironmentVariables();
+
       boolean started =
           runDockerContainer(
               imageName,
@@ -176,8 +256,9 @@ public class DockerSandboxManager extends SandboxManager {
               allocatedPortForComponent,
               mountPath,
               stateDirMountTarget,
-              component.getEnvironmentVariables(),
-              healthcheckCmd);
+              env,
+              healthcheckCmd,
+              instance.networkAlias);
 
       if (!started) {
         logger.log(
@@ -216,6 +297,8 @@ public class DockerSandboxManager extends SandboxManager {
       Integer allocatedPortForComponent = component.isEntryComponent() ? allocatedPort : null;
       Integer exposedPort = component.getExposedPort();
 
+      Map<String, String> env = component.getEnvironmentVariables();
+
       boolean started =
           runDockerContainer(
               imageName,
@@ -227,8 +310,9 @@ public class DockerSandboxManager extends SandboxManager {
               allocatedPortForComponent,
               null,
               null,
-              component.getEnvironmentVariables(),
-              healthcheckCmd);
+              env,
+              healthcheckCmd,
+              instance.networkAlias);
 
       if (!started) {
         logger.log(
@@ -245,6 +329,101 @@ public class DockerSandboxManager extends SandboxManager {
   @Override
   public boolean startService(ServiceInstance instance, int epoch, String mountPath) {
     return startService(instance, epoch, mountPath, instance.allocatedHttpPort);
+  }
+
+  /**
+   * Starts a cluster-managed service.
+   *
+   * <p>The cluster member (the stateful component, or the entry component when nothing is stateful)
+   * joins the shared overlay network under its stable alias and carries the XDN_CLUSTER_*
+   * environment. Every other component is a sidecar that shares the member's network namespace, so
+   * it reaches the member at 127.0.0.1. A sidecar in that namespace has no network of its own, so
+   * the entry component's port is published on the member.
+   *
+   * <p>Mirrors XdnGigapaxosApp.initContainerizedClusterService.
+   */
+  private boolean startClusterService(
+      ServiceInstance instance, String mountPath, int allocatedPort) {
+    List<ServiceComponent> components = instance.property.getComponents();
+    ServiceComponent entry = instance.property.getEntryComponent();
+    ServiceComponent member = instance.property.getStatefulComponent();
+    if (member == null) {
+      member = entry;
+    }
+    int memberIdx = components.indexOf(member);
+    String memberName = instance.containerNames.get(memberIdx);
+    String imageName = member.getImageName();
+
+    String healthcheckCmd = member.getHealthcheckCommand();
+    if (healthcheckCmd == null || healthcheckCmd.isBlank()) {
+      healthcheckCmd = ServiceComponent.inferHealthcheckCmd(imageName);
+    }
+
+    Map<String, String> env = new HashMap<>();
+    if (member.getEnvironmentVariables() != null) {
+      env.putAll(member.getEnvironmentVariables());
+    }
+    if (instance.extraEnv != null) {
+      env.putAll(instance.extraEnv);
+    }
+
+    boolean stateful = member.isStateful();
+    if (stateful) {
+      Shell.runCommand("mkdir -p " + mountPath, true);
+    }
+    Integer publishedPort = entry != null ? entry.getEntryPort() : null;
+
+    boolean started =
+        runDockerContainer(
+            imageName,
+            memberName,
+            instance.networkName,
+            member.getComponentName(),
+            member.getExposedPort(),
+            publishedPort,
+            publishedPort != null ? allocatedPort : null,
+            stateful ? mountPath : null,
+            stateful ? instance.property.getStatefulComponentDirectory() : null,
+            env,
+            healthcheckCmd,
+            instance.networkAlias);
+    if (!started) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:DockerSandboxManager failed to start cluster member {1} for {2}",
+          new Object[] {nodeId, memberName, instance.serviceName});
+      return false;
+    }
+
+    boolean requireConsecutive = ServiceComponent.requiresConsecutiveHealthyCheck(imageName);
+    if (!waitUntilReady(memberName, healthcheckCmd, requireConsecutive)) {
+      logger.log(
+          Level.SEVERE,
+          "{0}:DockerSandboxManager cluster member {1} failed healthcheck for {2}",
+          new Object[] {nodeId, memberName, instance.serviceName});
+      return false;
+    }
+
+    for (int i = 0; i < components.size(); i++) {
+      if (i == memberIdx) {
+        continue;
+      }
+      ServiceComponent sidecar = components.get(i);
+      boolean sidecarStarted =
+          startSidecarContainer(
+              sidecar.getImageName(),
+              instance.containerNames.get(i),
+              memberName,
+              sidecar.getEnvironmentVariables());
+      if (!sidecarStarted) {
+        logger.log(
+            Level.SEVERE,
+            "{0}:DockerSandboxManager failed to start cluster sidecar {1} for {2}",
+            new Object[] {nodeId, instance.containerNames.get(i), instance.serviceName});
+        return false;
+      }
+    }
+    return true;
   }
 
   @Override
@@ -327,7 +506,10 @@ public class DockerSandboxManager extends SandboxManager {
    */
   @Override
   public String captureStateSnapshot(String serviceName, int epoch) {
-    String stateDir = getStateDirectory(serviceName, epoch);
+    return captureStateSnapshot(serviceName, epoch, getStateDirectory(serviceName, epoch));
+  }
+
+  public String captureStateSnapshot(String serviceName, int epoch, String sourceDir) {
     String stagingDir =
         String.format("%s%s/%s/%d/staging/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
     String tarDir = String.format("%s%s/%s/%d/", BASE_FINAL_PATH, nodeId, serviceName, epoch);
@@ -339,7 +521,7 @@ public class DockerSandboxManager extends SandboxManager {
     Shell.runCommand("mkdir -p " + tarDir);
 
     // Copy state into staging dir with retries
-    String rsyncCmd = String.format("rsync -a %s %s", stateDir, stagingDir);
+    String rsyncCmd = String.format("rsync -a %s %s", sourceDir, stagingDir);
     boolean copied = false;
     for (int attempt = 1; attempt <= 10; attempt++) {
       int exitCode = Shell.runCommand(rsyncCmd, true);
@@ -667,7 +849,8 @@ public class DockerSandboxManager extends SandboxManager {
       String mountSource,
       String mountTarget,
       Map<String, String> env,
-      String healthcheckCmd) {
+      String healthcheckCmd,
+      String networkAlias) {
 
     // Remove any stale container with the same name
     Shell.runCommand("docker container rm --force " + containerName, true);
@@ -679,6 +862,9 @@ public class DockerSandboxManager extends SandboxManager {
     cmd.add("--name=" + containerName);
     cmd.add("--hostname=" + hostName);
     cmd.add("--network=" + networkName);
+    if (networkAlias != null && !networkAlias.isBlank()) {
+      cmd.add("--network-alias=" + networkAlias);
+    }
 
     // Port publishing
     if (publishedPort != null && allocatedHttpPort != null) {
@@ -760,6 +946,10 @@ public class DockerSandboxManager extends SandboxManager {
 
   private String buildNetworkName(String serviceName) {
     return String.format("net::%s:%s", nodeId, serviceName);
+  }
+
+  private String buildClusterNetworkName(String serviceName) {
+    return "xdn-cluster-" + serviceName;
   }
 
   /**
