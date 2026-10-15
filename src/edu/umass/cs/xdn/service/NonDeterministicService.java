@@ -327,7 +327,7 @@ public class NonDeterministicService {
     }
 
     String finalStatePrefix =
-        String.format("%s%d:", ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX, epoch);
+        String.format("%s%d", ServiceProperty.XDN_EPOCH_FINAL_STATE_PREFIX, epoch);
 
     java.io.File archive = new java.io.File(finalStatePath);
     int maxInlineBytes = 62500; // ~500 KB
@@ -720,12 +720,14 @@ public class NonDeterministicService {
       return false;
     }
 
-    // Pre-initialize the recorder for the new epoch
-    stateDiffRecorder.preInitialization(name, newEpoch);
-    stateDiffRecorder.removeServiceRecorder(name, newEpoch);
+    // Create the new epoch's directories, then seed snp/ with the previous epoch's final state.
+    // No container is started here. The Blue-Green manager drives that after the epoch starts.
+    sandboxManager.prepareStateDirectory(name, newEpoch);
+    stateDiffRecorder.prepareServiceDirectories(name, newEpoch);
 
-    // Restore the state directory from Base64 tar or URL
-    boolean stateRestored = sandboxManager.restoreStateFromSnapshot(name, newEpoch, encodedState);
+    String snapshotDir = stateDiffRecorder.getSnapshotDir(name, newEpoch);
+    boolean stateRestored =
+        sandboxManager.restoreStateFromSnapshot(name, newEpoch, encodedState, snapshotDir);
     if (!stateRestored) return false;
 
     int allocatedPort = sandboxManager.allocatePort();
@@ -733,12 +735,6 @@ public class NonDeterministicService {
     List<String> containerNames = buildContainerNames(name, newEpoch, property);
     ServiceInstance instance =
         new ServiceInstance(property, name, networkName, allocatedPort, containerNames);
-
-    sandboxManager.createNetwork(name);
-    boolean started = sandboxManager.startService(instance, newEpoch);
-    if (!started) return false;
-
-    stateDiffRecorder.postInitialization(name, newEpoch);
 
     serviceInstances.put(name, instance);
     servicePlacementEpoch.put(name, newEpoch);

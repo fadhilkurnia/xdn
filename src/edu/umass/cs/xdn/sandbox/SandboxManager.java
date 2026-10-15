@@ -202,6 +202,13 @@ public abstract class SandboxManager {
       String serviceName, int epoch, String encodedState);
 
   /**
+   * Same as {@link #restoreStateFromSnapshot(String, int, String)}, but extracts the archive into
+   * the given target directory instead of the epoch's state directory.
+   */
+  public abstract boolean restoreStateFromSnapshot(
+      String serviceName, int epoch, String encodedState, String targetDir);
+
+  /**
    * Returns the absolute path to the state directory for a service epoch. This directory is
    * bind-mounted into the container.
    *
