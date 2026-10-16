@@ -30,10 +30,14 @@ import org.junit.jupiter.api.Test;
  * placement is seeded from that state, elects a primary and serves again. Then the old epoch is
  * dropped. Writes made before a reconfiguration must be readable after it.
  *
- * <p>Two tests. {@link #testReconfigureAwayAndBack} runs on three nodes and shrinks the service
- * from three replicas to two and back, so two nodes stay through both reconfigurations. {@link
- * #testReconfigureToDisjointNodes} runs on six nodes and moves the service to three other nodes and
- * back, so every node of the new placement is fresh.
+ * <p>Two scenarios. The away-and-back scenario runs on three nodes and shrinks the service from
+ * three replicas to two and back, so two nodes stay through both reconfigurations. The disjoint
+ * scenario runs on six nodes and moves the service to three other nodes and back, so every node of
+ * the new placement is fresh.
+ *
+ * <p>Each scenario runs for three services. The plain methods use the single-container bookcatalog
+ * with SQLite. The Mysql and Postgres methods use bookcatalog-nd with a database container, whose
+ * data directory is the state that moves.
  *
  * <p>These tests only run against XdnApp (the Blue-Green primary-backup manager). Each is skipped
  * unless the system property XDN_TEST_GIGAPAXOS_CONFIG names its own properties file.
@@ -43,8 +47,24 @@ public class XdnPbReconfigurationTest {
   private static final String CONFIG_3_NODES = "gigapaxos.xdn.new-local.properties";
   private static final String CONFIG_6_NODES = "gigapaxos.xdn.new-local-6.properties";
 
-  private static final String SERVICE_AWAY = "pbreconfigaway";
-  private static final String SERVICE_DISJOINT = "pbreconfigdisjoint";
+  /**
+   * The service under test. SQLITE is the single-container bookcatalog. MYSQL and POSTGRES are the
+   * two-container bookcatalog-nd with a database. The names are not substrings of each other,
+   * because listContainers matches by substring.
+   */
+  private enum Flavor {
+    SQLITE("pbreconfigaway", "pbreconfigdisjoint"),
+    MYSQL("pbrcmysqlaway", "pbrcmysqldisjoint"),
+    POSTGRES("pbrcpgaway", "pbrcpgdisjoint");
+
+    final String awayService;
+    final String disjointService;
+
+    Flavor(String awayService, String disjointService) {
+      this.awayService = awayService;
+      this.disjointService = disjointService;
+    }
+  }
 
   private static final List<String> THREE_NODES = List.of("AR0", "AR1", "AR2");
   private static final List<String> SIX_NODES = List.of("AR0", "AR1", "AR2", "AR3", "AR4", "AR5");
@@ -73,74 +93,104 @@ public class XdnPbReconfigurationTest {
 
   @Test
   public void testReconfigureAwayAndBack() throws Exception {
-    assumeTrue(
-        CONFIG_3_NODES.equals(System.getProperty("XDN_TEST_GIGAPAXOS_CONFIG")),
-        "This test only runs on XdnApp (" + CONFIG_3_NODES + ")");
-    assertTrue(XdnTestCluster.isDockerAvailable(), "Docker is required for this test");
+    runAwayAndBack(Flavor.SQLITE);
+  }
 
-    try (XdnTestCluster cluster = new XdnTestCluster()) {
-      cluster.start();
+  @Test
+  public void testReconfigureAwayAndBackMysql() throws Exception {
+    runAwayAndBack(Flavor.MYSQL);
+  }
 
-      launch(cluster, SERVICE_AWAY);
-      Placement initial = awaitSettled(cluster, SERVICE_AWAY, null, 0, "initial placement");
-      log("initial placement: " + initial);
-      assertEquals(Set.copyOf(THREE_NODES), initial.nodes(), "Expected all three nodes");
-
-      String titleA = "BookA-" + System.nanoTime();
-      writeBook(cluster, SERVICE_AWAY, 0, titleA);
-      awaitBookOnNodes(cluster, SERVICE_AWAY, initial.nodes(), titleA);
-
-      // Precondition, so the checks on the leaving node cannot pass vacuously.
-      List<String> containersBefore = listContainers(SERVICE_AWAY, "AR2");
-      log("containers on AR2 before: " + containersBefore);
-      assertFalse(
-          listContainers(SERVICE_AWAY, null).isEmpty(),
-          "Expected containers for the service before the reconfiguration");
-
-      // three replicas to two. AR0 and AR1 stay, AR2 leaves.
-      Placement shrunk = reconfigure(cluster, SERVICE_AWAY, List.of("AR0", "AR1"), initial);
-      log("after shrinking: " + shrunk);
-      awaitBookOnNodes(cluster, SERVICE_AWAY, shrunk.nodes(), titleA);
-
-      // the staying nodes must take new writes after the old epoch was dropped
-      String titleB = "BookB-" + System.nanoTime();
-      writeBook(cluster, SERVICE_AWAY, 0, titleB);
-      awaitBookOnNodes(cluster, SERVICE_AWAY, shrunk.nodes(), titleB);
-
-      // two replicas to three. AR2 comes back from the final state of the old epoch.
-      Placement regrown = reconfigure(cluster, SERVICE_AWAY, THREE_NODES, shrunk);
-      log("after growing: " + regrown);
-      awaitBookOnNodes(cluster, SERVICE_AWAY, regrown.nodes(), titleA);
-      awaitBookOnNodes(cluster, SERVICE_AWAY, regrown.nodes(), titleB);
-
-      String titleC = "BookC-" + System.nanoTime();
-      writeBook(cluster, SERVICE_AWAY, 0, titleC);
-      awaitBookOnNodes(cluster, SERVICE_AWAY, regrown.nodes(), titleC);
-    }
+  @Test
+  public void testReconfigureAwayAndBackPostgres() throws Exception {
+    runAwayAndBack(Flavor.POSTGRES);
   }
 
   @Test
   public void testReconfigureToDisjointNodes() throws Exception {
+    runToDisjointNodes(Flavor.SQLITE);
+  }
+
+  @Test
+  public void testReconfigureToDisjointNodesMysql() throws Exception {
+    runToDisjointNodes(Flavor.MYSQL);
+  }
+
+  @Test
+  public void testReconfigureToDisjointNodesPostgres() throws Exception {
+    runToDisjointNodes(Flavor.POSTGRES);
+  }
+
+  private void runAwayAndBack(Flavor flavor) throws Exception {
+    assumeTrue(
+        CONFIG_3_NODES.equals(System.getProperty("XDN_TEST_GIGAPAXOS_CONFIG")),
+        "This test only runs on XdnApp (" + CONFIG_3_NODES + ")");
+    assertTrue(XdnTestCluster.isDockerAvailable(), "Docker is required for this test");
+    final String service = flavor.awayService;
+
+    try (XdnTestCluster cluster = new XdnTestCluster()) {
+      cluster.start();
+
+      launch(cluster, service, flavor);
+      Placement initial = awaitSettled(cluster, service, null, 0, "initial placement");
+      log("initial placement: " + initial);
+      assertEquals(Set.copyOf(THREE_NODES), initial.nodes(), "Expected all three nodes");
+
+      String titleA = "BookA-" + System.nanoTime();
+      writeBook(cluster, service, 0, titleA);
+      awaitBookOnNodes(cluster, service, initial.nodes(), titleA);
+
+      // Precondition, so the checks on the leaving node cannot pass vacuously.
+      List<String> containersBefore = listContainers(service, "AR2");
+      log("containers on AR2 before: " + containersBefore);
+      assertFalse(
+          listContainers(service, null).isEmpty(),
+          "Expected containers for the service before the reconfiguration");
+
+      // three replicas to two. AR0 and AR1 stay, AR2 leaves.
+      Placement shrunk = reconfigure(cluster, service, List.of("AR0", "AR1"), initial);
+      log("after shrinking: " + shrunk);
+      awaitBookOnNodes(cluster, service, shrunk.nodes(), titleA);
+
+      // the staying nodes must take new writes after the old epoch was dropped
+      String titleB = "BookB-" + System.nanoTime();
+      writeBook(cluster, service, 0, titleB);
+      awaitBookOnNodes(cluster, service, shrunk.nodes(), titleB);
+
+      // two replicas to three. AR2 comes back from the final state of the old epoch.
+      Placement regrown = reconfigure(cluster, service, THREE_NODES, shrunk);
+      log("after growing: " + regrown);
+      awaitBookOnNodes(cluster, service, regrown.nodes(), titleA);
+      awaitBookOnNodes(cluster, service, regrown.nodes(), titleB);
+
+      String titleC = "BookC-" + System.nanoTime();
+      writeBook(cluster, service, 0, titleC);
+      awaitBookOnNodes(cluster, service, regrown.nodes(), titleC);
+    }
+  }
+
+  private void runToDisjointNodes(Flavor flavor) throws Exception {
     assumeTrue(
         CONFIG_6_NODES.equals(System.getProperty("XDN_TEST_GIGAPAXOS_CONFIG")),
         "This test only runs on XdnApp with six nodes (" + CONFIG_6_NODES + ")");
     assertTrue(XdnTestCluster.isDockerAvailable(), "Docker is required for this test");
+    final String service = flavor.disjointService;
 
     try (XdnTestCluster cluster = new XdnTestCluster(SIX_NODES)) {
       cluster.start();
 
       // The default placement decides where the service starts, so read it back.
-      launch(cluster, SERVICE_DISJOINT);
-      Placement initial = awaitSettled(cluster, SERVICE_DISJOINT, null, 0, "initial placement");
+      launch(cluster, service, flavor);
+      Placement initial = awaitSettled(cluster, service, null, 0, "initial placement");
       log("initial placement: " + initial);
 
       String titleA = "BookA-" + System.nanoTime();
       String writer = initial.nodes().iterator().next();
-      writeBook(cluster, SERVICE_DISJOINT, indexOf(writer), titleA);
-      awaitBookOnNodes(cluster, SERVICE_DISJOINT, initial.nodes(), titleA);
+      writeBook(cluster, service, indexOf(writer), titleA);
+      awaitBookOnNodes(cluster, service, initial.nodes(), titleA);
 
       assertFalse(
-          listContainers(SERVICE_DISJOINT, null).isEmpty(),
+          listContainers(service, null).isEmpty(),
           "Expected containers for the service before the reconfiguration");
 
       // first reconfiguration, to AR3 to AR5
@@ -148,26 +198,26 @@ public class XdnPbReconfigurationTest {
       Set<String> overlap = new TreeSet<>(initial.nodes());
       overlap.retainAll(far);
       log("nodes shared by the initial placement and " + far + ": " + overlap);
-      Placement atFar = reconfigure(cluster, SERVICE_DISJOINT, far, initial);
+      Placement atFar = reconfigure(cluster, service, far, initial);
       log("after the first reconfiguration: " + atFar);
-      awaitBookOnNodes(cluster, SERVICE_DISJOINT, atFar.nodes(), titleA);
+      awaitBookOnNodes(cluster, service, atFar.nodes(), titleA);
 
       String titleB = "BookB-" + System.nanoTime();
-      writeBook(cluster, SERVICE_DISJOINT, indexOf("AR3"), titleB);
-      awaitBookOnNodes(cluster, SERVICE_DISJOINT, atFar.nodes(), titleB);
+      writeBook(cluster, service, indexOf("AR3"), titleB);
+      awaitBookOnNodes(cluster, service, atFar.nodes(), titleB);
 
       // second reconfiguration, back to AR0 to AR2, which shares no node with AR3 to AR5
-      Placement atHome = reconfigure(cluster, SERVICE_DISJOINT, THREE_NODES, atFar);
+      Placement atHome = reconfigure(cluster, service, THREE_NODES, atFar);
       log("after the second reconfiguration: " + atHome);
       assertTrue(
           Collections.disjoint(atFar.nodes(), atHome.nodes()),
           "The second reconfiguration should be fully disjoint");
-      awaitBookOnNodes(cluster, SERVICE_DISJOINT, atHome.nodes(), titleA);
-      awaitBookOnNodes(cluster, SERVICE_DISJOINT, atHome.nodes(), titleB);
+      awaitBookOnNodes(cluster, service, atHome.nodes(), titleA);
+      awaitBookOnNodes(cluster, service, atHome.nodes(), titleB);
 
       String titleC = "BookC-" + System.nanoTime();
-      writeBook(cluster, SERVICE_DISJOINT, 0, titleC);
-      awaitBookOnNodes(cluster, SERVICE_DISJOINT, atHome.nodes(), titleC);
+      writeBook(cluster, service, 0, titleC);
+      awaitBookOnNodes(cluster, service, atHome.nodes(), titleC);
     }
   }
 
@@ -342,7 +392,81 @@ public class XdnPbReconfigurationTest {
   // Service traffic
   // ---------------------------------------------------------------------------------------------
 
-  private void launch(XdnTestCluster cluster, String service) throws Exception {
+  private void launch(XdnTestCluster cluster, String service, Flavor flavor) throws Exception {
+    if (flavor == Flavor.SQLITE) {
+      launchSqlite(cluster, service);
+    } else {
+      // launchClusterService only posts the prebuilt spec. It needs no cluster fields, so it also
+      // serves a plain multi-component service. Its error text says "Cluster" for that reason.
+      cluster.launchClusterService(service, databaseSpec(flavor));
+    }
+  }
+
+  // The same service as bookcatalog-nd.my.yaml and bookcatalog-nd.pg.yaml, as the JSON that
+  // ServiceProperty parses. Both use the :5 app image. The name is set by launchClusterService.
+  private static JSONObject databaseSpec(Flavor flavor) throws JSONException {
+    boolean mysql = flavor == Flavor.MYSQL;
+    String dbComponent = mysql ? "mysql" : "postgres";
+
+    JSONObject database =
+        new JSONObject()
+            .put("image", mysql ? "mysql:8.0.41-debian" : "postgres:17.4-bookworm")
+            .put("stateful", true)
+            .put(
+                "environments",
+                mysql
+                    ? environments("MYSQL_DATABASE", "books", "MYSQL_ROOT_PASSWORD", "root")
+                    : environments("POSTGRES_DB", "books", "POSTGRES_PASSWORD", "root"));
+
+    JSONObject app =
+        new JSONObject()
+            .put("image", "michael2718/bookcatalog-nd:5")
+            .put("stateful", false)
+            .put("entry", true)
+            .put("port", 80)
+            .put("environments", environments("DB_TYPE", dbComponent, "DB_HOST", dbComponent))
+            .put("healthcheck", new JSONObject().put("path", "/api/books"));
+
+    JSONArray components =
+        new JSONArray()
+            .put(new JSONObject().put(dbComponent, database))
+            .put(new JSONObject().put("app", app));
+
+    JSONArray requests = new JSONArray();
+    requests.put(
+        new JSONObject()
+            .put("path_prefix", "/")
+            .put("methods", "GET,OPTIONS,HEAD")
+            .put("behavior", "read_only"));
+    requests.put(
+        new JSONObject()
+            .put("path_prefix", "/")
+            .put("methods", "PUT,POST,DELETE")
+            .put("behavior", "write_only"));
+    requests.put(
+        new JSONObject()
+            .put("path_prefix", "/")
+            .put("methods", "PUT,POST,DELETE")
+            .put("behavior", "monotonic"));
+
+    return new JSONObject()
+        .put("components", components)
+        .put("state", mysql ? "mysql:/var/lib/mysql/" : "postgres:/var/lib/postgresql/data/")
+        .put("deterministic", false)
+        .put("consistency", "sequential")
+        .put("requests", requests);
+  }
+
+  // Name and value pairs as the one-key objects that ServiceProperty expects.
+  private static JSONArray environments(String... namesAndValues) throws JSONException {
+    JSONArray result = new JSONArray();
+    for (int i = 0; i < namesAndValues.length; i += 2) {
+      result.put(new JSONObject().put(namesAndValues[i], namesAndValues[i + 1]));
+    }
+    return result;
+  }
+
+  private void launchSqlite(XdnTestCluster cluster, String service) throws Exception {
     JSONArray requests = new JSONArray();
     requests.put(
         new JSONObject()
@@ -496,7 +620,8 @@ public class XdnPbReconfigurationTest {
     List<String> matching = new ArrayList<>();
     for (String line : output.split("\\R")) {
       String name = line.trim();
-      if (name.contains(service) && (node == null || name.contains("." + node + "."))) {
+      if (name.contains(service)
+          && (node == null || name.toLowerCase().contains("." + node.toLowerCase() + "."))) {
         matching.add(name);
       }
     }
