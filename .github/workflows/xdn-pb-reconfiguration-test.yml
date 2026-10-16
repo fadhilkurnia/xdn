@@ -1,9 +1,10 @@
 name: "XDN PB reconfiguration test"
 
 # Runs only XdnPbReconfigurationTest, on XdnApp (the Blue-Green primary-backup manager).
-# The class has two test methods and each skips itself unless XDN_TEST_GIGAPAXOS_CONFIG names its
-# own config. The 3-node step runs testReconfigureAwayAndBack (gigapaxos.xdn.new-local.properties).
-# The 6-node step runs testReconfigureToDisjointNodes (gigapaxos.xdn.new-local-6.properties).
+# The class has six test methods and each skips itself unless XDN_TEST_GIGAPAXOS_CONFIG names its
+# own config. The 3-node step runs the three testReconfigureAwayAndBack* methods (SQLite, MySQL,
+# Postgres) with gigapaxos.xdn.new-local.properties. The 6-node step runs the three
+# testReconfigureToDisjointNodes* methods with gigapaxos.xdn.new-local-6.properties.
 
 on:
   push:
@@ -53,12 +54,15 @@ jobs:
       uses: docker-practice/actions-setup-docker@master
       timeout-minutes: 12
 
-    - name: 📦 Verify Docker and pre-pull test image
+    - name: 📦 Verify Docker and pre-pull test images
       run: |
         set -x
         docker version
         docker run --rm hello-world
         docker pull fadhilkurnia/xdn-bookcatalog
+        docker pull michael2718/bookcatalog-nd:5
+        docker pull mysql:8.0.41-debian
+        docker pull postgres:17.4-bookworm
 
     - name: 🔄 Set up Rsync
       uses: GuillaumeFalourd/setup-rsync@v1.2

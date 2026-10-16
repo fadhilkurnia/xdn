@@ -166,9 +166,10 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
     this.serviceFsSocket = new ConcurrentHashMap<>();
   }
 
-  // Maximum plausible state diff for a single HTTP request (100 MB).
+  // Maximum plausible state diff for a single capture (1 GiB). Must stay below 2 GiB because
+  // the size is cast to int when the read buffer is allocated.
   // Values above this indicate protocol desynchronization (garbage size header).
-  private static final long MAX_STATEDIFF_BYTES = 100L * 1024 * 1024;
+  private static final long MAX_STATEDIFF_BYTES = 1024L * 1024 * 1024;
 
   // -------------------------------------------------------------------------
   // Helper functions exclusive to FuselogStateDiffRecorder
@@ -314,7 +315,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
    * @return the new SocketChannel on success, or null on failure.
    */
   private SocketChannel reconnectSocket(String serviceName, int placementEpoch) {
-    String socketFile = baseSocketDirPath + serviceName + "::" + placementEpoch + ".sock";
+    String socketFile = getSocketPath(serviceName, placementEpoch);
     Map<Integer, SocketChannel> epochToChannelMap = serviceFsSocket.get(serviceName);
 
     // Close the old channel — this sends EOF to fuselog, causing its handle_client loop to exit.
@@ -430,6 +431,7 @@ public class FuselogStateDiffRecorder extends AbstractStateDiffRecorder {
 
     Map<String, String> env = new HashMap<>();
     env.put("FUSELOG_SOCKET_FILE", socketFile);
+    env.put("FUSELOG_ATTR_TIMEOUT", "0");
     if (Boolean.parseBoolean(System.getProperty("FUSELOG_DISABLE_COALESCING", "false"))) {
       env.put("WRITE_COALESCING", "false");
     }

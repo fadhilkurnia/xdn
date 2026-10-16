@@ -9,7 +9,7 @@ components:
         - MYSQL_ROOT_PASSWORD: root
 
   - app:
-      image: michael2718/bookcatalog-nd:4
+      image: michael2718/bookcatalog-nd:5
       stateful: false
       entry: true
       port: 80
