@@ -733,8 +733,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
   }
 
   /**
-   * Like release(), but a replicated write in a SEQUENTIAL service also gets the cookie that names
-   * the diff it is in. A failure to stamp never blocks the client's answer.
+   * Like release(), but a replicated request in a SEQUENTIAL service also gets the cookie that
+   * names the diff it is in. A failure to stamp never blocks the client's answer.
    */
   private ExecutedCallback releaseWithMark(
           Collection<PendingWrite> writes, String serviceName, int placement, int count) {
@@ -756,14 +756,13 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     };
   }
 
-  /** Stamps every write inside the request. Reads and the bootstrap entry are left alone. */
+  /** Stamps every request inside the request. The bootstrap entry has no request and is skipped. */
   private void stampStateDiffCookie(Request request, String name, String value) {
     if (request instanceof XdnHttpRequest xdnHttpRequest) {
-      if (!isWriteRequest(xdnHttpRequest)) return;
       if (xdnHttpRequest.getHttpResponse() == null) {
         logger.log(
                 Level.WARNING,
-                "{0}:PBM write has no response to stamp for {1}",
+                "{0}:PBM request has no response to stamp for {1}",
                 new Object[] {myNodeID, xdnHttpRequest.getServiceName()});
         return;
       }
@@ -773,6 +772,32 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         stampStateDiffCookie(inner, name, value);
       }
     }
+  }
+
+  /**
+   * Wraps the callback of a read served by a backup container. Under SEQUENTIAL the response gets
+   * the cookie that names the state this backup serves. The placement and the count are read after
+   * the container answered, so the cookie is not older than what the client saw. A count below 0
+   * means no diff has reached snp/ yet, so no cookie is set.
+   */
+  private ExecutedCallback stampLiveCountOnRead(String serviceName, ExecutedCallback callback) {
+    if (!isSequential(serviceName)) return callback;
+    return (executed, handled) -> {
+      if (handled) {
+        try {
+          // Placement first, then count, the same order as readNeedsPrimary
+          Integer placement = currPlacement.get(serviceName);
+          Integer liveCount = liveStateDiffCount.get(serviceName);
+          if (placement != null && placement >= 0 && liveCount != null && liveCount >= 0) {
+            stampStateDiffCookie(
+                    executed, stateDiffCookieName(serviceName), placement + "." + liveCount);
+          }
+        } catch (Throwable t) {
+          logger.log(Level.WARNING, myNodeID + ":PBM could not stamp read for " + serviceName, t);
+        }
+      }
+      callback.executed(executed, handled);
+    };
   }
 
   private void startCaptureLoop(String serviceName, int placement, int pEpoch) {
@@ -1260,9 +1285,10 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
     if (role == Role.PRIMARY) {
       app.execute(request);
 
-      // Only writes need a diff. Reads under linearizable also wait for one, so that every
-      // read is ordered after the writes before it.
-      if (!isWriteRequest && !isLinearizable(serviceName)) {
+      // Only writes need a diff. Reads under linearizable and sequential also wait for one.
+      // Linearizable needs it for ordering. Sequential needs it so the read's cookie names a
+      // committed diff.
+      if (!isWriteRequest && !isLinearizable(serviceName) && !isSequential(serviceName)) {
         callback.executed(request, true);
         return true;
       }
@@ -1331,7 +1357,8 @@ public class BlueGreenPrimaryBackupManager<NodeIDType> {
         return forwardRequestToPrimary(serviceName, request, callback, isWriteRequest);
       }
 
-      return app.forwardToBackupContainer(serviceName, backupPort, request, callback);
+      return app.forwardToBackupContainer(
+              serviceName, backupPort, request, stampLiveCountOnRead(serviceName, callback));
     }
 
     throw new IllegalStateException("Unhandled role " + role + " for service " + serviceName);
